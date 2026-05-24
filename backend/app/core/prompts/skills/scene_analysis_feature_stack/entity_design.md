@@ -42,6 +42,7 @@
   - 对正反打环境（如 OTS）、关键道具赋予精细四视图约束及高质量状态写实光影。
 - **[Node 4] 数据封装 TD (Pipeline Data Engineer) - JSON 打包与防幻觉校验**
    - 严格跟随上级工序传来的 Subject Index 列表。
+  - **类型归一化先行（新增强制）**：在执行数组归属前，必须先将上游 `subject_type` 做统一归一化（`trim + lowercase`），按“大小写不敏感”处理。即：`character/Character/CHARACTER`、`prop/Prop/PROP`、`environment/Environment/ENVIRONMENT`、`cover_poster/Cover_Poster/COVER_POSTER` 必须被视为同一类别。
   - **先分类、后写入（新增最高优先级）**：在开始输出最终 JSON 之前，必须先对 Subject Index 中的每一条实体执行一次**唯一数组归属判断**，按其 `subject_type` / 上游已定义实体类别路由到且仅路由到一个目标数组：`character -> characters[]`，`prop -> props[]`，`environment -> environments[]`，`cover_poster -> posters[]`。**不得**因为最终输出是“一个大 JSON 对象”就把所有实体都套用 character 的写法或统一塞进 `characters[]`。
   - **单实体单归属硬规则（新增强制）**：每个 Subject 只能在四大数组中的一个数组里出现一次，禁止跨数组重复、禁止分类回退为“默认角色”、禁止把道具/环境/海报借壳写成角色对象。若某条实体无法明确归类，必须回看上游 Subject Index 的类型标记重新判断，而不是擅自并入 `characters[]`。
    - 执行“绝对防幻觉比对”：把所有四宫格设计成果，分别打包到最终格式要求的 JSON 数组。
@@ -251,16 +252,19 @@
 
 - 确保遵守最终输出结果格式，仅保留 JSON 本身。
 - **唯一输出物**：全文仅输出**唯一的一个大 JSON 代码块**，里面需完整包含 `characters`（角色）、`props`（道具）、`environments`（场景）以及 `posters`（封面海报）。
+- **四段结构保底规则（新增最高优先级）**：最终 JSON 顶层必须始终同时存在四个数组键：`characters`、`props`、`environments`、`posters`。无论某一类是否有实体，均必须保留该键并输出空数组 `[]`，严禁省略任何一段。
 
 ### Entities JSON (Strict Schema)
 
 **关于 JSON 格式结构的最高优先级警告 (CRITICAL STRUCTURAL WARNING)**：
 1. 必须只在一整个 ```json 代码块中输出唯一的一个完整 JSON 对象。
 2. 该对象的根节点必须包含并置的四大键名：`"characters"`、`"props"`、`"environments"`、`"posters"`。
+2.1 **空数组保留硬规则（新增强制）**：若某一类别当前无实体，必须显式输出为空数组（例如 `"props": []`），不得删除键名、不得用 `null`、不得用缺省省略。
 3. **精准封装**：务必将 "props"、"environments" 和 "posters"（封面海报）实体精准地分别打入对应的各自数组类别里，各归其位！
 4. **单一大 JSON 不等于单一实体池（新增最高优先级）**：这里要求的是“一个根 JSON 对象”，**不是**“所有实体共用同一种对象模板”或“所有实体统一视为角色”。四个顶层数组必须保持严格的类型边界，不能因为输出容器只有一个 JSON 就把 character / prop / environment / poster 混写。
-5. **数组分类路由表（新增强制）**：凡上游 Subject Index 标记为角色或人物变体者，只能进入 `characters[]`；凡标记为道具、器物、静物、手持物、装备、文书、载具部件等物件类者，只能进入 `props[]`；凡标记为场景、空间、房间、街道、地貌、建筑、内外景、OTS 环境变体者，只能进入 `environments[]`；凡标记为 `cover_poster` 或封面海报者，只能进入 `posters[]`。
+5. **数组分类路由表（新增强制）**：先将上游 `subject_type` 执行 `trim + lowercase` 再路由；必须大小写不敏感同等对待。归属规则：角色或人物变体 -> `characters[]`；道具、器物、静物、手持物、装备、文书、载具部件等物件类 -> `props[]`；场景、空间、房间、街道、地貌、建筑、内外景、OTS 环境变体 -> `environments[]`；`cover_poster` / `poster` / `covers` / 封面海报 -> `posters[]`。
 6. **分类错误直接判废（新增强制）**：如果某个 prop/environment/poster 被写进 `characters[]`，或某个角色被写进非 `characters[]` 数组，该 JSON 视为结构性失败，必须整份重写，不得带错提交。
+7. **缺段直接判废（新增强制）**：如果最终 JSON 顶层缺失 `characters`、`props`、`environments`、`posters` 中任意一个键，即使其本应为空，也视为结构性失败，必须整份重写。
 
 #### JSON 内容共性硬约束
 - **Scene Subjects 零遗漏硬约束**：JSON 数组必须完整覆盖前置提供/识别出的**所有**实体；不得只保留“核心代表项”。任意防遗漏声明都不如直接在 JSON 里全量打满重要。

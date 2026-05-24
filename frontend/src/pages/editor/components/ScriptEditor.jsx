@@ -163,7 +163,7 @@ const isDummySubject = (itemName) => {
     return ['subjectindex', 'subjectsindex', 'sceneanalysis', 'entities', 'character', 'characters', 'prop', 'props', 'environment', 'environments', 'role', 'roles', 'item', 'items', 'scene', 'scenes', '角色', '道具', '场景', '人物', '环境', '物件'].includes(lcName);
 };
 
-export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
+export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
@@ -7332,11 +7332,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     overwrite_existing: true
                                 });
                                 onLog?.(`Generation response: ${JSON.stringify(res)}`, 'info');
-                                
-                                // Since we're in ScriptEditor, we might want to refresh the active episode from backend, 
-                                // or the user can just reload. `onLog` tells them it's done.
-                                onLog?.(`Current episode script generated successfully. Please wait a moment and refresh to see changes.`, 'success');
-                                alert('剧本生成任务已提交，可能需要几十秒时间。您可以在项目概览中查看分集生成状态，或稍后刷新本页查看结果。');
+
+                                const freshEpisodes = await onRefreshEpisodes?.();
+                                const refreshedEpisode = Array.isArray(freshEpisodes)
+                                    ? freshEpisodes.find((ep) => String(ep?.id) === String(activeEpisode.id))
+                                    : null;
+                                const refreshedTitle = String(refreshedEpisode?.title || '').trim();
+
+                                onLog?.(
+                                    refreshedTitle
+                                        ? `Current episode script generated successfully. Title refreshed to: ${refreshedTitle}`
+                                        : 'Current episode script generated successfully.',
+                                    'success'
+                                );
+                                alert(
+                                    refreshedTitle
+                                        ? `剧本生成完成，分集标题已更新为：${refreshedTitle}`
+                                        : '剧本生成完成，已自动刷新当前分集数据。'
+                                );
                             } catch (e) {
                                 console.error('Failed to generate script', e);
                                 onLog?.(`Failed to generate script: ${e.response?.data?.detail || e.message}`, 'error');

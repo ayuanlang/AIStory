@@ -160,7 +160,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview' }) => {
+export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onRefreshEpisodes, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const functionApiConfigs = useFunctionApis();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const resolveVideoSoundFromInfo = (payload) => {
@@ -1613,14 +1613,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         pollEpisodeScriptsStatus();
 
         try {
-            const overwriteExisting = Boolean(forceStart) || !!specificEpisode;
+            const overwriteExisting = true;
             const modeLabel = retryFailedOnly
                 ? 'retry-failed-only'
                 : specificEpisode ? `generate-episode-${specificEpisode}`
-                : (overwriteExisting ? 'force-generate-all' : 'generate-missing-only');
+                : 'overwrite-all-default';
 
             if (overwriteExisting && !specificEpisode) {
-                const ok = await confirmUiMessage('Force Start will overwrite existing episode scripts for all target episodes. Continue?');
+                const ok = await confirmUiMessage('默认会覆盖目标范围内已有分集剧本，是否继续？', 'This will overwrite existing episode scripts in the target range by default. Continue?');
                 if (!ok) {
                     addLog?.('Force Start canceled.', 'warning');
                     return;
@@ -1633,26 +1633,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 }
             }
 
-            let specificEpisodeId = null;
-            if (specificEpisode) {
-                const targetNo = Number(specificEpisode);
-                if (Number.isFinite(targetNo) && targetNo > 0) {
-                    const episodeList = Array.isArray(episodes) ? episodes : [];
-                    const matchedEpisode = episodeList.find((ep, index) => {
-                        const parsedNumber = Number(ep?.episode_number) > 0
-                            ? Number(ep?.episode_number)
-                            : (parseEpisodeNumberFromText(ep?.title) || (index + 1));
-                        return parsedNumber === targetNo;
-                    });
-                    if (matchedEpisode?.id) {
-                        specificEpisodeId = Number(matchedEpisode.id);
-                    }
-                }
-            }
-
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode, episode_id: specificEpisodeId })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
                 'info'
             );
             const reqPayload = {
@@ -1663,9 +1646,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 retry_failed_only: retryFailedOnly,
             };
             if (specificEpisode) {
-                if (specificEpisodeId) {
-                    reqPayload.episode_id = Number(specificEpisodeId);
-                }
                 reqPayload.episode_number = Number(specificEpisode);
             }
             const res = await generateProjectEpisodeScripts(id, reqPayload);
@@ -1706,6 +1686,34 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             }
             if (onProjectUpdate) {
                 await onProjectUpdate();
+            }
+            if (onRefreshEpisodes) {
+                await onRefreshEpisodes();
+            }
+
+            // In single-episode mode, jump directly to the resolved episode_id returned by backend.
+            // This avoids staying on another duplicate-number episode and looking like overwrite failed.
+            if (specificEpisode) {
+                const generatedSingle = results.find((item) => {
+                    if (!item || typeof item !== 'object') return false;
+                    const num = Number(item.episode_number || 0);
+                    const eid = Number(item.episode_id || 0);
+                    return num === Number(specificEpisode) && eid > 0 && Boolean(item.generated);
+                }) || results.find((item) => {
+                    if (!item || typeof item !== 'object') return false;
+                    const eid = Number(item.episode_id || 0);
+                    return eid > 0 && Boolean(item.generated);
+                });
+
+                const resolvedEpisodeId = Number(generatedSingle?.episode_id || 0);
+                const resolvedTitle = String(generatedSingle?.episode_title || '').trim();
+                if (resolvedEpisodeId > 0 && onJumpToEpisode) {
+                    addLog?.(
+                        `[Single Episode] Jumping to generated episode_id=${resolvedEpisodeId}${resolvedTitle ? ` title=${resolvedTitle}` : ''}`,
+                        'info'
+                    );
+                    onJumpToEpisode(resolvedEpisodeId);
+                }
             }
         } catch (e) {
             console.error(e);
@@ -1934,8 +1942,17 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             byEpisodeNumber.set(num, item);
         }
 
+        // Prefer concrete episode numbers returned by backend (especially in single-episode mode)
+        // so the progress table does not incorrectly remap episode 2 as row 1.
+        const resultEpisodeNumbers = Array.from(byEpisodeNumber.keys())
+            .filter((n) => Number.isFinite(n) && n > 0)
+            .sort((a, b) => a - b);
+        const plannedEpisodeNumbers = resultEpisodeNumbers.length > 0
+            ? resultEpisodeNumbers
+            : Array.from({ length: episodesInRun }, (_, idx) => idx + 1);
+
         const rows = [];
-        for (let i = 1; i <= episodesInRun; i++) {
+        for (const i of plannedEpisodeNumbers) {
             const row = byEpisodeNumber.get(i);
             const knownTitle = episodeTitleByNumber.get(i);
             if (row) {
@@ -3354,11 +3371,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                                         <div className="col-span-1 text-white/90">{row?.episode_number || '-'}</div>
                                                         <div
                                                             className="col-span-4 text-white/90 truncate"
-                                                            title={buildEpisodeDisplayLabel({
+                                                            title={`${buildEpisodeDisplayLabel({
                                                                 episodeNumber: row?.episode_number,
                                                                 title: row?.episode_title,
                                                                 fallbackNumber: Number(row?.episode_number || 0) || null,
-                                                            })}{titleMismatchSuffix}`}
+                                                            })}${titleMismatchSuffix}`}
                                                         >
                                                             {buildEpisodeDisplayLabel({
                                                                 episodeNumber: row?.episode_number,

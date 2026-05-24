@@ -3446,6 +3446,51 @@ def _episode_runtime_info_from_episode(episode: Optional[Episode]) -> Dict[str, 
     return _safe_json_dict(getattr(episode, "episode_info", None))
 
 
+def _extract_episode_number_from_title(title: Any) -> Optional[int]:
+    value = str(title or "").strip()
+    if not value:
+        return None
+
+    match = re.search(r"(?:Episode|EP)\s*[-_#]?\s*(\d+)", value, flags=re.IGNORECASE)
+    if match:
+        return _to_positive_int_or_none(match.group(1))
+
+    match = re.search(r"第\s*(\d+)\s*集", value)
+    if match:
+        return _to_positive_int_or_none(match.group(1))
+
+    return None
+
+
+def _resolve_episode_sort_number(episode: Optional[Episode]) -> Optional[int]:
+    if not episode:
+        return None
+
+    info = _episode_runtime_info_from_episode(episode)
+    for key in (
+        "episode_script_episode_number",
+        "story_dna_episode_number",
+        "episode_number",
+        "index",
+    ):
+        parsed = _to_positive_int_or_none(info.get(key) if isinstance(info, dict) else None)
+        if parsed:
+            return parsed
+
+    return _extract_episode_number_from_title(getattr(episode, "title", None))
+
+
+def _sort_project_episodes(episodes: List[Episode]) -> List[Episode]:
+    def _sort_key(episode: Episode):
+        resolved_number = _resolve_episode_sort_number(episode)
+        fallback_id = int(getattr(episode, "id", 0) or 0)
+        if resolved_number is not None:
+            return (0, int(resolved_number), fallback_id)
+        return (1, fallback_id, fallback_id)
+
+    return sorted(list(episodes or []), key=_sort_key)
+
+
 _ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 
 
@@ -8804,23 +8849,42 @@ def _parse_episode_heading_from_markdown(text: str) -> Dict[str, Any]:
     if not content:
         return {}
 
+    non_empty_lines: List[str] = []
     first_line = ""
     for line in content.splitlines():
         candidate = str(line or "").strip()
         if candidate:
-            first_line = candidate
-            break
+            non_empty_lines.append(candidate)
+            if not first_line:
+                first_line = candidate
 
-    if not first_line.startswith("#"):
+    if not first_line:
+        return {}
+
+    has_markdown_h1 = first_line.startswith("#")
+    second_line = non_empty_lines[1] if len(non_empty_lines) > 1 else ""
+    looks_like_episode_heading = bool(
+        re.match(r"^(?:#\s*)?(?:(?:EP(?:ISODE)?\s*)?0*\d+|第\s*\d+\s*[集话章回]|0*\d+)(?:\s*[-:：|｜]\s*|\s+).+$", first_line, flags=re.IGNORECASE)
+    )
+    looks_like_script_structure = bool(
+        second_line and re.match(r"^(?:##\s*)?-?1\)|^##\s+Logline\b|^##\s+Scenes\b|^##\s+Ending Hook\b", second_line, flags=re.IGNORECASE)
+    )
+    if not has_markdown_h1 and not (looks_like_episode_heading and looks_like_script_structure):
         return {}
 
     heading = first_line.lstrip("#").strip()
     if not heading:
         return {"raw_heading": first_line}
 
+    heading = re.sub(r"^[`*_~\s]+|[`*_~\s]+$", "", heading).strip()
+
     patterns = (
-        r"^(?:EP\s*)?0*(\d+)\s*[-:：]\s*(.+)$",
-        r"^第\s*(\d+)\s*集\s*[-:：]\s*(.+)$",
+        r"^(?:EP(?:ISODE)?\s*)?0*(\d+)\s*[-:：|｜]\s*(.+)$",
+        r"^第\s*(\d+)\s*[集话章回]\s*[-:：|｜]\s*(.+)$",
+        r"^(?:EP(?:ISODE)?\s*)?0*(\d+)\s+(.+)$",
+        r"^第\s*(\d+)\s*[集话章回]\s+(.+)$",
+        r"^0*(\d+)\s*[-:：|｜]\s*(.+)$",
+        r"^0*(\d+)\s+(.+)$",
     )
     for pattern in patterns:
         match = re.match(pattern, heading, flags=re.IGNORECASE)
@@ -10784,7 +10848,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episodes_count: Optional[int] = None
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
-    overwrite_existing: bool = False
+    overwrite_existing: bool = True
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
     strict_markdown: bool = True
@@ -10799,7 +10863,13 @@ def read_episodes(
     _require_project_access(db, project_id, current_user)
     
     from sqlalchemy.orm import selectinload
-    return db.query(Episode).options(selectinload(Episode.script_segments)).filter(Episode.project_id == project_id).all()
+    episodes = (
+        db.query(Episode)
+        .options(selectinload(Episode.script_segments))
+        .filter(Episode.project_id == project_id)
+        .all()
+    )
+    return _sort_project_episodes(episodes)
 
 @router.put("/episodes/{episode_id}/segments", response_model=List[ScriptSegmentOut])
 def update_episode_segments(
@@ -10844,12 +10914,28 @@ def create_episode(
     current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user)
+
+    existing_episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    existing_numbers = {
+        int(num)
+        for num in (_resolve_episode_sort_number(item) for item in existing_episodes)
+        if num is not None
+    }
+    requested_number = _extract_episode_number_from_title(getattr(episode, "title", None))
+    if requested_number is not None and requested_number in existing_numbers:
+        raise HTTPException(status_code=409, detail=f"episode_number={requested_number} already exists")
+
+    assigned_number = requested_number
+    if assigned_number is None:
+        assigned_number = max(existing_numbers) + 1 if existing_numbers else 1
+
+    episode_info = {"episode_script_episode_number": int(assigned_number)}
         
     db_episode = Episode(
         project_id=project_id, 
         title=episode.title, 
         script_content=episode.script_content,
-        episode_info={},
+        episode_info=episode_info,
         ai_scene_analysis_result=episode.ai_scene_analysis_result,
         character_profiles=episode.character_profiles or []
     )
@@ -12318,6 +12404,24 @@ async def generate_project_episode_scripts_from_global_framework(
             latest_gi[status_key] = status_payload
             if latest_project:
                 latest_gi[status_key] = merged_status
+                merged_results = merged_status.get("results") if isinstance(merged_status, dict) else []
+                latest_item = merged_results[-1] if isinstance(merged_results, list) and merged_results else {}
+                logger.info(
+                    "[generate_episode_scripts] STATUS_PERSIST project_id=%s running=%s processed=%s generated=%s failed=%s skipped=%s results_count=%s latest_episode_id=%r latest_episode_number=%r latest_episode_title=%r latest_project_episode_title=%r latest_llm_episode_title=%r latest_status=%r",
+                    project_id,
+                    bool(merged_status.get("running")),
+                    int(merged_status.get("processed") or 0),
+                    int(merged_status.get("generated") or 0),
+                    int(merged_status.get("failed") or 0),
+                    int(merged_status.get("skipped") or 0),
+                    len(merged_results) if isinstance(merged_results, list) else 0,
+                    latest_item.get("episode_id") if isinstance(latest_item, dict) else None,
+                    latest_item.get("episode_number") if isinstance(latest_item, dict) else None,
+                    latest_item.get("episode_title") if isinstance(latest_item, dict) else None,
+                    latest_item.get("project_episode_title") if isinstance(latest_item, dict) else None,
+                    latest_item.get("llm_episode_title") if isinstance(latest_item, dict) else None,
+                    latest_item.get("status") if isinstance(latest_item, dict) else None,
+                )
                 latest_project.global_info = latest_gi
                 status_db.add(latest_project)
                 status_db.commit()
@@ -12484,7 +12588,7 @@ async def generate_project_episode_scripts_from_global_framework(
             return None
 
     def _extract_episode_index(ep: Episode) -> Optional[int]:
-        ep_info = _episode_info_from_episode(ep)
+        ep_info = _episode_runtime_info_from_episode(ep)
         for key in (
             "episode_script_episode_number",
             "story_dna_episode_number",
@@ -12506,7 +12610,38 @@ async def generate_project_episode_scripts_from_global_framework(
 
         return None
 
+    def _is_placeholder_episode_title(title: Any, episode_number: Optional[int] = None) -> bool:
+        value = str(title or "").strip()
+        if not value:
+            return True
+        compact = re.sub(r"\s+", "", value).lower()
+        if compact in {"untitled", "tbd", "episode", "第集"}:
+            return True
+
+        candidates: List[str] = []
+        if episode_number and int(episode_number) > 0:
+            n = int(episode_number)
+            candidates.extend([
+                f"episode{n}",
+                f"ep{n}",
+                f"ep{n:02d}",
+                f"第{n}集",
+                f"第{n}话",
+                f"第{n}章",
+                f"第{n}回",
+            ])
+
+        if compact in candidates:
+            return True
+
+        if re.fullmatch(r"(?:episode|ep)0*\d+", compact):
+            return True
+        if re.fullmatch(r"第\d+[集话章回]", compact):
+            return True
+        return False
+
     by_idx: Dict[int, Episode] = {}
+    idx_candidates: Dict[int, List[int]] = {}
     by_title: Dict[str, Episode] = {}
     for ep in existing_eps:
         title_key = str(ep.title or "").strip().lower()
@@ -12514,15 +12649,58 @@ async def generate_project_episode_scripts_from_global_framework(
             by_title[title_key] = ep
 
         idx_num = _extract_episode_index(ep)
-        if idx_num and idx_num not in by_idx:
-            by_idx[idx_num] = ep
+        if idx_num:
+            idx_candidates.setdefault(int(idx_num), []).append(int(ep.id))
+            if idx_num not in by_idx:
+                by_idx[idx_num] = ep
+
+    def _bind_episode_index(ep: Episode, idx_value: int) -> None:
+        if not ep or not idx_value:
+            return
+        info = _episode_runtime_info_from_episode(ep)
+        current = _safe_positive_int(info.get("episode_script_episode_number") if isinstance(info, dict) else None)
+        if current == int(idx_value):
+            return
+        info["episode_script_episode_number"] = int(idx_value)
+        ep.episode_info = info
+        db.add(ep)
+        db.commit()
+        db.refresh(ep)
+
+    # Fallback mapping for legacy projects: if titles were renamed without numeric prefix,
+    # keep existing episode rows and assign missing indexes by stable DB order before creating any new rows.
+    mapped_ids = {int(ep.id) for ep in by_idx.values() if ep is not None}
+    unmapped_eps = [ep for ep in existing_eps if int(ep.id) not in mapped_ids]
+    if unmapped_eps:
+        upper_bound = max(int(target_n or 0), len(existing_eps), int(requested_episode_number or 0))
+        next_unmapped_idx = 0
+        for slot in range(1, upper_bound + 1):
+            if slot in by_idx:
+                continue
+            if next_unmapped_idx >= len(unmapped_eps):
+                break
+            ep = unmapped_eps[next_unmapped_idx]
+            next_unmapped_idx += 1
+            _bind_episode_index(ep, slot)
+            by_idx[slot] = ep
+            idx_candidates.setdefault(int(slot), []).append(int(ep.id))
+
+    logger.info(
+        "[generate_episode_scripts] EPISODE_INDEX_MAP project_id=%s existing=%s mapped=%s unmapped_after_fallback=%s target_n=%s requested_episode_number=%r",
+        project_id,
+        len(existing_eps),
+        len(by_idx),
+        max(0, len(existing_eps) - len(by_idx)),
+        target_n,
+        requested_episode_number,
+    )
 
     created_episodes: List[int] = []
     episodes_in_order: List[Episode] = []
-    
-    # If episode_id is provided, we don't need to ensure target_n episodes exist
-    # unless we still want to. Let's just create up to target_n if target_n isn't a dummy 999.
-    loop_limit = target_n if target_n != 999 else 0
+
+    # Strict single-episode mode: never auto-create episodes before target resolution.
+    single_episode_mode = bool(requested_episode_number is not None or req.episode_id)
+    loop_limit = 0 if single_episode_mode else (target_n if target_n != 999 else 0)
     for i in range(1, loop_limit + 1):
         title = f"Episode {i}"
         ep = by_idx.get(i)
@@ -12532,7 +12710,7 @@ async def generate_project_episode_scripts_from_global_framework(
             ep = by_title.get(f"第{i}集")
         if not ep:
             ep = Episode(project_id=project_id, title=title, script_content="")
-            ep_info = _episode_info_from_episode(ep)
+            ep_info = _episode_runtime_info_from_episode(ep)
             ep_info["episode_script_episode_number"] = int(i)
             ep.episode_info = ep_info
             db.add(ep)
@@ -12542,7 +12720,7 @@ async def generate_project_episode_scripts_from_global_framework(
             by_title[title.strip().lower()] = ep
             by_idx[i] = ep
         else:
-            ep_info = _episode_info_from_episode(ep)
+            ep_info = _episode_runtime_info_from_episode(ep)
             if _safe_positive_int(ep_info.get("episode_script_episode_number") if isinstance(ep_info, dict) else None) is None:
                 ep_info["episode_script_episode_number"] = int(i)
                 ep.episode_info = ep_info
@@ -12577,11 +12755,104 @@ async def generate_project_episode_scripts_from_global_framework(
         for n, ep in enumerate(episodes_in_order, start=1)
     ]
 
-    target_episode_id: Optional[int] = int(req.episode_id) if req.episode_id else None
-    if not target_episode_id and requested_episode_number:
+    target_episode_id: Optional[int] = None
+    target_resolution_source = "none"
+    target_episode_id_from_number: Optional[int] = None
+    if requested_episode_number:
+        candidate_ids = idx_candidates.get(int(requested_episode_number), [])
+        if len(candidate_ids) > 1:
+            logger.error(
+                "[generate_episode_scripts] TARGET_RESOLUTION_AMBIGUOUS project_id=%s requested_episode_number=%s candidate_episode_ids=%s",
+                project_id,
+                requested_episode_number,
+                candidate_ids,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"episode_number={requested_episode_number} is ambiguous; matched multiple episodes: {candidate_ids}. "
+                    "Please clean up duplicate numbering before retrying."
+                ),
+            )
         ep_by_number = by_idx.get(int(requested_episode_number))
         if ep_by_number:
-            target_episode_id = int(ep_by_number.id)
+            target_episode_id_from_number = int(ep_by_number.id)
+            target_episode_id = target_episode_id_from_number
+            target_resolution_source = "episode_number"
+
+    if req.episode_id:
+        req_episode_id_int = int(req.episode_id)
+        if requested_episode_number and target_episode_id_from_number is None:
+            logger.error(
+                "[generate_episode_scripts] TARGET_EPISODE_CONFLICT project_id=%s requested_episode_number=%s provided_episode_id=%s decision=reject_reason=episode_number_not_resolved",
+                project_id,
+                requested_episode_number,
+                req_episode_id_int,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot safely resolve episode_number={requested_episode_number} to a unique episode. "
+                    "Refusing provided episode_id to avoid wrong overwrite."
+                ),
+            )
+
+        if target_episode_id is None:
+            target_episode_id = req_episode_id_int
+            target_resolution_source = "episode_id"
+        elif req_episode_id_int != target_episode_id:
+            logger.error(
+                "[generate_episode_scripts] TARGET_EPISODE_CONFLICT "
+                f"project_id={project_id} requested_episode_number={requested_episode_number} "
+                f"resolved_episode_id_by_number={target_episode_id} provided_episode_id={req_episode_id_int} "
+                "decision=reject_conflict"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Conflict between episode_number={requested_episode_number} and episode_id={req_episode_id_int}. "
+                    "Refusing to continue to prevent wrong overwrite."
+                ),
+            )
+
+    call_meta["target_resolution_source"] = target_resolution_source
+    call_meta["target_episode_id"] = target_episode_id
+
+    if requested_episode_number and target_episode_id_from_number is None:
+        logger.error(
+            "[generate_episode_scripts] TARGET_RESOLUTION_FAILED project_id=%s requested_episode_number=%s provided_episode_id=%r reason=episode_number_not_resolved_refuse_fallback",
+            project_id,
+            requested_episode_number,
+            int(req.episode_id) if req.episode_id else None,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot safely resolve episode_number={requested_episode_number} to a unique episode. "
+                "Refusing fallback to episode_id to avoid wrong overwrite. "
+                "Please refresh episodes and retry."
+            ),
+        )
+
+    resolved_target_title = None
+    if target_episode_id:
+        for _ed in episodes_data:
+            if int(_ed.get("id") or 0) == int(target_episode_id):
+                resolved_target_title = _ed.get("title")
+                break
+        if resolved_target_title is None:
+            _target_ep_dbg = db.query(Episode).filter(Episode.id == int(target_episode_id)).first()
+            if _target_ep_dbg is not None:
+                resolved_target_title = _target_ep_dbg.title
+    logger.info(
+        "[generate_episode_scripts] TARGET_RESOLUTION project_id=%s requested_episode_number=%r provided_episode_id=%r resolved_episode_id=%r source=%s resolved_title=%r",
+        project_id,
+        requested_episode_number,
+        int(req.episode_id) if req.episode_id else None,
+        target_episode_id,
+        target_resolution_source,
+        resolved_target_title,
+    )
 
     if target_episode_id:
         episodes_data = [ed for ed in episodes_data if ed["id"] == target_episode_id]
@@ -12593,18 +12864,27 @@ async def generate_project_episode_scripts_from_global_framework(
                 fallback_idx = 1
                 if isinstance(target_n, int) and target_n != 999:
                     fallback_idx = target_n + 1
-                idx = int(parsed_idx) if parsed_idx else fallback_idx
+                if requested_episode_number:
+                    idx = int(requested_episode_number)
+                else:
+                    idx = int(parsed_idx) if parsed_idx else fallback_idx
                 episodes_data = [{"idx": idx, "id": target_ep.id, "title": target_ep.title, "script_content": target_ep.script_content}]
             else:
                 raise HTTPException(status_code=404, detail="Target episode not found in this project.")
     elif req.retry_failed_only:
         episodes_data = [ed for ed in episodes_data if ed["id"] in failed_episode_ids]
 
+    # Single-episode generation should always overwrite the target episode,
+    # even if a caller accidentally sends overwrite_existing=false.
+    effective_overwrite_existing = bool(req.overwrite_existing) or bool(target_episode_id)
+    call_meta["overwrite_existing_effective"] = effective_overwrite_existing
+
     run_status = {
         "project_id": project_id,
         "running": True,
         "prompt_filename": prompt_filename,
         "mode": "retry_failed_only" if req.retry_failed_only else "full",
+        "overwrite_existing_effective": effective_overwrite_existing,
         "started_at": started_at_iso,
         "updated_at": started_at_iso,
         "episodes_target": target_n,
@@ -12714,12 +12994,21 @@ async def generate_project_episode_scripts_from_global_framework(
             break
 
         should_write = True
-        if not req.retry_failed_only and not req.overwrite_existing and (ep_script_content or "").strip():
+        if not req.retry_failed_only and not effective_overwrite_existing and (ep_script_content or "").strip():
             should_write = False
 
         if not should_write:
             logger.info(
                 f"[generate_episode_scripts] SKIP episode_number={idx} episode_id={ep_id} title={ep_title!r} reason=existing_script"
+            )
+            logger.info(
+                "[generate_episode_scripts] SKIP_DIAGNOSTICS "
+                f"episode_number={idx} episode_id={ep_id} "
+                f"target_episode_id={target_episode_id} "
+                f"retry_failed_only={bool(req.retry_failed_only)} "
+                f"overwrite_existing_requested={bool(req.overwrite_existing)} "
+                f"overwrite_existing_effective={bool(effective_overwrite_existing)} "
+                f"has_existing_script={bool((ep_script_content or '').strip())}"
             )
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_SKIP", {
                 "project_id": project_id,
@@ -12727,6 +13016,11 @@ async def generate_project_episode_scripts_from_global_framework(
                 "episode_id": ep_id,
                 "episode_title": ep_title,
                 "reason": "script_content already exists",
+                "target_episode_id": target_episode_id,
+                "retry_failed_only": bool(req.retry_failed_only),
+                "overwrite_existing_requested": bool(req.overwrite_existing),
+                "overwrite_existing_effective": bool(effective_overwrite_existing),
+                "has_existing_script": bool((ep_script_content or "").strip()),
             })
             results.append({
                 "episode_id": ep_id,
@@ -12755,11 +13049,49 @@ async def generate_project_episode_scripts_from_global_framework(
         if relationships:
             relationships_block = f"Character Relationships (Plain Text):\n{relationships}\n\n"
 
+        episode_title_is_placeholder = _is_placeholder_episode_title(ep_title, idx)
+        if episode_title_is_placeholder:
+            episode_title_policy_block = (
+                "Episode Title Policy (Hard Constraint):\n"
+                f"- Current DB title is a placeholder: {ep_title}\n"
+                "- You MUST create a specific, plot-relevant episode title in the H1 heading.\n"
+                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n\n"
+            )
+        else:
+            episode_title_policy_block = (
+                "Episode Title Policy (Hard Constraint):\n"
+                f"- Current DB title reference: {ep_title}\n"
+                "- Keep or refine this title, but keep it specific and plot-relevant.\n"
+                "- Do NOT output placeholder titles such as 'Episode N', 'EPN', '第N集', 'Untitled', or 'TBD'.\n\n"
+            )
+
+        generation_scope_block = (
+            "Generation Scope (Hard Constraint):\n"
+            f"- Requested Episodes Count Input: {target_n}\n"
+            f"- Episodes In Current Run: {len(episodes_data)}\n"
+            f"- Current Call Episode Number: {idx}\n"
+            f"- Current Call Episode Title: {ep_title}\n"
+            "- You must generate ONLY the current call episode above.\n"
+            "- Do NOT generate content for any other episode number in this response.\n"
+            "- Any information about other episodes is reference context only.\n"
+            "- Even in batch generation mode, each call must output exactly one episode script (the current episode only).\n\n"
+            "Output Format Contract (Hard Constraint):\n"
+            f"- The first non-empty line MUST be exactly one H1 heading: # {idx}-{{episode_title}}\n"
+            "- Output MUST be pure Markdown text only.\n"
+            "- Do NOT output JSON, XML, YAML, code fences, or any wrapper text.\n"
+            "- Do NOT output any preface, analysis, explanation, or postscript.\n"
+            "- The response MUST contain exactly one episode H1 heading; do NOT include any second episode heading.\n"
+            "- Do NOT include headings for other episode numbers (e.g., 第X集 / EPX / Episode X).\n"
+            "- Keep all content strictly within the current episode scope.\n\n"
+        )
+
         user_prompt = (
             f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
-            f"Episode Title: {ep_title}\n"
+            f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
+            f"{generation_scope_block}"
+            f"{episode_title_policy_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
@@ -12821,14 +13153,34 @@ async def generate_project_episode_scripts_from_global_framework(
             if not content:
                 raise RuntimeError("LLM returned empty content")
 
+            content_first_line = ""
+            for _line in content.splitlines():
+                _candidate = str(_line or "").strip()
+                if _candidate:
+                    content_first_line = _candidate
+                    break
             parsed_heading = _parse_episode_heading_from_markdown(content)
             llm_episode_number = parsed_heading.get("episode_number")
             llm_episode_title = str(parsed_heading.get("episode_title") or ep_title or "").strip()
             llm_heading = str(parsed_heading.get("raw_heading") or "").strip()
+            logger.info(
+                "[generate_episode_scripts] HEADING_PARSE episode_number=%s episode_id=%s project_episode_title=%r first_line=%r parsed_heading=%s llm_episode_number=%r llm_episode_title=%r used_project_title_fallback=%s",
+                idx,
+                ep_id,
+                ep_title,
+                content_first_line,
+                json.dumps(parsed_heading, ensure_ascii=False),
+                llm_episode_number,
+                llm_episode_title,
+                not bool(parsed_heading.get("episode_title")),
+            )
             title_mismatch = bool(llm_episode_number) and int(llm_episode_number) != int(idx)
             if title_mismatch:
-                logger.warning(
-                    f"[generate_episode_scripts] EPISODE_TITLE_MISMATCH project_episode_number={idx} llm_episode_number={llm_episode_number} episode_id={ep_id} raw_heading={llm_heading!r}"
+                logger.error(
+                    f"[generate_episode_scripts] EPISODE_TITLE_MISMATCH_BLOCKED project_episode_number={idx} llm_episode_number={llm_episode_number} episode_id={ep_id} raw_heading={llm_heading!r}"
+                )
+                raise RuntimeError(
+                    f"LLM episode heading mismatch: expected episode {idx}, got episode {llm_episode_number}. Import blocked."
                 )
 
             usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
@@ -12868,19 +13220,43 @@ async def generate_project_episode_scripts_from_global_framework(
             ep_db = db.query(Episode).get(ep_id)
             if not ep_db:
                 raise RuntimeError(f"Episode {ep_id} not found in database for update.")
+            previous_title = str(ep_db.title or "")
             ep_db.script_content = content
+            if llm_episode_title:
+                ep_db.title = llm_episode_title
             ep_script_content = content
-            ei = _episode_info_from_episode(ep_db)
+            ei = _episode_runtime_info_from_episode(ep_db)
             ei["episode_script_generated_at"] = now_bj_iso()
             ei["episode_script_episode_number"] = int(idx)
+            if llm_episode_title:
+                ei["episode_title"] = llm_episode_title
             if generator_kind == "promo":
                 ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
             else:
                 ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
             ep_db.episode_info = ei
+            logger.info(
+                "[generate_episode_scripts] PERSIST_PREPARE episode_number=%s episode_id=%s previous_title=%r next_title=%r episode_info_title=%r script_chars=%s",
+                idx,
+                ep_id,
+                previous_title,
+                str(ep_db.title or ""),
+                str(ei.get("episode_title") or ""),
+                len(content),
+            )
             db.add(ep_db)
             db.commit()
             db.refresh(ep_db)
+
+            persisted_episode_info = _episode_runtime_info_from_episode(ep_db)
+            logger.info(
+                "[generate_episode_scripts] PERSISTED_READBACK episode_number=%s episode_id=%s db_title=%r episode_info_title=%r script_chars=%s",
+                idx,
+                ep_id,
+                str(ep_db.title or ""),
+                str(persisted_episode_info.get("episode_title") or ""),
+                len(str(ep_db.script_content or "")),
+            )
 
             logger.info(
                 f"[generate_episode_scripts] SUCCESS episode_number={idx} episode_id={ep_id} output_chars={len(content)}"
@@ -13080,6 +13456,24 @@ def get_project_episode_scripts_generation_status(
             "episodes_in_run": 0,
             "results": [],
         }
+    status_results = status_payload.get("results") if isinstance(status_payload, dict) else []
+    status_latest = status_results[-1] if isinstance(status_results, list) and status_results else {}
+    logger.info(
+        "[generate_episode_scripts] STATUS_READ project_id=%s running=%s processed=%s generated=%s failed=%s skipped=%s results_count=%s latest_episode_id=%r latest_episode_number=%r latest_episode_title=%r latest_project_episode_title=%r latest_llm_episode_title=%r latest_status=%r",
+        project_id,
+        bool(status_payload.get("running")),
+        int(status_payload.get("processed") or 0),
+        int(status_payload.get("generated") or 0),
+        int(status_payload.get("failed") or 0),
+        int(status_payload.get("skipped") or 0),
+        len(status_results) if isinstance(status_results, list) else 0,
+        status_latest.get("episode_id") if isinstance(status_latest, dict) else None,
+        status_latest.get("episode_number") if isinstance(status_latest, dict) else None,
+        status_latest.get("episode_title") if isinstance(status_latest, dict) else None,
+        status_latest.get("project_episode_title") if isinstance(status_latest, dict) else None,
+        status_latest.get("llm_episode_title") if isinstance(status_latest, dict) else None,
+        status_latest.get("status") if isinstance(status_latest, dict) else None,
+    )
     return status_payload
 
 

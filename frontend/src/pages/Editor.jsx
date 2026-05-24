@@ -297,6 +297,12 @@ const Editor = ({
         return normalized;
     }, []);
 
+    const refreshEpisodesForEditor = useCallback(async () => {
+        if (!id) return [];
+        const fresh = await fetchEpisodes(id).catch(() => []);
+        return hydrateEpisodesState(fresh);
+    }, [id, hydrateEpisodesState]);
+
     const loadEpisodesForEditor = useCallback(async (projectSnapshot = null) => {
         if (!id) return [];
         if (episodesLoadPromiseRef.current) {
@@ -546,7 +552,7 @@ const Editor = ({
         if (!title) return;
         try {
             const newEp = await createEpisode(id, { title });
-            setEpisodes(prev => [...prev, newEp]);
+            await refreshEpisodesForEditor();
             setActiveEpisodeId(newEp.id);
             setIsEpisodeMenuOpen(false);
         } catch (e) {
@@ -3466,6 +3472,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                         uiLang={uiLang}
                                         mode="overview"
                                         onProjectUpdate={loadProjectData}
+                                        onRefreshEpisodes={refreshEpisodesForEditor}
                                         onTabChange={setActiveTab}
                                         onJumpToEpisode={(episodeId) => {
                                             setActiveEpisodeId(episodeId);
@@ -3491,6 +3498,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                     uiLang={uiLang}
                                     mode="generator"
                                     onProjectUpdate={loadProjectData}
+                                    onRefreshEpisodes={refreshEpisodesForEditor}
                                     onTabChange={setActiveTab}
                                     onJumpToEpisode={(episodeId) => {
                                         setActiveEpisodeId(episodeId);
@@ -3498,7 +3506,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                     }}
                                 />
                             )}
-                            {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
+                            {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} uiLang={uiLang} />}
                             {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
                             {activeTab === 'scenes' && <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                                 if (sceneId) {
