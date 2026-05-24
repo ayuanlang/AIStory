@@ -506,6 +506,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [isDraftMode, setIsDraftMode] = useState(false);
     const [usePrevVideo, setUsePrevVideo] = useState(false);
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
+    const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
+    const [playlistIndex, setPlaylistIndex] = useState(0);
+    const playlistVideoRef = useRef(null);
 
     const _getInMemorySortedShots = () => {
         return [...(shots || [])].sort((a, b) => {
@@ -6204,6 +6207,34 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const findPrevShotRecord = (shotId) => {
+        const sortedArray = _getInMemorySortedShots();
+        const currentIdx = sortedArray.findIndex((s) => s.id === shotId);
+        if (currentIdx <= 0) return null;
+        return sortedArray[currentIdx - 1] || null;
+    };
+
+    const getPrevShotEndPromptText = (shotId, langKey = 'cn') => {
+        const prevShot = findPrevShotRecord(shotId);
+        if (!prevShot) return '';
+        let prevTech = {};
+        try {
+            prevTech = JSON.parse(prevShot.technical_notes || '{}');
+            if (!prevTech || typeof prevTech !== 'object') prevTech = {};
+        } catch (_) {
+            prevTech = {};
+        }
+
+        const cnPrompt = String(prevTech.end_frame_cn || '').trim();
+        const enPrompt = String(prevShot.end_frame || '').trim();
+        const fallbackPrompt = String(prevTech.video_prompt_cn || prevShot.video_content || prevShot.prompt || '').trim();
+
+        if (langKey === 'en') {
+            return enPrompt || cnPrompt || fallbackPrompt;
+        }
+        return cnPrompt || enPrompt || fallbackPrompt;
+    };
+
     useEffect(() => {
         if (!editingShot?.id) {
             startFrameAutoInheritRef.current = '';
@@ -6750,35 +6781,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     throw new Error(t('上一镜不存在可用的结束帧，无法作为多画格起始分镜参考图。', 'The previous shot does not have an end frame available for the multi-panel opening panel.'));
                 }
 
-                onLog?.(t('正在分析上一镜结束帧，并将其作为多画格第一格参考...', 'Analyzing the previous shot end frame and using it as panel-one reference...'), 'info');
-                const analysisResp = await analyzeAssetImage({
-                    image_url: prevEndFrameRefUrl,
-                    function_name: 'script_analysis',
-                    system_api_id: Number(localStorage.getItem('func_api_script_analysis') || 0) || null,
-                });
-
-                const analysisText = String(analysisResp?.result || '').trim();
+                onLog?.(t('正在读取上一镜结束帧提示词，并将其作为多画格第一格参考...', 'Reading the previous shot end-frame prompt and using it as panel-one reference...'), 'info');
+                const prevEndPromptText = getPrevShotEndPromptText(targetShotId, langKey);
                 const normalizeSummary = (value) => {
                     let text = String(value || '').trim();
                     if (!text) return '';
-                    try {
-                        const parsed = JSON.parse(text);
-                        if (parsed && typeof parsed === 'object') {
-                            text = [
-                                parsed.summary,
-                                parsed.visual_summary,
-                                parsed.description,
-                                parsed.style,
-                                parsed.result,
-                            ].filter((item) => typeof item === 'string' && item.trim()).join('，') || JSON.stringify(parsed);
-                        }
-                    } catch (_) {}
                     text = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/^["'“”]+|["'“”]+$/g, '').trim();
-                    return Array.from(text).slice(0, 30).join('');
+                    return Array.from(text).slice(0, 240).join('');
                 };
-                prevEndFrameSummary = normalizeSummary(analysisText);
+                prevEndFrameSummary = normalizeSummary(prevEndPromptText);
                 if (!prevEndFrameSummary) {
-                    throw new Error(t('上一镜结束帧图片分析结果为空，无法注入多画格提示词。', 'The previous-shot end-frame analysis returned empty, so it cannot be injected into the multi-panel prompt.'));
+                    throw new Error(t('上一镜结束帧提示词为空，无法注入多画格提示词。', 'The previous-shot end-frame prompt is empty, so it cannot be injected into the multi-panel prompt.'));
                 }
 
                 refs = [prevEndFrameRefUrl, ...refs.filter((url) => String(url || '').trim() && String(url || '').trim() !== prevEndFrameRefUrl)];
@@ -8122,6 +8135,83 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
     }, [shots, getShotHierarchyKey]);
 
+    const orderedVideoShots = useMemo(() => {
+        return (sortedShots || []).filter((shot) => String(shot?.video_url || '').trim());
+    }, [sortedShots]);
+
+    const activePlaylistShot = orderedVideoShots[playlistIndex] || null;
+
+    const openOrderedVideoPlaylist = useCallback(() => {
+        if (!orderedVideoShots.length) {
+            showNotification(t('当前列表没有可播放视频', 'No playable videos in current list'), 'error');
+            return;
+        }
+        setPlaylistIndex(0);
+        setIsPlaylistModalOpen(true);
+    }, [orderedVideoShots, showNotification, t]);
+
+    const closeOrderedVideoPlaylist = useCallback(() => {
+        setIsPlaylistModalOpen(false);
+    }, []);
+
+    const playPrevPlaylistVideo = useCallback(() => {
+        setPlaylistIndex((prev) => {
+            if (!orderedVideoShots.length) return 0;
+            return Math.max(0, prev - 1);
+        });
+    }, [orderedVideoShots.length]);
+
+    const playNextPlaylistVideo = useCallback(() => {
+        setPlaylistIndex((prev) => {
+            if (!orderedVideoShots.length) return 0;
+            return Math.min(orderedVideoShots.length - 1, prev + 1);
+        });
+    }, [orderedVideoShots.length]);
+
+    const handlePlaylistVideoEnded = useCallback(() => {
+        setPlaylistIndex((prev) => {
+            if (!orderedVideoShots.length) return 0;
+            if (prev >= orderedVideoShots.length - 1) {
+                return prev;
+            }
+            return prev + 1;
+        });
+    }, [orderedVideoShots.length]);
+
+    useEffect(() => {
+        if (!isPlaylistModalOpen) return;
+        if (!orderedVideoShots.length) {
+            setIsPlaylistModalOpen(false);
+            return;
+        }
+        setPlaylistIndex((prev) => Math.min(Math.max(prev, 0), orderedVideoShots.length - 1));
+    }, [isPlaylistModalOpen, orderedVideoShots.length]);
+
+    useEffect(() => {
+        if (!isPlaylistModalOpen) return;
+        const videoEl = playlistVideoRef.current;
+        if (!videoEl) return;
+        const playPromise = videoEl.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {});
+        }
+    }, [isPlaylistModalOpen, playlistIndex]);
+
+    useEffect(() => {
+        if (!isPlaylistModalOpen) return;
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeOrderedVideoPlaylist();
+            } else if (event.key === 'ArrowRight') {
+                playNextPlaylistVideo();
+            } else if (event.key === 'ArrowLeft') {
+                playPrevPlaylistVideo();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [isPlaylistModalOpen, closeOrderedVideoPlaylist, playNextPlaylistVideo, playPrevPlaylistVideo]);
+
     const selectedShotIdSet = useMemo(
         () => new Set((selectedShotIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)),
         [selectedShotIds]
@@ -8250,6 +8340,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             title={t('删除已选镜头', 'Delete selected shots')}
                         >
                             {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
+                        </button>
+                        <button
+                            onClick={openOrderedVideoPlaylist}
+                            disabled={orderedVideoShots.length === 0}
+                            className="ml-2 px-3 py-1.5 bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 rounded text-xs border border-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                            title={t('按当前卡片顺序连续播放视频', 'Play videos sequentially in current card order')}
+                        >
+                            <Video className="w-3 h-3" />
+                            {t('连续播放', 'Playlist')} ({orderedVideoShots.length})
                         </button>
 
                         <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
@@ -8502,6 +8601,83 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                      </div>
                  )}
              </div>
+
+            {isPlaylistModalOpen && (
+                <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeOrderedVideoPlaylist}>
+                    <div className="w-full max-w-5xl bg-[#0b0b0f] border border-white/15 rounded-xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                    <Film className="w-4 h-4 text-primary" />
+                                    {t('镜头视频连续播放', 'Shot Video Playlist')}
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                    {orderedVideoShots.length > 0
+                                        ? t(
+                                            `第 ${Math.min(playlistIndex + 1, orderedVideoShots.length)} / ${orderedVideoShots.length} 条`,
+                                            `${Math.min(playlistIndex + 1, orderedVideoShots.length)} / ${orderedVideoShots.length}`
+                                        )
+                                        : t('无可播放视频', 'No playable video')}
+                                </div>
+                            </div>
+                            <button
+                                className="p-2 rounded hover:bg-white/10 text-white/80"
+                                onClick={closeOrderedVideoPlaylist}
+                                title={t('关闭', 'Close')}
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-4">
+                            <div className="w-full bg-black rounded-lg border border-white/10 overflow-hidden flex items-center justify-center min-h-[320px] max-h-[70vh]">
+                                {activePlaylistShot ? (
+                                    <video
+                                        ref={playlistVideoRef}
+                                        key={`${activePlaylistShot.id || 'shot'}:${playlistIndex}:${String(activePlaylistShot.video_url || '')}`}
+                                        src={getFullUrl(activePlaylistShot.video_url)}
+                                        controls
+                                        autoPlay
+                                        playsInline
+                                        preload="metadata"
+                                        className="w-full max-h-[70vh] object-contain bg-black"
+                                        onEnded={handlePlaylistVideoEnded}
+                                    />
+                                ) : (
+                                    <div className="text-sm text-muted-foreground flex items-center gap-2 py-16">
+                                        <Video className="w-5 h-5" />
+                                        {t('当前没有可播放视频', 'No playable videos in current view')}
+                                    </div>
+                                )}
+                            </div>
+
+                            {activePlaylistShot && (
+                                <div className="mt-3 text-xs text-muted-foreground">
+                                    <span className="text-primary font-mono mr-2">{activePlaylistShot.shot_id || activePlaylistShot.id}</span>
+                                    <span className="text-white/90">{activePlaylistShot.shot_name || t('未命名镜头', 'Untitled Shot')}</span>
+                                </div>
+                            )}
+
+                            <div className="mt-4 flex items-center justify-between gap-2">
+                                <button
+                                    onClick={playPrevPlaylistVideo}
+                                    disabled={playlistIndex <= 0}
+                                    className="px-3 py-1.5 text-xs rounded border border-white/15 bg-white/5 hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    {t('上一个', 'Previous')}
+                                </button>
+                                <button
+                                    onClick={playNextPlaylistVideo}
+                                    disabled={playlistIndex >= orderedVideoShots.length - 1}
+                                    className="px-3 py-1.5 text-xs rounded border border-primary/40 bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    {t('下一个', 'Next')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
              {/* Import Modal */}
              <ImportModal 
@@ -9253,7 +9429,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         </select>
                                                         <label
                                                             className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 cursor-pointer hover:bg-white/5"
-                                                            title={t('选中后自动取上一镜结束帧作为首参考图，并先做图片分析，将摘要注入多画格提示词，要求第一格从该参考图开始。', 'Use the previous shot end frame as the first ref, analyze it, inject the summary into the prompt, and force panel 1 to start from that image.')}
+                                                            title={t('选中后自动取上一镜结束帧作为首参考图，并直接读取上一镜结束帧提示词注入多画格提示词，要求第一格从该参考图开始。', 'Use the previous shot end frame as the first ref, read the previous end-frame prompt directly, inject it into the multi-panel prompt, and force panel 1 to start from that image.')}
                                                         >
                                                             <input
                                                                 type="checkbox"

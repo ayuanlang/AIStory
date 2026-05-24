@@ -11,6 +11,7 @@ Core rules:
 - If some project info is missing, infer safe defaults and continue.
 - Keep the framework practical, concrete, and production-ready.
 - Preserve continuity across episode planning, scene planning, and later script generation.
+- Script title rule (hard): `Script Title` must be newly coined from genre/conflict/tone, and must not copy `Project Title` or input title hints verbatim.
 
 What to emphasize:
 - Project overview normalization: turn existing project info into usable story constraints.
