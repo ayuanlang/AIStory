@@ -9,6 +9,7 @@ import threading
 import tracemalloc
 from itertools import islice
 from pathlib import Path
+import importlib
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,38 @@ from slowapi.errors import RateLimitExceeded
 from jose import JWTError, jwt
 import time
 import re
+
+
+def _resolve_endpoints_router():
+    """Resolve API router robustly and emit diagnostics for partial module init issues."""
+    module = endpoints
+    router_obj = getattr(module, "router", None)
+    if router_obj is not None:
+        return module, router_obj
+
+    logger.warning(
+        "endpoints router missing on first import; retrying reload | module=%s file=%s",
+        getattr(module, "__name__", "unknown"),
+        getattr(module, "__file__", "unknown"),
+    )
+
+    module = importlib.reload(module)
+    router_obj = getattr(module, "router", None)
+    if router_obj is not None:
+        logger.info(
+            "endpoints router recovered after reload | module=%s file=%s",
+            getattr(module, "__name__", "unknown"),
+            getattr(module, "__file__", "unknown"),
+        )
+        return module, router_obj
+
+    visible_attrs = ",".join(sorted(name for name in dir(module) if not name.startswith("__"))[:80])
+    raise RuntimeError(
+        "Failed to resolve app.api.endpoints.router; "
+        f"module={getattr(module, '__name__', 'unknown')} "
+        f"file={getattr(module, '__file__', 'unknown')} "
+        f"attrs_sample={visible_attrs}"
+    )
 
 # ---------------------------------------------------------------------------
 # Startup DB bootstrap — retry on transient DNS / connection failures so
@@ -1136,7 +1169,8 @@ app.add_middleware(_CorsPreflightMiddleware)
 import os
 from fastapi.responses import FileResponse, HTMLResponse
 
-app.include_router(endpoints.router, prefix=settings.API_V1_STR)
+_endpoints_module, _endpoints_router = _resolve_endpoints_router()
+app.include_router(_endpoints_router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 app.include_router(groups_api.router, prefix=settings.API_V1_STR)
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
