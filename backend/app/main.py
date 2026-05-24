@@ -67,6 +67,27 @@ def _resolve_endpoints_router():
         )
         return module, router_obj
 
+    # Last resort: execute endpoints.py from file under an alternate module name
+    # to bypass poisoned/half-initialized entries in sys.modules.
+    module_file = str(getattr(module, "__file__", "") or "").strip()
+    if module_file:
+        try:
+            alias_name = "app.api._endpoints_bootstrap"
+            alias_spec = importlib.util.spec_from_file_location(alias_name, module_file)
+            if alias_spec and alias_spec.loader:
+                alias_module = importlib.util.module_from_spec(alias_spec)
+                alias_spec.loader.exec_module(alias_module)
+                alias_router = getattr(alias_module, "router", None)
+                if alias_router is not None:
+                    logger.warning(
+                        "endpoints router resolved from source fallback | alias=%s file=%s",
+                        alias_name,
+                        module_file,
+                    )
+                    return alias_module, alias_router
+        except Exception as fallback_exc:
+            logger.exception("endpoints source fallback failed: %s", fallback_exc)
+
     visible_attrs = ",".join(sorted(name for name in dir(module) if not name.startswith("__"))[:80])
     raise RuntimeError(
         "Failed to resolve app.api.endpoints.router; "
