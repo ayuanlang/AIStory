@@ -4,7 +4,13 @@ import time
 
 from app.api import endpoints
 from app.core.logging import configure_uvicorn_logging_noise_reduction, logger
-from app.main import _RUN_DB_BOOTSTRAP_ON_START, _bootstrap_db_post_init, _bootstrap_db_schema
+
+
+def _load_bootstrap_hooks():
+    # Lazy import avoids circular startup edge-cases when app.main imports API modules.
+    from app.main import _RUN_DB_BOOTSTRAP_ON_START, _bootstrap_db_post_init, _bootstrap_db_schema
+
+    return _RUN_DB_BOOTSTRAP_ON_START, _bootstrap_db_post_init, _bootstrap_db_schema
 
 
 _STOP_EVENT = threading.Event()
@@ -19,6 +25,8 @@ def main() -> None:
     configure_uvicorn_logging_noise_reduction()
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    _RUN_DB_BOOTSTRAP_ON_START, _bootstrap_db_post_init, _bootstrap_db_schema = _load_bootstrap_hooks()
 
     if _RUN_DB_BOOTSTRAP_ON_START:
         logger.info("Generation worker startup: critical DB bootstrap enabled")

@@ -16,7 +16,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
-from app.api import endpoints, settings as settings_api, groups as groups_api, invoices as invoices_api, invoices as invoices_api
+import app.api.endpoints as endpoints
+import app.api.settings as settings_api
+import app.api.groups as groups_api
+import app.api.invoices as invoices_api
 from app.db.session import engine, SessionLocal
 from app.models.all_models import Base, User
 from sqlalchemy import inspect, text
