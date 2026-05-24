@@ -1635,13 +1635,14 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, script_title: info?.script_title || project?.title || '', overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
                 'info'
             );
             const reqPayload = {
                 generator_kind: generatorKind,
                 episodes_count: n,
                 script_mode: globalStoryInput.script_mode,
+                script_title: String(info?.script_title || project?.title || '').trim(),
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,
             };

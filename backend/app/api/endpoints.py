@@ -10848,6 +10848,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episodes_count: Optional[int] = None
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
+    script_title: Optional[str] = None
     overwrite_existing: bool = True
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
@@ -12355,8 +12356,17 @@ async def generate_project_episode_scripts_from_global_framework(
 
     user_id = int(current_user.id)
     user_name = str(current_user.username or "").strip()
-    project_title = str(project.title or "").strip()
     project_global_info = dict(project.global_info or {})
+    gi_story_input = project_global_info.get("story_generator_global_input") if isinstance(project_global_info.get("story_generator_global_input"), dict) else {}
+    gi_basic_info = project_global_info.get("basic_information") if isinstance(project_global_info.get("basic_information"), dict) else {}
+    project_title = str(
+        req.script_title
+        or project_global_info.get("script_title")
+        or gi_story_input.get("script_title")
+        or gi_basic_info.get("script_title")
+        or project.title
+        or ""
+    ).strip()
 
     try:
         log_action(
@@ -13085,11 +13095,19 @@ async def generate_project_episode_scripts_from_global_framework(
             "- Keep all content strictly within the current episode scope.\n\n"
         )
 
+        script_title_policy_block = (
+            "Script Title Policy (Hard Constraint):\n"
+            f"- Canonical Script Title (fixed for this run): {project_title}\n"
+            "- Treat this script title as immutable context for all generated output in this call.\n"
+            "- Do NOT replace, rename, or invent another project-level script title.\n\n"
+        )
+
         user_prompt = (
             f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
+            f"{script_title_policy_block}"
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
@@ -31252,18 +31270,15 @@ def _append_video_api_ref_mapping(
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"@Image{mapped_idx} "
         escaped_entity = re.escape(entity_name)
+        unprefixed_guard = rf"(?<!{re.escape(prefix)})"
         anchor_patterns = [
-            rf"[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"{unprefixed_guard}[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"{unprefixed_guard}(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"{unprefixed_guard}[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
         ]
 
         replaced = False
         for pattern in anchor_patterns:
-            if re.search(rf"{re.escape(prefix)}{pattern}", updated_text, flags=re.IGNORECASE):
-                replaced = True
-                break
-
             def _prepend_prefix(match: re.Match[str]) -> str:
                 token = str(match.group(0) or "")
                 if token.startswith(prefix):
@@ -31281,9 +31296,7 @@ def _append_video_api_ref_mapping(
             continue
 
         # Fallback: prepend marker directly before plain entity mentions.
-        plain_pattern = rf'(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])'
-        if re.search(rf"{re.escape(prefix)}{plain_pattern}", updated_text, flags=re.IGNORECASE):
-            continue
+        plain_pattern = rf'{unprefixed_guard}(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])'
 
         def _prepend_marker(match: re.Match[str]) -> str:
             token = str(match.group(0) or "")
