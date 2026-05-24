@@ -10,6 +10,7 @@ import tracemalloc
 from itertools import islice
 from pathlib import Path
 import importlib
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,6 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from app.core.config import settings
-import app.api.endpoints as endpoints
 import app.api.settings as settings_api
 import app.api.groups as groups_api
 import app.api.invoices as invoices_api
@@ -40,7 +40,8 @@ import re
 
 def _resolve_endpoints_router():
     """Resolve API router robustly and emit diagnostics for partial module init issues."""
-    module = endpoints
+    module_name = "app.api.endpoints"
+    module = importlib.import_module(module_name)
     router_obj = getattr(module, "router", None)
     if router_obj is not None:
         return module, router_obj
@@ -51,7 +52,12 @@ def _resolve_endpoints_router():
         getattr(module, "__file__", "unknown"),
     )
 
-    module = importlib.reload(module)
+    # Drop potentially half-initialized module and import from scratch.
+    try:
+        sys.modules.pop(module_name, None)
+    except Exception:
+        pass
+    module = importlib.import_module(module_name)
     router_obj = getattr(module, "router", None)
     if router_obj is not None:
         logger.info(
