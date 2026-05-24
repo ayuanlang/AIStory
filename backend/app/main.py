@@ -706,7 +706,8 @@ async def lifespan(app: FastAPI):
         logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
     if _RUN_GENERATION_QUEUE_WORKER_ON_START:
         logger.info("Application startup: generation queue worker enabled in web process")
-        await asyncio.to_thread(endpoints.start_generation_queue_worker)
+        endpoints_module, _ = _resolve_endpoints_router()
+        await asyncio.to_thread(endpoints_module.start_generation_queue_worker)
     else:
         logger.info("Application startup: generation queue worker disabled in web process")
     try:
