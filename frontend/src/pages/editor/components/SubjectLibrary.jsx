@@ -171,6 +171,42 @@ const toRenderableText = (value) => {
     }
 };
 
+const parseDependencyEntityId = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const directIdMatch = raw.match(/^\d+$/);
+    if (directIdMatch) return directIdMatch[0];
+
+    const prefixedIdMatch = raw.match(/^(?:existing_id|existingid|entity_id|entityid|id)\s*[:#=]\s*(\d+)$/i);
+    if (prefixedIdMatch) return String(prefixedIdMatch[1] || '').trim();
+
+    return '';
+};
+
+const resolveDependencyEntity = (dependencyToken, entities) => {
+    const rawToken = String(dependencyToken || '').trim();
+    if (!rawToken) return null;
+
+    const normalizedToken = normalizeEntityToken(rawToken);
+    const resolvedEntityId = parseDependencyEntityId(rawToken);
+
+    return (Array.isArray(entities) ? entities : []).find((entity) => {
+        if (!entity) return false;
+
+        const entityId = String(entity.id || '').trim();
+        const entityName = normalizeEntityToken(entity.name || '');
+        const entityNameEn = normalizeEntityToken(entity.name_en || '');
+
+        if (resolvedEntityId && entityId && entityId === resolvedEntityId) return true;
+        if (entityId && entityId === rawToken) return true;
+        if (normalizedToken && entityName && entityName === normalizedToken) return true;
+        if (normalizedToken && entityNameEn && entityNameEn === normalizedToken) return true;
+
+        return false;
+    }) || null;
+};
+
 export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
@@ -305,6 +341,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [entityListLoading, setEntityListLoading] = useState(false);
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
+    const [entityEpisodeScope, setEntityEpisodeScope] = useState(() => (currentEpisode?.id ? 'current' : 'all'));
     const [selectedEntity, setSelectedEntity] = useState(null);
     const [showImageModal, setShowImageModal] = useState(false);
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
@@ -1038,7 +1075,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             if (projectId) {
                 const latest = await fetchEntities(projectId, {
-                    episode_id: currentEpisode?.id || undefined,
                     include_project_null_episode: true,
                 });
                 const processedLatest = Array.isArray(latest) ? latest.map(item => {
@@ -1555,7 +1591,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (!projectId || !stableEntityId) return '';
 
         const latestEntities = await fetchEntities(projectId, {
-            episode_id: currentEpisode?.id || undefined,
             include_project_null_episode: true,
         });
         const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
@@ -1566,7 +1601,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         applySubjectEntityImageLocally(stableEntityId, recoveredUrl);
         return recoveredUrl;
-    }, [applySubjectEntityImageLocally, currentEpisode?.id, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
+    }, [applySubjectEntityImageLocally, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
 
     const awaitPersistedSubjectEntityImage = useCallback(async (entityId, options = {}) => {
         const stableEntityId = String(entityId || '').trim();
@@ -2176,7 +2211,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setEntityListLoading(true);
         try {
             const data = await fetchEntities(projectId, {
-                episode_id: currentEpisode?.id || undefined,
                 include_project_null_episode: true,
             });
             const processedData = Array.isArray(data) ? data.map(item => {
@@ -2193,7 +2227,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setEntityListLoading(false);
         }
-    }, [currentEpisode?.id, projectId]);
+    }, [projectId]);
 
     const awaitShotGenerationEntities = useCallback(async () => {
         if (!projectId) return Array.isArray(entities) ? entities : [];
@@ -2211,13 +2245,29 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         loadEntities();
     }, [loadEntities]);
 
-    // Local Filtering based on subTab
     useEffect(() => {
-        setEntities(allEntities.filter(e => e.type === subTab));
-    }, [allEntities, subTab]);
+        setEntityEpisodeScope(currentEpisode?.id ? 'current' : 'all');
+    }, [currentEpisode?.id]);
+
+    const scopedEntities = useMemo(() => {
+        const baseEntities = (allEntities || []);
+        if (entityEpisodeScope !== 'current') {
+            return baseEntities;
+        }
+        const currentEpisodeId = String(currentEpisode?.id || '').trim();
+        if (!currentEpisodeId) {
+            return baseEntities;
+        }
+        return baseEntities.filter((entity) => String(entity?.episode_id || '').trim() === currentEpisodeId);
+    }, [allEntities, currentEpisode?.id, entityEpisodeScope]);
+
+    // Local Filtering based on subTab + episode scope
+    useEffect(() => {
+        setEntities(scopedEntities.filter(e => e.type === subTab));
+    }, [scopedEntities, subTab]);
 
     const subjectCategoryStats = useMemo(() => {
-        return allEntities.reduce((stats, entity) => {
+        return scopedEntities.reduce((stats, entity) => {
             const entityType = String(entity?.type || '').toLowerCase();
             if (Object.prototype.hasOwnProperty.call(stats, entityType)) {
                 stats[entityType].total += 1;
@@ -2232,7 +2282,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             prop: { total: 0, generated: 0 }, 
             poster: { total: 0, generated: 0 } 
         });
-    }, [allEntities]);
+    }, [scopedEntities]);
 
     // Create Entity
     const [isAnalyzingEntity, setIsAnalyzingEntity] = useState(false);
@@ -2576,15 +2626,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const depUrls = [];
         const deps = parseVisualDependencies(analyzed.visual_dependencies);
         deps.forEach(dep => {
-            const depValue = String(dep).trim();
-            const depNormalized = normalizeEntityToken(depValue);
-            const target = allEntities.find(e => {
-                if (!e) return false;
-                if (String(e.id).trim() === depValue) return true;
-                if (normalizeEntityToken(e.name || '') === depNormalized) return true;
-                if (normalizeEntityToken(e.name_en || '') === depNormalized) return true;
-                return false;
-            });
+            const target = resolveDependencyEntity(dep, allEntities);
             if (target?.image_url) depUrls.push(target.image_url);
         });
         const combinedRefs = [primaryRefUrl, ...depUrls]
@@ -2681,10 +2723,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return;
         }
 
-        const confirmed = await confirmUiMessage(t(
-            `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”${skippedSystemCount > 0 ? `（自动跳过系统生成 ${skippedSystemCount} 个）` : ''}，是否继续？`,
-            `Run batch reference image generation for ${targets.length} user-uploaded subject images${skippedSystemCount > 0 ? ` (skip ${skippedSystemCount} system-generated)` : ''}?`
-        ));
+        const confirmMessageZh = skippedSystemCount > 0
+            ? `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”（自动跳过系统生成 ${skippedSystemCount} 个），是否继续？`
+            : `将对 ${targets.length} 个“用户上传图片”主体执行“批量参考生图”，是否继续？`;
+        const confirmMessageEn = skippedSystemCount > 0
+            ? `Run batch reference image generation for ${targets.length} user-uploaded subject images (skip ${skippedSystemCount} system-generated)?`
+            : `Run batch reference image generation for ${targets.length} user-uploaded subject images?`;
+        const confirmed = await confirmUiMessage(t(confirmMessageZh, confirmMessageEn));
         if (!confirmed) return;
 
         subjectBatchReconstructStopRequestedRef.current = false;
@@ -2955,6 +3000,29 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             alert(`Failed to delete all entities: ${e?.message || 'Unknown error'}`);
         }
     };
+
+    function inferPreferredAssetImageType(entity) {
+        const entityId = String(entity?.id || '').trim();
+        const entityFromTable = entityId
+            ? (allEntities || []).find((item) => String(item?.id || '').trim() === entityId)
+            : null;
+
+        const candidates = [
+            entityFromTable?.type,
+            entityFromTable?.entity_type,
+            entityFromTable?.subject_type,
+            entity?.type,
+            entity?.entity_type,
+            entity?.subject_type,
+            entity?.category,
+            subTab,
+        ];
+        for (const candidate of candidates) {
+            const normalized = normalizeEntityAssetType(candidate || '');
+            if (normalized !== 'all') return normalized;
+        }
+        return 'all';
+    }
     
     // Open Image Modal
     const handleOpenImageModal = (entity, defaultTab = 'library') => {
@@ -2968,8 +3036,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
         setAssetKeyword('');
-        setAssetEpisodeFilter(currentEpisode?.id ? `ep:${String(currentEpisode.id)}` : 'all');
-        setAssetImageTypeFilter('all');
+        const currentEpisodeId = String(currentEpisode?.id || entity?.episode_id || '').trim();
+        setAssetEpisodeFilter(currentEpisodeId ? `ep:${currentEpisodeId}` : 'all');
+        const preferredType = inferPreferredAssetImageType(entity);
+        setAssetImageTypeFilter(preferredType !== 'all' ? preferredType : 'all');
+        if (onLog) {
+            const entityFromTable = (allEntities || []).find((item) => String(item?.id || '').trim() === String(entity?.id || '').trim());
+            onLog(
+                `Asset picker defaults: entity=${entity?.name || entity?.name_en || entity?.id}, raw_type=${String(entity?.type || entity?.entity_type || entity?.subject_type || '').trim() || 'N/A'}, table_type=${String(entityFromTable?.type || entityFromTable?.entity_type || entityFromTable?.subject_type || '').trim() || 'N/A'}, preferred_type=${preferredType}, episode_filter=${currentEpisodeId ? `ep:${currentEpisodeId}` : 'all'}`,
+                'process'
+            );
+        }
         setAssetNameFilter('');
         setIncludeHistoricalEpisodeAssets(false);
         const currentProjectKey = String(projectId || '').trim();
@@ -3005,16 +3082,65 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     // Load Assets
     const loadAssets = useCallback(async (options = {}) => {
-        const includeHistory = options.includeHistoricalEpisodeAssets ?? includeHistoricalEpisodeAssets;
         setAssetsLoading(true);
         try {
-            const data = await fetchAssets({
-                project_id: projectId || undefined,
-                episode_id: includeHistory ? undefined : (currentEpisode?.id || undefined),
-                include_project_null_episode: includeHistory ? undefined : true,
-                current_project_asset: 'all',
+            const parseAssetMeta = (asset) => {
+                if (!asset || typeof asset !== 'object') return {};
+                let meta = asset.meta_info;
+                for (let i = 0; i < 3; i += 1) {
+                    if (typeof meta !== 'string') break;
+                    const text = meta.trim();
+                    if (!text) {
+                        meta = {};
+                        break;
+                    }
+                    try {
+                        meta = JSON.parse(text);
+                    } catch {
+                        break;
+                    }
+                }
+                return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+            };
+
+            const isImageType = (value) => {
+                const stable = String(value || '').trim().toLowerCase();
+                if (!stable) return false;
+                return stable === 'image'
+                    || stable.includes('image')
+                    || stable.includes('frame')
+                    || stable.includes('photo');
+            };
+
+            const pageSize = 200;
+            const maxPages = 25;
+            const allRows = [];
+
+            for (let page = 0; page < maxPages; page += 1) {
+                const data = await fetchAssets({
+                    project_id: projectId || undefined,
+                    include_project_null_episode: true,
+                    current_project_asset: 'all',
+                    skip: page * pageSize,
+                    limit: pageSize,
+                });
+                const rows = Array.isArray(data) ? data : [];
+                if (!rows.length) break;
+                allRows.push(...rows);
+                if (rows.length < pageSize) break;
+            }
+
+            const uniqueById = new Map();
+            allRows.forEach((row) => {
+                const key = String(row?.id || '').trim();
+                if (!key || uniqueById.has(key)) return;
+                uniqueById.set(key, {
+                    ...row,
+                    meta_info: parseAssetMeta(row),
+                });
             });
-            const imageAssets = data.filter(a => a.type === 'image');
+
+            const imageAssets = Array.from(uniqueById.values()).filter((a) => isImageType(a?.type));
             setAssets(imageAssets);
 
             const currentProjectKey = String(projectId || '').trim();
@@ -3032,12 +3158,42 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setAssetsLoading(false);
         }
-    }, [currentEpisode?.id, includeHistoricalEpisodeAssets, projectId]);
+    }, [projectId]);
 
     useEffect(() => {
         if (!showImageModal) return;
         loadAssets();
     }, [showImageModal, loadAssets]);
+
+    const activeAssetLibraryEntity = useMemo(() => {
+        if (showImageModal) return selectedEntity;
+        if (refSelectionMode === 'assets') return viewingEntity;
+        return selectedEntity || viewingEntity || null;
+    }, [refSelectionMode, selectedEntity, showImageModal, viewingEntity]);
+
+    useEffect(() => {
+        if (!showImageModal && refSelectionMode !== 'assets') {
+            assetLibraryContextResetRef.current = '';
+            return;
+        }
+        const currentEpisodeId = String(currentEpisode?.id || activeAssetLibraryEntity?.episode_id || '').trim();
+        const resetKey = [
+            showImageModal ? 'image-modal' : 'design-ref-assets',
+            String(activeAssetLibraryEntity?.id || '').trim(),
+            currentEpisodeId,
+        ].join('::');
+        if (assetLibraryContextResetRef.current === resetKey) return;
+        assetLibraryContextResetRef.current = resetKey;
+        
+        const preferredType = activeAssetLibraryEntity ? (String(activeAssetLibraryEntity?.type || '').toLowerCase() === 'environment' ? 'environment' : (String(activeAssetLibraryEntity?.type || '').toLowerCase() === 'prop' ? 'prop' : 'character')) : 'all';
+        const desiredType = preferredType !== 'all' ? preferredType : 'all';
+
+        setAssetEpisodeFilter(currentEpisodeId ? `ep:${currentEpisodeId}` : 'all');
+        setAssetImageTypeFilter(desiredType);
+        setIncludeHistoricalEpisodeAssets(false);
+        setAssetNameFilter('');
+        loadAssets({ includeHistoricalEpisodeAssets: false });
+    }, [activeAssetLibraryEntity, allEntities, currentEpisode?.id, refSelectionMode, showImageModal, loadAssets, subTab]);
 
     useEffect(() => {
         if (refSelectionMode !== 'assets') return;
@@ -3047,43 +3203,232 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const getAssetMeta = useCallback((asset) => {
         if (!asset || typeof asset !== 'object') return {};
-        const meta = asset.meta_info;
-        return meta && typeof meta === 'object' ? meta : {};
+        let meta = asset.meta_info;
+        for (let i = 0; i < 3; i += 1) {
+            if (typeof meta !== 'string') break;
+            const text = meta.trim();
+            if (!text) {
+                meta = {};
+                break;
+            }
+            try {
+                meta = JSON.parse(text);
+            } catch {
+                break;
+            }
+        }
+        if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
+
+        const merged = {};
+        const visit = (node) => {
+            if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+            Object.entries(node).forEach(([k, v]) => {
+                if (v === null || v === undefined) return;
+                if (typeof v === 'object' && !Array.isArray(v)) {
+                    visit(v);
+                    return;
+                }
+                if (!(k in merged)) merged[k] = v;
+            });
+        };
+        visit(meta);
+        return merged;
+    }, []);
+
+    const pickAssetMetaValue = useCallback((meta, keys = []) => {
+        if (!meta || typeof meta !== 'object') return '';
+        const toKey = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const lookup = {};
+        Object.entries(meta).forEach(([k, v]) => {
+            if (v === null || v === undefined) return;
+            lookup[toKey(k)] = v;
+        });
+        for (const key of keys) {
+            const stable = toKey(key);
+            if (!stable) continue;
+            const raw = lookup[stable];
+            const text = String(raw || '').trim();
+            if (!text) continue;
+            if (['null', 'undefined', 'nan'].includes(text.toLowerCase())) continue;
+            return text;
+        }
+        return '';
+    }, []);
+
+    const normalizeEntityAssetType = useCallback((value) => {
+        const stable = String(value || '').trim().toLowerCase();
+        if (!stable) return 'all';
+        if (
+            ['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(stable)
+            || stable.includes('char')
+            || stable.includes('role')
+            || stable.includes('角色')
+            || stable.includes('人物')
+        ) return 'character';
+        if (
+            ['prop', 'props', '道具', '物件'].includes(stable)
+            || stable.includes('prop')
+            || stable.includes('道具')
+            || stable.includes('物件')
+        ) return 'prop';
+        if (
+            ['environment', 'environments', 'scene', 'scenes', 'poster', '背景', '场景', '环境', '封面'].includes(stable)
+            || stable.includes('env')
+            || stable.includes('scene')
+            || stable.includes('poster')
+            || stable.includes('背景')
+            || stable.includes('场景')
+            || stable.includes('环境')
+            || stable.includes('封面')
+        ) return 'environment';
+        return 'all';
+    }, []);
+
+    const isImageAssetType = useCallback((value) => {
+        const stable = String(value || '').trim().toLowerCase();
+        if (!stable) return false;
+        return stable === 'image'
+            || stable.includes('image')
+            || stable.includes('frame')
+            || stable.includes('photo');
     }, []);
 
     const getAssetProjectId = useCallback((asset) => {
         const meta = getAssetMeta(asset);
-        const idVal = meta.project_id;
+        const idVal = pickAssetMetaValue(meta, ['project_id', 'projectId', 'owner_project_id', 'ownerProjectId']) || asset?.project_id;
         return String(idVal || '').trim();
-    }, [getAssetMeta]);
+    }, [getAssetMeta, pickAssetMetaValue]);
 
     const getAssetProjectLabel = useCallback((asset) => {
         const meta = getAssetMeta(asset);
-        const projectId = String(meta.project_id || '').trim();
-        const projectTitle = String(meta.project_title || '').trim();
+        const projectId = String(pickAssetMetaValue(meta, ['project_id', 'projectId', 'owner_project_id', 'ownerProjectId']) || '').trim();
+        const projectTitle = String(pickAssetMetaValue(meta, ['project_title', 'projectTitle', 'owner_project_title', 'ownerProjectTitle']) || '').trim();
         if (projectTitle && projectId) return `${projectTitle} (#${projectId})`;
         if (projectTitle) return projectTitle;
         if (projectId) return `Project #${projectId}`;
         return t('未标注项目', 'Unassigned Project');
-    }, [getAssetMeta, t]);
+    }, [getAssetMeta, pickAssetMetaValue, t]);
+
+    const getAssetEntityId = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        return String(
+            pickAssetMetaValue(meta, [
+                'entity_id',
+                'entityId',
+                'subject_id',
+                'subjectId',
+                'character_id',
+                'characterId',
+                'owner_entity_id',
+                'ownerEntityId',
+            ]) || asset?.entity_id || asset?.character_id || ''
+        ).trim();
+    }, [getAssetMeta, pickAssetMetaValue]);
+
+    const resolveAssetEntity = useCallback((asset) => {
+        const entityId = getAssetEntityId(asset);
+        if (!entityId) return null;
+        return (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null;
+    }, [allEntities, getAssetEntityId]);
+
+    const resolveAssetImageUrlEntity = useCallback((asset) => {
+        const assetTokens = collectAssetUrlTokens(asset?.url);
+        if (!(assetTokens instanceof Set) || assetTokens.size === 0) return null;
+        return (allEntities || []).find((entity) => {
+            const imageUrl = String(entity?.image_url || '').trim();
+            if (!imageUrl) return false;
+            const entityTokens = collectAssetUrlTokens(imageUrl);
+            for (const token of entityTokens) {
+                if (assetTokens.has(token)) return true;
+            }
+            return false;
+        }) || null;
+    }, [allEntities, collectAssetUrlTokens]);
 
     const getAssetEpisodeId = useCallback((asset) => {
         const meta = getAssetMeta(asset);
-        const episodeId = meta.episode_id;
+        const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
+        const episodeId = pickAssetMetaValue(meta, ['episode_id', 'episodeId', 'owner_episode_id', 'ownerEpisodeId']) || asset?.episode_id || entityRecord?.episode_id;
         return String(episodeId || '').trim();
-    }, [getAssetMeta]);
+    }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity]);
 
     const getAssetEpisodeLabel = useCallback((asset) => {
         const meta = getAssetMeta(asset);
-        const episodeId = String(meta.episode_id || '').trim();
-        const episodeTitle = String(meta.episode_title || '').trim();
+        const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
+        const episodeId = String(pickAssetMetaValue(meta, ['episode_id', 'episodeId', 'owner_episode_id', 'ownerEpisodeId']) || asset?.episode_id || entityRecord?.episode_id || '').trim();
+        const episodeTitle = String(pickAssetMetaValue(meta, ['episode_title', 'episodeTitle', 'owner_episode_title', 'ownerEpisodeTitle']) || '').trim();
         if (episodeTitle && episodeId) return `${episodeTitle} (#${episodeId})`;
         if (episodeTitle) return episodeTitle;
         if (episodeId) return `${t('分集', 'Episode')} #${episodeId}`;
         return t('未标注分集', 'Unassigned Episode');
-    }, [getAssetMeta, t]);
+    }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity, t]);
+
+    const normalizeAssetImageType = useCallback((value) => {
+        const stable = String(value || '').trim().toLowerCase();
+        if (!stable) return '';
+        if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(stable)) return 'character';
+        if (['prop', 'props', '道具', '物件'].includes(stable)) return 'prop';
+        if (['environment', 'environments', 'scene', 'scenes', 'poster', '背景', '场景', '环境', '封面'].includes(stable)) return 'environment';
+        return stable;
+    }, []);
+
+    const getAssetEntityDisplayName = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const entityId = String(
+            getAssetEntityId(asset) ||
+            ''
+        ).trim();
+
+        let entityRecord = null;
+        if (entityId) {
+            entityRecord = (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null;
+        }
+        if (!entityRecord) {
+            entityRecord = resolveAssetImageUrlEntity(asset);
+        }
+
+        const nameZh = String(
+            entityRecord?.name ||
+            pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName', 'owner_entity_name', 'ownerEntityName', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']) ||
+            ''
+        ).trim();
+        const nameEn = String(
+            entityRecord?.name_en ||
+            pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn', 'owner_entity_name_en', 'ownerEntityNameEn', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']) ||
+            ''
+        ).trim();
+
+        if (nameZh && nameEn && nameZh.toLowerCase() !== nameEn.toLowerCase()) return `${nameZh} / ${nameEn}`;
+        if (nameZh) return nameZh;
+        if (nameEn) return nameEn;
+        return '';
+    }, [allEntities, getAssetEntityId, getAssetMeta, pickAssetMetaValue, resolveAssetImageUrlEntity]);
+
+    const isExplicitShotAsset = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const frameType = String(
+            pickAssetMetaValue(meta, ['asset_type', 'assetType', 'frame_type', 'frameType']) || ''
+        ).trim().toLowerCase();
+        if (
+            frameType.includes('start')
+            || frameType.includes('end')
+            || frameType.includes('keyframe')
+            || frameType.includes('video')
+            || frameType.includes('shot')
+        ) return true;
+
+        const shotNumber = String(pickAssetMetaValue(meta, ['shot_number', 'shotNumber', 'shot_no', 'shotNo']) || '').trim();
+        const shotName = String(pickAssetMetaValue(meta, ['shot_name', 'shotName']) || '').trim();
+        if (shotNumber || shotName) return true;
+
+        const assetName = String(asset?.name || asset?.filename || asset?.remark || '').trim().toLowerCase();
+        return assetName.includes('分镜') || assetName.includes('storyboard') || assetName.includes('shot_');
+    }, [getAssetMeta, pickAssetMetaValue]);
 
     const getAssetDisplayName = useCallback((asset) => {
+        const entityDisplay = getAssetEntityDisplayName(asset);
+        if (entityDisplay) return entityDisplay;
+
         const stableName = String(asset?.name || '').trim();
         if (stableName) return stableName;
         const fileName = String(asset?.filename || '').trim();
@@ -3091,37 +3436,174 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const remark = String(asset?.remark || '').trim();
         if (remark) return remark;
         return String(asset?.id || '').trim() || t('未命名素材', 'Unnamed asset');
-    }, [t]);
-
-    const inferPreferredAssetImageType = useCallback((entity) => {
-        const entityType = String(entity?.type || '').trim().toLowerCase();
-        if (entityType === 'character') return 'character';
-        if (entityType === 'prop') return 'prop';
-        if (entityType === 'environment' || entityType === 'poster') return 'environment';
-        return 'all';
-    }, []);
+    }, [getAssetEntityDisplayName, t]);
 
     const getAssetImageType = useCallback((asset) => {
         const meta = getAssetMeta(asset);
-        const source = String(meta.source || '').trim().toLowerCase();
-        if (source === 'file_upload') return 'uploaded_asset';
-        return String(
-            meta.asset_type ||
-            meta.frame_type ||
-            meta.subject_type ||
-            meta.entity_type ||
-            meta.category ||
+        const source = String(pickAssetMetaValue(meta, ['source']) || '').trim().toLowerCase();
+
+        if (isExplicitShotAsset(asset)) return '';
+
+        const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
+        const entityTypeFromTable = normalizeAssetImageType(
+            entityRecord?.type
+            || entityRecord?.entity_type
+            || entityRecord?.subject_type
+            || ''
+        );
+        if (entityTypeFromTable) return entityTypeFromTable;
+
+        const directType = normalizeAssetImageType(String(
+            pickAssetMetaValue(meta, [
+                'asset_type',
+                'assetType',
+                'frame_type',
+                'frameType',
+                'subject_type',
+                'subjectType',
+                'entity_type',
+                'entityType',
+                'category',
+            ]) ||
             ''
-        ).trim().toLowerCase();
-    }, [getAssetMeta]);
+        ));
+        if (directType) return directType;
+
+        const entityId = String(
+            getAssetEntityId(asset) ||
+            asset?.entity_id ||
+            ''
+        ).trim();
+        if (!entityId) return '';
+
+        const fallbackEntityRecord = (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null;
+        const fallbackEntityType = normalizeAssetImageType(fallbackEntityRecord?.type || '');
+        if (fallbackEntityType) return fallbackEntityType;
+
+        if (source === 'file_upload') return 'uploaded_asset';
+        return '';
+    }, [allEntities, getAssetEntityId, getAssetMeta, isExplicitShotAsset, normalizeAssetImageType, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity]);
 
     const getAssetImageTypeLabel = useCallback((typeName) => {
         const normalized = String(typeName || '').trim().toLowerCase();
+        if (normalized === 'character') return t('角色素材', 'Character Assets');
+        if (normalized === 'prop') return t('道具素材', 'Prop Assets');
+        if (normalized === 'environment') return t('环境素材', 'Environment Assets');
         if (normalized === 'uploaded_asset') {
             return t('上传资产', 'Uploaded Asset');
         }
         return typeName;
     }, [t]);
+
+    const normalizeEntityLookupKey = useCallback((value) => {
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '');
+    }, []);
+
+    const selectedEntityAliasIds = useMemo(() => {
+        const selectedId = String(activeAssetLibraryEntity?.id || '').trim();
+        const selectedType = normalizeAssetImageType(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || '');
+        const selectedAttrs = getEntityCustomAttributes(activeAssetLibraryEntity);
+        const selectedClonedFromId = String(selectedAttrs?.cloned_from_entity_id || '').trim();
+        const nameKeys = new Set(
+            [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
+                .map(normalizeEntityLookupKey)
+                .filter(Boolean)
+        );
+        const ids = new Set();
+        if (selectedId) ids.add(selectedId);
+        if (selectedClonedFromId) ids.add(selectedClonedFromId);
+        (allEntities || []).forEach((entity) => {
+            const entityId = String(entity?.id || '').trim();
+            if (!entityId) return;
+            const entityType = normalizeAssetImageType(entity?.type || entity?.entity_type || entity?.subject_type || '');
+            if (selectedType && entityType && entityType !== selectedType) return;
+            const entityAttrs = getEntityCustomAttributes(entity);
+            const entityClonedFromId = String(entityAttrs?.cloned_from_entity_id || '').trim();
+            const entityNameKeys = [entity?.name, entity?.name_en].map(normalizeEntityLookupKey).filter(Boolean);
+            if (
+                entityNameKeys.some((key) => nameKeys.has(key))
+                || (selectedId && entityClonedFromId === selectedId)
+                || (selectedClonedFromId && entityId === selectedClonedFromId)
+                || (selectedClonedFromId && entityClonedFromId === selectedClonedFromId)
+            ) {
+                ids.add(entityId);
+                if (entityClonedFromId) ids.add(entityClonedFromId);
+            }
+        });
+        return ids;
+    }, [activeAssetLibraryEntity, allEntities, getEntityCustomAttributes, normalizeAssetImageType, normalizeEntityLookupKey]);
+
+    const selectedEntityAliasImageTokens = useMemo(() => {
+        const tokenSet = new Set();
+        const pushEntityTokens = (entity) => {
+            const imageUrl = String(entity?.image_url || '').trim();
+            if (!imageUrl) return;
+            collectAssetUrlTokens(imageUrl).forEach((token) => tokenSet.add(token));
+        };
+        pushEntityTokens(activeAssetLibraryEntity);
+        (allEntities || []).forEach((entity) => {
+            const entityId = String(entity?.id || '').trim();
+            if (!entityId || !selectedEntityAliasIds.has(entityId)) return;
+            pushEntityTokens(entity);
+        });
+        return tokenSet;
+    }, [activeAssetLibraryEntity, allEntities, collectAssetUrlTokens, selectedEntityAliasIds]);
+
+    const doesAssetMatchSelectedEntityImageUrl = useCallback((asset) => {
+        if (!(selectedEntityAliasImageTokens instanceof Set) || selectedEntityAliasImageTokens.size === 0) return false;
+        const assetTokens = collectAssetUrlTokens(asset?.url);
+        for (const token of assetTokens) {
+            if (selectedEntityAliasImageTokens.has(token)) return true;
+        }
+        return false;
+    }, [collectAssetUrlTokens, selectedEntityAliasImageTokens]);
+
+    const doesAssetMatchSelectedEntity = useCallback((asset) => {
+        const selectedId = String(activeAssetLibraryEntity?.id || '').trim();
+        if (!selectedId) return true;
+
+        const selectedType = normalizeAssetImageType(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || '');
+        const assetType = getAssetImageType(asset);
+        if (selectedType && assetType && assetType !== selectedType) return false;
+
+        const assetEntityId = String(getAssetEntityId(asset) || '').trim();
+        if (assetEntityId && selectedEntityAliasIds.has(assetEntityId)) return true;
+        if (doesAssetMatchSelectedEntityImageUrl(asset)) return true;
+
+        const meta = getAssetMeta(asset);
+        const assetNameKeys = new Set([
+            pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName', 'owner_entity_name', 'ownerEntityName', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']),
+            pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn', 'owner_entity_name_en', 'ownerEntityNameEn', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']),
+            getAssetEntityDisplayName(asset),
+        ].map(normalizeEntityLookupKey).filter(Boolean));
+
+        const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
+            .map(normalizeEntityLookupKey)
+            .filter(Boolean);
+
+        if (selectedNameKeys.some((key) => assetNameKeys.has(key))) return true;
+        return false;
+    }, [activeAssetLibraryEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetImageType, getAssetMeta, normalizeAssetImageType, normalizeEntityLookupKey, pickAssetMetaValue, selectedEntityAliasIds]);
+
+    const preferredAssetImageType = useMemo(() => {
+        return inferPreferredAssetImageType(activeAssetLibraryEntity);
+    }, [activeAssetLibraryEntity, allEntities, subTab]);
+
+    const assetScopedImageTypeOptions = useMemo(() => {
+        const options = [
+            { value: 'all', label: t('全部素材（兜底）', 'All Materials (Fallback)') },
+        ];
+        if (preferredAssetImageType && preferredAssetImageType !== 'all') {
+            options.unshift({
+                value: preferredAssetImageType,
+                label: getAssetImageTypeLabel(preferredAssetImageType),
+            });
+        }
+        return options;
+    }, [getAssetImageTypeLabel, preferredAssetImageType, t]);
+
+    const assetPickerDiagRef = useRef('');
+    const assetLibraryContextResetRef = useRef('');
 
     const assetProjectOptions = useMemo(() => {
         const map = new Map();
@@ -3136,18 +3618,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             .map(([value, label]) => ({ value, label }))
             .sort((a, b) => a.label.localeCompare(b.label));
     }, [assets, getAssetProjectId, getAssetProjectLabel]);
-
-    const assetImageTypeOptions = useMemo(() => {
-        const set = new Set();
-        for (const asset of assets || []) {
-            const typeName = getAssetImageType(asset);
-            if (typeName) set.add(typeName);
-        }
-        set.add('uploaded_asset');
-        return Array.from(set)
-            .map((value) => ({ value, label: getAssetImageTypeLabel(value) }))
-            .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
-    }, [assets, getAssetImageType, getAssetImageTypeLabel]);
 
     const assetEpisodeOptions = useMemo(() => {
         const map = new Map();
@@ -3164,19 +3634,124 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [assets, getAssetEpisodeId, getAssetEpisodeLabel]);
 
     const libraryFilteredAssets = useMemo(() => {
-        return (assets || []).filter((asset) => {
+        const sourceAssets = Array.isArray(assets) ? assets : [];
+        const nonShotAssets = sourceAssets.filter((asset) => !isExplicitShotAsset(asset));
+        const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
+            .map(normalizeEntityLookupKey)
+            .filter(Boolean);
+        const characterCandidates = nonShotAssets
+            .filter((asset) => {
+                const imageType = getAssetImageType(asset);
+                if (imageType === 'character') return true;
+                return imageType === 'uploaded_asset' && preferredAssetImageType === 'character' && doesAssetMatchSelectedEntityImageUrl(asset);
+            })
+            .slice(0, 12)
+            .map((asset) => {
+                const meta = getAssetMeta(asset);
+                return {
+                    id: asset?.id,
+                    name: asset?.name || asset?.filename || asset?.remark || '',
+                    entityId: getAssetEntityId(asset),
+                    episodeId: getAssetEpisodeId(asset),
+                    imageType: getAssetImageType(asset),
+                    entityName: pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName', 'owner_entity_name', 'ownerEntityName']) || '',
+                    entityNameEn: pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn', 'owner_entity_name_en', 'ownerEntityNameEn']) || '',
+                    matchesById: selectedEntityAliasIds.has(String(getAssetEntityId(asset) || '').trim()),
+                    matchesByImageUrl: doesAssetMatchSelectedEntityImageUrl(asset),
+                    matchesByName: (() => {
+                        const nameKeys = new Set([
+                            pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName']),
+                            pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn']),
+                            getAssetEntityDisplayName(asset),
+                        ].map(normalizeEntityLookupKey).filter(Boolean));
+                        return selectedNameKeys.some((key) => nameKeys.has(key));
+                    })(),
+                };
+            });
+        const entityMatchedAssets = assetImageTypeFilter === 'all' 
+            ? nonShotAssets 
+            : nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset));
+        const episodeMatchedAssets = entityMatchedAssets.filter((asset) => {
             const episodeId = getAssetEpisodeId(asset);
-            if (assetEpisodeFilter !== 'all') {
-                const wantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
-                if (episodeId !== wantedEpisodeId) return false;
-            }
-
-            const imageType = getAssetImageType(asset);
-            if (assetImageTypeFilter !== 'all' && imageType !== assetImageTypeFilter) return false;
-
-            return true;
+            if (assetEpisodeFilter === 'all') return true;
+            const wantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
+            return episodeId === wantedEpisodeId;
         });
-    }, [assets, assetEpisodeFilter, assetImageTypeFilter, getAssetEpisodeId, getAssetImageType]);
+        const typeMatchedAssets = episodeMatchedAssets.filter((asset) => {
+            const imageType = getAssetImageType(asset);
+            if (assetImageTypeFilter === 'all') return true;
+            if (imageType === 'uploaded_asset' && assetImageTypeFilter === preferredAssetImageType && doesAssetMatchSelectedEntityImageUrl(asset)) {
+                return true;
+            }
+            return imageType === assetImageTypeFilter;
+        });
+
+        if (typeof window !== 'undefined') {
+            console.log('[设计资产][library-filter-stages]', {
+                entity: {
+                    id: String(activeAssetLibraryEntity?.id || ''),
+                    name: activeAssetLibraryEntity?.name || activeAssetLibraryEntity?.name_en || '',
+                    type: String(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || ''),
+                    aliasIds: Array.from(selectedEntityAliasIds),
+                    aliasImageTokens: Array.from(selectedEntityAliasImageTokens),
+                    selectedNameKeys,
+                },
+                filters: {
+                    assetEpisodeFilter,
+                    assetImageTypeFilter,
+                },
+                counts: {
+                    source: sourceAssets.length,
+                    nonShot: nonShotAssets.length,
+                    entityMatched: entityMatchedAssets.length,
+                    episodeMatched: episodeMatchedAssets.length,
+                    typeMatched: typeMatchedAssets.length,
+                },
+                characterCandidates,
+                sampleAfterEntity: entityMatchedAssets.slice(0, 8).map((asset) => ({
+                    id: asset?.id,
+                    name: asset?.name || asset?.filename || asset?.remark || '',
+                    entityId: getAssetEntityId(asset),
+                    episodeId: getAssetEpisodeId(asset),
+                    imageType: getAssetImageType(asset),
+                })),
+            });
+            console.log(
+                '[设计资产][library-filter-stages:flat]',
+                JSON.stringify({
+                    entity: {
+                        id: String(activeAssetLibraryEntity?.id || ''),
+                        name: activeAssetLibraryEntity?.name || activeAssetLibraryEntity?.name_en || '',
+                        type: String(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || ''),
+                        aliasIds: Array.from(selectedEntityAliasIds),
+                        aliasImageTokens: Array.from(selectedEntityAliasImageTokens),
+                        selectedNameKeys,
+                    },
+                    filters: {
+                        assetEpisodeFilter,
+                        assetImageTypeFilter,
+                    },
+                    counts: {
+                        source: sourceAssets.length,
+                        nonShot: nonShotAssets.length,
+                        entityMatched: entityMatchedAssets.length,
+                        episodeMatched: episodeMatchedAssets.length,
+                        typeMatched: typeMatchedAssets.length,
+                    },
+                    characterCandidates,
+                    sampleAfterEntity: entityMatchedAssets.slice(0, 8).map((asset) => ({
+                        id: asset?.id,
+                        name: asset?.name || asset?.filename || asset?.remark || '',
+                        entityId: getAssetEntityId(asset),
+                        episodeId: getAssetEpisodeId(asset),
+                        imageType: getAssetImageType(asset),
+                    })),
+                })
+            );
+        }
+
+        return typeMatchedAssets;
+    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
 
     const assetNameOptions = useMemo(() => {
         return libraryFilteredAssets
@@ -3192,6 +3767,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (!assetNameFilter) return libraryFilteredAssets[0] || null;
         return libraryFilteredAssets.find((asset) => String(asset?.id || '').trim() === assetNameFilter) || null;
     }, [libraryFilteredAssets, assetNameFilter]);
+
+    useEffect(() => {
+        if ((!showImageModal || imageModalTab !== 'library') && refSelectionMode !== 'assets') return;
+        if (!onLog) return;
+        const optionValues = assetScopedImageTypeOptions.map((item) => item.value).join('|');
+        const diagSignature = [
+            String(activeAssetLibraryEntity?.id || ''),
+            String(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || ''),
+            String(assetEpisodeFilter || ''),
+            String(assetImageTypeFilter || ''),
+            String(assets.length || 0),
+            String(libraryFilteredAssets.length || 0),
+            optionValues,
+        ].join('::');
+        if (assetPickerDiagRef.current === diagSignature) return;
+        assetPickerDiagRef.current = diagSignature;
+        onLog(
+            `Asset picker diag: entity=${activeAssetLibraryEntity?.name || activeAssetLibraryEntity?.name_en || activeAssetLibraryEntity?.id || 'N/A'}, raw_type=${String(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || '').trim() || 'N/A'}, preferred_type=${preferredAssetImageType}, options=${optionValues || 'none'}, episode_filter=${assetEpisodeFilter}, type_filter=${assetImageTypeFilter}, assets_total=${assets.length}, assets_matched=${libraryFilteredAssets.length}`,
+            'process'
+        );
+    }, [activeAssetLibraryEntity, assetEpisodeFilter, assetImageTypeFilter, assetScopedImageTypeOptions, assets.length, imageModalTab, libraryFilteredAssets.length, onLog, preferredAssetImageType, refSelectionMode, showImageModal]);
 
     const filteredAssets = useMemo(() => {
         const keyword = String(assetKeyword || '').trim().toLowerCase();
@@ -3209,8 +3805,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 asset?.filename,
                 asset?.remark,
                 asset?.url,
+                getAssetEntityDisplayName(asset),
                 meta?.project_title,
                 meta?.project_id,
+                meta?.entity_name,
+                meta?.entity_name_en,
+                meta?.subject_name,
+                meta?.subject_name_en,
                 meta?.asset_type,
                 meta?.frame_type,
                 meta?.subject_type,
@@ -3228,25 +3829,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         assetImageTypeFilter,
         getAssetProjectId,
         getAssetImageType,
+        getAssetEntityDisplayName,
         getAssetMeta,
     ]);
 
     useEffect(() => {
+        // Keep "All Types" as default to avoid silently hiding entity names in the picker.
         if (!showImageModal || imageModalTab !== 'library') return;
-        if (assetImageTypeFilter !== 'all') return;
-
-        const preferredType = inferPreferredAssetImageType(selectedEntity);
-        if (!preferredType || preferredType === 'all') return;
-        if (!assetImageTypeOptions.some((item) => item.value === preferredType)) return;
-        setAssetImageTypeFilter(preferredType);
-    }, [
-        showImageModal,
-        imageModalTab,
-        selectedEntity,
-        assetImageTypeFilter,
-        assetImageTypeOptions,
-        inferPreferredAssetImageType,
-    ]);
+    }, [showImageModal, imageModalTab]);
 
     useEffect(() => {
         if (!showImageModal || imageModalTab !== 'library') return;
@@ -3488,19 +4078,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (activeEntity && activeEntity.visual_dependencies) {
                  const deps = parseVisualDependencies(activeEntity.visual_dependencies);
                  deps.forEach(dep => {
-                     // dep can be name or id
-                     const startDep = String(dep).trim();
-                     const startDepNormalized = normalizeEntityToken(startDep);
-                     if (!startDep) return;
-                     
-                     // Use allEntities for resolution with case-insensitive match
-                     const target = allEntities.find(e => {
-                         if (!e) return false;
-                         if (String(e.id).trim() === startDep) return true;
-                         if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
-                         if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
-                         return false;
-                     });
+                     const target = resolveDependencyEntity(dep, allEntities);
 
                      if (target && target.image_url) {
                          depUrls.push(target.image_url);
@@ -3782,12 +4360,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             
             return deps.every(depRaw => {
                 const dep = normalizeEntityToken(depRaw);
-                let target = null;
-                 if (allEntities.find(e => String(e.id).trim() === dep)) {
-                     target = allEntities.find(e => String(e.id).trim() === dep);
-                 } else {
-                     target = nameMap.get(dep);
-                 }
+                const target = resolveDependencyEntity(depRaw, allEntities) || nameMap.get(dep) || null;
 
                 if (!target) return true; // External/Unknown dep doesn't block
                 return urlMap.has(target.id);
@@ -3840,16 +4413,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 const depUrls = [];
                 const deps = parseVisualDependencies(entity.visual_dependencies);
                 deps.forEach(dep => {
-                    const startDep = String(dep).trim();
-                    const startDepNormalized = normalizeEntityToken(startDep);
-
-                    const target = allEntities.find(e => {
-                        if (!e) return false;
-                        if (String(e.id).trim() === startDep) return true;
-                        if (normalizeEntityToken(e.name || '') === startDepNormalized) return true;
-                        if (normalizeEntityToken(e.name_en || '') === startDepNormalized) return true;
-                        return false;
-                    });
+                    const target = resolveDependencyEntity(dep, allEntities);
 
                     if (target && urlMap.has(target.id)) {
                         depUrls.push(urlMap.get(target.id));
@@ -4187,7 +4751,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 <div className="flex flex-col gap-3">
                     <div className="flex gap-1.5 bg-gradient-to-r from-white/10 via-white/5 to-white/10 border border-white/15 p-1.5 rounded-xl self-start shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
                         <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary font-mono mr-1">
-                            {t('合计', 'Total')}: {allEntities.filter(e => e.image_url).length}/{allEntities.length}
+                            {t('合计', 'Total')}: {scopedEntities.filter(e => e.image_url).length}/{scopedEntities.length}
                         </span>
                         {[
                             { key: 'character', label: t('角色', 'Char'), title: t('角色', 'Characters') },
@@ -4208,6 +4772,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         )})}
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2">
                             <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} />
+                        </div>
+                        <div className="flex items-center ml-2 border-l border-white/20 pl-2">
+                            <select
+                                value={entityEpisodeScope}
+                                onChange={(e) => setEntityEpisodeScope(e.target.value)}
+                                className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-bold text-white outline-none transition-colors hover:bg-white/10"
+                            >
+                                <option value="current">{t('当前分集', 'Current Episode')}</option>
+                                <option value="all">{t('整个项目', 'Whole Project')}</option>
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -5166,19 +5740,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动作为参考）', 'Visual Dependencies (Auto-Used)')}</label>
                                                     <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
-                                                            const startDep = String(dep).trim();
-                                                            const startDepNormalized = normalizeEntityToken(startDep);
-
-                                                            const depEntity = allEntities.find(e => {
-                                                                if (!e) return false;
-                                                                const entityId = String(e.id || '').trim();
-                                                                const entityName = normalizeEntityToken(e.name || '');
-                                                                const entityNameEn = normalizeEntityToken(e.name_en || '');
-                                                                if (entityId && entityId === startDep) return true;
-                                                                if (startDepNormalized && entityName && entityName === startDepNormalized) return true;
-                                                                if (startDepNormalized && entityNameEn && entityNameEn === startDepNormalized) return true;
-                                                                return false;
-                                                            });
+                                                            const depEntity = resolveDependencyEntity(dep, allEntities);
 
                                                             return (
                                                                 <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
@@ -5290,8 +5852,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                          onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                                          className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                                      >
-                                                                         <option value="all">{t('全部类型', 'All Types')}</option>
-                                                                         {assetImageTypeOptions.map((item) => (
+                                                                         {assetScopedImageTypeOptions.map((item) => (
                                                                              <option key={item.value} value={item.value}>{item.label}</option>
                                                                          ))}
                                                                      </select>
@@ -5321,7 +5882,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                              <SafeImage src={selectedLibraryAsset.url} alt={getAssetDisplayName(selectedLibraryAsset)} className="w-full h-full object-cover" />
                                                                          </div>
                                                                          <div className="flex-1 min-w-0 space-y-1">
-                                                                             <div className="text-xs font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                                            <div className="text-xs font-semibold text-white break-words leading-snug" title={getAssetDisplayName(selectedLibraryAsset)}>{getAssetDisplayName(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
                                                                              <button
@@ -5685,8 +6246,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                 className="bg-black/40 border border-white/10 rounded-md px-2 py-2 text-xs text-white focus:border-primary/50 outline-none"
                                             >
-                                                <option value="all">{t('全部图片类型', 'All Image Types')}</option>
-                                                {assetImageTypeOptions.map((item) => (
+                                                {assetScopedImageTypeOptions.map((item) => (
                                                     <option key={item.value} value={item.value}>{item.label}</option>
                                                 ))}
                                             </select>
@@ -5725,7 +6285,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     />
                                                 </div>
                                                 <div className="space-y-1.5">
-                                                    <div className="text-sm font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                    <div className="text-sm font-semibold text-white break-words leading-snug" title={getAssetDisplayName(selectedLibraryAsset)}>{getAssetDisplayName(selectedLibraryAsset)}</div>
                                                     <div className="text-[11px] text-muted-foreground truncate">
                                                         {t('分集：', 'Episode: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}
                                                     </div>
@@ -5822,7 +6382,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     const processed = processPrompt(text, epInfo, allEntities);
                                                     return { text: processed, modified: processed !== text };
                                                 }}
-                                                onPickMedia={(cb) => openMediaPicker(cb, { entityId: selectedEntity?.id })}
+                                                onPickMedia={(cb) => openMediaPicker(cb, {
+                                                    entityId: selectedEntity?.id,
+                                                    disableShotFilter: true,
+                                                    defaultSecondaryKind: 'entity',
+                                                    defaultSubCategory: 'character',
+                                                })}
                                                 type="image"
                                             />
                                         </div>
@@ -5875,19 +6440,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 <label className="text-[10px] uppercase font-bold text-muted-foreground mb-1 block">{t('视觉依赖（自动使用）', 'Visual Dependencies (Auto-Used)')}</label>
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
-                                                        const startDep = String(dep).trim();
-                                                        const startDepNormalized = normalizeEntityToken(startDep);
-                                                        
-                                                        const depEntity = allEntities.find(e => {
-                                                            if (!e) return false;
-                                                            const entityId = String(e.id || '').trim();
-                                                            const entityName = normalizeEntityToken(e.name || '');
-                                                            const entityNameEn = normalizeEntityToken(e.name_en || '');
-                                                            if (entityId && entityId === startDep) return true;
-                                                            if (startDepNormalized && entityName && entityName === startDepNormalized) return true;
-                                                            if (startDepNormalized && entityNameEn && entityNameEn === startDepNormalized) return true;
-                                                            return false;
-                                                        });
+                                                        const depEntity = resolveDependencyEntity(dep, allEntities);
                                                         
                                                         return (
                                                             <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
@@ -6003,8 +6556,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                      onChange={(e) => setAssetImageTypeFilter(e.target.value)}
                                                                      className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
                                                                  >
-                                                                     <option value="all">{t('全部类型', 'All Types')}</option>
-                                                                     {assetImageTypeOptions.map((item) => (
+                                                                     {assetScopedImageTypeOptions.map((item) => (
                                                                          <option key={item.value} value={item.value}>{item.label}</option>
                                                                      ))}
                                                                  </select>
@@ -6034,7 +6586,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                          <SafeImage src={selectedLibraryAsset.url} alt={getAssetDisplayName(selectedLibraryAsset)} className="w-full h-full object-cover" />
                                                                      </div>
                                                                      <div className="flex-1 min-w-0 space-y-1">
-                                                                         <div className="text-xs font-semibold text-white truncate">{getAssetDisplayName(selectedLibraryAsset)}</div>
+                                                                        <div className="text-xs font-semibold text-white break-words leading-snug" title={getAssetDisplayName(selectedLibraryAsset)}>{getAssetDisplayName(selectedLibraryAsset)}</div>
                                                                          <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
                                                                          <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
                                                                          <button
@@ -6245,7 +6797,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     setPickerConfig(prev => ({ ...prev, isOpen: false }));
                 }}
                 projectId={projectId}
-                context={pickerConfig.context}
+                context={{
+                    ...(pickerConfig.context || {}),
+                    disableShotFilter: true,
+                    defaultSecondaryKind: 'entity',
+                }}
                 entities={allEntities}
                 episodeId={currentEpisode?.id}
                 uiLang={uiLang}

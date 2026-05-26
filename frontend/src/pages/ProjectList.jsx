@@ -556,6 +556,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [selectedProject, setSelectedProject] = useState(null);
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
+    const [assetsScopeSnapshot, setAssetsScopeSnapshot] = useState(null);
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
 
@@ -668,6 +669,28 @@ const ProjectList = ({ initialTab = 'projects' }) => {
         }
         // Removed snapshot restoration to ensure project cards page on refresh
     }, [location.pathname]);
+
+    useEffect(() => {
+        if (activeTab !== 'assets' || selectedProjectId) return;
+        try {
+            const raw = sessionStorage.getItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY);
+            if (!raw) {
+                setAssetsScopeSnapshot(null);
+                return;
+            }
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') {
+                setAssetsScopeSnapshot(null);
+                return;
+            }
+            setAssetsScopeSnapshot({
+                selectedProjectId: parsed.selectedProjectId ?? null,
+                activeEpisodeId: parsed.activeEpisodeId ?? null,
+            });
+        } catch {
+            setAssetsScopeSnapshot(null);
+        }
+    }, [activeTab, selectedProjectId]);
 
     const handleThemeChange = (key, showToast = true) => {
         setCurrentTheme(key);
@@ -1626,10 +1649,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             <Editor
                 projectId={selectedProjectId}
                 initialProject={selectedProject}
-                onClose={() => {
+                onClose={(snapshot = null) => {
                     setSelectedProject(null);
                     setSelectedProjectId(null);
-                    setRestoredEditorState(null);
+                    setRestoredEditorState(snapshot || null);
                 }}
                 initialActiveTab={restoredEditorState?.activeTab}
                 initialEpisodeId={restoredEditorState?.activeEpisodeId ?? null}
@@ -1959,7 +1982,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     animate={{ opacity: 1, y: 0 }}
                                     className="h-full flex-1"
                                 >
-                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} onClose={() => { setSelectedProjectId(null); setSelectedProject(null); }} />
+                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} onClose={(snapshot = null) => { setSelectedProjectId(null); setSelectedProject(null); setRestoredEditorState(snapshot || null); }} />
                                 </motion.div>
                             ) : (
                             <>
@@ -2324,7 +2347,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
                         {activeTab === 'assets' && (
                             <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
-                                <AssetsLibrary />
+                                <AssetsLibrary
+                                    projectId={assetsScopeSnapshot?.selectedProjectId ?? null}
+                                    currentEpisodeId={assetsScopeSnapshot?.activeEpisodeId ?? null}
+                                    projectOptionsProp={projects}
+                                />
                             </div>
                         )}
 

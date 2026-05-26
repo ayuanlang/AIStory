@@ -316,7 +316,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(true);
 
-    const [episodeFilter, setEpisodeFilter] = useState('all');
+    const [episodeFilter, setEpisodeFilter] = useState(() => (episodeId ? 'current' : 'all'));
     const [assetTypeFilter, setAssetTypeFilter] = useState('all');
     const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
     const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
@@ -409,6 +409,25 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return Boolean(raw);
     }, [context?.allowMultiSelect]);
 
+    const contextDisableShotFilter = useMemo(() => {
+        const raw = context?.disableShotFilter;
+        if (typeof raw === 'string') {
+            const normalized = raw.trim().toLowerCase();
+            if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+                return false;
+            }
+            if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+                return true;
+            }
+        }
+        if (typeof raw === 'boolean') return raw;
+
+        // Fallback: entity-only entry (has entityId but no shotId) should not expose shot filter.
+        const stableEntityId = String(context?.entityId ?? context?.entity_id ?? '').trim();
+        const stableShotId = String(context?.shotId ?? context?.shot_id ?? '').trim();
+        return Boolean(stableEntityId) && !stableShotId;
+    }, [context?.disableShotFilter, context?.entityId, context?.entity_id, context?.shotId, context?.shot_id]);
+
     const contextDesiredAssetType = useMemo(() => {
         const raw = String(context?.desiredAssetType || context?.assetType || context?.type || '').trim().toLowerCase();
         if (raw.includes('video')) return 'video';
@@ -427,6 +446,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const contextShotId = useMemo(() => String(context?.shotId ?? context?.shot_id ?? '').trim(), [context?.shotId, context?.shot_id]);
     const contextEntityId = useMemo(() => String(context?.entityId ?? context?.entity_id ?? '').trim(), [context?.entityId, context?.entity_id]);
     const contextFrameType = useMemo(() => String(context?.shotFrameType ?? context?.shot_frame_type ?? context?.frame_type ?? context?.type ?? '').trim().toLowerCase(), [context?.frame_type, context?.shotFrameType, context?.shot_frame_type, context?.type]);
+    const secondaryKindChoices = useMemo(() => {
+        if (contextDisableShotFilter) return ['all', 'entity'];
+        return ['all', 'entity', 'shot'];
+    }, [contextDisableShotFilter]);
 
     const inferPreferredAssetType = useCallback(() => {
         if (contextDesiredAssetType !== 'all') return contextDesiredAssetType;
@@ -475,8 +498,45 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     const resolveAssetEntityId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-        return String(meta?.entity_id ?? asset?.entity_id ?? '').trim();
-    }, []);
+        const directId = String(
+            meta?.entity_id
+            ?? asset?.entity_id
+            ?? meta?.subject_id
+            ?? asset?.subject_id
+            ?? meta?.character_id
+            ?? asset?.character_id
+            ?? meta?.owner_entity_id
+            ?? asset?.owner_entity_id
+            ?? ''
+        ).trim();
+        if (directId) return directId;
+
+        const entityNameCandidates = [
+            meta?.entity_name,
+            meta?.subject_name,
+            meta?.character_name,
+            meta?.owner_entity_name,
+            asset?.entity_name,
+            asset?.subject_name,
+            asset?.character_name,
+        ]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+
+        if (!entityNameCandidates.length || !Array.isArray(entities) || entities.length === 0) return '';
+
+        const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '');
+        const candidateSet = new Set(entityNameCandidates.map(normalize).filter(Boolean));
+        if (candidateSet.size === 0) return '';
+
+        const matched = entities.find((item) => {
+            const name = normalize(item?.name || '');
+            const nameEn = normalize(item?.name_en || '');
+            return candidateSet.has(name) || candidateSet.has(nameEn);
+        });
+
+        return String(matched?.id || '').trim();
+    }, [entities]);
 
     const resolveAssetShotId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
@@ -490,11 +550,43 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     const resolveAssetEntityType = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-        const entityId = String(meta?.entity_id ?? asset?.entity_id ?? '').trim();
+        const entityId = String(
+            meta?.entity_id
+            ?? asset?.entity_id
+            ?? meta?.subject_id
+            ?? asset?.subject_id
+            ?? meta?.character_id
+            ?? asset?.character_id
+            ?? meta?.owner_entity_id
+            ?? asset?.owner_entity_id
+            ?? ''
+        ).trim();
         const entityRecord = entityId && Array.isArray(entities)
             ? entities.find((item) => String(item?.id || '') === entityId)
             : null;
-        return String(meta?.entity_type || entityRecord?.type || '').trim().toLowerCase();
+        if (entityRecord?.type) return String(entityRecord.type).trim().toLowerCase();
+
+        const entityName = String(
+            meta?.entity_name
+            || meta?.subject_name
+            || meta?.character_name
+            || meta?.owner_entity_name
+            || asset?.entity_name
+            || asset?.subject_name
+            || asset?.character_name
+            || ''
+        ).trim();
+        if (entityName && Array.isArray(entities)) {
+            const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[^\w\u4e00-\u9fa5]+/g, '');
+            const normalizedName = normalize(entityName);
+            const matched = entities.find((item) => normalize(item?.name || '') === normalizedName || normalize(item?.name_en || '') === normalizedName);
+            if (matched?.type) return String(matched.type).trim().toLowerCase();
+        }
+
+        const subjectType = String(meta?.subject_type ?? asset?.subject_type ?? meta?.character_type ?? asset?.character_type ?? '').trim().toLowerCase();
+        if (subjectType) return subjectType;
+
+        return String(meta?.entity_type || asset?.entity_type || meta?.type || asset?.type || '').trim().toLowerCase();
     }, [entities]);
 
     const resolveContextualAssetDisplayName = useCallback((asset) => {
@@ -576,17 +668,42 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(true);
-             setEpisodeFilter('all');
+             setEpisodeFilter(episodeId ? 'current' : 'all');
              setAssetTypeFilter('all');
-             setSecondaryFilterKind('all');
-             setSecondaryFilterValue('');
-             setSubCategoryFilter('all');
+             let nextSecondaryKind = 'all';
+             const preferredKind = String(context?.defaultSecondaryKind || '').trim().toLowerCase();
+             if (contextDisableShotFilter && preferredKind !== 'all') {
+                 nextSecondaryKind = 'entity';
+             } else if (secondaryKindChoices.includes(preferredKind)) {
+                 nextSecondaryKind = preferredKind;
+             }
+             setSecondaryFilterKind(nextSecondaryKind);
+             const defaultSecondaryValue = nextSecondaryKind === 'entity'
+                 ? contextEntityId
+                 : nextSecondaryKind === 'shot'
+                     ? contextShotId
+                     : '';
+             setSecondaryFilterValue(String(defaultSecondaryValue || '').trim());
+             const preferredSubCategory = String(context?.defaultSubCategory || '').trim().toLowerCase();
+             if (preferredSubCategory === 'character' || preferredSubCategory === 'prop' || preferredSubCategory === 'environment') {
+                 setSubCategoryFilter(preferredSubCategory);
+             } else {
+                 setSubCategoryFilter('all');
+             }
              setSecondaryAutoFollow(false);
              setNameFilter('');
              setSelectedAssetId('');
              setSelectedMulti(new Set());
         }
-    }, [episodeId, isOpen]);
+    }, [context?.defaultSecondaryKind, context?.defaultSubCategory, contextDisableShotFilter, contextEntityId, contextShotId, episodeId, isOpen, secondaryKindChoices]);
+
+    useEffect(() => {
+        if (!contextDisableShotFilter) return;
+        if (secondaryFilterKind === 'shot') {
+            setSecondaryFilterKind('entity');
+            setSecondaryFilterValue('');
+        }
+    }, [contextDisableShotFilter, secondaryFilterKind]);
 
         useEffect(() => {
                  if (episodeId && availableShots.length === 0) {
@@ -670,26 +787,164 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
     const secondaryEntityOptions = useMemo(() => {
         const grouped = new Map();
+        const groupedByAliasKey = new Map();
+        const groupedBuckets = new Map();
+        const allowedTypes = new Set(['character', 'prop', 'environment']);
+        const normalizeAlias = (value) => String(value || '').trim().toLowerCase().replace(/[\s/\\|,，、·._-]+/g, '');
+        const collectAliasKeys = (...values) => {
+            const keys = new Set();
+            values.flat().forEach((value) => {
+                const stableValue = String(value || '').trim();
+                if (!stableValue) return;
+                stableValue
+                    .split(/[/\\|,，、]+/)
+                    .map((part) => normalizeAlias(part))
+                    .filter(Boolean)
+                    .forEach((part) => keys.add(part));
+                const wholeKey = normalizeAlias(stableValue);
+                if (wholeKey) keys.add(wholeKey);
+            });
+            return Array.from(keys);
+        };
+        const activeEntityIds = new Set(
+            (Array.isArray(levelOneAssets) ? levelOneAssets : [])
+                .map((asset) => String(resolveAssetEntityId(asset) || '').trim())
+                .filter(Boolean)
+        );
+        const canonicalEntities = Array.isArray(entities) ? entities : [];
+        canonicalEntities.forEach((entity) => {
+            const type = String(entity?.type || '').trim().toLowerCase();
+            if (!allowedTypes.has(type)) return;
+            const eid = String(entity?.id || '').trim();
+            if (!eid || grouped.has(eid)) return;
+            if (activeEntityIds.size > 0 && !activeEntityIds.has(eid)) return;
+            const nameZh = String(entity?.name || '').trim();
+            const nameEn = String(entity?.name_en || '').trim();
+            const label = nameZh && nameEn && nameZh.toLowerCase() !== nameEn.toLowerCase()
+                ? `${nameZh} / ${nameEn}`
+                : (nameZh || nameEn || `${t('实体', 'Entity')} #${eid}`);
+            grouped.set(eid, {
+                label,
+                type,
+                aliases: [nameZh, nameEn, label],
+            });
+        });
+
+        // Always enrich with asset-derived ids so historical/multi-episode alias ids
+        // still appear and can later merge back into the canonical label bucket.
         levelOneAssets.forEach((asset) => {
             const eid = String(resolveAssetEntityId(asset) || '').trim();
             if (!eid) return;
-            if (grouped.has(eid)) return;
             const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
             const entityRecord = (Array.isArray(entities) ? entities.find((item) => String(item?.id || '') === eid) : null);
-            const entityName = String(meta?.entity_name || entityRecord?.name || '').trim() || `${t('实体', 'Entity')} #${eid}`;
-            grouped.set(eid, entityName);
+            const entityName = String(meta?.entity_name || meta?.subject_name || meta?.character_name || meta?.owner_entity_name || entityRecord?.name || '').trim() || `${t('实体', 'Entity')} #${eid}`;
+            const inferredType = String(entityRecord?.type || resolveAssetEntityType(asset) || '').trim().toLowerCase();
+            const normalizedType = allowedTypes.has(inferredType) ? inferredType : '';
+            const assetAliases = [
+                meta?.entity_name,
+                meta?.subject_name,
+                meta?.character_name,
+                meta?.owner_entity_name,
+                entityRecord?.name,
+                entityRecord?.name_en,
+                entityName,
+            ];
+            const existing = grouped.get(eid);
+            if (!existing) {
+                grouped.set(eid, {
+                    label: entityName,
+                    type: normalizedType,
+                    aliases: assetAliases,
+                });
+                return;
+            }
+            if (!existing.label && entityName) {
+                existing.label = entityName;
+            }
+            if (!existing.type && normalizedType) {
+                existing.type = normalizedType;
+            }
+            existing.aliases = Array.from(new Set([...(existing.aliases || []), ...assetAliases].filter(Boolean)));
         });
-        const options = Array.from(grouped.entries())
-            .map(([id, label]) => ({ id, label }))
+
+        Array.from(grouped.entries()).forEach(([id, entry]) => {
+            const label = String(entry?.label || '').trim();
+            const type = String(entry?.type || '').trim().toLowerCase();
+            const aliasKeys = collectAliasKeys(label, entry?.aliases || []);
+            const bucketId = aliasKeys.find((key) => groupedByAliasKey.has(key)) ? groupedByAliasKey.get(aliasKeys.find((key) => groupedByAliasKey.has(key))) : null;
+            const existing = bucketId ? groupedBuckets.get(bucketId) : null;
+            if (!existing) {
+                const nextBucket = {
+                    id,
+                    label,
+                    aliasIds: [id],
+                    types: type ? [type] : [],
+                    aliasKeys,
+                };
+                groupedBuckets.set(id, nextBucket);
+                aliasKeys.forEach((key) => groupedByAliasKey.set(key, id));
+                return;
+            }
+            existing.aliasIds.push(id);
+            if (type) existing.types.push(type);
+            existing.aliasKeys = Array.from(new Set([...(existing.aliasKeys || []), ...aliasKeys]));
+            existing.aliasKeys.forEach((key) => groupedByAliasKey.set(key, existing.id));
+            // Keep the earliest stable id and the longer, more descriptive label.
+            if (String(label || '').length > String(existing.label || '').length) {
+                existing.label = label;
+            }
+        });
+
+        const pickPrimaryType = (types) => {
+            const candidates = Array.from(new Set((Array.isArray(types) ? types : []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)));
+            if (candidates.includes('character')) return 'character';
+            if (candidates.includes('prop')) return 'prop';
+            if (candidates.includes('environment')) return 'environment';
+            return '';
+        };
+
+        const options = Array.from(groupedBuckets.values())
+            .map((item) => ({
+                id: item.id,
+                label: item.label,
+                aliasIds: Array.from(new Set(item.aliasIds.map((v) => String(v).trim()).filter(Boolean))),
+                type: pickPrimaryType(item.types),
+            }))
             .sort((a, b) => String(a.label).localeCompare(String(b.label), undefined, { numeric: true }));
         if (typeof window !== 'undefined') {
             console.log('[素材选择][secondaryEntityOptions]', options);
         }
         return options;
-    }, [entities, levelOneAssets, resolveAssetEntityId, t]);
+    }, [entities, levelOneAssets, resolveAssetEntityId, resolveAssetEntityType, t]);
 
     const secondaryShotOptions = useMemo(() => {
+        if (contextDisableShotFilter || secondaryFilterKind !== 'shot') {
+            if (typeof window !== 'undefined') {
+                console.log('[素材选择][secondaryShotOptions]', []);
+            }
+            return [];
+        }
+
         const grouped = new Map();
+
+        // Prefer canonical episode shots first so shot choices remain available even
+        // when assets do not carry a shot_id in their metadata.
+        if (Array.isArray(availableShots)) {
+            availableShots.forEach((shot) => {
+                const sid = String(shot?.id || '').trim();
+                if (!sid || grouped.has(sid)) return;
+                const shotIdText = String(shot?.shot_id || '').trim();
+                const shotName = String(shot?.shot_name || '').trim();
+                const labelParts = [];
+                if (shotIdText) labelParts.push(shotIdText);
+                if (shotName) labelParts.push(shotName);
+                const label = labelParts.length > 0
+                    ? `${t('分镜', 'Shot')} ${labelParts.join(' · ')}`
+                    : `${t('分镜', 'Shot')} #${sid}`;
+                grouped.set(sid, label);
+            });
+        }
+
         levelOneAssets.forEach((asset) => {
             const sid = String(resolveAssetShotId(asset) || '').trim();
             if (!sid) return;
@@ -711,21 +966,63 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             console.log('[素材选择][secondaryShotOptions]', options);
         }
         return options;
-    }, [availableShots, levelOneAssets, resolveAssetShotId, t]);
+    }, [availableShots, contextDisableShotFilter, levelOneAssets, resolveAssetShotId, secondaryFilterKind, t]);
+
+    const visibleSecondaryEntityOptions = useMemo(() => {
+        if (secondaryFilterKind !== 'entity' || subCategoryFilter === 'all') {
+            return secondaryEntityOptions;
+        }
+        return secondaryEntityOptions.filter((option) => String(option?.type || '').trim().toLowerCase() === subCategoryFilter);
+    }, [secondaryEntityOptions, secondaryFilterKind, subCategoryFilter]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const typeCounts = secondaryEntityOptions.reduce((acc, option) => {
+            const key = String(option?.type || '').trim().toLowerCase() || '(empty)';
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+        console.log('[素材选择][entity-visibility]', {
+            secondaryFilterKind,
+            subCategoryFilter,
+            totalSecondaryEntityOptions: secondaryEntityOptions.length,
+            visibleSecondaryEntityOptions: visibleSecondaryEntityOptions.length,
+            typeCounts,
+            visiblePreview: visibleSecondaryEntityOptions.slice(0, 12).map((option) => ({
+                id: option?.id,
+                label: option?.label,
+                type: option?.type,
+                aliasIds: option?.aliasIds,
+            })),
+        });
+    }, [secondaryFilterKind, subCategoryFilter, secondaryEntityOptions, visibleSecondaryEntityOptions]);
 
     const filteredAssets = useMemo(() => {
         let filtered = [...levelOneAssets];
 
-        const isShotBoundAsset = (asset) => {
+        const hasShotLink = (asset) => {
             const shotId = String(resolveAssetShotId(asset) || '').trim();
-            if (shotId) return true;
+            return Boolean(shotId);
+        };
+
+        const isExplicitShotFrameAsset = (asset) => {
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const shotNo = String(meta?.shot_number || '').trim();
+            const shotName = String(meta?.shot_name || '').trim();
+            if (shotNo || shotName) return true;
             const frameType = String(resolveAssetFrameType(asset) || '').trim().toLowerCase();
-            return frameType.includes('start')
+            if (frameType.includes('start')
                 || frameType.includes('end')
                 || frameType.includes('keyframe')
                 || frameType.includes('video')
-                || frameType.includes('shot');
+                || frameType.includes('shot')) {
+                return true;
+            }
+            const assetName = String(asset?.name || meta?.asset_name || meta?.display_name || '').trim().toLowerCase();
+            return assetName.includes('分镜') || assetName.includes('shot_') || assetName.includes('storyboard');
         };
+
+        const isShotBoundAsset = (asset) => hasShotLink(asset) || isExplicitShotFrameAsset(asset);
 
         logAssetPickerDebug('level2:before-secondary', {
             filters: {
@@ -740,15 +1037,48 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             summary: summarizeAssetsForDebug(filtered),
         });
 
+        const entityOptionIdsByType = new Map();
+        secondaryEntityOptions.forEach((option) => {
+            const normalizedType = String(option?.type || '').trim().toLowerCase();
+            if (!normalizedType) return;
+            const bucket = entityOptionIdsByType.get(normalizedType) || new Set();
+            [String(option?.id || ''), ...((option?.aliasIds || []).map((value) => String(value || '')))]
+                .map((value) => String(value || '').trim())
+                .filter(Boolean)
+                .forEach((id) => bucket.add(id));
+            entityOptionIdsByType.set(normalizedType, bucket);
+        });
+
         if (secondaryFilterKind === 'entity') {
-            // Entity scope should not mix in shot assets (start/end/keyframe/video).
-            filtered = filtered.filter((asset) => !isShotBoundAsset(asset));
-            logAssetPickerDebug('level2:entity-scope', {
+            filtered = filtered.filter((asset) => {
+                const entityId = String(resolveAssetEntityId(asset) || '').trim();
+                if (!entityId) return false;
+                if (isExplicitShotFrameAsset(asset)) return false;
+                return true;
+            });
+            logAssetPickerDebug('level2:entity-scope-non-shot', {
                 summary: summarizeAssetsForDebug(filtered),
             });
+
+            if (subCategoryFilter !== 'all') {
+                const allowedEntityIds = entityOptionIdsByType.get(subCategoryFilter) || new Set();
+                filtered = filtered.filter((asset) => allowedEntityIds.has(String(resolveAssetEntityId(asset) || '').trim()));
+                logAssetPickerDebug('level2:entity-subtype-options', {
+                    subCategoryFilter,
+                    allowedEntityIds: Array.from(allowedEntityIds),
+                    summary: summarizeAssetsForDebug(filtered),
+                });
+            }
+
             if (secondaryFilterValue) {
-                filtered = filtered.filter((asset) => String(resolveAssetEntityId(asset)) === String(secondaryFilterValue));
+                const selectedOption = secondaryEntityOptions.find((item) => String(item.id) === String(secondaryFilterValue));
+                const acceptedEntityIds = new Set([
+                    String(secondaryFilterValue),
+                    ...((selectedOption?.aliasIds || []).map((value) => String(value))),
+                ]);
+                filtered = filtered.filter((asset) => acceptedEntityIds.has(String(resolveAssetEntityId(asset) || '')));
                 logAssetPickerDebug('level2:entity-value', {
+                    selectedEntityIds: Array.from(acceptedEntityIds),
                     summary: summarizeAssetsForDebug(filtered),
                 });
             }
@@ -774,9 +1104,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             }
         }
 
-        if (secondaryFilterKind === 'entity' && subCategoryFilter !== 'all') {
-            filtered = filtered.filter((asset) => resolveAssetEntityType(asset) === subCategoryFilter);
-        } else if (secondaryFilterKind === 'shot') {
+        if (secondaryFilterKind === 'shot') {
             if (subCategoryFilter === 'shot_start') {
                 filtered = filtered.filter((asset) => {
                     const frameType = resolveAssetFrameType(asset);
@@ -804,6 +1132,21 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             });
         }
 
+        const dedupMap = new Map();
+        filtered.forEach((asset) => {
+            const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+            const idKey = String(asset?.id || '').trim();
+            const urlKey = String(asset?.url || '').trim();
+            const normalizedUrlKey = urlKey ? urlKey.replace(/[?#].*$/, '').trim().toLowerCase() : '';
+            const nameKey = String(asset?.name || meta?.asset_name || meta?.display_name || '').trim();
+            const compositeKey = normalizedUrlKey || idKey || `${urlKey}::${nameKey}`;
+            if (!compositeKey) return;
+            if (!dedupMap.has(compositeKey)) {
+                dedupMap.set(compositeKey, asset);
+            }
+        });
+        filtered = Array.from(dedupMap.values());
+
         filtered.sort((left, right) => {
             const l = new Date(left?.created_at || 0).getTime();
             const r = new Date(right?.created_at || 0).getTime();
@@ -813,7 +1156,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             summary: summarizeAssetsForDebug(filtered),
         });
         return filtered;
-    }, [assetTypeFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, logAssetPickerDebug, nameFilter, resolveAssetEntityType, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryFilterKind, secondaryFilterValue, subCategoryFilter, summarizeAssetsForDebug]);
+    }, [assetTypeFilter, contextDisableShotFilter, contextEntityId, contextFrameType, contextShotId, episodeFilter, levelOneAssets, logAssetPickerDebug, nameFilter, resolveAssetEntityId, resolveAssetFrameType, resolveAssetShotId, resolveContextualAssetDisplayName, secondaryEntityOptions, secondaryFilterKind, secondaryFilterValue, subCategoryFilter, summarizeAssetsForDebug]);
 
     useEffect(() => {
         if (secondaryFilterKind !== 'entity' && secondaryFilterKind !== 'shot') {
@@ -834,7 +1177,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (secondaryAutoFollow) return;
         if (secondaryFilterKind === 'entity') {
-            const exists = secondaryEntityOptions.some((item) => String(item.id) === String(secondaryFilterValue));
+            const exists = visibleSecondaryEntityOptions.some((item) => String(item.id) === String(secondaryFilterValue));
             if (!exists && secondaryFilterValue) setSecondaryFilterValue('');
             return;
         }
@@ -844,7 +1187,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             return;
         }
         if (secondaryFilterValue) setSecondaryFilterValue('');
-    }, [secondaryAutoFollow, secondaryEntityOptions, secondaryFilterKind, secondaryFilterValue, secondaryShotOptions]);
+    }, [secondaryAutoFollow, secondaryFilterKind, secondaryFilterValue, secondaryShotOptions, visibleSecondaryEntityOptions]);
 
     useEffect(() => {
         if (!isOpen || tab !== 'assets') return;
@@ -1088,7 +1431,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                         >
                             <option value="all">{t('全部', 'All')}</option>
                             <option value="entity">{t('实体', 'Entity')}</option>
-                            <option value="shot">{t('分镜', 'Shot')}</option>
+                            {!contextDisableShotFilter && <option value="shot">{t('分镜', 'Shot')}</option>}
                         </select>
 
                         <select
@@ -1102,7 +1445,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                             disabled={secondaryFilterKind === 'all'}
                         >
                             <option value="">{secondaryFilterKind === 'shot' ? t('全部分镜', 'All Shots') : t('全部实体', 'All Entities')}</option>
-                            {(secondaryFilterKind === 'shot' ? secondaryShotOptions : secondaryEntityOptions).map((option) => (
+                            {(secondaryFilterKind === 'shot' ? secondaryShotOptions : visibleSecondaryEntityOptions).map((option) => (
                                 <option key={option.id} value={option.id}>{option.label}</option>
                             ))}
                         </select>

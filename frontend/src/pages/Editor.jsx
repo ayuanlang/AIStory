@@ -191,6 +191,20 @@ const VideoStudio = lazyWithRetry(() => import('../components/VideoStudio'));
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
 
+const buildProjectReturnSnapshot = ({
+    projectId,
+    activeTab,
+    activeEpisodeId,
+    editingShot,
+}) => ({
+    selectedProjectId: projectId,
+    activeTab,
+    activeEpisodeId,
+    editingShotId: editingShot?.id ?? null,
+    editingShotSceneId: editingShot?.scene_id ?? null,
+    savedAt: Date.now(),
+});
+
 const Editor = ({
     projectId,
     initialProject,
@@ -253,6 +267,21 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
     const episodesLoadPromiseRef = useRef(null);
+
+    const persistProjectReturnSnapshot = useCallback(() => {
+        try {
+            const snapshot = buildProjectReturnSnapshot({
+                projectId: id,
+                activeTab,
+                activeEpisodeId,
+                editingShot,
+            });
+            sessionStorage.setItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY, JSON.stringify(snapshot));
+            return snapshot;
+        } catch (e) {
+            return null;
+        }
+    }, [activeEpisodeId, activeTab, editingShot, id]);
 
     const loadProjectData = async () => {
         if (!id) return;
@@ -3341,8 +3370,9 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     <button
                         onClick={() => {
                             trackMenuAction('editor.back.projects', t('返回项目', 'Back to Projects'), () => {
+                                const snapshot = persistProjectReturnSnapshot();
                                 if (onClose) {
-                                    onClose();
+                                    onClose(snapshot);
                                     return;
                                 }
                                 navigate('/projects');
@@ -3392,17 +3422,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
-                                try {
-                                    const snapshot = {
-                                        selectedProjectId: id,
-                                        activeTab,
-                                        activeEpisodeId,
-                                        editingShotId: editingShot?.id ?? null,
-                                        editingShotSceneId: editingShot?.scene_id ?? null,
-                                        savedAt: Date.now(),
-                                    };
-                                    sessionStorage.setItem(PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY, JSON.stringify(snapshot));
-                                } catch (e) {}
+                                persistProjectReturnSnapshot();
                                 const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
                                 window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
                             });

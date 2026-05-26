@@ -20534,6 +20534,78 @@ def get_assets(
     asset_shot_cache: Dict[int, Optional[Shot]] = {}
     asset_scene_cache: Dict[int, Optional[Scene]] = {}
     asset_episode_cache: Dict[int, Optional[Episode]] = {}
+    project_entity_image_token_cache: Optional[Set[str]] = None
+
+    def _collect_asset_url_tokens(value: Any) -> Set[str]:
+        raw = str(value or '').strip()
+        if not raw:
+            return set()
+
+        tokens: Set[str] = set()
+
+        def _push(token_value: Any) -> None:
+            token_text = str(token_value or '').strip()
+            if token_text:
+                tokens.add(token_text.lower())
+
+        _push(raw)
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            path = urllib.parse.unquote(parsed.path or '').strip()
+        except Exception:
+            path = ''
+
+        if path:
+            normalized_path = path.replace('\\', '/').strip()
+            trimmed_path = normalized_path.lstrip('/')
+            _push(normalized_path)
+            _push(trimmed_path)
+            base_name = os.path.basename(trimmed_path)
+            if base_name:
+                _push(base_name)
+            path_parts = [part for part in trimmed_path.split('/') if part]
+            if len(path_parts) >= 2:
+                _push('/'.join(path_parts[-2:]))
+            if len(path_parts) >= 3:
+                _push('/'.join(path_parts[-3:]))
+
+        return tokens
+
+    def _get_project_entity_image_tokens() -> Set[str]:
+        nonlocal project_entity_image_token_cache
+        if project_entity_image_token_cache is not None:
+            return project_entity_image_token_cache
+
+        project_entity_image_token_cache = set()
+        req_project_text = _normalize_filter_text(project_id)
+        if not req_project_text:
+            return project_entity_image_token_cache
+
+        try:
+            req_project_int = int(req_project_text)
+        except Exception:
+            return project_entity_image_token_cache
+
+        try:
+            entity_rows = db.query(Entity.image_url).filter(Entity.project_id == req_project_int).all()
+        except Exception:
+            logger.exception('[AssetsFilterDiag] failed to preload entity image tokens for project_id=%s', req_project_text)
+            return project_entity_image_token_cache
+
+        for (image_url,) in entity_rows:
+            project_entity_image_token_cache.update(_collect_asset_url_tokens(image_url))
+        return project_entity_image_token_cache
+
+    def _asset_matches_project_entity_image(asset_row: Asset) -> bool:
+        if str(getattr(asset_row, 'type', '') or '').strip().lower() != 'image':
+            return False
+        project_tokens = _get_project_entity_image_tokens()
+        if not project_tokens:
+            return False
+        asset_tokens = _collect_asset_url_tokens(getattr(asset_row, 'url', None))
+        if not asset_tokens:
+            return False
+        return any(token in project_tokens for token in asset_tokens)
 
     def _normalize_filter_text(value: Any) -> str:
         raw = str(value or '').strip()
@@ -20549,16 +20621,21 @@ def get_assets(
             p_id = meta.get('project_id') or getattr(asset_row, 'project_id', None)
             p_text = _normalize_filter_text(p_id)
             req_project_text = _normalize_filter_text(project_id)
+            project_image_backed = False
+            if p_text != req_project_text:
+                project_image_backed = _asset_matches_project_entity_image(asset_row)
             if strict_meta_filter:
-                if p_text != req_project_text:
+                if p_text != req_project_text and not project_image_backed:
                     return False, "project_mismatch", {
                         "asset_project": p_text,
                         "request_project": req_project_text,
+                        "project_image_backed": project_image_backed,
                     }
-            elif p_text and p_text != req_project_text:
+            elif p_text and p_text != req_project_text and not project_image_backed:
                 return False, "project_mismatch", {
                     "asset_project": p_text,
                     "request_project": req_project_text,
+                    "project_image_backed": project_image_backed,
                 }
 
         if episode_id:
@@ -20771,6 +20848,13 @@ def get_assets(
         
         # Enrich
         p_id = meta.get('project_id')
+        if not p_id and project_id and _asset_matches_project_entity_image(a):
+            try:
+                meta['project_id'] = int(str(project_id).strip())
+                p_id = meta['project_id']
+                meta.setdefault('asset_origin', 'entity_image_url_linked_upload')
+            except Exception:
+                pass
         if p_id:
             try:
                 pid_int = int(p_id)

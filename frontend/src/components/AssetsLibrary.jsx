@@ -6,7 +6,7 @@ import {
     Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
     Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle, FolderOpen, Download
 } from 'lucide-react';
-import { fetchAssets, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds } from '../services/api';
+import { fetchAssets, fetchProjects, fetchEpisodes, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds } from '../services/api';
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
@@ -289,6 +289,13 @@ const buildGroupingContext = (asset) => {
         'project_title', 'projecttitle', 'project_name', 'projectname', 'project',
     ]);
 
+    const episodeId = pickMetaValue(lookup, [
+        'episode_id', 'episodeid', 'current_episode_id', 'currentepisodeid',
+    ]);
+    const episodeTitle = pickMetaValue(lookup, [
+        'episode_title', 'episodetitle', 'episode_name', 'episodename',
+    ]);
+
     const subjectId = pickMetaValue(lookup, [
         'entity_id', 'entityid', 'subject_id', 'subjectid', 'character_id', 'characterid',
     ]);
@@ -358,9 +365,15 @@ const buildGroupingContext = (asset) => {
         : '';
 
     const subjectType = normalizeSubjectType(subjectTypeRaw);
+    const episodeLabel = episodeTitle
+        ? normalizeDisplayText(episodeTitle)
+        : episodeId
+            ? `Episode ${episodeId}`
+            : '';
 
     return {
         projectLabel,
+        episodeLabel,
         subjectLabel,
         subjectType,
         sceneLabel,
@@ -542,7 +555,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
     );
 });
 
-const AssetsLibrary = () => {
+const AssetsLibrary = ({ projectId = null, currentEpisodeId = null, projectOptionsProp = [] }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
     const { addLog } = useLog();
@@ -550,10 +563,14 @@ const AssetsLibrary = () => {
     
     
     const [assets, setAssets] = useState([]);
+    const [projectOptions, setProjectOptions] = useState([]);
+    const [episodeOptions, setEpisodeOptions] = useState([]);
+    const [scopeProjectId, setScopeProjectId] = useState(() => String(projectId || '').trim());
+    const [scopeEpisodeId, setScopeEpisodeId] = useState(() => String(currentEpisodeId || '').trim());
     const [isSourceIds, setIsSourceIds] = useState(new Set());
     const [isDependentIds, setIsDependentIds] = useState(new Set());
     const [filter, setFilter] = useState('all'); // all, image, video
-    const [groupBy, setGroupBy] = useState('none'); // none, project, subject, shot
+    const [groupBy, setGroupBy] = useState('episode'); // none, project, episode, subject, shot
     const [sortOrder, setSortOrder] = useState('desc'); // desc (newest first), asc (oldest first)
     const [loading, setLoading] = useState(false);
     const [selectedAsset, setSelectedAsset] = useState(null); 
@@ -585,7 +602,67 @@ const AssetsLibrary = () => {
     };
 
     useEffect(() => {
-        loadAssets();
+        setScopeProjectId(String(projectId || '').trim());
+    }, [projectId]);
+
+    useEffect(() => {
+        setScopeEpisodeId(String(currentEpisodeId || '').trim());
+    }, [currentEpisodeId]);
+
+    useEffect(() => {
+        const normalizedPropProjects = Array.isArray(projectOptionsProp) ? projectOptionsProp : [];
+        if (normalizedPropProjects.length > 0) {
+            setProjectOptions(normalizedPropProjects);
+        }
+    }, [projectOptionsProp]);
+
+    useEffect(() => {
+        const loadProjectsForScope = async () => {
+            const normalizedPropProjects = Array.isArray(projectOptionsProp) ? projectOptionsProp : [];
+            if (normalizedPropProjects.length > 0) {
+                setProjectOptions(normalizedPropProjects);
+                return;
+            }
+            try {
+                const rows = await fetchProjects(0, 200);
+                const normalized = Array.isArray(rows) ? rows : [];
+                setProjectOptions(normalized);
+            } catch (e) {
+                console.warn('Failed to load project scope options', e);
+            }
+        };
+        loadProjectsForScope();
+    }, [projectOptionsProp]);
+
+    useEffect(() => {
+        const stableProjectId = String(scopeProjectId || '').trim();
+        if (!stableProjectId) {
+            setEpisodeOptions([]);
+            setScopeEpisodeId('');
+            return;
+        }
+
+        const loadEpisodesForScope = async () => {
+            try {
+                const rows = await fetchEpisodes(stableProjectId);
+                const normalized = Array.isArray(rows) ? rows : [];
+                setEpisodeOptions(normalized);
+                setScopeEpisodeId((prev) => {
+                    const stablePrev = String(prev || '').trim();
+                    if (!stablePrev) return '';
+                    const exists = normalized.some((item) => String(item?.id || '').trim() === stablePrev);
+                    return exists ? stablePrev : '';
+                });
+            } catch (e) {
+                console.warn('Failed to load episode scope options', e);
+                setEpisodeOptions([]);
+            }
+        };
+
+        loadEpisodesForScope();
+    }, [scopeProjectId]);
+
+    useEffect(() => {
         try {
             const remembered = localStorage.getItem(LOCAL_DIR_RESTORE_HINT_KEY);
             if (remembered === '1') {
@@ -599,6 +676,10 @@ const AssetsLibrary = () => {
             localObjectUrlsRef.current.clear();
         };
     }, []);
+
+    useEffect(() => {
+        loadAssets();
+    }, [scopeProjectId, scopeEpisodeId]);
 
     const clearLocalAssets = React.useCallback(() => {
         localObjectUrlsRef.current.forEach((url) => {
@@ -698,7 +779,16 @@ const AssetsLibrary = () => {
     const loadAssets = async () => {
         setLoading(true);
         try {
-            const data = await fetchAssets();
+            const scopedParams = {};
+            if (scopeProjectId) {
+                scopedParams.project_id = scopeProjectId;
+                scopedParams.current_project_asset = 'all';
+            }
+            if (scopeEpisodeId) {
+                scopedParams.episode_id = scopeEpisodeId;
+            }
+
+            const data = await fetchAssets(scopedParams);
             // Ensure meta_info is always an object
             const cleanData = data.map(a => {
                 let meta = a.meta_info;
@@ -905,6 +995,68 @@ const AssetsLibrary = () => {
         }
     };
 
+    const derivedProjectOptions = React.useMemo(() => {
+        const map = new Map();
+        (assets || []).forEach((asset) => {
+            const lookup = buildMetaLookup(asset);
+            const value = pickMetaValue(lookup, ['project_id', 'projectid', 'project', 'proj_id', 'projid']);
+            if (!value) return;
+            const label = pickMetaValue(lookup, ['project_title', 'projecttitle', 'project_name', 'projectname']) || `${t('项目', 'Project')} #${value}`;
+            if (!map.has(String(value))) {
+                map.set(String(value), { id: String(value), title: label });
+            }
+        });
+        return Array.from(map.values()).sort((a, b) => compareNaturalText(a.title, b.title));
+    }, [assets, t]);
+
+    const mergedProjectOptions = React.useMemo(() => {
+        const map = new Map();
+        (Array.isArray(projectOptions) ? projectOptions : []).forEach((project) => {
+            const value = String(project?.id || '').trim();
+            if (!value) return;
+            map.set(value, project);
+        });
+        derivedProjectOptions.forEach((project) => {
+            const value = String(project?.id || '').trim();
+            if (!value || map.has(value)) return;
+            map.set(value, project);
+        });
+        return Array.from(map.values()).sort((a, b) => compareNaturalText(a?.title, b?.title));
+    }, [derivedProjectOptions, projectOptions]);
+
+    const derivedEpisodeOptions = React.useMemo(() => {
+        const map = new Map();
+        const stableScopeProjectId = String(scopeProjectId || '').trim();
+        (assets || []).forEach((asset) => {
+            const lookup = buildMetaLookup(asset);
+            const assetProjectId = pickMetaValue(lookup, ['project_id', 'projectid', 'project', 'proj_id', 'projid']);
+            if (stableScopeProjectId && String(assetProjectId || '').trim() !== stableScopeProjectId) return;
+
+            const value = pickMetaValue(lookup, ['episode_id', 'episodeid', 'current_episode_id', 'currentepisodeid']);
+            if (!value) return;
+            const label = pickMetaValue(lookup, ['episode_title', 'episodetitle', 'episode_name', 'episodename']) || `${t('分集', 'Episode')} #${value}`;
+            if (!map.has(String(value))) {
+                map.set(String(value), { id: String(value), title: label });
+            }
+        });
+        return Array.from(map.values()).sort((a, b) => compareNaturalText(a.title, b.title));
+    }, [assets, scopeProjectId, t]);
+
+    const mergedEpisodeOptions = React.useMemo(() => {
+        const map = new Map();
+        (Array.isArray(episodeOptions) ? episodeOptions : []).forEach((episode) => {
+            const value = String(episode?.id || '').trim();
+            if (!value) return;
+            map.set(value, episode);
+        });
+        derivedEpisodeOptions.forEach((episode) => {
+            const value = String(episode?.id || '').trim();
+            if (!value || map.has(value)) return;
+            map.set(value, episode);
+        });
+        return Array.from(map.values()).sort((a, b) => compareNaturalText(a?.title, b?.title));
+    }, [derivedEpisodeOptions, episodeOptions]);
+
     const filteredAssets = React.useMemo(() => {
         const mergedAssets = [...assets, ...localAssets];
         const list = mergedAssets.filter(a => {
@@ -1006,6 +1158,12 @@ const AssetsLibrary = () => {
 
             if (groupBy === 'project') {
                 if (context.projectLabel) key = context.projectLabel;
+            } else if (groupBy === 'episode') {
+                if (context.projectLabel && context.episodeLabel) {
+                    key = `${context.projectLabel} · ${context.episodeLabel}`;
+                } else if (context.episodeLabel) {
+                    key = context.episodeLabel;
+                }
             } else if (groupBy === 'subject') {
                 if (!context.isShotContent && context.projectLabel && context.subjectLabel) {
                     const typeLabel = context.subjectType === 'character'
@@ -1015,11 +1173,15 @@ const AssetsLibrary = () => {
                             : context.subjectType === 'prop'
                                 ? t('道具', 'Prop')
                                 : t('其他', 'Other');
-                    key = `${context.projectLabel} · ${typeLabel}`;
+                    key = context.episodeLabel
+                        ? `${context.projectLabel} · ${context.episodeLabel} · ${typeLabel}`
+                        : `${context.projectLabel} · ${typeLabel}`;
                 }
             } else if (groupBy === 'shot') {
                 if (!context.isSubjectContent && context.projectLabel && context.sceneLabel && context.shotLabel) {
-                    key = `${context.projectLabel} · ${context.sceneLabel} · ${context.shotLabel}`;
+                    key = context.episodeLabel
+                        ? `${context.projectLabel} · ${context.episodeLabel} · ${context.sceneLabel} · ${context.shotLabel}`
+                        : `${context.projectLabel} · ${context.sceneLabel} · ${context.shotLabel}`;
                 }
             }
 
@@ -1094,6 +1256,35 @@ const AssetsLibrary = () => {
                     </div>
                     
                     <div className="flex items-center gap-3">
+                        <select
+                            value={scopeProjectId}
+                            onChange={(e) => {
+                                const nextProjectId = String(e.target.value || '').trim();
+                                setScopeProjectId(nextProjectId);
+                                setScopeEpisodeId('');
+                            }}
+                            className="px-3 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors text-sm"
+                        >
+                            <option value="">{t('全部项目', 'All Projects')}</option>
+                            {mergedProjectOptions.map((project) => (
+                                <option key={project?.id} value={project?.id}>
+                                    {project?.title || `${t('项目', 'Project')} #${project?.id}`}
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            value={scopeEpisodeId}
+                            onChange={(e) => setScopeEpisodeId(String(e.target.value || '').trim())}
+                            disabled={!scopeProjectId}
+                            className="px-3 py-2 bg-card border border-white/10 text-white rounded-lg hover:bg-white/5 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <option value="">{t('全部分集', 'All Episodes')}</option>
+                            {mergedEpisodeOptions.map((episode) => (
+                                <option key={episode?.id} value={episode?.id}>
+                                    {episode?.title || `${t('分集', 'Episode')} #${episode?.id}`}
+                                </option>
+                            ))}
+                        </select>
                         <input
                             ref={localDirInputRef}
                             type="file"
@@ -1177,6 +1368,7 @@ const AssetsLibrary = () => {
                     {[
                         { id: 'none', label: t('全部', 'All'), icon: Layers },
                         { id: 'project', label: t('项目', 'Project'), icon: Folder },
+                        { id: 'episode', label: t('分集', 'Episode'), icon: Layers },
                         { id: 'subject', label: t('主体', 'Subject'), icon: User },
                         { id: 'shot', label: t('镜头', 'Shot'), icon: Film },
                     ].map(g => (
@@ -1214,6 +1406,7 @@ const AssetsLibrary = () => {
                         <div key={sectionTitle} className="mb-8">
                             <h3 className="text-sm font-bold text-white/50 uppercase mb-4 sticky top-0 bg-black/95 backdrop-blur py-2 z-10 border-b border-white/5 flex items-center gap-2">
                                 {groupBy === 'project' && <Folder size={14} />}
+                                {groupBy === 'episode' && <Layers size={14} />}
                                 {groupBy === 'subject' && <User size={14} />}
                                 {groupBy === 'shot' && <Film size={14} />}
                                 {sectionTitle}
