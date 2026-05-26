@@ -216,7 +216,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         story_dna_global_md: "",
         promo_dna_global_md: "",
         story_generator_global_input: {
-            episodes_count: 12,
+            episodes_count: 30,
             background: "",
             setup: "",
             development: "",
@@ -243,7 +243,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [isSceneAnalysisDimensionsCollapsed, setIsSceneAnalysisDimensionsCollapsed] = useState(true);
 
     const [globalStoryInput, setGlobalStoryInput] = useState({
-        episodes_count: 20,
+        episodes_count: 30,
         script_mode: "短剧快节奏 / Short Drama",
         target_audience: "男频路线 / Male-Oriented",
         background: "",
@@ -324,6 +324,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const episodeScriptsStatusTimerRef = useRef(null);
     const globalStoryAutosaveTimerRef = useRef(null);
     const skipNextGlobalStoryAutosaveRef = useRef(true);
+    const promoAutosaveTimerRef = useRef(null);
+    const skipNextPromoAutosaveRef = useRef(true);
+    const generatorResultAutosaveTimerRef = useRef(null);
+    const skipNextGeneratorResultAutosaveRef = useRef(true);
+    const autosaveFeedbackTimerRef = useRef(null);
+    const [generatorAutosaveFeedback, setGeneratorAutosaveFeedback] = useState({
+        phase: 'idle',
+        message: '',
+    });
     const [projectReviewThreads, setProjectReviewThreads] = useState([]);
     const [isReviewPanelLoading, setIsReviewPanelLoading] = useState(false);
     const [isReviewPanelSubmitting, setIsReviewPanelSubmitting] = useState(false);
@@ -354,6 +363,29 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [isCostLoading, setIsCostLoading] = useState(false);
     const [isCostRefreshing, setIsCostRefreshing] = useState(false);
     const [costError, setCostError] = useState('');
+
+    const setGeneratorAutosaveState = useCallback((phase, message = '') => {
+        if (autosaveFeedbackTimerRef.current) {
+            clearTimeout(autosaveFeedbackTimerRef.current);
+            autosaveFeedbackTimerRef.current = null;
+        }
+        setGeneratorAutosaveFeedback({ phase, message });
+        if (phase === 'saved') {
+            autosaveFeedbackTimerRef.current = setTimeout(() => {
+                setGeneratorAutosaveFeedback({ phase: 'idle', message: '' });
+                autosaveFeedbackTimerRef.current = null;
+            }, 2500);
+        }
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (autosaveFeedbackTimerRef.current) {
+                clearTimeout(autosaveFeedbackTimerRef.current);
+                autosaveFeedbackTimerRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (mode !== 'generator') {
@@ -965,6 +997,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
                      // Avoid immediately auto-saving right after hydration
                      skipNextGlobalStoryAutosaveRef.current = true;
+                     skipNextPromoAutosaveRef.current = true;
+                     skipNextGeneratorResultAutosaveRef.current = true;
 
                      // Restore Character Canon draft inputs (if previously saved)
                      const canonDraft = merged.character_canon_input;
@@ -1204,6 +1238,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
 
         globalStoryAutosaveTimerRef.current = setTimeout(async () => {
+            setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
             try {
                 const payload = {
                     mode: 'global',
@@ -1222,8 +1257,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     extra_notes: globalStoryInput.extra_notes,
                 };
                 await saveProjectStoryGeneratorGlobalInput(id, payload);
+                setGeneratorAutosaveState('saved', t('故事输入已自动保存', 'Story input auto-saved'));
             } catch (e) {
                 console.error('[Global Story Generator] Auto-save failed:', e);
+                setGeneratorAutosaveState('error', t('自动保存失败', 'Auto-save failed'));
             }
         }, 800);
 
@@ -1232,7 +1269,107 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 clearTimeout(globalStoryAutosaveTimerRef.current);
             }
         };
-    }, [id, globalStoryInput, isGeneratingGlobalStory]);
+    }, [id, globalStoryInput, isGeneratingGlobalStory, setGeneratorAutosaveState, t]);
+
+    // Auto-save Promo Generator draft inputs (debounced)
+    useEffect(() => {
+        if (!id) return;
+        if (mode !== 'generator' || projectTab !== 'promo_generator') return;
+        if (isGeneratingGlobalStory) return;
+
+        if (skipNextPromoAutosaveRef.current) {
+            skipNextPromoAutosaveRef.current = false;
+            return;
+        }
+
+        if (promoAutosaveTimerRef.current) {
+            clearTimeout(promoAutosaveTimerRef.current);
+        }
+
+        promoAutosaveTimerRef.current = setTimeout(async () => {
+            setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
+            try {
+                const payload = {
+                    mode: 'global',
+                    generator_kind: 'promo',
+                    promo_type: promoInput.promo_type,
+                    episodes_count: Number(promoInput.episodes_count || 0) || 0,
+                    campaign_objective: promoInput.campaign_objective || '',
+                    target_audience: promoInput.target_audience || '',
+                    key_message: promoInput.key_message || '',
+                    core_highlights: promoInput.core_highlights || '',
+                    credibility_proof: promoInput.credibility_proof || '',
+                    hook_opening: promoInput.hook_opening || '',
+                    conversion_cta: promoInput.conversion_cta || '',
+                    channel_context: promoInput.channel_context || '',
+                    constraints: promoInput.constraints || '',
+                };
+                await saveProjectStoryGeneratorGlobalInput(id, payload);
+                setGeneratorAutosaveState('saved', t('宣传输入已自动保存', 'Promo input auto-saved'));
+            } catch (e) {
+                console.error('[Promo Generator] Auto-save failed:', e);
+                setGeneratorAutosaveState('error', t('自动保存失败', 'Auto-save failed'));
+            }
+        }, 800);
+
+        return () => {
+            if (promoAutosaveTimerRef.current) {
+                clearTimeout(promoAutosaveTimerRef.current);
+            }
+        };
+    }, [id, mode, projectTab, promoInput, isGeneratingGlobalStory, setGeneratorAutosaveState, t]);
+
+    // Auto-save editable generator results (framework markdown + relationships) (debounced)
+    useEffect(() => {
+        if (!id) return;
+        if (mode !== 'generator') return;
+        if (isGeneratingGlobalStory) return;
+
+        if (skipNextGeneratorResultAutosaveRef.current) {
+            skipNextGeneratorResultAutosaveRef.current = false;
+            return;
+        }
+
+        if (generatorResultAutosaveTimerRef.current) {
+            clearTimeout(generatorResultAutosaveTimerRef.current);
+        }
+
+        generatorResultAutosaveTimerRef.current = setTimeout(async () => {
+            setGeneratorAutosaveState('saving', t('自动保存中...', 'Auto-saving...'));
+            try {
+                const baseGlobalInfo = (project?.global_info && typeof project.global_info === 'object')
+                    ? project.global_info
+                    : {};
+                const global_info = {
+                    ...baseGlobalInfo,
+                    story_dna_global_md: info.story_dna_global_md || '',
+                    promo_dna_global_md: info.promo_dna_global_md || '',
+                    character_relationships: info.character_relationships || '',
+                };
+                await updateProject(id, { global_info });
+                setGeneratorAutosaveState('saved', t('生成结果已自动保存', 'Generated content auto-saved'));
+            } catch (e) {
+                console.error('[Generator Result] Auto-save failed:', e);
+                setGeneratorAutosaveState('error', t('自动保存失败', 'Auto-save failed'));
+            }
+        }, 1200);
+
+        return () => {
+            if (generatorResultAutosaveTimerRef.current) {
+                clearTimeout(generatorResultAutosaveTimerRef.current);
+            }
+        };
+    }, [
+        id,
+        mode,
+        isGeneratingGlobalStory,
+        info.story_dna_global_md,
+        info.promo_dna_global_md,
+        info.character_relationships,
+        project,
+        setGeneratorAutosaveState,
+        t,
+    ]);
 
     const handleSave = async () => {
         try {
@@ -2062,9 +2199,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         </div>
                     )}
                 </div>
-                <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
-                    <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
-                </button>
+                <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
+                    <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
+                        <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
+                    </button>
+                    {mode === 'generator' && generatorAutosaveFeedback.phase !== 'idle' && (
+                        <div
+                            className={`text-xs px-3 py-1 rounded-full border ${generatorAutosaveFeedback.phase === 'error' ? 'border-red-400/40 text-red-200 bg-red-500/10' : generatorAutosaveFeedback.phase === 'saved' ? 'border-emerald-400/40 text-emerald-200 bg-emerald-500/10' : 'border-white/20 text-white/80 bg-white/5'}`}
+                        >
+                            {generatorAutosaveFeedback.phase === 'saving' && <Loader2 className="w-3 h-3 inline-block mr-1 animate-spin" />}
+                            {generatorAutosaveFeedback.message}
+                        </div>
+                    )}
+                </div>
             </div>
 
             {mode === 'generator' && (
