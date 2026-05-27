@@ -819,7 +819,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             if (!eid || grouped.has(eid)) return;
             const nameZh = String(entity?.name || '').trim();
             const nameEn = String(entity?.name_en || '').trim();
-            const label = nameZh && nameEn && nameZh.toLowerCase() !== nameEn.toLowerCase()
+            const isSubset = nameZh && nameEn && (nameZh.toLowerCase().includes(nameEn.toLowerCase()) || nameEn.toLowerCase().includes(nameZh.toLowerCase()));
+            const label = nameZh && nameEn && !isSubset
                 ? `${nameZh} / ${nameEn}`
                 : (nameZh || nameEn || `${t('实体', 'Entity')} #${eid}`);
             grouped.set(eid, {

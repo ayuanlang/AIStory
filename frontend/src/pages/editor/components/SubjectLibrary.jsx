@@ -3404,7 +3404,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             ''
         ).trim();
 
-        if (nameZh && nameEn && nameZh.toLowerCase() !== nameEn.toLowerCase()) return `${nameZh} / ${nameEn}`;
+        const isSubset = nameZh && nameEn && (nameZh.toLowerCase().includes(nameEn.toLowerCase()) || nameEn.toLowerCase().includes(nameZh.toLowerCase()));
+        if (nameZh && nameEn && !isSubset) return `${nameZh} / ${nameEn}`;
         if (nameZh) return nameZh;
         if (nameEn) return nameEn;
         return '';

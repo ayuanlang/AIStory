@@ -170,9 +170,16 @@ function AiEntityCreateDialog({
                                     className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
                                 >
                                     <option value="">请选择</option>
-                                    {(entities || []).map((item) => (
-                                        <option key={item.id} value={item.id}>{item.name}{item.name_en && item.name_en.toLowerCase() !== (item.name || '').toLowerCase() ? ` (${item.name_en})` : ''}</option>
-                                    ))}
+                                    {(entities || []).map((item) => {
+                                        const nameZh = String(item.name || '').trim();
+                                        const nameEn = String(item.name_en || '').trim();
+                                        const isSubset = nameZh && nameEn && (nameZh.toLowerCase().includes(nameEn.toLowerCase()) || nameEn.toLowerCase().includes(nameZh.toLowerCase()));
+                                        return (
+                                            <option key={item.id} value={item.id}>
+                                                {item.name}{nameEn && !isSubset ? ` (${item.name_en})` : ''}
+                                            </option>
+                                        );
+                                    })}
                                 </select>
                             </div>
                             <div>

@@ -9788,7 +9788,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 No entities matched tags: "{names.join(', ')}". 
                                                 <br/>
                                                 <span className="opacity-50 text-[10px] block mt-1">
-                                                    Available({entities.length}): {entities.map(e => `${e.name}${e.name_en && e.name_en.toLowerCase() !== String(e.name || '').toLowerCase() ? `/${e.name_en}` : ''}`).slice(0, 15).join(', ')}
+                                                    Available({entities.length}): {entities.map(e => {
+                                                        const nameZh = String(e.name || '').trim();
+                                                        const nameEn = String(e.name_en || '').trim();
+                                                        const isSubset = nameZh && nameEn && (nameZh.toLowerCase().includes(nameEn.toLowerCase()) || nameEn.toLowerCase().includes(nameZh.toLowerCase()));
+                                                        return `${e.name}${nameEn && !isSubset ? `/${e.name_en}` : ''}`;
+                                                    }).slice(0, 15).join(', ')}
                                                 </span>
                                             </div>
                                         );
