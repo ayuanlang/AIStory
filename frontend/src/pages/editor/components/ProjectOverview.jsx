@@ -277,15 +277,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (episodes && episodes.length > 0) {
             let defaultEp = 1;
             const getEpNum = (e, i) => Number(e.episode_number) || parseEpisodeNumberFromText(e.title) || (i + 1);
-            
-            const ungeneratedEps = episodes.map((e, index) => ({ e, index }))
-                .filter(({e}) => !e.script_content || String(e.script_content).trim() === '');
-            
-            if (ungeneratedEps.length > 0) {
-                defaultEp = Math.min(...ungeneratedEps.map(({e, index}) => getEpNum(e, index)));
-            } else {
-                defaultEp = Math.max(...episodes.map((e, index) => getEpNum(e, index)));
-            }
+            defaultEp = Math.max(...episodes.map((e, index) => getEpNum(e, index))) + 1;
             
             if (!hasSetDefaultEp) {
                 setTargetEpisodeNumberForGen(String(defaultEp));

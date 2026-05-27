@@ -12942,19 +12942,51 @@ async def generate_project_episode_scripts_from_global_framework(
     call_meta["target_episode_id"] = target_episode_id
 
     if requested_episode_number and target_episode_id_from_number is None:
-        logger.error(
-            "[generate_episode_scripts] TARGET_RESOLUTION_FAILED project_id=%s requested_episode_number=%s provided_episode_id=%r reason=episode_number_not_resolved_refuse_fallback",
+        if req.episode_id:
+            logger.error(
+                "[generate_episode_scripts] TARGET_RESOLUTION_FAILED project_id=%s requested_episode_number=%s provided_episode_id=%r reason=episode_number_not_resolved_refuse_fallback",
+                project_id,
+                requested_episode_number,
+                int(req.episode_id) if req.episode_id else None,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot safely resolve episode_number={requested_episode_number} to a unique episode. "
+                    "Refusing fallback to episode_id to avoid wrong overwrite. "
+                    "Please refresh episodes and retry."
+                ),
+            )
+
+        # Single-episode generation with a non-existing episode number should auto-create that episode.
+        create_idx = int(requested_episode_number)
+        created_ep = Episode(project_id=project_id, title=f"Episode {create_idx}", script_content="")
+        created_info = _episode_runtime_info_from_episode(created_ep)
+        created_info["episode_script_episode_number"] = int(create_idx)
+        created_ep.episode_info = created_info
+        db.add(created_ep)
+        db.commit()
+        db.refresh(created_ep)
+
+        created_episodes.append(int(created_ep.id))
+        by_idx[create_idx] = created_ep
+        idx_candidates.setdefault(create_idx, []).append(int(created_ep.id))
+        by_title[str(created_ep.title or "").strip().lower()] = created_ep
+
+        target_episode_id_from_number = int(created_ep.id)
+        target_episode_id = target_episode_id_from_number
+        target_resolution_source = "episode_number_autocreate"
+        episodes_data.append({
+            "idx": create_idx,
+            "id": int(created_ep.id),
+            "title": created_ep.title,
+            "script_content": created_ep.script_content,
+        })
+        logger.info(
+            "[generate_episode_scripts] TARGET_AUTOCREATED project_id=%s requested_episode_number=%s created_episode_id=%s",
             project_id,
             requested_episode_number,
-            int(req.episode_id) if req.episode_id else None,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Cannot safely resolve episode_number={requested_episode_number} to a unique episode. "
-                "Refusing fallback to episode_id to avoid wrong overwrite. "
-                "Please refresh episodes and retry."
-            ),
+            int(created_ep.id),
         )
 
     resolved_target_title = None

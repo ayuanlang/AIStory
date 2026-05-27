@@ -171,7 +171,7 @@ function AiEntityCreateDialog({
                                 >
                                     <option value="">请选择</option>
                                     {(entities || []).map((item) => (
-                                        <option key={item.id} value={item.id}>{item.name}{item.name_en ? ` (${item.name_en})` : ''}</option>
+                                        <option key={item.id} value={item.id}>{item.name}{item.name_en && item.name_en.toLowerCase() !== (item.name || '').toLowerCase() ? ` (${item.name_en})` : ''}</option>
                                     ))}
                                 </select>
                             </div>

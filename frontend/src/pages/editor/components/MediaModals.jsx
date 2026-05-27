@@ -817,7 +817,6 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             if (!allowedTypes.has(type)) return;
             const eid = String(entity?.id || '').trim();
             if (!eid || grouped.has(eid)) return;
-            if (activeEntityIds.size > 0 && !activeEntityIds.has(eid)) return;
             const nameZh = String(entity?.name || '').trim();
             const nameEn = String(entity?.name_en || '').trim();
             const label = nameZh && nameEn && nameZh.toLowerCase() !== nameEn.toLowerCase()
@@ -1071,7 +1070,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             }
 
             if (secondaryFilterValue) {
-                const selectedOption = secondaryEntityOptions.find((item) => String(item.id) === String(secondaryFilterValue));
+                const selectedOption = secondaryEntityOptions.find((item) => String(item.id) === String(secondaryFilterValue) || (item.aliasIds && item.aliasIds.some((v) => String(v) === String(secondaryFilterValue))));
                 const acceptedEntityIds = new Set([
                     String(secondaryFilterValue),
                     ...((selectedOption?.aliasIds || []).map((value) => String(value))),
@@ -1177,8 +1176,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     useEffect(() => {
         if (secondaryAutoFollow) return;
         if (secondaryFilterKind === 'entity') {
-            const exists = visibleSecondaryEntityOptions.some((item) => String(item.id) === String(secondaryFilterValue));
-            if (!exists && secondaryFilterValue) setSecondaryFilterValue('');
+            const match = visibleSecondaryEntityOptions.find((item) => String(item.id) === String(secondaryFilterValue) || (item.aliasIds && item.aliasIds.some((v) => String(v) === String(secondaryFilterValue))));
+            if (!match && secondaryFilterValue) {
+                setSecondaryFilterValue('');
+            } else if (match && String(match.id) !== String(secondaryFilterValue)) {
+                setSecondaryFilterValue(String(match.id));
+            }
             return;
         }
         if (secondaryFilterKind === 'shot') {

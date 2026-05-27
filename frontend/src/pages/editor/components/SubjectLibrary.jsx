@@ -178,7 +178,7 @@ const parseDependencyEntityId = (value) => {
     const directIdMatch = raw.match(/^\d+$/);
     if (directIdMatch) return directIdMatch[0];
 
-    const prefixedIdMatch = raw.match(/^(?:existing_id|existingid|entity_id|entityid|id)\s*[:#=]\s*(\d+)$/i);
+    const prefixedIdMatch = raw.match(/^(?:existing[_ \s]*id|entity[_ \s]*id|id)\s*[:#=]\s*(\d+)$/i);
     if (prefixedIdMatch) return String(prefixedIdMatch[1] || '').trim();
 
     return '';
@@ -538,7 +538,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             .map((id) => (allEntities || []).find((entity) => String(entity?.id || '') === String(id || '')))
             .filter((entity) => isAiReuseEntityAllowed(stableType, entity?.type))
             .filter(Boolean)
-            .map((entity) => `${buildEntityIndexToken(entity.type, entity.name || entity.name_en || String(entity.id))} (${entity.name_en || entity.name || ''})`);
+            .map((entity) => {
+                const primary = buildEntityIndexToken(entity.type, entity.name || entity.name_en || String(entity.id));
+                const secondary = entity.name_en || entity.name || '';
+                return secondary && secondary.toLowerCase() !== String(entity.name || '').toLowerCase() 
+                    ? `${primary} (${secondary})` 
+                    : primary;
+            });
 
         const lines = [
             'Subject Index (Manual Asset Addition Request)',
