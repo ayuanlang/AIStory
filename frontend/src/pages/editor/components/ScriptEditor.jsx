@@ -6728,14 +6728,10 @@ ${stage2_1Text}`;
 
                 const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
                 
-                // Extract clean Subject Index from Stage 2.1 Text before persisting
-                const pureSections21 = extractAnalysisSections(stage2_1Text);
-                const cleanSubjectIndexToPersist = pureSections21.hasStructuredSubjectIndex ? pureSections21.subjectIndexText : String(stage2_1Text || '').trim();
-
                 // Directly persist the clean Subject Index (Stage 2.1) without coupling it to Stage 2.2 Scenes.
                 try {
                     if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately...', 'process');
-                    await persistLlmResultContent(cleanSubjectIndexToPersist, 'ai_scene_analysis_subject_index', {
+                    await persistLlmResultContent(String(stage2_1Text || '').trim(), 'ai_scene_analysis_subject_index', {
                         source: 'advanced-analysis-stage2_1-subject-index'
                     });
                 } catch (persistErr) {
