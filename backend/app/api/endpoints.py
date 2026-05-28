@@ -17751,17 +17751,40 @@ def create_entity(
         ),
     ).first()
     
+
     if existing_entity:
         existing_entity.description = entity.description or existing_entity.description
         existing_entity.image_url = entity.image_url or existing_entity.image_url
         existing_entity.generation_prompt_en = entity.generation_prompt_en or existing_entity.generation_prompt_en
         existing_entity.generation_prompt_cn = entity.generation_prompt_cn or existing_entity.generation_prompt_cn
         existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
+        
+        existing_entity.name_en = entity.name_en or existing_entity.name_en
         existing_entity.base_name_en = entity.base_name_en or existing_entity.base_name_en
+        existing_entity.gender = entity.gender or existing_entity.gender
         existing_entity.role = entity.role or existing_entity.role
+        existing_entity.archetype = entity.archetype or existing_entity.archetype
         existing_entity.appearance_cn = entity.appearance_cn or existing_entity.appearance_cn
+        existing_entity.clothing = entity.clothing or existing_entity.clothing
+        existing_entity.action_characteristics = entity.action_characteristics or existing_entity.action_characteristics
+        
+        existing_entity.atmosphere = entity.atmosphere or existing_entity.atmosphere
+        existing_entity.visual_params = entity.visual_params or existing_entity.visual_params
+        existing_entity.narrative_description = entity.narrative_description or existing_entity.narrative_description
+
+        # Only merge structured lists/dicts if provided
+        if entity.visual_dependencies:
+            existing_entity.visual_dependencies = entity.visual_dependencies
+        if entity.dependency_strategy:
+            existing_entity.dependency_strategy = entity.dependency_strategy
+        if entity.custom_attributes:
+            existing_attr = dict(existing_entity.custom_attributes or {})
+            existing_attr.update(entity.custom_attributes)
+            existing_entity.custom_attributes = existing_attr
+
         if entity.episode_id is not None and existing_entity.episode_id is None:
             existing_entity.episode_id = entity.episode_id
+
         db.commit()
         db.refresh(existing_entity)
         return existing_entity

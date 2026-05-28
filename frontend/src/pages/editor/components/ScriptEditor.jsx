@@ -201,24 +201,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const isSuperuserRef = useRef(false);
     const SUBJECT_INDEX_PARSE_ERROR = '第二阶段返回未完成或被截断，未解析到完整的资产清单区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
 
-    const extractAnalysisSections = useCallback((rawText) => {
-        const authoritativeSubjectText = String(rawText || '');
+        const extractAnalysisSections = useCallback((rawText) => {
+        let authoritativeSubjectText = String(rawText || '');
+        // Erase any <think> blocks before doing regex to prevent huge text matching failures
+        authoritativeSubjectText = authoritativeSubjectText.replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+
         let extractedText = '';
         let extractedAdaptationText = '';
         let hasStructuredSubjectIndex = false;
 
-        const looksLikeSubjectIndex = (candidateText) => {
+                const looksLikeSubjectIndex = (candidateText) => {
             const candidate = String(candidateText || '');
             return /subject_no\s*=|subject_type\s*=|subject_name_(?:zh|en|exact)\s*=|subject_type\s*\|/i.test(candidate)
-            || /(?:^|\n)\s*[A-Z]?\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster)\b/i.test(candidate)
-                || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)/i.test(candidate);
+            || /(?:^|\n)\s*\|?\s*[A-Za-z]?\d{1,}\s*\|\s*(?:character|prop|environment|cover_poster)\b/i.test(candidate)
+            || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract)/i.test(candidate);
         };
 
         const trimSubjectIndexSection = (candidateText) => {
             let candidate = String(candidateText || '').replace(/\r\n/g, '\n').trim();
             if (!candidate) return '';
 
-            const subjectHeaderMatch = candidate.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)\s*(?:\*\*)?\s*\n?/i);
+            const subjectHeaderMatch = candidate.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract)\s*(?:\*\*)?\s*\n?/i);
             if (subjectHeaderMatch?.index >= 0) {
                 candidate = candidate.slice(subjectHeaderMatch.index).trim();
             }
@@ -275,9 +278,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             extractedText = trimSubjectIndexSection(dashMatch[1]);
             hasStructuredSubjectIndex = !!extractedText;
         } else {
-            const match = authoritativeSubjectText.match(/(?:^|\b|\s)#{0,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)\s*(?:\*\*)?\s*\n[\s\S]*/i)
-                || authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i)
-                || authoritativeSubjectText.match(/(?:^|\b|\s)(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index)[\s\S]*/i);
+            const match = authoritativeSubjectText.match(/(?:^|\b|\s)#{0,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract)\s*(?:\*\*)?\s*\n[\s\S]*/i)
+                || authoritativeSubjectText.match(/#{1,6}\s*(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract)[\s\S]*/i)
+                || authoritativeSubjectText.match(/(?:^|\b|\s)(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract)[\s\S]*/i);
             if (match) {
                 extractedText = trimSubjectIndexSection(match[0]);
                 hasStructuredSubjectIndex = !!extractedText;
@@ -292,7 +295,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const idx = authoritativeSubjectText.indexOf(subjectTypeLine[1]);
                         extractedText = trimSubjectIndexSection(authoritativeSubjectText.slice(idx));
                         hasStructuredSubjectIndex = !!extractedText;
-                    } else if (hasDownstreamMarker && looksLikeSubjectIndex(authoritativeSubjectText)) {
+                    } else if (looksLikeSubjectIndex(authoritativeSubjectText)) {
                         extractedText = trimSubjectIndexSection(authoritativeSubjectText);
                         hasStructuredSubjectIndex = !!extractedText;
                     }
@@ -300,7 +303,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        if (!hasStructuredSubjectIndex && hasDownstreamMarker && looksLikeSubjectIndex(authoritativeSubjectText)) {
+        if (!hasStructuredSubjectIndex && looksLikeSubjectIndex(authoritativeSubjectText)) {
             extractedText = trimSubjectIndexSection(authoritativeSubjectText);
             hasStructuredSubjectIndex = !!extractedText;
         }
@@ -908,7 +911,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 objs.push(JSON.parse(s));
             } catch {
-                // ignore
+                try {
+                    const repaired = repairJSON(s);
+                    if (repaired && typeof repaired === 'object') {
+                        objs.push(repaired);
+                    }
+                } catch {
+                    // ignore
+                }
             }
         };
 
@@ -1080,6 +1090,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         return null;
+    };
+
+    const repairJSON = (jsonStr) => {
+        try {
+            return JSON.parse(jsonStr);
+        } catch (e) {
+            // Regex to match "key": value where value is unquoted
+            let repaired = jsonStr.replace(
+                /"([^"]+)"\s*:\s*([^\s"{\[][\s\S]*?)(?=\s*[,}\]])/g, 
+                (match, key, value) => {
+                    const trimmedValue = value.trim();
+                    if (!trimmedValue) return match;
+                    
+                    // Allow valid JSON primitives (numbers, bools, null)
+                    if (/^(true|false|null)$/.test(trimmedValue)) return match;
+                    if (!isNaN(parseFloat(trimmedValue)) && isFinite(trimmedValue)) return match;
+                    
+                    // Quote the string, escaping quotes and newlines
+                    const safeValue = trimmedValue
+                        .replace(/\\/g, '\\\\') // Escape backslashes first
+                        .replace(/"/g, '\\"')
+                        .replace(/\n/g, '\\n'); // Avoid actual newlines in string
+                    
+                    return `"${key}": "${safeValue}"`;
+                }
+            );
+            try {
+                return JSON.parse(repaired);
+            } catch(e2) {
+                return [];
+            }
+        }
     };
 
     const extractNamedJsonArrayFromRawText = (inputText, keyName) => {
@@ -1297,7 +1339,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const rawJsonText = JSON.stringify(subjectsJson, null, 2);
             const normalizedPayload = getAnalysisEntitiesPayloadFromJsonText(rawJsonText);
-            return JSON.stringify(normalizedPayload || subjectsJson, null, 2);
+            const dataToUse = normalizedPayload || subjectsJson;
+            // If all arrays are empty, return '' so fallback can use raw text
+            if (!dataToUse || Object.values(dataToUse).every(arr => Array.isArray(arr) ? arr.length === 0 : !arr)) {
+                return '';
+            }
+            return JSON.stringify(dataToUse, null, 2);
         } catch (_) {
             return '';
         }
@@ -4204,13 +4251,57 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const phase2StartedAt = Date.now();
 
-            // Run them concurrently
+                        // Run them concurrently
             const results = await Promise.allSettled(
                 promptsData.map(async (pData, index) => {
                     const isPrimary = index === 0;
+
+                    let specificSubjectIndexText = finalSubjectIndexText;
+                    
+                    // Strip LLM think blocks
+                    specificSubjectIndexText = specificSubjectIndexText.replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+
+                    // Filter by target entity type so each LLM only sees its own entities
+                    if (pData.key) {
+                        const targetTypeKey = pData.key;
+                        let allowedKeywords = [];
+                        if (targetTypeKey === 'characters') allowedKeywords = ['character', '角色', '人物'];
+                        else if (targetTypeKey === 'props') allowedKeywords = ['prop', '道具', '物件'];
+                        else if (targetTypeKey === 'environments') allowedKeywords = ['environment', 'env', '场景', '环境'];
+                        else if (targetTypeKey === 'posters') allowedKeywords = ['poster', 'cover_poster', 'cover', '海报', '封面'];
+
+                        const allEntityKeywords = ['character', '角色', '人物', 'prop', '道具', '物件', 'environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
+
+                        const lines = specificSubjectIndexText.split('\n');
+                        const filteredLines = [];
+
+                        for (let line of lines) {
+                            const lineTrim = line.trim();
+                            const isRowItem = /^(?:\||[+\-*]\s*?\[[a-zA-Z0-9_-]+\]|[A-Za-z0-9_-]+\s*\|)/.test(lineTrim);
+                            if (isRowItem) {
+                                const lowerLine = line.toLowerCase();
+                                const isEntityRow = allEntityKeywords.some(kw => lowerLine.includes(kw));
+                                
+                                if (isEntityRow) {
+                                    const matchesTarget = allowedKeywords.some(kw => lowerLine.includes(kw));
+                                    if (matchesTarget) {
+                                        filteredLines.push(line);
+                                    }
+                                } else {
+                                    // Likely a header row, keep it
+                                    filteredLines.push(line);
+                                }
+                            } else {
+                                // Normal text, project context, table separators, etc. keep it.
+                                filteredLines.push(line);
+                            }
+                        }
+                        specificSubjectIndexText = filteredLines.join('\n').trim();
+                    }
+
                     return awaitAnalyzeSceneWithRecovery(
                         () => analyzeScene(
-                            finalSubjectIndexText, 
+                            specificSubjectIndexText,  
                             pData.content, 
                             null, 
                             isPrimary ? (activeEpisode?.id || null) : null, // Only bind episode ID on the first one to avoid DB overwrite race conditions
@@ -4241,8 +4332,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             for (let r of results) {
                 if (r.status === 'fulfilled' && r.value.result) {
                     const res = r.value.result;
-                    const bJson = res?.subjects_json;
+                    let bJson = res?.subjects_json;
                     const aText = extractAnalysisTextFromResult(res);
+                    
+                    if (!bJson && aText) {
+                        bJson = getAnalysisEntitiesPayloadFromJsonText(aText) || {};
+                    }
+
                     if (bJson) {
                         if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
                         if (r.value.key === 'environments' && bJson.environments) mergedBackendSubjectsJson.environments = bJson.environments;
@@ -4253,7 +4349,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
                     }
                     if (aText) {
-                        rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: bJson && bJson[r.value.key] ? bJson[r.value.key] : []}, null, 2)}\n\`\`\`\n\n`);
+                        const extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
+                        if (extractedArr && extractedArr.length > 0) {
+                            rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
+                        } else {
+                            rawTextParts.push(`\n\n${aText}\n\n`);
+                        }
                     }
                 } else if (r.status === 'rejected') {
                     onLog?.(`[Stage 3 Asset Design] Warning: task ${promptsData[results.indexOf(r)].key} failed: ${r.reason}`, "warning");
@@ -8207,4 +8308,6 @@ ${stage2_1Text}`;
         </div>
     );
 };
+
+ 
 

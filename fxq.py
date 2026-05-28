@@ -1,3 +1,0 @@
-import re  
-with open('backend/app/services/media_service.py', 'r', encoding='utf-8') as f: content = f.read()  
-content = re.sub(r'def _normalize_zlhub_task_query_endpoint\(self, endpoint: Optional\[str\]\) -\        raw = \(endpoint or \" "\\)\.strip\(\)\n        if not raw:\n            return \https://api\.zlhub\.cn/v1/task/create\', 'def _normalize_zlhub_task_query_endpoint(self, endpoint: Optional[str]) -        raw = (endpoint or \\).strip()\n        if not raw:\n            return \https://api.zlhub.cn/v1/task/get/" -encodedCommand dABhAHMAawBfAGkAZAA= "\', content)  ; echo with open('backend/app/services/media_service.py', 'w', encoding='utf-8') as f: f.write(content)  ; python fxq.py ; del fxq.py -inputFormat xml -outputFormat text

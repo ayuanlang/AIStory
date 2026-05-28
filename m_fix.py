@@ -1,3 +1,0 @@
-import re  
-with open('backend/app/services/media_service.py', 'r', encoding='utf-8') as f: content = f.read()  
-content = re.sub(r'f\" zlhub-\ -encodedCommand dQB1AGkAZABcAC4AdQB1AGkAZAA0AFwAKABcACkAXAAuAGgAZQB4AFwAWwA6AFwAZAArAFwAXQBcAA== "\', 'uuid.uuid4().hex', content)  ; echo content = content.replace('\X-Trace-ID\: trace_id', '\X-Trace-ID\: (str(trace_id).replace(\-\, \\).replace(\_\, \\) + \00000000000000000000000000000000\)[:32]')  ; echo with open('backend/app/services/media_service.py', 'w', encoding='utf-8') as f: f.write(content)  ; python m_fix.py ; del m_fix.py ; python -m py_compile backend/app/services/media_service.py -inputFormat xml -outputFormat text
