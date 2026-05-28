@@ -670,6 +670,17 @@ def _ensure_transaction_schema(is_postgres: bool = False):
                     else:
                         conn.execute(text("ALTER TABLE transaction_history ADD COLUMN target_group_id INTEGER"))
                     logger.info("Added target_group_id to transaction_history")
+                if "project_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN project_id INTEGER REFERENCES projects(id)"))
+                if "episode_id" not in cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
+                    else:
+                        conn.execute(text("ALTER TABLE transaction_history ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
+                    logger.info("Added project_id and episode_id to transaction_history")
 
         # Ensure payment_orders columns
         if inspector.has_table("payment_orders"):
@@ -740,6 +751,19 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         except Exception as e:
             logger.error(f"Failed to ensure entities columns: {e}")
 
+        for tname, tmodel in [
+            ("projects", models.Project),
+            ("episodes", models.Episode),
+            ("scenes", models.Scene),
+            ("shots", models.Shot),
+            ("script_segments", models.ScriptSegment),
+            ("project_shares", models.ProjectShare)
+        ]:
+            try:
+                _ensure_missing_table_columns(tname, tmodel, is_postgres=is_postgres)
+            except Exception as e:
+                logger.error(f"Failed to ensure {tname} columns: {e}")
+
         try:
             _ensure_entities_episode_scoped_unique_indexes(is_postgres=is_postgres)
         except Exception as e:
@@ -747,11 +771,22 @@ def check_and_migrate_tables(*, critical_only: bool = False):
 
         try:
             if hasattr(models, "UserGroup"):
+                if not inspector.has_table("user_groups"):
+                    models.UserGroup.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created user_groups table")
                 _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
             if hasattr(models, "UserGroupMembership"):
+                if not inspector.has_table("user_group_memberships"):
+                    models.UserGroupMembership.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created user_group_memberships table")
                 _ensure_missing_table_columns("user_group_memberships", models.UserGroupMembership, is_postgres=is_postgres)
+            if hasattr(models, "ProjectGroupCreditAllocation"):
+                if not inspector.has_table("project_group_credit_allocations"):
+                    models.ProjectGroupCreditAllocation.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created project_group_credit_allocations table")
+                _ensure_missing_table_columns("project_group_credit_allocations", models.ProjectGroupCreditAllocation, is_postgres=is_postgres)
         except Exception as e:
-            logger.error(f"Failed to ensure user group columns: {e}")
+            logger.error(f"Failed to ensure user group columns/tables: {e}")
 
         if critical_only:
             logger.info("Skipping non-critical legacy migrations during startup bootstrap")

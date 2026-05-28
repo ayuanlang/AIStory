@@ -10816,6 +10816,25 @@ def delete_project(
                     candidate_urls.append(url_txt)
 
         # Delete DB rows bottom-up to avoid FK constraints
+        if episode_ids:
+            db.query(TransactionAction).filter(TransactionAction.episode_id.in_(episode_ids)).update({TransactionAction.episode_id: None}, synchronize_session=False)
+            db.query(TransactionHistory).filter(TransactionHistory.episode_id.in_(episode_ids)).update({TransactionHistory.episode_id: None}, synchronize_session=False)
+
+        db.query(TransactionAction).filter(TransactionAction.project_id == project_id).update({TransactionAction.project_id: None}, synchronize_session=False)
+        db.query(TransactionHistory).filter(TransactionHistory.project_id == project_id).update({TransactionHistory.project_id: None}, synchronize_session=False)
+
+        # Pre-clear references in remaining assets and credit allocations
+        db.query(Asset).filter(Asset.project_id == project_id).update({
+            Asset.project_id: None,
+            Asset.episode_id: None,
+            Asset.is_current_project_asset: False
+        }, synchronize_session=False)
+
+        if hasattr(models, "ProjectGroupCreditAllocation"):
+            db.query(models.ProjectGroupCreditAllocation).filter(
+                models.ProjectGroupCreditAllocation.project_id == project_id
+            ).delete(synchronize_session=False)
+
         if scene_ids or project_scoped_shot_ids:
             shot_delete_filter = []
             if scene_ids:
@@ -10828,11 +10847,11 @@ def delete_project(
         if scene_ids:
             db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
 
+        db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
+
         if episode_ids:
             db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(episode_ids)).delete(synchronize_session=False)
             db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
-
-        db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
 
         if asset_ids_to_delete:
             db.query(Asset).filter(

@@ -1,125 +1,126 @@
 {
-  "version": 1,
-  "skills": [
-    {
-      "id": "agent_orchestrator",
-      "title": "Agent Orchestrator",
-      "type": "agent",
-      "prompts": [
-        "skills/agent_orchestrator/system_prompt.txt"
-      ],
-      "legacy_refs": []
-    },
-    {
-      "id": "scene_analysis_feature_stack",
-      "title": "Scene Analysis Feature Stack",
-      "type": "analysis",
-      "prompts": [
-        "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
-        "skills/scene_analysis_feature_stack/scene_planning_2_beats_and_assets.md",
-        "skills/scene_analysis_feature_stack/entity_design.md"
-      ],
-      "legacy_refs": []
-    },
-    {
-      "id": "scene_analysis",
-      "title": "Scene Analysis",
-      "type": "analysis",
-      "prompts": [
-        "scene_analysis.txt",
-        "scene_analysis_subject_recovery_lite.txt"
-      ],
-      "legacy_refs": [
-        "scene_analysis.txt",
-        "scene_analysis_subject_recovery_lite.txt"
-      ]
-    },
-    {
-      "id": "story_generation",
-      "title": "Story Generation",
-      "type": "story",
-      "prompts": [
-        "story_generator_global.txt",
-        "story_generator_analyze_novel.txt"
-      ],
-      "legacy_refs": [
-        "story_generator_global.txt",
-        "story_generator_analyze_novel.txt"
-      ]
-    },
-    {
-      "id": "script_generation",
-      "title": "Script Generation",
-      "type": "script",
-      "prompts": [
-        "script_generator_scenes.txt",
-        "script_generator_episode_script.txt",
-        "scene_regenerate.txt"
-      ],
-      "legacy_refs": [
-        "script_generator_scenes.txt",
-        "script_generator_episode_script.txt",
-        "scene_regenerate.txt"
-      ]
-    },
-    {
-      "id": "promo_generation",
-      "title": "Promo Generation",
-      "type": "promo",
-      "prompts": [
-        "promo_generator_global.txt",
-        "promo_generator_episode_script.txt"
-      ],
-      "legacy_refs": [
-        "promo_generator_global.txt",
-        "promo_generator_episode_script.txt"
-      ]
-    },
-    {
-      "id": "image_style_extraction",
-      "title": "Image Style Extraction",
-      "type": "vision",
-      "prompts": [
-        "image_style_extractor.txt"
-      ],
-      "legacy_refs": [
-        "image_style_extractor.txt"
-      ]
-    },
-    {
-      "id": "shot_generation",
-      "title": "Shot Generation",
-      "type": "storyboard",
-      "prompts": [
-        "skills/shot_generation.md",
-        "shot_regenerate.txt"
-      ],
-      "legacy_refs": [
-        "skills/shot_generation.md",
-        "shot_regenerate.txt"
-      ]
-    },
-    {
-      "id": "master_story_architect",
-      "title": "Master Story Architect (剧本故事DNA)",
-      "type": "story",
-      "prompts": [
-        "master_story_architect.md"
-      ],
-      "legacy_refs": [
-        "master_story_architect.md"
-      ]
-    },
-    {
-      "id": "master_episode_writer",
-      "title": "Master Episode Writer (生成剧本)",
-      "type": "script",
-      "prompts": [
-        "master_episode_writer.md"
-      ],
-      "legacy_refs": [
-        "master_episode_writer.md"
-      ]
-    }
-  ]
+    "version": 1,
+    "skills": [
+        {
+            "id": "agent_orchestrator",
+            "title": "Agent Orchestrator",
+            "type": "agent",
+            "prompts": [
+                "skills/agent_orchestrator/system_prompt.txt"
+            ],
+            "legacy_refs": []
+        },
+        {
+            "id": "scene_analysis_feature_stack",
+            "title": "Scene Analysis Feature Stack",
+            "type": "analysis",
+            "prompts": [
+                "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
+                "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md",
+                "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md",
+                "skills/scene_analysis_feature_stack/entity_design.md"
+            ],
+            "legacy_refs": []
+        },
+        {
+            "id": "scene_analysis",
+            "title": "Scene Analysis",
+            "type": "analysis",
+            "prompts": [
+                "scene_analysis.txt",
+                "scene_analysis_subject_recovery_lite.txt"
+            ],
+            "legacy_refs": [
+                "scene_analysis.txt",
+                "scene_analysis_subject_recovery_lite.txt"
+            ]
+        },
+        {
+            "id": "story_generation",
+            "title": "Story Generation",
+            "type": "story",
+            "prompts": [
+                "story_generator_global.txt",
+                "story_generator_analyze_novel.txt"
+            ],
+            "legacy_refs": [
+                "story_generator_global.txt",
+                "story_generator_analyze_novel.txt"
+            ]
+        },
+        {
+            "id": "script_generation",
+            "title": "Script Generation",
+            "type": "script",
+            "prompts": [
+                "script_generator_scenes.txt",
+                "script_generator_episode_script.txt",
+                "scene_regenerate.txt"
+            ],
+            "legacy_refs": [
+                "script_generator_scenes.txt",
+                "script_generator_episode_script.txt",
+                "scene_regenerate.txt"
+            ]
+        },
+        {
+            "id": "promo_generation",
+            "title": "Promo Generation",
+            "type": "promo",
+            "prompts": [
+                "promo_generator_global.txt",
+                "promo_generator_episode_script.txt"
+            ],
+            "legacy_refs": [
+                "promo_generator_global.txt",
+                "promo_generator_episode_script.txt"
+            ]
+        },
+        {
+            "id": "image_style_extraction",
+            "title": "Image Style Extraction",
+            "type": "vision",
+            "prompts": [
+                "image_style_extractor.txt"
+            ],
+            "legacy_refs": [
+                "image_style_extractor.txt"
+            ]
+        },
+        {
+            "id": "shot_generation",
+            "title": "Shot Generation",
+            "type": "storyboard",
+            "prompts": [
+                "skills/shot_generation.md",
+                "shot_regenerate.txt"
+            ],
+            "legacy_refs": [
+                "skills/shot_generation.md",
+                "shot_regenerate.txt"
+            ]
+        },
+        {
+            "id": "master_story_architect",
+            "title": "Master Story Architect (剧本故事DNA)",
+            "type": "story",
+            "prompts": [
+                "master_story_architect.md"
+            ],
+            "legacy_refs": [
+                "master_story_architect.md"
+            ]
+        },
+        {
+            "id": "master_episode_writer",
+            "title": "Master Episode Writer (生成剧本)",
+            "type": "script",
+            "prompts": [
+                "master_episode_writer.md"
+            ],
+            "legacy_refs": [
+                "master_episode_writer.md"
+            ]
+        }
+    ]
 }

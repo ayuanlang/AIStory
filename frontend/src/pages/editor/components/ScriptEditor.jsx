@@ -4142,10 +4142,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { key: 'posters', path: 'skills/scene_analysis_feature_stack/entity_design_poster.md' }
             ];
 
+            const commonPromptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design_common.md").catch(() => null);
+            const commonPromptContent = commonPromptRes?.content || "";
+
             const promptsData = await Promise.all(
                 promptFiles.map(async p => ({
                     ...p,
-                    content: (await fetchPrompt(p.path).catch(() => null))?.content || ""
+                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(p.path).catch(() => null))?.content || "")
                 }))
             );
 
