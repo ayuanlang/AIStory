@@ -6728,6 +6728,16 @@ ${stage2_1Text}`;
 
                 const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
                 
+                // Directly persist the clean Subject Index (Stage 2.1) without coupling it to Stage 2.2 Scenes.
+                try {
+                    if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately...', 'process');
+                    await persistLlmResultContent(String(stage2_1Text || '').trim(), 'ai_scene_analysis_subject_index', {
+                        source: 'advanced-analysis-stage2_1-subject-index'
+                    });
+                } catch (persistErr) {
+                    if (onLog) onLog(`Failed to persist clean Subject Index: ${persistErr?.message || persistErr}`, 'warning');
+                }
+                
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
                 finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
 
@@ -6746,7 +6756,16 @@ ${stage2_1Text}`;
                 } finally {
                     phaseMarks.persistFinishedAt = Date.now();
                 }
-                analysisSections = extractAnalysisSections(finalAnalysisText);
+                // Override the extraction to ensure the pure stage2_1Text acts as the authoritative source
+                analysisSections = extractAnalysisSections(stage2PhaseRawText);
+                if (!analysisSections.hasStructuredSubjectIndex) {
+                    // Try parsing pure 2.1 text just in case the extract logic trips over 2.2
+                    const pureSections = extractAnalysisSections(stage2_1Text);
+                    if (pureSections.hasStructuredSubjectIndex) {
+                        analysisSections.hasStructuredSubjectIndex = true;
+                        analysisSections.subjectIndexText = pureSections.subjectIndexText;
+                    }
+                }
             }
 
             if (!analysisSections.hasStructuredSubjectIndex) {
