@@ -7541,76 +7541,106 @@ ${stage2_1Text}`;
         ).trim();
         const assetDesignPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignJson);
 
-        return [
-            {
-                key: 'stage3-asset-design-json',
-                eyebrow: t('第三阶段', 'Stage 3'),
-                title: t('资产设计', 'Asset Design'),
-                status: assetDesignJson ? 'completed' : 'idle',
-                badge: assetDesignJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
-                summary: t('展示第三阶段的资产设计结果，可重新导入角色、道具、场景与海报。', 'Shows the Stage 3 asset-design result and supports re-import.'),
-                content: formatArtifactContent(assetDesignJson, 'json'),
+        const cards = [];
+        
+        cards.push({
+            key: 'stage3-asset-design-json',
+            eyebrow: t('第三阶段', 'Stage 3'),
+            title: t('资产设计 - 全部', 'Asset Design (All)'),
+            status: assetDesignJson ? 'completed' : 'idle',
+            badge: assetDesignJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
+            summary: t('全部的资产设计结果，可重新导入或重跑全部。', 'Shows all Stage 3 asset-design result and supports re-import/rerun.'),
+            content: formatArtifactContent(assetDesignJson, 'json'),
+            actions: [
+                {
+                    key: 'reimport-stage3-asset-design',
+                    label: t('全部导入', 'Import All'),
+                    icon: 'refresh',
+                    onClick: () => handleImportStageArtifact({
+                        content: assetDesignJson,
+                        importType: 'json',
+                        label: 'stage3 asset design json',
+                        importOptions: {
+                            subjectsJson: assetDesignPayload || null,
+                            suppressAlerts: false,
+                        },
+                    }),
+                    disabled: isAnalyzing || !assetDesignJson,
+                    loading: false,
+                },
+                {
+                    key: 'restart-stage3-card',
+                    label: t('重跑全部', 'Rerun All'),
+                    icon: 'play',
+                    onClick: () => handleRetryPhase2({}),
+                    disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                    loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
+                }
+            ],
+            placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
+        });
+
+        const categories = [
+            { key: 'characters', labelZh: '角色设计', labelEn: 'Characters', btnZh: '重跑角色', btnEn: 'Regen Characters' },
+            { key: 'props', labelZh: '道具设计', labelEn: 'Props', btnZh: '重跑道具', btnEn: 'Regen Props' },
+            { key: 'environments', labelZh: '环境设计', labelEn: 'Environments', btnZh: '重跑环境', btnEn: 'Regen Environments' },
+            { key: 'posters', labelZh: '封面设计', labelEn: 'Posters', btnZh: '重跑封面', btnEn: 'Regen Posters' },
+        ];
+
+        categories.forEach(cat => {
+            let catObj = null;
+            if (assetDesignPayload && assetDesignPayload[cat.key] && Array.isArray(assetDesignPayload[cat.key]) && assetDesignPayload[cat.key].length > 0) {
+                 catObj = { [cat.key]: assetDesignPayload[cat.key] };
+                 if (cat.key === 'posters' && assetDesignPayload.covers && Array.isArray(assetDesignPayload.covers) && assetDesignPayload.covers.length > 0) {
+                     catObj.covers = assetDesignPayload.covers;
+                 }
+            } else if (cat.key === 'posters' && assetDesignPayload && assetDesignPayload.covers && Array.isArray(assetDesignPayload.covers) && assetDesignPayload.covers.length > 0) {
+                 catObj = { covers: assetDesignPayload.covers };
+            }
+
+            const catJson = catObj ? JSON.stringify(catObj, null, 2) : '';
+
+            cards.push({
+                key: \stage3-asset-\\,
+                eyebrow: t('第三阶段局部', 'Stage 3 Partial'),
+                title: t(cat.labelZh, cat.labelEn),
+                status: catJson ? 'completed' : 'idle',
+                badge: catJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
+                summary: t(\局部的\结果。\, \Stage 3 \ result.\),
+                content: formatArtifactContent(catJson, 'json'),
                 actions: [
                     {
-                        key: 'reimport-stage3-asset-design',
-                        label: t('重新导入', 'Re-import'),
+                        key: \
+eimport-stage3-\\,
+                        label: t('局部导入', 'Import Partial'),
                         icon: 'refresh',
                         onClick: () => handleImportStageArtifact({
-                            content: assetDesignJson,
+                            content: catJson,
                             importType: 'json',
-                            label: 'stage3 asset design json',
+                            label: \stage3 \ json\,
                             importOptions: {
-                                subjectsJson: assetDesignPayload || null,
+                                subjectsJson: catObj || null,
                                 suppressAlerts: false,
                             },
                         }),
-                        disabled: isAnalyzing || !assetDesignJson,
+                        disabled: isAnalyzing || !catJson,
                         loading: false,
                     },
                     {
-                        key: 'restart-stage3-card',
-                        label: t('重跑覆盖', 'Rerun & Overwrite'),
-                        icon: 'play',
-                        onClick: () => handleRetryPhase2({}),
-                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
-                    },
-                    {
-                        key: 'restart-stage3-characters',
-                        label: t('重新生成角色', 'Regenerate Characters'),
+                        key: \
+estart-stage3-\\,
+                        label: t(cat.btnZh, cat.btnEn),
                         icon: 'repeat',
-                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['characters'] }),
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: [cat.key] }),
                         disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('characters'),
-                    },
-                    {
-                        key: 'restart-stage3-props',
-                        label: t('重新生成道具', 'Regenerate Props'),
-                        icon: 'repeat',
-                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['props'] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('props'),
-                    },
-                    {
-                        key: 'restart-stage3-environments',
-                        label: t('重新生成环境', 'Regenerate Environments'),
-                        icon: 'repeat',
-                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['environments'] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('environments'),
-                    },
-                    {
-                        key: 'restart-stage3-posters',
-                        label: t('重新生成封面', 'Regenerate Covers'),
-                        icon: 'repeat',
-                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['posters'] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('posters'),
-                    },
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key),
+                    }
                 ],
-                placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
-            },
-        ];
+                placeholder: t(\尚未返回\结果。\, \No \ output yet.\),
+            });
+        });
+
+        return cards;
     }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;

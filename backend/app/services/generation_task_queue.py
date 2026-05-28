@@ -11,7 +11,7 @@ def _load_queue_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"queue_threads": 20, "callback_threads": 20}
+    return {}
 
 _q_conf = _load_queue_config()
 
@@ -55,7 +55,7 @@ _REQUESTED_WORKER_THREADS = max(
 )
 # Keep the default queue target at 20 for dedicated worker processes, while
 # still degrading safely when the DB pool is smaller than that target.
-_WORKER_THREAD_CAP = max(1, min(20, _POOL_CAPACITY - 4))
+_WORKER_THREAD_CAP = max(1, min(20, _POOL_CAPACITY // 2))
 _QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None

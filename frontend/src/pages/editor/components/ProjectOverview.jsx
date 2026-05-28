@@ -200,7 +200,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 frame_rate: "24",
                 aspect_ratio: "9:16",
                 quality: "超高 / Ultra High",
-                image_size: "1K"
+                image_size: "2K"
             }
         },
         tone: "",

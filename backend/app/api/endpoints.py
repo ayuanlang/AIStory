@@ -25603,7 +25603,7 @@ async def _run_generate_image(
                             elif long_side >= 2200:
                                 image_size = "2K"
                             elif long_side >= 1200:
-                                image_size = "1K"
+                                image_size = "2K"
                             else:
                                 image_size = "0.5K"
                         break
@@ -25630,7 +25630,7 @@ async def _run_generate_image(
             elif max_side >= 2200:
                 image_size = "2K"
             elif max_side >= 1200:
-                image_size = "1K"
+                image_size = "2K"
             else:
                 image_size = "0.5K"
 

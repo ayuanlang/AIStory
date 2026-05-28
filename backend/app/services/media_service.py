@@ -1016,7 +1016,7 @@ Negative prompt constraints: {neg_prompt}"""
                 return mapped_from_ratio
             return "1024x1024"
 
-        size_value = normalized_image_size or "1024x1024"
+        size_value = normalized_image_size or "2560x1440"
         if ratio_value and not normalized_image_size:
             ratio_map = {
                 "1:1": "1024x1024",
@@ -5245,14 +5245,14 @@ Negative prompt constraints: {neg_prompt}"""
                 res_str = f"{w}x{h}"
             elif aspect_ratio:
                  # Minimal mapping for Grsai (Assuming it supports standard sizes or 1024 based aspect)
-                 if aspect_ratio == "16:9": res_str = "1280x720"
+                 if aspect_ratio == "16:9": res_str = "2560x1440"
                  elif aspect_ratio == "9:16": res_str = "720x1280"
                  elif aspect_ratio == "4:3": res_str = "1024x768"
                  elif aspect_ratio == "3:4": res_str = "768x1024"
                  elif aspect_ratio == "21:9": res_str = "1536x640" 
-                 else: res_str = "1024x1024"
+                 else: res_str = "2560x1440"
             else:
-                 res_str = "1024x1024"
+                 res_str = "2560x1440"
 
             normalized_image_size = self._normalize_image_size_value(
                 image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
@@ -7089,7 +7089,7 @@ Negative prompt constraints: {neg_prompt}"""
                 "model": model,
                 "prompt": _sanitize_video_prompt_if_needed(prompt, negative_prompt, model),
                 "seconds": str(int(duration or tool_conf.get("seconds") or 4)),
-                "size": str(tool_conf.get("size") or "1280x720"),
+                "size": str(tool_conf.get("size") or "2560x1440"),
             }
             if aspect_ratio and not tool_conf.get("size"):
                 size_map = {
@@ -10496,12 +10496,12 @@ Negative prompt constraints: {neg_prompt}"""
                 payload_input.pop("image_size", None)
             elif is_gpt_image_2:
                 ar_val = str(payload_input.pop("aspect_ratio", "")).strip()
-                if ar_val == "16:9": res_str = "1280x720"
+                if ar_val == "16:9": res_str = "2560x1440"
                 elif ar_val == "9:16": res_str = "720x1280"
                 elif ar_val == "4:3": res_str = "1024x768"
                 elif ar_val == "3:4": res_str = "768x1024"
                 elif ar_val == "21:9": res_str = "1536x640" 
-                else: res_str = "1024x1024"
+                else: res_str = "2560x1440"
                 payload_input["size"] = res_str
                 payload_input.pop("image_size", None)
             elif is_gpt_image_15_i2i:

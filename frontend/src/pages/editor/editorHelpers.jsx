@@ -1769,7 +1769,7 @@ export function resolveShotDiptychRequestResolution(diptychPlan, panelExportSize
 
 export function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
     const ratio = String(aspectRatio || '').trim();
-    const size = normalizeImageSizeOption(imageSize) || '1K';
+    const size = normalizeImageSizeOption(imageSize) || '2K';
     const key = `${ratio}|${size}`;
     const presets = {
         '16:9|0.5K': { width: '960', height: '540' },
