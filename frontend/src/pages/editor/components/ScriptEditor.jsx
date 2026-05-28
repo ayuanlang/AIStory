@@ -4077,7 +4077,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
                 const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
                 const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-                let subjectIndexText = persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
+                let subjectIndexText = options.explicitSubjectIndexText || persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
                 let adaptationBodyText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
                     adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
@@ -6758,14 +6758,9 @@ ${stage2_1Text}`;
                 }
                 // Override the extraction to ensure the pure stage2_1Text acts as the authoritative source
                 analysisSections = extractAnalysisSections(stage2PhaseRawText);
-                if (!analysisSections.hasStructuredSubjectIndex) {
-                    // Try parsing pure 2.1 text just in case the extract logic trips over 2.2
-                    const pureSections = extractAnalysisSections(stage2_1Text);
-                    if (pureSections.hasStructuredSubjectIndex) {
-                        analysisSections.hasStructuredSubjectIndex = true;
-                        analysisSections.subjectIndexText = pureSections.subjectIndexText;
-                    }
-                }
+                // We unconditionally treat stage2_1Text as our subject index
+                analysisSections.hasStructuredSubjectIndex = true;
+                analysisSections.subjectIndexText = String(stage2_1Text || '').trim();
             }
 
             if (!analysisSections.hasStructuredSubjectIndex) {
@@ -6838,7 +6833,9 @@ ${stage2_1Text}`;
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, finalAnalysisText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText);
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText, {
+                explicitSubjectIndexText: analysisSections?.subjectIndexText || ''
+            });
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
