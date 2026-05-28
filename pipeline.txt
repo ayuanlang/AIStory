@@ -1,0 +1,348 @@
+const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
+        if (phase2GenerationInFlightRef.current) {
+            onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
+            return {
+                checkedSceneCount: 0,
+                missingSceneCount: 0,
+                missingItemCount: 0,
+                missingSceneReports: [],
+                supplementReport: {
+                    createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
+                    countsByType: { character: 0, prop: 0, environment: 0 },
+                },
+                importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
+            };
+        }
+
+        const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
+        const emptyReport = {
+            checkedSceneCount: importedSceneRows.length,
+            missingSceneCount: 0,
+            missingItemCount: 0,
+            missingSceneReports: [],
+            supplementReport: {
+                createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
+                countsByType: { character: 0, prop: 0, environment: 0 },
+            },
+            importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
+        };
+
+        onLog?.(`[Stage 3 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
+
+        if (!projectId) {
+            onLog?.(`[Stage 3 Debug] aborting because projectId is empty.`);
+            return emptyReport;
+        }
+
+                const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
+                const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+                const extractedSections = extractAnalysisSections(authoritativeSubjectText);
+                let subjectIndexText = options.explicitSubjectIndexText || persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
+                let adaptationBodyText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+                if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
+                    adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
+                }
+
+                if (adaptationBodyText) {
+                    onLog?.(`[Stage 2 Scene Analysis] Extracted optimized script (length: ${adaptationBodyText.length})`);
+                }
+
+          onLog?.(`[Stage 3 Asset Design] Initial authoritative text length: ${authoritativeSubjectText.length}`);
+
+        // Try to match the block wrapped by at least 5 dashes: ---------
+        if (options?.isRetryPhase2) {
+            onLog?.(`[Stage 3 Asset Design] Retry mode enabled. Bypassing asset-index structural check.`);
+            // Retry may receive a manually edited Subject Index block without the original Stage 2 wrapper.
+            if (!subjectIndexText.trim() && explicitText) {
+                const explicitSections = extractAnalysisSections(explicitText);
+                subjectIndexText = explicitSections?.hasStructuredSubjectIndex
+                    ? String(explicitSections.subjectIndexText || '').trim()
+                    : '';
+            }
+        } else if (extractedSections.hasStructuredSubjectIndex) {
+            onLog?.(`[Stage 2 Asset Index] Extracted asset index (length: ${subjectIndexText.length})`);
+        } else {
+            onLog?.(`[Stage 3 Asset Design] Error: Failed to find the Stage 2 asset index block. Aborting asset design.`, 'error');
+            throw new Error(SUBJECT_INDEX_PARSE_ERROR);
+        }
+
+        // Persist authoritative Stage 2 outputs so Stage 3 uses the optimized script and asset index as inputs.
+        if (subjectIndexText.trim() || adaptationBodyText.trim()) {
+              if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
+              if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
+              const updatePayload = {};
+              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = subjectIndexText.trim();
+              if (adaptationBodyText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationBodyText.trim();
+              
+              try {
+                  await updateEpisode(activeEpisode.id, updatePayload);
+                  onLog?.(`[Stage 2 Outputs] Saved asset index and optimized script (asset_index_len=${subjectIndexText.length}, optimized_script_len=${adaptationBodyText.length})`);
+              } catch (error) {
+                  onLog?.(`[Stage 2 Outputs] Warning: Failed to save asset index / optimized script: ${error.message}`);
+              }
+          }
+
+        if (!subjectIndexText.trim()) {
+            console.log("No asset index found in the analysis result. Skipping Stage 3 asset design.");
+            return emptyReport;
+        }
+
+        phase2GenerationInFlightRef.current = true;
+
+        setAnalysisFlowStatus({
+            phase: "generating_assets",
+            message: t("✨ 正在执行第三阶段资产设计...", "Running Stage 3 asset design from the Stage 2 asset index..."),
+        });
+
+        try {
+            onLog?.(`[Stage 3 Asset Design] Preparing to fetch 4 entity_design prompts`);
+            
+            const promptFiles = [
+                { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
+                { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
+                { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' },
+                { key: 'posters', path: 'skills/scene_analysis_feature_stack/entity_design_poster.md' }
+            ];
+
+            const commonPromptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design_common.md").catch(() => null);
+            const commonPromptContent = commonPromptRes?.content || "";
+
+            const promptsData = await Promise.all(
+                promptFiles.map(async p => ({
+                    ...p,
+                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(p.path).catch(() => null))?.content || "")
+                }))
+            );
+
+            let finalSubjectIndexText = subjectIndexText;
+            // Hotfix: Ensure any trailing Scenes markdown that accidentally leaked into the Subject Index gets cleanly removed
+            const scenesOftMatch = finalSubjectIndexText.match(/(?:^|\n)\s*(?:###?\s*(?:-1\)\s*类型研判|Scenes|场景列表))/i);
+            if (scenesOftMatch && scenesOftMatch.index >= 0) {
+                finalSubjectIndexText = finalSubjectIndexText.slice(0, scenesOftMatch.index).trim();
+            }
+            
+            const designProjectContextSection = buildStage1ProjectContextSection()
+                .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
+                .replace('Use this project context as first-class constraints before analyzing the script.', 'Use this project context as first-class constraints before generating the subjects.');
+
+            if (designProjectContextSection) {
+                finalSubjectIndexText = `${designProjectContextSection}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
+            }
+
+            const isUserSuper = isSuperuser || isSuperuserRef.current;
+            if (isUserSuper) {
+                setAnalysisModalMode('stage3');
+                setSystemPrompt(promptsData[0].content); // Show character one as representative
+                setUserPrompt(finalSubjectIndexText);
+                setShowAnalysisModal(true);
+                
+                onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
+                // Wait for the modal submit
+                const confirmed = await new Promise(resolve => {
+                    phase2ResolverRef.current = resolve;
+                });
+                
+                if (!confirmed || typeof confirmed !== 'object') {
+                    onLog?.(`[Stage 3 Asset Design] Superuser aborted the asset-design stage.`);
+                    return emptyReport;
+                }
+                
+                promptsData[0].content = confirmed.systemPrompt || promptsData[0].content;
+                finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
+            }
+
+            onLog?.('[Stage 3 Asset Design] Launching 4 parallel asset-design LLM calls...');
+
+            const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
+                || Number(localStorage.getItem('func_api_script_analysis') || 0)
+                || null;
+            if (phase1SystemApiId) {
+                onLog?.(`[Stage 3 Asset Design] Reusing Stage 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
+            } else {
+                onLog?.('[Stage 3 Asset Design] Stage 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
+            }
+
+            const phase2StartedAt = Date.now();
+
+                        // Run them concurrently
+            const results = await Promise.allSettled(
+                promptsData.map(async (pData, index) => {
+                    const isPrimary = index === 0;
+
+                    let specificSubjectIndexText = finalSubjectIndexText;
+                    
+                    // Strip LLM think blocks
+                    specificSubjectIndexText = specificSubjectIndexText.replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+
+                    // Filter by target entity type so each LLM only sees its own entities
+                    if (pData.key) {
+                        const targetTypeKey = pData.key;
+                        let allowedKeywords = [];
+                        if (targetTypeKey === 'characters') allowedKeywords = ['character', '角色', '人物'];
+                        else if (targetTypeKey === 'props') allowedKeywords = ['prop', '道具', '物件'];
+                        else if (targetTypeKey === 'environments') allowedKeywords = ['environment', 'env', '场景', '环境'];
+                        else if (targetTypeKey === 'posters') allowedKeywords = ['poster', 'cover_poster', 'cover', '海报', '封面'];
+
+                        const allEntityKeywords = ['character', '角色', '人物', 'prop', '道具', '物件', 'environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
+
+                        const lines = specificSubjectIndexText.split('\n');
+                        const filteredLines = [];
+
+                        for (let line of lines) {
+                            const lineTrim = line.trim();
+                            const isRowItem = /^(?:\||[+\-*]\s*?\[[a-zA-Z0-9_-]+\]|[A-Za-z0-9_-]+\s*\|)/.test(lineTrim);
+                            if (isRowItem) {
+                                const lowerLine = line.toLowerCase();
+                                const isEntityRow = allEntityKeywords.some(kw => lowerLine.includes(kw));
+                                
+                                if (isEntityRow) {
+                                    const matchesTarget = allowedKeywords.some(kw => lowerLine.includes(kw));
+                                    if (matchesTarget) {
+                                        filteredLines.push(line);
+                                    }
+                                } else {
+                                    // Likely a header row, keep it
+                                    filteredLines.push(line);
+                                }
+                            } else {
+                                // Normal text, project context, table separators, etc. keep it.
+                                filteredLines.push(line);
+                            }
+                        }
+                        specificSubjectIndexText = filteredLines.join('\n').trim();
+                    }
+
+                    return awaitAnalyzeSceneWithRecovery(
+                        () => analyzeScene(
+                            specificSubjectIndexText,  
+                            pData.content, 
+                            null, 
+                            isPrimary ? (activeEpisode?.id || null) : null, // Only bind episode ID on the first one to avoid DB overwrite race conditions
+                            analysisAttentionNotes, 
+                            selectedReuseSubjectAssets, 
+                            {
+                                onTaskCreated: (taskId) => {
+                                    if (isPrimary) {
+                                        setActiveAnalysisTaskId(String(taskId || '').trim());
+                                        saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: phase2StartedAt, phase: 2 });
+                                    }
+                                }
+                            }, 
+                            projectId,
+                            "script_analysis",
+                            phase1SystemApiId,
+                            `2_pass_generate_assets_${pData.key}`
+                        ),
+                        { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
+                    ).then(res => ({ key: pData.key, result: res }));
+                })
+            );
+
+            // Merge results
+            let mergedBackendSubjectsJson = { characters: [], environments: [], props: [], posters: [], covers: [] };
+            let rawTextParts = [];
+            
+            for (let r of results) {
+                if (r.status === 'fulfilled' && r.value.result) {
+                    const res = r.value.result;
+                    let bJson = res?.subjects_json;
+                    const aText = extractAnalysisTextFromResult(res);
+                    
+                    if (!bJson && aText) {
+                        bJson = getAnalysisEntitiesPayloadFromJsonText(aText) || {};
+                    }
+
+                    if (bJson) {
+                        if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
+                        if (r.value.key === 'environments' && bJson.environments) mergedBackendSubjectsJson.environments = bJson.environments;
+                        if (r.value.key === 'props' && bJson.props) mergedBackendSubjectsJson.props = bJson.props;
+                        if (r.value.key === 'posters') {
+                            if (bJson.posters) mergedBackendSubjectsJson.posters = bJson.posters;
+                            if (bJson.covers) mergedBackendSubjectsJson.covers = bJson.covers;
+                        }
+                    }
+                    if (aText) {
+                        const extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
+                        if (extractedArr && extractedArr.length > 0) {
+                            rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
+                        } else {
+                            rawTextParts.push(`\n\n${aText}\n\n`);
+                        }
+                    }
+                } else if (r.status === 'rejected') {
+                    onLog?.(`[Stage 3 Asset Design] Warning: task ${promptsData[results.indexOf(r)].key} failed: ${r.reason}`, "warning");
+                }
+            }
+
+            const canonicalAssetDesignText = String(
+                buildCanonicalAssetDesignJsonText(mergedBackendSubjectsJson) || rawTextParts.join('\n')
+            ).trim();
+            setLlmAssetRawResultContent(canonicalAssetDesignText);
+
+            // Override to persist true result manually
+            try {
+                if (canonicalAssetDesignText) {
+                    onLog?.('[Stage 3 Asset Design] Persisting merged 4-part asset-design output to ai_entity_design_result...', 'process');
+                    await persistLlmResultContent(canonicalAssetDesignText || '', 'ai_entity_design_result');
+                }
+            } catch (persistErr) {
+                onLog?.(`[Stage 3 Asset Design] Raw output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            }
+
+            if (canonicalAssetDesignText) {
+                // Safeguard: make sure we are not importing plain text phase 1 by mistake
+                const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[|"covers"\s*:\s*\[/i.test(canonicalAssetDesignText);
+                
+                if (!hasValidSubjectJsonBlock && Object.values(mergedBackendSubjectsJson).every(arr => arr.length === 0)) {
+                    onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block. Skipping import to prevent overwriting the Stage 2 asset index.`, "warning");
+                    throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
+                } else {
+                    // Automatically import the generated subjects
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(canonicalAssetDesignText, {
+                            reason: 'phase2-entity-design-recovery',
+                            subjectsJson: mergedBackendSubjectsJson || null,
+                            importOptions: {
+                                onLog,
+                                projectId,
+                                episodeId: activeEpisode?.id,
+                                subjectsJson: mergedBackendSubjectsJson || null,
+                                suppressAlerts: true,
+                            },
+                        });
+
+                    const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
+                    const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
+                    onLog?.(`[Stage 3 Asset Design] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+
+                    return {
+                        checkedSceneCount: importedSceneRows.length,
+                        missingSceneCount: 0,
+                        missingItemCount: createdLen + matchedLen,
+                        supplementReport: {
+                            createdItems: sceneImportReport?.createdSubjectItems || [],
+                            skippedItems: sceneImportReport?.skippedSubjectItems || [],
+                            failedItems: [],
+                        },
+                        importedSubjectCounts: sceneImportReport?.importedSubjectCounts,
+                        dbPersistedCounts: sceneImportReport?.dbPersistedCounts,
+                        dbRunInsertedCounts: sceneImportReport?.dbRunInsertedCounts,
+                    };
+                }
+            }
+
+        } catch (error) {
+            console.error("Stage 3 asset design step failed:", error);
+            onLog?.(`Stage 3 asset design failed: ${error.message}`);
+            throw error;
+        } finally {
+            phase2GenerationInFlightRef.current = false;
+        }
+
+        return emptyReport;
+    }, [
+        projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
+        fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery,
+        analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
+        isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
+        project
+    ]);

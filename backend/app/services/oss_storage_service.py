@@ -66,6 +66,7 @@ def _env_int(*keys: str, default: int) -> int:
 class OSSStorageService:
     def __init__(self) -> None:
         self._credential_cursors: Dict[str, int] = {}
+        self._boto3_clients_cache: Dict[str, Any] = {}
 
     def _urlsafe_b64encode(self, raw: bytes) -> str:
         return base64.urlsafe_b64encode(raw).decode("utf-8")
@@ -431,6 +432,10 @@ class OSSStorageService:
         if not pool or not cred:
             raise ValueError("OSS pool or credential missing")
 
+        cache_key = f"{getattr(pool, 'endpoint', '')}_{getattr(cred, 'access_key', '')}"
+        if cache_key in self._boto3_clients_cache:
+            return self._boto3_clients_cache[cache_key]
+
         # Some S3-compatible providers (including Qiniu gateways) can persist
         # aws-chunked as object Content-Encoding when payload signing is enabled.
         # That can break browser playback (especially over HTTP/2) for video assets.
@@ -444,7 +449,7 @@ class OSSStorageService:
             signature_version="s3v4",
             s3=s3_config,
         )
-        return boto3.client(
+        client = boto3.client(
             "s3",
             endpoint_url=pool.endpoint,
             region_name=getattr(pool, "region_name", None) or None,
@@ -453,6 +458,8 @@ class OSSStorageService:
             aws_session_token=getattr(cred, "session_token", None),
             config=config,
         )
+        self._boto3_clients_cache[cache_key] = client
+        return client
 
     def is_enabled(self, db=None) -> bool:
         for pool in self._get_active_pools(db):

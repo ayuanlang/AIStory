@@ -1,0 +1,71 @@
+        return [
+            {
+                key: 'stage3-asset-design-json',
+                eyebrow: t('第三阶段', 'Stage 3'),
+                title: t('资产设计', 'Asset Design'),
+                status: assetDesignJson ? 'completed' : 'idle',
+                badge: assetDesignJson ? t('可导入', 'Importable') : t('待输出', 'Pending'),
+                summary: t('展示第三阶段的资产设计结果，可重新导入角色、道具、场景与海报。', 'Shows the Stage 3 asset-design result and supports re-import.'),
+                content: formatArtifactContent(assetDesignJson, 'json'),
+                actions: [
+                    {
+                        key: 'reimport-stage3-asset-design',
+                        label: t('重新导入', 'Re-import'),
+                        icon: 'refresh',
+                        onClick: () => handleImportStageArtifact({
+                            content: assetDesignJson,
+                            importType: 'json',
+                            label: 'stage3 asset design json',
+                            importOptions: {
+                                subjectsJson: assetDesignPayload || null,
+                                suppressAlerts: false,
+                            },
+                        }),
+                        disabled: isAnalyzing || !assetDesignJson,
+                        loading: false,
+                    },
+                    {
+                        key: 'restart-stage3-card',
+                        label: t('重跑覆盖', 'Rerun & Overwrite'),
+                        icon: 'play',
+                        onClick: () => handleRetryPhase2({}),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
+                    },
+                    {
+                        key: 'restart-stage3-characters',
+                        label: t('重新生成角色', 'Regenerate Characters'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['characters'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('characters'),
+                    },
+                    {
+                        key: 'restart-stage3-props',
+                        label: t('重新生成道具', 'Regenerate Props'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['props'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('props'),
+                    },
+                    {
+                        key: 'restart-stage3-environments',
+                        label: t('重新生成环境', 'Regenerate Environments'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['environments'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('environments'),
+                    },
+                    {
+                        key: 'restart-stage3-posters',
+                        label: t('重新生成封面', 'Regenerate Covers'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['posters'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('posters'),
+                    },
+                ],
+                placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
+            },
+        ];
+    }, [

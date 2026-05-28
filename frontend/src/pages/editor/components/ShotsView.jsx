@@ -421,9 +421,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [selectedShotIds, setSelectedShotIds] = useState([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
     // const [editingShot, setEditingShot] = useState(null); // Lifted state
-    const [entities, setEntities] = useState([]);
+    const [projectEntities, setProjectEntities] = useState([]);
+    
+    // Auto-filter: Only recognize global entities or entities belonging to this episode
+    const entities = useMemo(() => {
+        return projectEntities.filter(e => !e?.episode_id || String(e.episode_id) === String(activeEpisode?.id));
+    }, [projectEntities, activeEpisode?.id]);
+
     const [entityListLoading, setEntityListLoading] = useState(false);
-    const entitiesRef = useRef([]);
+    const projectEntitiesRef = useRef([]);
     const entityLoadPromiseRef = useRef(null);
     
     // NEW: Abort Controller Ref for retries
@@ -437,12 +443,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     };
 
     useEffect(() => {
-        entitiesRef.current = Array.isArray(entities) ? entities : [];
-    }, [entities]);
+        projectEntitiesRef.current = Array.isArray(projectEntities) ? projectEntities : [];
+    }, [projectEntities]);
 
     const loadEntities = useCallback(async () => {
         const resolvedProjectId = projectId || activeEpisode?.project_id;
-        if (!resolvedProjectId) return entitiesRef.current;
+        if (!resolvedProjectId) return projectEntitiesRef.current;
         if (entityLoadPromiseRef.current) return entityLoadPromiseRef.current;
 
         const request = (async () => {
@@ -455,7 +461,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     }
                     return item;
                 }) : [];
-                setEntities(nextEntities);
+                setProjectEntities(nextEntities);
                 return nextEntities;
             } catch (e) {
                 console.error(e);
@@ -478,10 +484,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
         const loaded = await loadEntities();
         if (Array.isArray(loaded) && loaded.length > 0) {
-            return loaded;
+            return loaded.filter(e => !e?.episode_id || String(e.episode_id) === String(activeEpisode?.id));
         }
         return Array.isArray(entities) ? entities : [];
-    }, [activeEpisode?.project_id, entities, entityListLoading, loadEntities, projectId]);
+    }, [activeEpisode?.id, activeEpisode?.project_id, entities, entityListLoading, loadEntities, projectId]);
 
     useEffect(() => {
         loadEntities();

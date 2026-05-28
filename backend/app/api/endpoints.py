@@ -25564,6 +25564,14 @@ async def _run_generate_image(
             project = db.query(Project).filter(Project.id == resolved_project_id).first()
             if project:
                 project_global_info = _ensure_project_generation_defaults(_safe_json_dict(project.global_info))
+                gi_basic_info = project_global_info.get("basic_info") or {}
+                project_type = gi_basic_info.get("type") or project_global_info.get("type") or ""
+                if project_type:
+                    project_type_prefix = f"项目视觉类型：{project_type}"
+                    if not req.prompt:
+                        req.prompt = project_type_prefix
+                    elif project_type_prefix not in req.prompt:
+                        req.prompt = f"{project_type_prefix}\n{req.prompt}"
 
         project_visual = _pick_visual_from_info(project_global_info)
 
@@ -28028,6 +28036,14 @@ async def _run_generate_video(
             project = db.query(Project).filter(Project.id == resolved_project_id).first()
             if project:
                 project_global_info = _safe_json_dict(project.global_info)
+                gi_basic_info = project_global_info.get("basic_info") or {}
+                project_type = gi_basic_info.get("type") or project_global_info.get("type") or ""
+                if project_type:
+                    project_type_prefix = f"项目视觉类型：{project_type}"
+                    if not req.prompt:
+                        req.prompt = project_type_prefix
+                    elif project_type_prefix not in req.prompt:
+                        req.prompt = f"{project_type_prefix}\n{req.prompt}"
 
         req_ratio = str(req.aspect_ratio or "").strip() or None
         project_ratio = _pick_ratio_from_info(project_global_info)
