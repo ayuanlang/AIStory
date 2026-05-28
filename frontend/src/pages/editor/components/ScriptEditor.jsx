@@ -4189,7 +4189,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
                 { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' },
                 { key: 'posters', path: 'skills/scene_analysis_feature_stack/entity_design_poster.md' }
-            ];
+            ].filter(p => !options.targetEntityTypes || options.targetEntityTypes.includes(p.key));
 
             const commonPromptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design_common.md").catch(() => null);
             const commonPromptContent = commonPromptRes?.content || "";
@@ -4327,6 +4327,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             // Merge results
             let mergedBackendSubjectsJson = { characters: [], environments: [], props: [], posters: [], covers: [] };
+            if (options.targetEntityTypes) {
+                const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
+                    activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
+                ) || {};
+                ['characters', 'environments', 'props', 'posters', 'covers'].forEach(k => {
+                    if (!options.targetEntityTypes.includes(k) && existingEntities[k]) {
+                        mergedBackendSubjectsJson[k] = existingEntities[k];
+                    }
+                });
+            }
             let rawTextParts = [];
             
             for (let r of results) {
@@ -7302,18 +7312,21 @@ ${stage2_1Text}`;
     };
 
 
-    const handleRetryPhase2 = async () => {
+    const phase2RetryOptionsRef = useRef({});
+
+    const handleRetryPhase2 = async (options = {}) => {
         if (!activeEpisode?.id) return;
+        phase2RetryOptionsRef.current = options;
         setIsRetryingPhase2(true);
         try {
             resetAutoSubjectsImportCache();
-            onLog?.('Retrying Stage 3 asset design...', 'process');
+            onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'}`, 'process');
             // Re-run the second pass with the (potentially edited) subjectIndexText
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
                 analysisUiReport?.importReport || {},
                 subjectIndexText,
-                { isRetryPhase2: true }
+                { isRetryPhase2: true, ...options }
             );
             
             // Update the UI report with the new asset counts
@@ -7558,9 +7571,41 @@ ${stage2_1Text}`;
                         key: 'restart-stage3-card',
                         label: t('重跑覆盖', 'Rerun & Overwrite'),
                         icon: 'play',
-                        onClick: handleRetryPhase2,
+                        onClick: () => handleRetryPhase2({}),
                         disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
-                        loading: isRetryingPhase2,
+                        loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
+                    },
+                    {
+                        key: 'restart-stage3-characters',
+                        label: t('重新生成角色', 'Regenerate Characters'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['characters'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('characters'),
+                    },
+                    {
+                        key: 'restart-stage3-props',
+                        label: t('重新生成道具', 'Regenerate Props'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['props'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('props'),
+                    },
+                    {
+                        key: 'restart-stage3-environments',
+                        label: t('重新生成环境', 'Regenerate Environments'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['environments'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('environments'),
+                    },
+                    {
+                        key: 'restart-stage3-posters',
+                        label: t('重新生成封面', 'Regenerate Covers'),
+                        icon: 'repeat',
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: ['posters'] }),
+                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes('posters'),
                     },
                 ],
                 placeholder: t('第三阶段尚未返回资产设计结果。', 'No Stage 3 asset design output yet.'),
