@@ -10986,10 +10986,10 @@ def read_episodes(
     # Verify access
     _require_project_access(db, project_id, current_user)
     
-    from sqlalchemy.orm import selectinload
+    from sqlalchemy.orm import selectinload, defer, noload
     episodes = (
         db.query(Episode)
-        .options(selectinload(Episode.script_segments))
+        .options(noload(Episode.script_segments))
         .filter(Episode.project_id == project_id)
         .all()
     )

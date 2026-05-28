@@ -4334,14 +4334,23 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         let sceneRankMap = new Map();
         scenesToScan.forEach((sc, sceneIndex) => {
             const scText = sc.scene_text || '';
-            const scSubjects = sc.scene_subjects || '';
-            const scAll = scText + ' ' + scSubjects;
+            const envName = sc.environment_name || '';
+            const chars = sc.linked_characters || '';
+            const props = sc.key_props || '';
+            const scAll = scText + ' ' + envName + ' ' + chars + ' ' + props;
             
+            const refs = extractSceneSubjectRefs(sc) || [];
+            const refNames = refs.map(r => String(r.name || '').toLowerCase());
+
             toGenerate.forEach(e => {
                 if (sceneRankMap.has(e.id)) return;
+                const eNameLower = String(e.name || '').toLowerCase();
+                const eNameEnLower = String(e.name_en || '').toLowerCase();
+
+                const isRefInScene = refNames.includes(eNameLower) || refNames.includes(eNameEnLower);
                 const matchName = e.name && scAll.includes(e.name);
                 const matchNameEn = e.name_en && scAll.includes(e.name_en);
-                if (matchName || matchNameEn) {
+                if (isRefInScene || matchName || matchNameEn) {
                     sceneRankMap.set(e.id, sceneIndex);
                 }
             });
@@ -4538,13 +4547,23 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 }
             };
 
-            const startNextGenerateTask = () => {
-                if (shouldStopBatchGenerate() || activeTasks.size >= workerLimit || queue.length === 0) {
-                    return false;
-                }
+            let currentSceneRank = null;
+            let currentSceneBatchLimit = workerLimit;
 
+            const startNextGenerateTask = () => {
                 const nextEntity = queue.find(e => isReady(e)) || (activeTasks.size === 0 ? queue[0] : null);
                 if (!nextEntity) {
+                    return false;
+                }
+                
+                const topRank = sceneRankMap.has(nextEntity.id) ? sceneRankMap.get(nextEntity.id) : 999999;
+                if (topRank !== currentSceneRank) {
+                    currentSceneRank = topRank;
+                    const sameRankItems = queue.filter(e => isReady(e) && (sceneRankMap.has(e.id) ? sceneRankMap.get(e.id) : 999999) === topRank);
+                    currentSceneBatchLimit = Math.max(workerLimit, sameRankItems.length);
+                }
+
+                if (shouldStopBatchGenerate() || activeTasks.size >= currentSceneBatchLimit || queue.length === 0) {
                     return false;
                 }
 
@@ -4565,7 +4584,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             };
 
             while (queue.length > 0 || activeTasks.size > 0) {
-                while (!shouldStopBatchGenerate() && activeTasks.size < workerLimit && startNextGenerateTask()) {
+                while (!shouldStopBatchGenerate() && startNextGenerateTask()) {
                     // Fill available concurrency slots immediately.
                 }
 

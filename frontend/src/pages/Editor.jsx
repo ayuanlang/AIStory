@@ -318,13 +318,25 @@ const Editor = ({
         if (normalized.length > 0) {
             setActiveEpisodeId((prev) => {
                 const hasActiveEpisode = !!prev && normalized.some((ep) => String(ep.id) === String(prev));
-                return hasActiveEpisode ? prev : normalized[0].id;
+                if (hasActiveEpisode) return prev;
+                // Otherwise check localStorage
+                const lastEpId = localStorage.getItem(`AIStory_lastEpisode_${id}`);
+                if (lastEpId && normalized.some((ep) => String(ep.id) === String(lastEpId))) {
+                    return Number(lastEpId);
+                }
+                return normalized[0].id;
             });
         } else {
             setActiveEpisodeId(null);
         }
         return normalized;
-    }, []);
+    }, [id]);
+
+    useEffect(() => {
+        if (id && activeEpisodeId) {
+            localStorage.setItem(`AIStory_lastEpisode_${id}`, activeEpisodeId);
+        }
+    }, [id, activeEpisodeId]);
 
     const refreshEpisodesForEditor = useCallback(async () => {
         if (!id) return [];
@@ -408,14 +420,17 @@ const Editor = ({
             if (allAssetsReady && eps && eps.length > 0) {
                 let anyActive = false;
                 let allVids = true;
-                for (const ep of eps) {
-                    const epShots = await fetchEpisodeShots(ep.id, { compact: true }).catch(() => []);
+                
+                const episodesShotsResults = await Promise.all(
+                    eps.map(ep => fetchEpisodeShots(ep.id, { compact: true }).catch(() => []))
+                );
+
+                for (const epShots of episodesShotsResults) {
                     if (epShots && epShots.length > 0) {
                         hasShots = true;
                         anyActive = true;
                         if (!epShots.every(s => !!s.video_url)) {
                             allVids = false;
-                            break;
                         }
                     }
                 }
