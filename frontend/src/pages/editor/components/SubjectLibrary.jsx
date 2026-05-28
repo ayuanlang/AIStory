@@ -4317,6 +4317,42 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
 
+        let scenesToScan = [];
+        try {
+            if (entityEpisodeScope === 'all') {
+                const eps = await fetchEpisodes(projectId).catch(() => []);
+                const scenesPromises = eps.map(ep => fetchScenes(ep.id).catch(() => []));
+                const allEpsScenes = await Promise.all(scenesPromises);
+                scenesToScan = allEpsScenes.flat();
+            } else if (currentEpisode?.id) {
+                scenesToScan = await fetchScenes(currentEpisode.id).catch(() => []);
+            }
+        } catch (err) {
+            console.warn("Failed to fetch scenes for calculating entity rank", err);
+        }
+
+        let sceneRankMap = new Map();
+        scenesToScan.forEach((sc, sceneIndex) => {
+            const scText = sc.scene_text || '';
+            const scSubjects = sc.scene_subjects || '';
+            const scAll = scText + ' ' + scSubjects;
+            
+            toGenerate.forEach(e => {
+                if (sceneRankMap.has(e.id)) return;
+                const matchName = e.name && scAll.includes(e.name);
+                const matchNameEn = e.name_en && scAll.includes(e.name_en);
+                if (matchName || matchNameEn) {
+                    sceneRankMap.set(e.id, sceneIndex);
+                }
+            });
+        });
+
+        toGenerate.sort((a, b) => {
+            const rankA = sceneRankMap.has(a.id) ? sceneRankMap.get(a.id) : 999999;
+            const rankB = sceneRankMap.has(b.id) ? sceneRankMap.get(b.id) : 999999;
+            return rankA - rankB;
+        });
+
         subjectBatchGenerateStopRequestedRef.current = false;
         const batchSessionId = `subject-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         subjectBatchGenerateSessionRef.current = batchSessionId;

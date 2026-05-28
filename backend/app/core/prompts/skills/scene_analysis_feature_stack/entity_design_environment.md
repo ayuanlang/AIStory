@@ -70,7 +70,7 @@
 - **命名绝对防篡改与零容错校验（极度严格）**：所有资产的 `name` / `name_en`（及其层级名称）必须与输入 `subjects index` 完全一致；输出前必须逐条执行“输入 `subjects index.name` -> 输出 JSON `name`”一对一核对。任意字符差异（含空格、全半角、大小写、下划线、连字符、后缀、括号）都视为严重错误，必须修正后再输出。
 - **description_cn 传导硬约束**：必须将上游输入的 `entity_attributes` 字段属性原文一字不改、**原样填写**到本实体对应的 `description_cn` 字段中，不要做任何二次创作或删减。
 - **固定双语输出字段契约**：严格沿用定义的中英双轨字段要求，特别是 `generation_prompt_cn/en`。
-- **继承约束**：每个实体都必须提供 `visual_dependencies`（数组）与 `dependency_strategy`（包含 `type` 和 `logic` 两个对象属性），详见前文状态演化链要求。
+- **继承约束**：每个实体都必须提供 `visual_dependencies`（数组）与 `dependency_strategy`（包含 `type` 和 `logic` 两个对象属性），详见前文状态演化链要求。**绝对禁止在 `visual_dependencies` 中填入 `S001`、`E001` 等 `subject_no`，实体名引用必须逐字符一致 (如 `ENV:[@...]` 等)！**
 
 #### 统一 JSON 示例（必读参照）
 以下为 environments 的形态示例：

@@ -628,7 +628,7 @@
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
 - `visual_dependencies`：
   - `[]` 表示原创主资产（无上游依赖）；
-  - 非空时必须引用已存在实体名（逐字符一致），用于声明视觉继承链。
+  - 非空时必须引用已存在实体名（逐字符一致，格式必须为 CHAR:[@...] 或 PROP:[...] 等），用于声明视觉继承链。绝对禁止在 visual_dependencies 中填入 S001、E001 等 subject_no！
 - `dependency_strategy` 必须包含：
   - `type`：仅允许 `Original` / `Type A` / `Type B`；
   - `logic`：用简洁自然语言说明“如何继承、继承哪些锚点、允许哪些变化”。

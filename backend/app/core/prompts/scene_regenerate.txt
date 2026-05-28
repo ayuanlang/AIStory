@@ -343,7 +343,7 @@ You MUST use all of them together.
 - `SUBJECTS_JSON` 的 `characters/props/environments` 必须完整覆盖当前场景中所有“需要新建且 inventory 中不存在”的实体；不得只保留“核心代表项”。
 - 若某实体已在 inventory 中存在，则必须与其逐条同名同类型对齐；任何偏离（重命名、跨类型映射、丢失依赖引用）均判无效。
 - 每个实体（character / prop / environment）都必须包含：`visual_dependencies` 与 `dependency_strategy`。
-- `visual_dependencies=[]` 表示原创主资产；非空时必须引用已存在实体名（逐字符一致），用于声明视觉继承链。
+- `visual_dependencies=[]` 表示原创主资产；非空时必须引用已存在实体名（逐字符一致，格式必须为 CHAR:[@...] 等），绝对禁止填入 S001、E001 等 subject_no。
 - `dependency_strategy.type` 仅允许 `Original` / `Type A` / `Type B`。
 - `dependency_strategy.logic` 必须用简洁自然语言说明如何继承、继承哪些锚点、允许哪些变化。
 
