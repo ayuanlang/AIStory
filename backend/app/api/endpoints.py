@@ -10,7 +10,7 @@ def _load_queue_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"queue_threads": 20, "callback_threads": 20}
+    return {}
 
 _q_conf = _load_queue_config()
 
@@ -23,7 +23,7 @@ from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect, cast, String, func
-from app.db.session import get_db, SessionLocal
+from app.db.session import get_db, SessionLocal, DB_POOL_CAPACITY_EFFECTIVE
 from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
@@ -539,7 +539,8 @@ GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERA
 GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS", "2000")))
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
 GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, int(_q_conf.get("callback_threads", 20)))
+_POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 20)), max(5, _POOL_CAPACITY // 4)))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -6045,7 +6046,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         _release_db_connection(db, "analyze_scene_llm_call")
 
         # 1. Execute required Phase based on mode natively
-        is_entity_design_phase = (effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"])
+        is_entity_design_phase = (effective_scene_analysis_mode == "entity_design" or (effective_scene_analysis_mode or "").startswith("2_pass_generate_assets"))
         
         # Execute the LLM loop generically for all modes
         try:
@@ -6168,7 +6169,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
 
-            if effective_scene_analysis_mode in ["entity_design", "2_pass_generate_assets"]:
+            if effective_scene_analysis_mode == "entity_design" or (effective_scene_analysis_mode or "").startswith("2_pass_generate_assets"):
                 persisted_field_name = "ai_entity_design_result"
                 episode.ai_entity_design_result = result_content
                 logger.info(
