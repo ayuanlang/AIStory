@@ -227,6 +227,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 /^\s*-{4,}\s*$/im,
                 /^\s*(?:###?\s*)?(?:Project\s*Visual\s*Backfill|第三部分|Final\s*Consistency\s*Report|一致性检查)\b/im,
                 /^\s*\{\s*"project_visual_backfill"\s*:/im,
+                /^\s*(?:(?:##|###)\s*(?:-1\)|Scenes?|场景列表))|(?:\*\*\s*(?:Scenes?)\s*\*\*)|(?:-{3,}\n\s*(?:Scenes?))/im,
+                /^\s*(?:###?\s*(?:-1\)\s*类型研判|Scenes|场景列表))/im,
             ];
 
             let endIndex = -1;
@@ -4153,6 +4155,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
 
             let finalSubjectIndexText = subjectIndexText;
+            // Hotfix: Ensure any trailing Scenes markdown that accidentally leaked into the Subject Index gets cleanly removed
+            const scenesOftMatch = finalSubjectIndexText.match(/(?:^|\n)\s*(?:###?\s*(?:-1\)\s*类型研判|Scenes|场景列表))/i);
+            if (scenesOftMatch && scenesOftMatch.index >= 0) {
+                finalSubjectIndexText = finalSubjectIndexText.slice(0, scenesOftMatch.index).trim();
+            }
+            
             const designProjectContextSection = buildStage1ProjectContextSection()
                 .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
                 .replace('Use this project context as first-class constraints before analyzing the script.', 'Use this project context as first-class constraints before generating the subjects.');

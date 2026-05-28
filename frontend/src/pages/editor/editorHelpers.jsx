@@ -880,15 +880,15 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 };
 
 export const resolveUnifiedVideoMode = (techObj = {}) => {
-    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'start_end').trim().toLowerCase();
+    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'entity_refs').trim().toLowerCase();
     if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
     if (rawMode === 'entity_refs_start_end') return 'entity_refs_start_end';
     if (rawMode === 'keyframes_entity_refs' || rawMode === 'keyframe_entity_refs') return 'keyframes_entity_refs';
-    return rawMode || 'start_end';
+    return rawMode || 'entity_refs';
 };
 
 export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null, entityRefUrls = []) => {
-    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'start_end').trim().toLowerCase();
+    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'entity_refs').trim().toLowerCase();
     const refs = [];
     const startRef = String(shotLike?.image_url || '').trim();
     const endRef = String(techObj?.end_frame_url || '').trim();

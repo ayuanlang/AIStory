@@ -504,7 +504,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
-    const [usePrevVideo, setUsePrevVideo] = useState(false);
+    const [usePrevVideo, setUsePrevVideo] = useState(() => {
+        try {
+            return localStorage.getItem('aiStory_usePrevVideo') === 'true';
+        } catch {
+            return false;
+        }
+    });
     const [isBatchMenuOpen, setIsBatchMenuOpen] = useState(false);
     const [isPlaylistModalOpen, setIsPlaylistModalOpen] = useState(false);
     const [playlistIndex, setPlaylistIndex] = useState(0);
@@ -564,6 +570,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
         }
         setUsePrevVideo(checked);
+        try {
+            localStorage.setItem('aiStory_usePrevVideo', String(checked));
+        } catch {}
     };
 
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
@@ -9158,7 +9167,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         try {
                                                             const t = JSON.parse(editingShot.technical_notes || '{}');
                                                             return resolveUnifiedVideoMode(t);
-                                                        } catch(e) { return 'start_end'; }
+                                                        } catch(e) { return 'entity_refs'; }
                                                     })()}
                                                     onChange={(e) => {
                                                         const nextMode = e.target.value;

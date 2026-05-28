@@ -8332,9 +8332,9 @@ Negative prompt constraints: {neg_prompt}"""
                 elif len(resolved_image_refs) > 1 or reference_video_urls or reference_audio_urls:
                     seedance2_ref_mode = "entity_refs"
                 elif resolved_image_refs:
-                    seedance2_ref_mode = "start"
+                    seedance2_ref_mode = "entity_refs"
                 else:
-                    seedance2_ref_mode = "start"
+                    seedance2_ref_mode = "entity_refs"
 
             seedance2_payload_mode = "reference_media" if seedance2_ref_mode == "entity_refs" else "frame_content"
 

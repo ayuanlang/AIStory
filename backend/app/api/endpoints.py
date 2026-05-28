@@ -31714,8 +31714,8 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
-            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
-            return _normalize_video_ref_mode(raw_mode) or "start"
+            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "entity_refs"
+            return _normalize_video_ref_mode(raw_mode) or "entity_refs"
 
         video_mode = _resolve_video_mode(tech)
         refs: List[str] = []
@@ -32457,8 +32457,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
                         def _resolve_video_mode(payload: Dict[str, Any]) -> str:
-                            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "start"
-                            return _normalize_video_ref_mode(raw_mode) or "start"
+                            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "entity_refs"
+                            return _normalize_video_ref_mode(raw_mode) or "entity_refs"
 
                         video_mode = _resolve_video_mode(tech)
                         refs: List[str] = []
