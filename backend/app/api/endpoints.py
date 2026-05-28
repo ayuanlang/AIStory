@@ -13266,6 +13266,28 @@ async def generate_project_episode_scripts_from_global_framework(
             "- Do NOT replace, rename, or invent another project-level script title.\n\n"
         )
 
+        prev_episode_block = ""
+        if idx > 1:
+            prev_ep = by_idx.get(idx - 1)
+            _prev_ep_db = db.query(Episode).filter(Episode.id == prev_ep.id).first() if prev_ep else None
+            if not _prev_ep_db:
+                 prev_ep_id_temp = next((ed["id"] for ed in episodes_data if ed.get("idx") == idx - 1), None)
+                 if prev_ep_id_temp:
+                     _prev_ep_db = db.query(Episode).get(prev_ep_id_temp)
+            
+            p_text = getattr(_prev_ep_db, "script_content", None) or getattr(prev_ep, "script_content", None)
+            if p_text and p_text.strip():
+                p_text_clean = p_text.strip()
+                last_500 = p_text_clean[-500:]
+                prev_episode_block = (
+                    "Previous Episode Context (Constraint):\n"
+                    f"- The previous episode (Episode {idx - 1}) script ends with the following text.\n"
+                    "- You must ensure the opening of the current episode (Episode {idx}) connects logically with this ending.\n"
+                    "```markdown\n"
+                    f"...{last_500}\n"
+                    "```\n\n"
+                )
+
         user_prompt = (
             f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
@@ -13274,6 +13296,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{script_title_policy_block}"
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
+            f"{prev_episode_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
