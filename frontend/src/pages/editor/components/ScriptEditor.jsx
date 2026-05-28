@@ -7212,6 +7212,14 @@ ${stage2_1Text}`;
             // To emulate 'stage2Text' that gets saved, we combine them
             const stage2Text = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
             const finalAnalysisText = [String(stage1SourceText || '').trim(), stage2Text].filter(Boolean).join('\n\n');
+            
+            const stage2Result = {
+                ...(stage2_1Result || {}),
+                ...(stage2_2Result || {}),
+                meta: stage2_2Result?.meta || stage2_1Result?.meta,
+                subjects_json: stage2_1Result?.subjects_json || stage2_2Result?.subjects_json,
+            };
+
             const analysisSections = extractAnalysisSections(finalAnalysisText);
             if (!analysisSections.hasStructuredSubjectIndex) {
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
