@@ -93,9 +93,6 @@ Output format (Markdown):
   - Hollywood / International Narrative Pattern: ...
 - Script Execution Rules（本集脚本执行规则）: ...
 
-## Logline (剧情一句话概述)
-- (1-2 sentences)
-
 ## Scenes (场景列表)
 对于每个场景，使用以下格式：
 ### Scene {i} {scene_id=EPxx_SCyy}: {scene_name}（{location} / {time}）
@@ -123,6 +120,9 @@ Output format (Markdown):
 - 需要舞台调度时，把走位写在该人物的节拍里（例如：靠近/后退/绕过/挡住视线）。长动作必须拆分成微动作。
 - 节拍短而连贯可拍：用具体可见行为推动信息增量与情绪转折。
 - 视觉审美默认：若输入未指定相反风格，动作与场面调度默认追求高审美、现代、精致；人物吸引力通过优雅的自然语言与气质动态体现。
+
+## Logline & Handover (剧情一句话概述与交接状态)
+- (1-2 sentences，明确总结本集核心剧情，必须清晰描述最后一幕的具体场景内容与角色最终状态，以便下一集无缝承接)
 
 ## Ending Hook (结尾悬念)
 - (1-2 句话，构成剧末悬念或下一集的钩子)
