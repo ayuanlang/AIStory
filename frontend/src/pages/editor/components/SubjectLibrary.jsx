@@ -3675,7 +3675,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     })(),
                 };
             });
-        const entityMatchedAssets = assetImageTypeFilter === 'all' 
+                const activeEpisodeId = String(currentEpisode?.id || '').trim();
+        const selectedWantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
+        const isCurrentEpisode = assetEpisodeFilter === 'all' || selectedWantedEpisodeId === activeEpisodeId;
+
+        const entityMatchedAssets = (assetImageTypeFilter === 'all' || !isCurrentEpisode)
             ? nonShotAssets 
             : nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset));
         const episodeMatchedAssets = entityMatchedAssets.filter((asset) => {
@@ -4009,12 +4013,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [assetKeyword, assetProjectFilter, assetImageTypeFilter, filteredAssets.length]);
 
     // Image Handlers
-    const handleSelectAsset = async (asset) => {
+    const handleSelectAsset = async (asset, replaceAnchor = true) => {
         const selectedUrl = String(asset?.url || '').trim();
         if (!selectedUrl) return;
 
+        let extraFields = {};
+        if (replaceAnchor) {
+            const assetEntityId = getAssetEntityId(asset);
+            if (assetEntityId) {
+                const sourceEntity = allEntities?.find((e) => String(e.id) === String(assetEntityId));
+                if (sourceEntity && typeof sourceEntity.anchor_description === 'string') {
+                    extraFields.anchor_description = sourceEntity.anchor_description;
+                }
+            }
+        }
+
         const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
             skipAnalyze: imageSelectAction === 'rewrite_and_regenerate',
+            extraFields
         });
         if (!updatedEntity) return;
 
@@ -4243,14 +4259,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const targetUrl = String(url || '').trim();
         if (!targetUrl) return;
         try {
-            await updateEntity(targetEntity.id, { image_url: targetUrl });
-            const updatedEntity = { ...targetEntity, image_url: targetUrl };
+            const updates = { image_url: targetUrl, ...(options?.extraFields || {}) };
+            await updateEntity(targetEntity.id, updates);
+            const updatedEntity = { ...targetEntity, ...updates };
             if (selectedEntity && String(selectedEntity.id) === String(updatedEntity.id)) {
                 setSelectedEntity(updatedEntity);
             }
-            setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, image_url: targetUrl } : prev));
-            setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
-            setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, image_url: targetUrl } : ent));
+            setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, ...updates } : prev));
+            setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, ...updates } : ent));
+            setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, ...updates } : ent));
             if (closeModal) {
                 setShowImageModal(false);
             }
@@ -6358,19 +6375,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         {t('项目：', 'Project: ')}{getAssetProjectLabel(selectedLibraryAsset)}
                                                     </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => {
-                                                        if (selectedEntityImageLocked) {
-                                                            notifySubjectImageActionLocked(selectedEntity);
-                                                            return;
-                                                        }
-                                                        handleSelectAsset(selectedLibraryAsset);
-                                                    }}
-                                                    disabled={selectedEntityImageLocked}
-                                                    className="w-full rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                                                >
-                                                    {t('选用该素材', 'Use this asset')}
-                                                </button>
+                                                <div className="flex gap-2 w-full">
+                                                    <button
+                                                        onClick={() => {
+                                                            if (selectedEntityImageLocked) {
+                                                                notifySubjectImageActionLocked(selectedEntity);
+                                                                return;
+                                                            }
+                                                            handleSelectAsset(selectedLibraryAsset, true);
+                                                        }}
+                                                        disabled={selectedEntityImageLocked}
+                                                        title={t('同时使用该素材的图片与其绑定的锚点来替换当前实体', 'Replace image and its associated anchor.')}
+                                                        className="flex-1 rounded-md px-1 py-1.5 text-[10px] sm:text-[11px] font-bold bg-primary/80 hover:bg-primary text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        {t('替换图与锚点', 'Replace Both')}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            if (selectedEntityImageLocked) {
+                                                                notifySubjectImageActionLocked(selectedEntity);
+                                                                return;
+                                                            }
+                                                            handleSelectAsset(selectedLibraryAsset, false);
+                                                        }}
+                                                        disabled={selectedEntityImageLocked}
+                                                        title={t('仅将该图片作为当前实体的参考图，不修改当前的描点描述', 'Only apply image as a reference without altering the anchor.')}
+                                                        className="flex-1 rounded-md px-1 py-1.5 text-[10px] sm:text-[11px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        {t('仅换图', 'Ref Image Only')}
+                                                    </button>
+                                                </div>
                                             </div>
                                         ) : (
                                             <div className="text-center py-16 text-muted-foreground text-sm">
