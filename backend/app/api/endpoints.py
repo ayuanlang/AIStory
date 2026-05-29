@@ -10966,6 +10966,8 @@ class EpisodeCreate(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
+    ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
 
 class EpisodeUpdate(BaseModel):
     title: Optional[str] = None
@@ -10975,6 +10977,8 @@ class EpisodeUpdate(BaseModel):
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
+    ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
 
 class EpisodeOut(BaseModel):
     id: int
@@ -10985,6 +10989,8 @@ class EpisodeOut(BaseModel):
     ai_scene_analysis_result: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
+    ai_entity_design_result: Optional[str] = None
+    ai_stage_outputs: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = []
     script_segments: List[ScriptSegmentOut] = []
     class Config:
@@ -11118,6 +11124,14 @@ def update_episode(
     # episode_info is deprecated and intentionally ignored.
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
+    if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
+        episode.ai_scene_analysis_subject_index = episode_in.ai_scene_analysis_subject_index
+    if hasattr(episode_in, 'ai_scene_analysis_adaptation') and episode_in.ai_scene_analysis_adaptation is not None:
+        episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
+    if hasattr(episode_in, 'ai_entity_design_result') and episode_in.ai_entity_design_result is not None:
+        episode.ai_entity_design_result = episode_in.ai_entity_design_result
+    if hasattr(episode_in, 'ai_stage_outputs') and episode_in.ai_stage_outputs is not None:
+        episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if episode_in.character_profiles is not None:
         episode.character_profiles = episode_in.character_profiles
     try:

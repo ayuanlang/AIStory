@@ -757,7 +757,8 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("scenes", models.Scene),
             ("shots", models.Shot),
             ("script_segments", models.ScriptSegment),
-            ("project_shares", models.ProjectShare)
+            ("project_shares", models.ProjectShare),
+            ("llm_call_logs", models.LLMCallLog)
         ]:
             try:
                 _ensure_missing_table_columns(tname, tmodel, is_postgres=is_postgres)
