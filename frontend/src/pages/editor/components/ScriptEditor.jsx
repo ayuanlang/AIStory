@@ -7786,69 +7786,94 @@ ${stage2_1Text}`;
                         <div className="w-1 h-5 bg-purple-500 rounded-full"></div>
                         {t('进度诊断面板', 'Workflow Diagnostics')}
                     </div>
-                    <div className="flex-1 w-full flex items-center justify-between relative max-w-2xl px-4 mt-2 md:mt-0">
-                        <div className="absolute top-4 left-8 right-8 h-0.5 bg-white/10 -z-10"></div>
+                    <div className="flex-1 w-full flex items-center justify-between relative max-w-3xl px-8 mt-2 md:mt-0">
+                        <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
-                        <div className="flex flex-col items-center gap-2">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border ${!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : 'bg-white/5 border-white/20 text-white/50'}`}>
+                        <div className="flex flex-col items-center gap-2 relative">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'}`}>
                                 {!!getStageOutputContent('stage1', 'optimized_script') ? <Check className="w-4 h-4" /> : 1}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段1: 结构化剧本与视觉约束', 'Stage 1: Script & Visual Context')}</span>
+                                <span className="text-xs font-semibold">{t('剧本优化', 'Script Opt')}</span>
                                 {!!getStageOutputContent('stage1', 'optimized_script') ? (
-                                    <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
+                                    <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                 ) : (
                                     <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
                                 )}
                             </div>
                         </div>
 
-                        <div className="flex flex-col items-center gap-2">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border ${!!getStageOutputContent('stage2', 'subject_index') ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : (!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-purple-500/20 border-purple-500/50 text-purple-300' : 'bg-white/5 border-white/20 text-white/50')}`}>
+                        <div className="flex flex-col items-center gap-2 relative">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'subject_index') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
                                 {!!getStageOutputContent('stage2', 'subject_index') ? <Check className="w-4 h-4" /> : 2}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段2: 实体清单(Subject)与动作(Beats)', 'Stage 2: Subjects & Beats')}</span>
+                                <span className="text-xs font-semibold">{t('资产提取', 'Extract Assets')}</span>
                                 {!!getStageOutputContent('stage2', 'subject_index') ? (
                                      <div className="flex items-center gap-1">
-                                         <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
-                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50">
+                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
                                             {t('重跑', 'Rerun')}
                                          </button>
                                      </div>
                                 ) : (
                                     !!getStageOutputContent('stage1', 'optimized_script') ? (
-                                        <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50">
-                                            {t('前置具备, 点此重跑', 'Ready (Click to Rerun)')}
+                                        <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                            {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                            {t('可重跑', 'Ready')}
                                         </button>
                                     ) : (
-                                        <span className="text-[10px] text-white/30">{t('缺乏前置', 'Needs Stage 1')}</span>
+                                        <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S1')}</span>
                                     )
                                 )}
                             </div>
                         </div>
 
-                        <div className="flex flex-col items-center gap-2">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border ${!!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : (!!getStageOutputContent('stage2', 'subject_index') ? 'bg-purple-500/20 border-purple-500/50 text-purple-300' : 'bg-white/5 border-white/20 text-white/50')}`}>
-                                {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 3}
+                        <div className="flex flex-col items-center gap-2 relative">
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'scene_markdown') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage2', 'subject_index') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {!!getStageOutputContent('stage2', 'scene_markdown') ? <Check className="w-4 h-4" /> : 3}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段3: 美术资产详细设计(JSON)', 'Stage 3: Visual Asset JSON')}</span>
-                                {!!getStageOutputContent('stage3', 'asset_design_json') ? (
+                                <span className="text-xs font-semibold">{t('场景编排', 'Scene Beats')}</span>
+                                {!!getStageOutputContent('stage2', 'scene_markdown') ? (
                                     <div className="flex items-center gap-1">
-                                        <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
-                                        <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50">
-                                            {t('重跑', 'Rerun')}
+                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                        <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
+                                            {t('重排', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
                                     !!getStageOutputContent('stage2', 'subject_index') ? (
-                                        <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                                            {t('前置具备, 点此重跑', 'Ready (Click to Rerun)')}
+                                         <span className="text-[10px] text-purple-300">{t('处理中', 'Processing')}</span>
+                                    ) : (
+                                        <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S2')}</span>
+                                    )
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-center gap-2 relative">
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage2', 'scene_markdown') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 4}
+                            </div>
+                            <div className="flex flex-col items-center gap-1 text-center">
+                                <span className="text-xs font-semibold">{t('资产生成', 'Assets Gen')}</span>
+                                {!!getStageOutputContent('stage3', 'asset_design_json') ? (
+                                    <div className="flex items-center gap-1">
+                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                        <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors flex items-center gap-1">
+                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                            {t('重跑', 'Rerun')}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    !!getStageOutputContent('stage2', 'scene_markdown') ? (
+                                         <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                            {t('可重跑', 'Ready')}
                                         </button>
                                     ) : (
-                                        <span className="text-[10px] text-white/30">{t('缺乏前置', 'Needs Stage 2')}</span>
+                                        <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S3')}</span>
                                     )
                                 )}
                             </div>
