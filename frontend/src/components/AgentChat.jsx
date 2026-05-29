@@ -182,7 +182,7 @@ const hasSavedHistory = () => {
     } catch { return false; }
 };
 
-const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown }) => {
+const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown, customTitle, customPlaceholder, customModeOnly = false, onSendCustom }) => {
     const [historyByMode, setHistoryByMode] = useState({ project: [], system_management: [] });
     const [loading, setLoading] = useState(false);
     const [streaming, setStreaming] = useState(false);
@@ -296,9 +296,11 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown 
                 },
             };
 
-            const result = isSystemMode
-                ? await streamSystemManagementAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks)
-                : await streamAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks);
+            const result = (customModeOnly && onSendCustom)
+                ? await onSendCustom(queryText, normalizedHistory, callbacks)
+                : (isSystemMode
+                    ? await streamSystemManagementAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks)
+                    : await streamAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks));
 
             setStreaming(false);
 
@@ -349,9 +351,9 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown 
                  onPointerDown={onHeaderPointerDown}>
                 <div className="flex items-center gap-2">
                     <Bot className="w-5 h-5 text-primary" />
-                    {mode === 'system_management' ? 'System Management Agent' : 'AI Assistant'}
+                    {customTitle || (mode === 'system_management' ? 'System Management Agent' : 'AI Assistant')}
                 </div>
-                {isSuperuser && (
+                {isSuperuser && !customModeOnly && (
                     <div className="ml-auto mr-2 flex items-center gap-1 rounded-md border border-white/10 bg-black/20 p-1">
                         <button
                             type="button"
@@ -424,7 +426,7 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown 
             <ChatInput
                 onSend={handleSend}
                 loading={loading}
-                placeholder={mode === 'system_management' ? 'Ask system agent to analyze/update provider pricing...' : 'Ask AI to analyze script, generate images...'}
+                placeholder={customPlaceholder || (mode === 'system_management' ? 'Ask system agent to analyze/update provider pricing...' : 'Ask AI to analyze script, generate images...')}
             />
         </div>
     );

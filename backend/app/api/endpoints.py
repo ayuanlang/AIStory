@@ -8329,13 +8329,25 @@ def _attach_project_flags(project: Project, current_user: User) -> Project:
     return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
-    # 0. 优先使用名为“封面海报”的subject图片
-    poster_entity = db.query(Entity).filter(
+    # 0. 优先使用 named cover 或 type cover 相关的
+    poster_entities = db.query(Entity).filter(
         Entity.project_id == project_id,
-        Entity.name == "封面海报",
+        or_(
+            Entity.name.in_(["封面海报", "海报", "封面", "cover", "poster"]),
+            Entity.type.in_(["poster", "posters", "cover"])
+        ),
         Entity.image_url != None,
         Entity.image_url != ""
-    ).first()
+    ).all()
+    
+    poster_entity = None
+    for p in poster_entities:
+        if p.name == "封面海报":
+            poster_entity = p
+            break
+        if not poster_entity:
+            poster_entity = p
+
     if poster_entity:
         return _refresh_managed_media_url(poster_entity.image_url, db)
 
@@ -10424,14 +10436,26 @@ def read_projects(
         
         poster_map, shot_map, entity_map = {}, {}, {}
         # Poster entities
-        posters = session.query(Entity.project_id, Entity.image_url).filter(
+        posters = session.query(Entity.project_id, Entity.image_url, Entity.name).filter(
             Entity.project_id.in_(p_ids),
-            Entity.name == "封面海报",
+            or_(
+                Entity.name.in_(["封面海报", "海报", "封面", "cover", "poster"]),
+                Entity.type.in_(["poster", "posters", "cover"])
+            ),
             Entity.image_url != None,
             Entity.image_url != ""
         ).all()
-        for p_id, image_url in posters:
-            poster_map[p_id] = _refresh_managed_media_url(image_url, session)
+        
+        _temp_poster_map = {}
+        for p_id, image_url, name in posters:
+            is_exact = (name == "封面海报")
+            if p_id not in _temp_poster_map:
+                _temp_poster_map[p_id] = {"url": image_url, "exact": is_exact}
+            elif is_exact and not _temp_poster_map[p_id]["exact"]:
+                _temp_poster_map[p_id] = {"url": image_url, "exact": is_exact}
+                
+        for p_id, data in _temp_poster_map.items():
+            poster_map[p_id] = _refresh_managed_media_url(data["url"], session)
             
         # First valid shot images (optimized using first() equivalent query or just aggregating)
         shot_subq = session.query(

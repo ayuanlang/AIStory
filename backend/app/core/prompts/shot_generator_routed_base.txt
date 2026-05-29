@@ -223,6 +223,8 @@
   - **No Silent Drop**：严禁在未描述移除动作的情况下，让配饰在下一镜头凭空消失。
   - **State Ledger Integration**：在执行 `Start Frame + Video Content = End Frame` 校验时，必须把“配饰是否佩戴”纳入状态账本，与角色位置/持物同级检查。
   - **Cross-Beat Echo**：若当前 Shot 内含多个微节拍（Micro-Beats），新增配饰后，后续节拍文本也要保持同一配饰状态，不可只在首个节拍提一次。
+- **底线连贯原则与障碍检视 (Bottom-line Spatial & Action Consistency)**：
+  - **强制约束**：牢记每个角色的位置、动作与表情状态。在每个动作（镜头规划与拆分解读）开始前都要进行内省思考：前后动作是否有衔接好？逻辑是否一致？运动路径上是否有障碍物或其他人？（如果有，是否已明确交代如何绕开或跨过？）严禁让角色无端“闪现”或“穿模”越过障碍物！
 - **Inter-Shot Character Continuity (上下镜角色连贯)**：
   - **Presence Check**: 紧邻的两个镜头（Shot N 与 Shot N+1），若空间未变且均为全景/中景，**在场角色必须保持延续**。
   - **No Magic Appearance/Disappearance**: 

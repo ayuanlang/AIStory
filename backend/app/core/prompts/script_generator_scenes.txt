@@ -42,6 +42,9 @@ JSON schema to output:
 }
 
 Constraints:
+- Bottom-line Spatial & Action Consistency: Keep the position, action, and expression of each character in mind. Before initiating any action, introspect: Is the action sequence coherent? Is the logic consistent? Are there obstacles or others in the path? Characters are strictly forbidden from 'teleporting' or passing through obstacles without explicitly explaining how they bypassed them.
+- Action Force & Prop Interaction Specificity: The force, direction, and visible outcome of physical actions must be explicitly described. When interacting with props or environments, the description must be tightly bound to physical reality (e.g., 'tightly gripping the edge of the cup with the left hand', 'kicking the wooden door outward with the right foot'). Vague action phrases like 'he opens the door' or 'they start fighting' are strictly prohibited.
+- 360-Degree Minimalist Layout & Action Logic Constraint (Mandatory): For every new scene, before determining the exact scene events and text, you must internally construct its 360-degree physical environment layout, main obstacles, and exits strictly based on the principle of 'don't add entities unless necessary'. Especially for new scenes: You must first establish a single physical object as the core environmental anchor (e.g., a door, window, desk, pillar, steps, bed, bar, etc.), and the plot development and characters' positioning must subsequently revolve around this initial anchor. You MUST finalize the characters' initial relative positions and establish their action logic (e.g., how they avoid obstacles during movement, their exact distance to the anchor) before writing the specific content.
 - Scene count target: follow the user's requested scene_count if provided; otherwise generate 8-12 scenes.
 - Each scene should have a clear objective, conflict, and a change (beat).
 - End the episode with a hook if suspense/cliffhanger is requested.

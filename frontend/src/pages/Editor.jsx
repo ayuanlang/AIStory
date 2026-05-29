@@ -318,25 +318,13 @@ const Editor = ({
         if (normalized.length > 0) {
             setActiveEpisodeId((prev) => {
                 const hasActiveEpisode = !!prev && normalized.some((ep) => String(ep.id) === String(prev));
-                if (hasActiveEpisode) return prev;
-                // Otherwise check localStorage
-                const lastEpId = localStorage.getItem(`AIStory_lastEpisode_${id}`);
-                if (lastEpId && normalized.some((ep) => String(ep.id) === String(lastEpId))) {
-                    return Number(lastEpId);
-                }
-                return normalized[0].id;
+                return hasActiveEpisode ? prev : normalized[0].id;
             });
         } else {
             setActiveEpisodeId(null);
         }
         return normalized;
-    }, [id]);
-
-    useEffect(() => {
-        if (id && activeEpisodeId) {
-            localStorage.setItem(`AIStory_lastEpisode_${id}`, activeEpisodeId);
-        }
-    }, [id, activeEpisodeId]);
+    }, []);
 
     const refreshEpisodesForEditor = useCallback(async () => {
         if (!id) return [];
@@ -420,17 +408,14 @@ const Editor = ({
             if (allAssetsReady && eps && eps.length > 0) {
                 let anyActive = false;
                 let allVids = true;
-                
-                const episodesShotsResults = await Promise.all(
-                    eps.map(ep => fetchEpisodeShots(ep.id, { compact: true }).catch(() => []))
-                );
-
-                for (const epShots of episodesShotsResults) {
+                for (const ep of eps) {
+                    const epShots = await fetchEpisodeShots(ep.id, { compact: true }).catch(() => []);
                     if (epShots && epShots.length > 0) {
                         hasShots = true;
                         anyActive = true;
                         if (!epShots.every(s => !!s.video_url)) {
                             allVids = false;
+                            break;
                         }
                     }
                 }
@@ -1724,9 +1709,14 @@ const Editor = ({
                             }
                             const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
                             if (existingForName) {
-                                // Delegate to backend to update existing entity's rich attributes
-                                char.visual_dependencies = Array.isArray(char.visual_dependencies) ? char.visual_dependencies : (typeof char.visual_dependencies === 'string' ? [char.visual_dependencies] : []);
-                                char.visual_dependencies.push(`existing_id:${existingForName.id}`);
+                                if (String(existingForName.episode_id) === String(activeEpisode?.id)) {
+                                    logSkippedExistingSubject('character', entityName, entityNameEn);
+                                    continue;
+                                } else {
+                                    char.visual_dependencies = Array.isArray(char.visual_dependencies) ? char.visual_dependencies : (typeof char.visual_dependencies === 'string' ? [char.visual_dependencies] : []);
+                                    // Use format expected by the backend/prompts
+                                    char.visual_dependencies.push(`existing_id:${existingForName.id}`);
+                                }
                             }
                             const desc = [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,
@@ -1803,11 +1793,10 @@ const Editor = ({
                                           addLog('Skipped prop entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             const existingForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
-                              if (existingForName) {
-                                prop.visual_dependencies = Array.isArray(prop.visual_dependencies) ? prop.visual_dependencies : (typeof prop.visual_dependencies === 'string' ? [prop.visual_dependencies] : []);
-                                prop.visual_dependencies.push(`existing_id:${existingForName.id}`);
-                              }
+                             if (existingEntityMap.has(normalizeEntityKey('prop', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('prop', entityNameEn)))) {
+                                logSkippedExistingSubject('prop', entityName, entityNameEn);
+                                continue;
+                             }
                              const desc = [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
                                 `Type: ${prop.type}`, // inner type from JSON
@@ -1874,11 +1863,10 @@ const Editor = ({
                                           addLog('Skipped environment entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             const existingForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
-                              if (existingForName) {
-                                env.visual_dependencies = Array.isArray(env.visual_dependencies) ? env.visual_dependencies : (typeof env.visual_dependencies === 'string' ? [env.visual_dependencies] : []);
-                                env.visual_dependencies.push(`existing_id:${existingForName.id}`);
-                              }
+                             if (existingEntityMap.has(normalizeEntityKey('environment', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('environment', entityNameEn)))) {
+                                logSkippedExistingSubject('environment', entityName, entityNameEn);
+                                continue;
+                             }
                              const desc = [
                                           `Name (EN): ${entityNameEn || env.name_en || ''}`,
                                 `Atmosphere: ${env.atmosphere}`,
@@ -1950,8 +1938,10 @@ const Editor = ({
                                           addLog('Skipped poster entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             const existingForName = existingEntityMap.get(normalizeEntityKey('poster', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('poster', entityNameEn)) : null);
-                              /* Allow update in backend */
+                             if (existingEntityMap.has(normalizeEntityKey('poster', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('poster', entityNameEn)))) {
+                                logSkippedExistingSubject('poster', entityName, entityNameEn);
+                                continue;
+                             }
                              const desc = [
                                           `Name (EN): ${entityNameEn || poster.name_en || ''}`,
                                 `Atmosphere: ${poster.atmosphere}`,

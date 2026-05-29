@@ -892,6 +892,11 @@ export const streamSystemManagementAgentCommand = async (query, context = {}, hi
     return await streamSSE('/agent/system-management/command/stream', { query, context, history }, callbacks);
 };
 
+export const streamAnalyzeScene = async (payload, callbacks = {}) => {
+    return await streamSSE('/analyze_scene/stream', payload, callbacks);
+};
+
+
 export const fetchProjects = async (skip = 0, limit = 100) => {
     const response = await api.get('/projects/', { params: { skip, limit } });
     return response.data;

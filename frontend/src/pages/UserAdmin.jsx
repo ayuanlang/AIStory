@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
 import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
@@ -60,6 +61,7 @@ const DEFAULT_PROJECT_COST_VISUAL_CONFIG = {
 const UserAdmin = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('users');
     const [users, setUsers] = useState([]);
     const [billingOptions, setBillingOptions] = useState(null);
@@ -5131,11 +5133,11 @@ const UserAdmin = () => {
              <div className="min-h-screen bg-[#09090b] text-white flex flex-col">
                 <div className="container mx-auto px-4 pt-8">
                     <button
-                        onClick={() => window.history.back()}
+                        onClick={() => navigate('/projects')}
                         className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-sm"
                     >
                         <ArrowLeft size={16} />
-                        {t('返回', 'Back')}
+                        {t('返回项目主页', 'Back to Projects')}
                     </button>
                 </div>
                 <div className="flex-1 flex items-center justify-center">
@@ -5162,10 +5164,10 @@ const UserAdmin = () => {
                         <p className="text-gray-400 mt-1">{t('管理用户、权限与计费。', 'Manage users, permissions, and billing.')}</p>
                     </div>
                     <button
-                        onClick={() => window.history.back()}
+                        onClick={() => navigate('/projects')}
                         className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 shrink-0"
-                        title={t('返回', 'Back')}
-                        aria-label={t('返回', 'Back')}
+                        title={t('返回项目主页', 'Back to Projects')}
+                        aria-label={t('返回项目主页', 'Back to Projects')}
                     >
                         <ArrowLeft size={16} />
                     </button>

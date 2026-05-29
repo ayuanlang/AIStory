@@ -2,6 +2,8 @@
 import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import TunePromptAgentModal from "./TunePromptAgentModal";
+import AgentChat from '../../../components/AgentChat';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
 import { ReferenceManager } from './SceneManager';
@@ -108,6 +110,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     getCachedUserPreferences,
+    markAssetAsCurrentProjectAsset,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
@@ -421,6 +424,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [selectedShotIds, setSelectedShotIds] = useState([]);
     const [isImportOpen, setIsImportOpen] = useState(false);
     // const [editingShot, setEditingShot] = useState(null); // Lifted state
+
+    const [tunePromptModalConfig, setTunePromptModalConfig] = useState({ open: false, targetField: null, initialValue: "" });
     const [projectEntities, setProjectEntities] = useState([]);
     
     // Auto-filter: Only recognize global entities or entities belonging to this episode
@@ -6692,6 +6697,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 source_asset_url: videoUrlRaw,
                 idempotency_key: extractUploadIdempotencyKey,
             });
+            
+            if (uploaded?.id) {
+                try {
+                    await markAssetAsCurrentProjectAsset(uploaded.id);
+                } catch (e) {
+                    console.error('Failed to mark extracted end frame as project asset:', e);
+                }
+            }
+
             const extractedUrl = String(uploaded?.url || '').trim();
             if (!extractedUrl) {
                 throw new Error('uploaded frame has no url');
@@ -6708,6 +6722,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
             showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
+            
+            // Wait, we should also refresh the asset metadata view to show the new asset in the project library
+            if (typeof refreshShotAssetsMeta === 'function') {
+                refreshShotAssetsMeta();
+            }
         } catch (e) {
             const detail = getReadableErrorDetail(e);
             onLog?.(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
@@ -9351,7 +9370,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             );
                                         })()}
 
-                                        <PromptMentionTextarea entities={entities} uiLang={uiLang}
+                                        
+<div className="flex justify-between items-center mb-1 mt-2">
+    <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('动作 / 运动提示词', 'Action / Motion Prompt')}</div>
+    <button 
+        onClick={() => setTunePromptModalConfig({ open: true, targetField: 'video', initialValue: shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot) })} 
+        className="text-[11px] flex items-center gap-1 text-primary hover:text-primary-foreground hover:bg-primary/50 px-2 py-0.5 rounded transition-colors"
+    >
+        ✨ {t('AI 提示词修改', 'AI Prompt Tuning')}
+    </button>
+</div>
+<PromptMentionTextarea entities={entities} uiLang={uiLang}
                                             className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}

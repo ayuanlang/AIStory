@@ -519,6 +519,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [isProjectsLoading, setIsProjectsLoading] = useState(false);
     const [hasLoadedProjectsOnce, setHasLoadedProjectsOnce] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
+    const [isCreatingProjectSubmit, setIsCreatingProjectSubmit] = useState(false);
     const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
@@ -916,6 +917,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
     };
 
     const handleCreate = async () => {
+        if (isCreatingProjectSubmit) return;
         const title = String(newTitle || '').trim();
         if (!title) {
             setToast({ type: 'error', message: t('项目名称为必输项', 'Project Title is required') });
@@ -935,7 +937,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         const description = String(newDescription || '');
         const shareUsers = parseUserListInput(newShareUsers);
         const reviewerUsers = parseUserListInput(newReviewerUsers);
-        const newProject = await createProject({
+
+        setIsCreatingProjectSubmit(true);
+        try {
+            const newProject = await createProject({
             title,
             description,
             share_users: shareUsers,
@@ -996,6 +1001,13 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         
         if (targetProjectId && newScriptText.trim()) {
             setSelectedProjectId(targetProjectId);
+        }
+        } catch (error) {
+            console.error('Failed to create project', error);
+            setToast({ type: 'error', message: error?.response?.data?.detail || t('创建项目失败，请重试', 'Failed to create project, please try again') });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setIsCreatingProjectSubmit(false);
         }
     };
 
@@ -1885,7 +1897,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                         onClick={() => setSelectedProjectId(null)}
                                         className="flex items-center gap-2 px-5 py-2.5 bg-secondary text-secondary-foreground rounded-full hover:bg-secondary/80 transition-all font-medium"
                                     >
-                                        <ArrowLeft className="w-4 h-4" /> {t('返回项目列表', 'Back to Projects')}
+                                        <ArrowLeft className="w-4 h-4" /> {t('返回项目主页', 'Back to Projects')}
                                     </button>
                                 ) : (
                                     <>
@@ -2006,7 +2018,10 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 placeholder={t('例如：最后的地平线 - 场景1', 'e.g., The Last Horizon - Scene 1')}
                                                 autoFocus
                                             />
-                                            <button onClick={handleCreate} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">{t('创建', 'Create')}</button>
+                                            <button onClick={handleCreate} disabled={isCreatingProjectSubmit} className="px-6 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                                                {isCreatingProjectSubmit && <Loader2 className="w-4 h-4 animate-spin" />}
+                                                {t('创建', 'Create')}
+                                            </button>
                                             <button onClick={handleImportBackupClick} disabled={isProjectBackupImporting} className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
                                                 {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                                                 {t('导入备份', 'Import Backup')}
