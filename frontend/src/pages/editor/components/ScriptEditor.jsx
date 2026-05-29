@@ -431,7 +431,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段“场景分析结果 / 资产清单”生成。以下“优化后剧本”是主权威输入来源；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。仅提取实体建立资产库，绝不输出任何剧情拆解或 Scenes Table 表格。以下“优化后剧本”是主权威输入来源；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -7794,7 +7794,7 @@ ${stage2_1Text}`;
                                 {!!getStageOutputContent('stage1', 'optimized_script') ? <Check className="w-4 h-4" /> : 1}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段1: 剧本结构', 'Stage 1: Script')}</span>
+                                <span className="text-xs font-semibold">{t('阶段1: 结构化剧本与视觉约束', 'Stage 1: Script & Visual Context')}</span>
                                 {!!getStageOutputContent('stage1', 'optimized_script') ? (
                                     <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
                                 ) : (
@@ -7808,7 +7808,7 @@ ${stage2_1Text}`;
                                 {!!getStageOutputContent('stage2', 'subject_index') ? <Check className="w-4 h-4" /> : 2}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段2: 场景提取', 'Stage 2: Scenes')}</span>
+                                <span className="text-xs font-semibold">{t('阶段2: 实体清单(Subject)与动作(Beats)', 'Stage 2: Subjects & Beats')}</span>
                                 {!!getStageOutputContent('stage2', 'subject_index') ? (
                                      <div className="flex items-center gap-1">
                                          <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
@@ -7833,7 +7833,7 @@ ${stage2_1Text}`;
                                 {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 3}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('阶段3: 资产设计', 'Stage 3: Assets')}</span>
+                                <span className="text-xs font-semibold">{t('阶段3: 美术资产详细设计(JSON)', 'Stage 3: Visual Asset JSON')}</span>
                                 {!!getStageOutputContent('stage3', 'asset_design_json') ? (
                                     <div className="flex items-center gap-1">
                                         <span className="text-[10px] text-emerald-400/80">{t('已具备', 'Ready')}</span>
