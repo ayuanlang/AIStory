@@ -2894,7 +2894,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             setAnalysisFlowStatus({
-                phase: 'saving_scenes',
+                phase: 'scene_beats',
                 message: t('🎬 AI导演已交稿，正在为您排版整理...', 'LLM response received, auto-importing...'),
             });
 
@@ -3032,7 +3032,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             '检测到 Scene Markdown 与场景数据表不一致：将清理旧场景并按 Markdown 重新导入。',
             'Detected mismatch between scene markdown and scene table: clearing old scenes and re-importing from markdown.'
         );
-        setAnalysisFlowStatus({ phase: 'saving_scenes', message: stageNotice });
+        setAnalysisFlowStatus({ phase: 'scene_beats', message: stageNotice });
         if (onLog) {
             onLog(`${stageNotice} markdown=${uniqueMarkdown.length}, db=${uniqueDb.length}, missing=${missingInDb.length}, extra=${extraInDb.length}`, 'warning');
         }
@@ -4177,9 +4177,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         phase2GenerationInFlightRef.current = true;
 
         setAnalysisFlowStatus({
-            phase: "generating_assets",
-            message: t("✨ 正在执行第三阶段资产设计...", "Running Stage 3 asset design from the Stage 2 asset index..."),
+            phase: "assets_gen",
+            message: t("✨ 正在执行第四阶段资产设计 (共 4 项并发推演)...", "Running Stage 4 asset design..."),
         });
+
+        const targetAssetsCount = 4;
+        let assetsGenCompletedCount = 0;
 
         try {
             onLog?.(`[Stage 3 Asset Design] Preparing to fetch 4 entity_design prompts`);
@@ -4321,7 +4324,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             `2_pass_generate_assets_${pData.key}`
                         ),
                         { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
-                    ).then(res => ({ key: pData.key, result: res }));
+                    ).then(res => {
+                        assetsGenCompletedCount += 1;
+                        setAnalysisFlowStatus({
+                            phase: "assets_gen",
+                            message: t(`✨ 第四阶段资产推演中 (${assetsGenCompletedCount}/${targetAssetsCount} 个并发任务已完成)...`, `Running Stage 4 asset design (${assetsGenCompletedCount}/${targetAssetsCount} completed)...`),
+                        });
+                        return { key: pData.key, result: res };
+                    });
                 })
             );
 
@@ -4472,7 +4482,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: '',
             });
             setAnalysisFlowStatus({
-                phase: 'generating_assets',
+                phase: 'assets_gen',
                 message: t("✨ 发现有个未完成的第三阶段任务，正在继续执行资产设计...", "Resuming Stage 3 asset design..."),
             });
             try {
@@ -4593,7 +4603,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
-            phase: 'analyzing',
+            phase: 'script_opt',
             message: t('🔄 发现有个没完成的场景任务，接着帮您做完...', 'Detected an in-progress analysis task, reconnecting...'),
         });
         setAnalysisUiReport({
@@ -5771,7 +5781,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
-                setAnalysisFlowStatus({ phase: 'analyzing', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
+                setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
                 try {
                     const { splitEpisodeScript } = await import('../../../services/api');
                     await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
@@ -6071,7 +6081,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         setAnalysisFlowStatus({
-            phase: 'processing_output_workspace',
+            phase: 'completed',
                 message: '🚀 检测到场景分析结果与资产清单已完整，直接进入资产设计...',
         });
 
@@ -6157,7 +6167,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
-            phase: 'autosaving',
+            phase: 'script_opt',
             message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         setAnalysisUiReport({
@@ -6202,7 +6212,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const metadata = skipMetadata ? null : (project?.global_info || null);
 
             setAnalysisFlowStatus({
-                phase: 'analyzing',
+                phase: 'script_opt',
                 message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
@@ -6249,11 +6259,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
             setAnalysisFlowStatus({
-                phase: 'processing_output_workspace',
+                phase: 'completed',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
             setAnalysisFlowStatus({
-                phase: 'processing_output_workspace',
+                phase: 'completed',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
 
@@ -6325,7 +6335,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
-                phase: 'saving_scenes',
+                phase: 'scene_beats',
                 message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
@@ -6602,7 +6612,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
-            phase: 'autosaving',
+            phase: 'script_opt',
             message: t('💾 正在自动保存您的剧本，保障数据安全...', 'Auto-saving script...'),
         });
         const retryResetNotice = retryCount > 0
@@ -6643,7 +6653,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const metadata = skipMetadata ? null : (project?.global_info || null);
 
             setAnalysisFlowStatus({
-                phase: 'analyzing',
+                phase: 'script_opt',
                 message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
@@ -6792,6 +6802,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 if (onLog) onLog('Submitting Stage 2.1 (Asset Extraction)...', 'info');
 
+                setAnalysisFlowStatus({
+                    phase: 'extract_assets',
+                    message: t('📝 正在执行美术提取，拆解核心资产...', 'Running Asset Extraction...'),
+                });
+
                 const stage2_1Result = await awaitAnalyzeSceneWithRecovery(
                     () => analyzeScene(
                         finalStage2_1UserInput,
@@ -6813,6 +6828,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
                 if (onLog) onLog('Stage 2.1 completed. Now starting Stage 2.2 (Beats Generation)...', 'info');
+
+                setAnalysisFlowStatus({
+                    phase: 'scene_beats',
+                    message: t('📝 正在执行分镜规划，生成镜头节拍...', 'Running Scene Beats Generation...'),
+                });
 
                 const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
                 let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
@@ -6936,7 +6956,7 @@ ${stage2_1Text}`;
 
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
-                phase: 'saving_scenes',
+                phase: 'scene_beats',
                 message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
             });
             try {
@@ -7162,7 +7182,7 @@ ${stage2_1Text}`;
         analysisRunInFlightRef.current = true;
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
-            phase: 'analyzing',
+            phase: 'script_opt',
             message: t('正在读取第一阶段产物并重新执行第二阶段。', 'Re-running Stage 2 from saved Stage 1 outputs.'),
         });
 
@@ -7914,13 +7934,13 @@ ${stage2_1Text}`;
 
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
                                                                         {[
-                            { key: 'autosaving', label: t('自动保存', 'Auto Save') },
-                            { key: 'analyzing', label: t('场景解析', 'Scene Planning') },
-                            { key: 'saving_scenes', label: t('保存结构', 'Import Structure') },
-                            { key: 'generating_assets', label: t('推演资产', 'Asset Generation') },
+                            { key: 'script_opt', label: t('剧本统筹', 'Script Opt') },
+                            { key: 'extract_assets', label: t('美术提取', 'Extract Assets') },
+                            { key: 'scene_beats', label: t('分镜规划', 'Scene Beats') },
+                            { key: 'assets_gen', label: t('资产生成', 'Assets Gen') },
                             { key: 'completed', label: t('AI 总结报告', 'Report') },
                         ].map((step, idx) => {
-                            const stepOrder = ['autosaving', 'analyzing', 'saving_scenes', 'generating_assets', 'completed'];
+                            const stepOrder = ['script_opt', 'extract_assets', 'scene_beats', 'assets_gen', 'completed'];
                             const phase = analysisFlowStatus.phase || 'idle';
                             const currentIndex = stepOrder.indexOf(phase);
                             const stepIndex = stepOrder.indexOf(step.key);
