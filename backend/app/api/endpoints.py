@@ -5129,9 +5129,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
                 match = _find_match(record)
                 if not match:
-                    placeholder = _build_subject_placeholder(record)
-                    reconciled[target_bucket].append(placeholder)
-                    filled_missing += 1
                     sample_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip()
                     if sample_name and len(missing_samples) < 12:
                         missing_samples.append(sample_name)
