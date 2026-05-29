@@ -6,13 +6,13 @@ const isLocalFrontend = typeof window !== 'undefined' && /^(localhost|127\.0\.0\
 const RENDER_BACKEND_FALLBACK = 'https://aistory-backend-xggg.onrender.com';
 const LOCAL_BACKEND_FALLBACK = 'http://127.0.0.1:8000';
 
-let resolvedBaseUrl = '';
-if (isRenderFrontend) {
-        resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
-} else if (RAW_BASE_URL) {
-        resolvedBaseUrl = RAW_BASE_URL;
-} else if (isLocalFrontend) {
+let resolvedBaseUrl = RAW_BASE_URL;
+if (!resolvedBaseUrl) {
+    if (isLocalFrontend) {
         resolvedBaseUrl = LOCAL_BACKEND_FALLBACK;
+    } else {
+        resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
+    }
 }
 
 export const BASE_URL = resolvedBaseUrl;
