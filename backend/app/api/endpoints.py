@@ -14212,24 +14212,36 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         except Exception:
             continue
 
-        if not isinstance(parsed, dict):
-            continue
+        parsed_objects = []
+        if isinstance(parsed, list):
+            parsed_objects.extend(parsed)
+        elif isinstance(parsed, dict):
+            parsed_objects.append(parsed)
 
-        for section in ("characters", "props", "environments", "covers"):
-            items = parsed.get(section)
-            if section == "covers" and not items and "posters" in parsed:
-                items = parsed.get("posters")
-            if not isinstance(items, list):
+        for obj in parsed_objects:
+            if not isinstance(obj, dict):
                 continue
-            normalized_items = []
-            for item in items:
-                if not isinstance(item, dict):
+                
+            for wrapper_key in ("entities", "subjects", "payload"):
+                if wrapper_key in obj and isinstance(obj[wrapper_key], dict):
+                    obj = obj[wrapper_key]
+                    break
+                    
+            for section in ("characters", "props", "environments", "covers"):
+                items = obj.get(section)
+                if section == "covers" and not items and "posters" in obj:
+                    items = obj.get("posters")
+                if not isinstance(items, list):
                     continue
-                normalized = _normalize_item(section, item)
-                if not normalized.get("name"):
-                    continue
-                normalized_items.append(normalized)
-            payload[section].extend(normalized_items)
+                normalized_items = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized = _normalize_item(section, item)
+                    if not normalized.get("name") and not normalized.get("subject_no"):
+                        continue
+                    normalized_items.append(normalized)
+                payload[section].extend(normalized_items)
 
         if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
             return payload
