@@ -8345,7 +8345,13 @@ def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
         Entity.project_id == project_id,
         or_(
             Entity.name.in_(["封面海报", "海报", "封面", "cover", "poster"]),
-            Entity.type.in_(["poster", "posters", "cover"])
+            Entity.name.ilike("%海报%"),
+            Entity.name.ilike("%封面%"),
+            Entity.name.ilike("%cover%"),
+            Entity.name.ilike("%poster%"),
+            Entity.type.in_(["poster", "posters", "cover", "project_cover", "cover_image"]),
+            Entity.type.ilike("%poster%"),
+            Entity.type.ilike("%cover%")
         ),
         Entity.image_url != None,
         Entity.image_url != ""
@@ -10451,7 +10457,13 @@ def read_projects(
             Entity.project_id.in_(p_ids),
             or_(
                 Entity.name.in_(["封面海报", "海报", "封面", "cover", "poster"]),
-                Entity.type.in_(["poster", "posters", "cover"])
+                Entity.name.ilike("%海报%"),
+                Entity.name.ilike("%封面%"),
+                Entity.name.ilike("%cover%"),
+                Entity.name.ilike("%poster%"),
+                Entity.type.in_(["poster", "posters", "cover", "project_cover", "cover_image"]),
+                Entity.type.ilike("%poster%"),
+                Entity.type.ilike("%cover%")
             ),
             Entity.image_url != None,
             Entity.image_url != ""

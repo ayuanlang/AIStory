@@ -586,7 +586,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     useEffect(() => {
-        if (!isAnalyzing || analysisFlowStatus?.phase !== 'analyzing') {
+        if (!isAnalyzing) {
             setAnalysisHeartbeatTick(0);
             return;
         }
@@ -596,14 +596,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [isAnalyzing, analysisFlowStatus?.phase]);
+    }, [isAnalyzing]);
 
     const analysisHeartbeatElapsedMs = useMemo(() => {
-        if (!isAnalyzing || analysisFlowStatus?.phase !== 'analyzing') return 0;
+        if (!isAnalyzing) return 0;
         const startedAt = Number(analysisUiReport?.startedAt || 0);
         if (!Number.isFinite(startedAt) || startedAt <= 0) return 0;
         return Math.max(0, Date.now() - startedAt);
-    }, [isAnalyzing, analysisFlowStatus?.phase, analysisUiReport?.startedAt, analysisHeartbeatTick]);
+    }, [isAnalyzing, analysisUiReport?.startedAt, analysisHeartbeatTick]);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
         const uniqueWarnings = [...new Set((warnings || []).map(w => String(w || '').trim()).filter(Boolean))];
@@ -7994,16 +7994,16 @@ ${stage2_1Text}`;
                         </div>
                     )}
 
-                    {isAnalyzing && analysisFlowStatus.phase === 'analyzing' && analysisHeartbeatElapsedMs >= 5000 && (
+                    {isAnalyzing && (
                         <div className="mb-2 text-[11px] text-amber-200/90">
-                            {t('仍在等待后端响应...', 'Still waiting for backend response...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
+                            {t('剧本分析进行中...', 'Script analysis in progress...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
                             <span className="ml-2 text-amber-100/80">
-                                {t('提交阶段超时约 300s，整体等待最长约 600s；复杂剧本通常需要更久。', 'Submit timeout is about 300s and total wait can take up to about 600s; complex scripts usually take longer.')}
+                                {t('复杂剧本通常需要较长时间。', 'Complex scripts usually take longer.')}
                             </span>
                         </div>
                     )}
 
-                    {isAnalyzing && analysisFlowStatus.phase === 'analyzing' && (
+                    {isAnalyzing && (
                         <div className="mb-2">
                             <button
                                 onClick={handleStopAnalysisTask}
