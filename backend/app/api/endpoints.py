@@ -4787,9 +4787,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
             return payload
 
-        def _detect_subject_consistency_warnings(text: str) -> Dict[str, Any]:
+        def _detect_subject_consistency_warnings(text: str, parsed_entities: Dict[str, Any] = None) -> Dict[str, Any]:
             markdown_subjects = _extract_subjects_from_analysis_text(text)
-            entities_payload = _extract_entities_from_json_candidates(text)
+            entities_payload = parsed_entities if parsed_entities is not None else _extract_entities_from_json_candidates(text)
 
             json_subjects: List[str] = []
             for section in ("characters", "props", "environments", "covers"):
@@ -6356,7 +6356,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         debug_meta["subject_index_coverage"] = subject_index_coverage_meta
         debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
-        subject_consistency_meta = _detect_subject_consistency_warnings(result_content)
+        subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
         debug_meta["subject_consistency"] = subject_consistency_meta
 
         prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
@@ -31537,6 +31537,7 @@ def _append_video_api_ref_mapping(
         return mentions
 
     # Remove legacy inline URL-index tags injected into prompt anchors.
+    text = re.sub(r"@Image\d+\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
         "",
