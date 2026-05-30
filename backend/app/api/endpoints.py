@@ -5466,22 +5466,26 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
 
         include_negative_prompt = getattr(request, "include_negative_prompt", True)
-        if include_negative_prompt:
+        
+        is_asset_json_stage = "asset_design" in str(getattr(request, "system_api_id", "")) or "subject" in str(getattr(request, "system_api_id", "")) or "planning_1_stage_1_main" in str(getattr(request, "prompt_file", ""))
+        
+        if is_asset_json_stage:
+            if include_negative_prompt:
+                system_instruction += (
+                    "\n\n"
+                    "# Output Hard Constraint (Negative Prompt)\n"
+                    "In Part 2 JSON, every entity item (characters / props / environments / covers) MUST include key \"negative_prompt_en\". "
+                    "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
+                    "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
+                )
+
             system_instruction += (
                 "\n\n"
-                "# Output Hard Constraint (Negative Prompt)\n"
-                "In Part 2 JSON, every entity item (characters / props / environments / covers) MUST include key \"negative_prompt_en\". "
-                "Each negative_prompt_en must be English-only, style-aware, and aligned to that entity's generation_prompt_en. "
-                "For live-action realism, explicitly exclude plastic/waxy/CGI look and other realism-breaking artifacts."
+                "# Output Hard Constraint (English Naming)\n"
+                "For every entity JSON item, name_en MUST use natural English word spacing. "
+                "Use readable Title Case phrases like 'Demon Slayer Captain' or 'Harbor Office Front Mid Night', "
+                "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
             )
-
-        system_instruction += (
-            "\n\n"
-            "# Output Hard Constraint (English Naming)\n"
-            "For every entity JSON item, name_en MUST use natural English word spacing. "
-            "Use readable Title Case phrases like 'Demon Slayer Captain' or 'Harbor Office Front Mid Night', "
-            "and avoid 'DemonSlayerCaptain', 'Demon_Slayer_Captain', 'demon-slayer-captain', or 'HarborOffice_Front_Mid_Night'."
-        )
 
         # Inject authoritative character canon (if provided via episode_id)
         try:
