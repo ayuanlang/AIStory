@@ -73,7 +73,6 @@ import {
     getSceneLatestAIResult,
     generateEpisodeCharacterProfile,
     generateEpisodeScenes,
-    generateProjectEpisodeScripts,
     getProjectEpisodeScriptsStatus,
     stopProjectEpisodeScripts,
     startSceneAiShotsBatch,
@@ -187,7 +186,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [isGeneratingScript, setIsGeneratingScript] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
@@ -7345,6 +7343,8 @@ ${stage2_1Text}`;
         if (!activeEpisode?.id) return;
         phase2RetryOptionsRef.current = options;
         setIsRetryingPhase2(true);
+        // Reset the duplicate execution marker in case it was stuck
+        phase2GenerationInFlightRef.current = false;
         try {
             resetAutoSubjectsImportCache();
             onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'}`, 'process');
@@ -7733,57 +7733,6 @@ ${stage2_1Text}`;
                             {t('合并剧本', 'Merge Script')}
                         </button>
                     )}
-                    <button 
-                        onClick={async () => {
-                            if (!projectId || !activeEpisode?.id || isGeneratingScript) return;
-                            
-                            const ok = await confirmUiMessage(
-                                '此操作会根据项目设定的“全局剧本架构”(若有)与当前集设定，通过AI一键重写当前分集剧情，是否确定覆盖当前的内容？',
-                                'This will overwrite the current episode script using the global story framework and AI. Continue?'
-                            );
-                            if (!ok) return;
-
-                            setIsGeneratingScript(true);
-                            onLog?.(`Generating script for episode ${activeEpisode.id}...`, 'process');
-                            try {
-                                const res = await generateProjectEpisodeScripts(projectId, {
-                                    episode_id: activeEpisode.id,
-                                    overwrite_existing: true
-                                });
-                                onLog?.(`Generation response: ${JSON.stringify(res)}`, 'info');
-
-                                const freshEpisodes = await onRefreshEpisodes?.();
-                                const refreshedEpisode = Array.isArray(freshEpisodes)
-                                    ? freshEpisodes.find((ep) => String(ep?.id) === String(activeEpisode.id))
-                                    : null;
-                                const refreshedTitle = String(refreshedEpisode?.title || '').trim();
-
-                                onLog?.(
-                                    refreshedTitle
-                                        ? `Current episode script generated successfully. Title refreshed to: ${refreshedTitle}`
-                                        : 'Current episode script generated successfully.',
-                                    'success'
-                                );
-                                alert(
-                                    refreshedTitle
-                                        ? `剧本生成完成，分集标题已更新为：${refreshedTitle}`
-                                        : '剧本生成完成，已自动刷新当前分集数据。'
-                                );
-                            } catch (e) {
-                                console.error('Failed to generate script', e);
-                                onLog?.(`Failed to generate script: ${e.response?.data?.detail || e.message}`, 'error');
-                                alert('生成失败: ' + (e.response?.data?.detail || e.message));
-                            } finally {
-                                setIsGeneratingScript(false);
-                            }
-                        }}
-                        disabled={isGeneratingScript || !activeEpisode?.id}
-                        className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-100 border border-blue-500/30 rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={t('根据故事线和人物设定AI生成当前集', 'Generate episode script using AI via Global Framework')}
-                    >
-                        {isGeneratingScript ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-                        {t('AI一键生成本集', 'AI Gen Episode')}
-                    </button>
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
                     <button
                         onClick={async () => {

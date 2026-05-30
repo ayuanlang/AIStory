@@ -1570,13 +1570,6 @@ class BillingService:
         if not bool(getattr(rule, "is_active", False)):
             return False
 
-        if mode == "text" and not bool(getattr(rule, "applies_to_text", False)):
-            return False
-        if mode == "image" and not bool(getattr(rule, "applies_to_image", False)):
-            return False
-        if mode == "video" and not bool(getattr(rule, "applies_to_video", False)):
-            return False
-
         gm = BillingService._to_lower_text(getattr(rule, "generation_mode", ""))
         usage_gm = BillingService._to_lower_text(usage.get("generation_mode"))
         if gm and usage_gm and gm != usage_gm:

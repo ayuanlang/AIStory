@@ -31680,7 +31680,13 @@ def _append_video_api_ref_mapping(
                 token = str(match.group(0) or "")
                 if token.startswith(prefix):
                     return token
-                return f"{prefix}{token}"
+                base = token
+                if anchor_text:
+                    if "(" in base and ")" in base:
+                        base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
+                    else:
+                        base = f"{base}({anchor_text})"
+                return f"{prefix}{base}"
 
             # Replace ALL occurrences instead of just 1
             replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
@@ -31699,7 +31705,13 @@ def _append_video_api_ref_mapping(
             token = str(match.group(0) or "")
             if token.startswith(prefix):
                 return token
-            return f"{prefix}{token}"
+            base = token
+            if anchor_text:
+                if "(" in base and ")" in base:
+                    base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
+                else:
+                    base = f"{base}({anchor_text})"
+            return f"{prefix}{base}"
 
         # Replace ALL occurrences instead of just 1
         replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)

@@ -1,0 +1,2 @@
+const fn = require('./extract_test11.js');
+console.log(fn(`### Subject Index subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage --- | --- | --- | --- | --- | --- | --- S001 | character | 布鲁克·海斯`));
