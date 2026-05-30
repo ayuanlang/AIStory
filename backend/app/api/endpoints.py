@@ -4766,6 +4766,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     obj = json.loads(candidate)
                 except Exception:
                     continue
+                if isinstance(obj, list):
+                    grouped = {"characters": [], "props": [], "environments": [], "covers": []}
+                    for item in obj:
+                        if not isinstance(item, dict): continue
+                        t = str(item.get("type") or item.get("subject_type") or item.get("entity_type") or "").strip().lower()
+                        if t in {"character", "characters", "char", "role", "roles", "人物", "角色"}: grouped["characters"].append(item)
+                        elif t in {"prop", "props", "item", "items", "道具", "物件"}: grouped["props"].append(item)
+                        elif t in {"environment", "environments", "env", "scene", "场景", "环境"}: grouped["environments"].append(item)
+                        elif t in {"poster", "posters", "cover", "covers", "海报", "封面"}: grouped["covers"].append(item)
+                    obj = grouped
                 if not isinstance(obj, dict):
                     continue
                 for section in ("characters", "props", "environments", "covers"):
@@ -14215,7 +14225,23 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
 
         parsed_objects = []
         if isinstance(parsed, list):
-            parsed_objects.extend(parsed)
+            # If the list itself is an array of entities, wrap them in a mock object
+            # grouped by type, or just pass them as generic items if we determine they have type fields
+            # Actually, let's just group them into a wrapper object
+            grouped = {"characters": [], "props": [], "environments": [], "covers": []}
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                t = str(item.get("type") or item.get("subject_type") or item.get("entity_type") or "").strip().lower()
+                if t in {"character", "characters", "char", "role", "roles", "人物", "角色"}:
+                    grouped["characters"].append(item)
+                elif t in {"prop", "props", "item", "items", "道具", "物件"}:
+                    grouped["props"].append(item)
+                elif t in {"environment", "environments", "env", "scene", "场景", "环境"}:
+                    grouped["environments"].append(item)
+                elif t in {"poster", "posters", "cover", "covers", "海报", "封面"}:
+                    grouped["covers"].append(item)
+            parsed_objects.append(grouped)
         elif isinstance(parsed, dict):
             parsed_objects.append(parsed)
 

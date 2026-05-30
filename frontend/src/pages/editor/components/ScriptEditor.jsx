@@ -4369,7 +4369,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
                     }
                     if (aText) {
-                        const extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
+                        let extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
+                        if (r.value.key === 'posters' && (!extractedArr || !extractedArr.length) && bJson?.covers) {
+                            extractedArr = bJson.covers;
+                        }
                         if (extractedArr && extractedArr.length > 0) {
                             rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
                         } else {
