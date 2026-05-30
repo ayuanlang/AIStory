@@ -3,12 +3,15 @@
 const RAW_BASE_URL = String(import.meta?.env?.VITE_API_BASE_URL || '').trim();
 const isRenderFrontend = typeof window !== 'undefined' && /\.onrender\.com$/i.test(window.location.hostname || '');        
 const isLocalFrontend = typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname || '');
+const isSelfHostedIP = typeof window !== 'undefined' && window.location.hostname === '8.130.73.155';
 const RENDER_BACKEND_FALLBACK = 'https://aistory-backend-xggg.onrender.com';
 const LOCAL_BACKEND_FALLBACK = 'http://127.0.0.1:8000';
 
 let resolvedBaseUrl = RAW_BASE_URL;
 if (!resolvedBaseUrl) {
-    if (isLocalFrontend) {
+    if (isSelfHostedIP) {
+        resolvedBaseUrl = window.location.origin;
+    } else if (isLocalFrontend) {
         resolvedBaseUrl = LOCAL_BACKEND_FALLBACK;
     } else {
         resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
