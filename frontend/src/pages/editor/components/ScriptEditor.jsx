@@ -5762,10 +5762,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         await autoSaveScriptBeforeAnalysis();
 
-        if (actualContent && actualContent.trim().length > 2500) {
+        if (actualContent && actualContent.trim().length > 5000) {
             const ok = window.confirm(t(
-                '检测到剧本内容超过2500字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 2500 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+                '检测到剧本内容超过5000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                'Script length exceeds 5000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
             ));
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
@@ -5782,10 +5782,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        if (actualContent && actualContent.trim().length > 2500) {
+        if (actualContent && actualContent.trim().length > 5000) {
             const ok = await confirmUiMessage(t(
-                '检测到剧本内容超过2500字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 2500 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+                '检测到剧本内容超过5000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                'Script length exceeds 5000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
             ));
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
