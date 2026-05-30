@@ -5840,6 +5840,41 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
                                                                         </div>
                                                                     )}
+                                                                    
+                                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
+                                                                         {depEntity?.image_url ? (
+                                                                             <>
+                                                                                <button
+                                                                                    title={t('用该实体的图与锚点替换当前', 'Replace Both')}
+                                                                                    onClick={(e) => {
+                                                                                        e.preventDefault();
+                                                                                        e.stopPropagation();
+                                                                                        setViewingEntity(prev => ({
+                                                                                            ...prev,
+                                                                                            image_url: depEntity.image_url,
+                                                                                            anchor_description: depEntity.anchor_description !== undefined ? depEntity.anchor_description : prev.anchor_description
+                                                                                        }));
+                                                                                    }}
+                                                                                    className="w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-white font-bold"
+                                                                                >
+                                                                                    {t('图与锚点', 'Replace Both')}
+                                                                                </button>
+                                                                                <button
+                                                                                    title={t('设为参考图', 'Set as Ref Image')}
+                                                                                    onClick={(e) => {
+                                                                                        e.preventDefault();
+                                                                                        e.stopPropagation();
+                                                                                        setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
+                                                                                    }}
+                                                                                    className="w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold"
+                                                                                >
+                                                                                    {t('仅用作参考', 'Ref Only')}
+                                                                                </button>
+                                                                             </>
+                                                                         ) : (
+                                                                             <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
+                                                                         )}
+                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}
@@ -5964,15 +5999,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             <div className="text-xs font-semibold text-white break-words leading-snug" title={getAssetDisplayName(selectedLibraryAsset)}>{getAssetDisplayName(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
-                                                                             <button
-                                                                                 onClick={() => {
-                                                                                     setRefImage(selectedLibraryAsset);
-                                                                                     setRefSelectionMode(null);
-                                                                                 }}
-                                                                                 className="mt-1 px-2.5 py-1 rounded text-xs font-bold bg-primary/80 hover:bg-primary text-white"
-                                                                             >
-                                                                                 {t('选用', 'Use')}
-                                                                             </button>
+                                                                             <div className="flex gap-2 mt-1">
+                                                                                 <button
+                                                                                     onClick={() => {
+                                                                                         const depEntityId = getAssetEntityId(selectedLibraryAsset);
+                                                                                         const depEntity = allEntities?.find(e => String(e.id) === String(depEntityId));
+                                                                                         setViewingEntity(prev => ({
+                                                                                             ...prev,
+                                                                                             image_url: selectedLibraryAsset.url,
+                                                                                             anchor_description: depEntity?.anchor_description !== undefined ? depEntity.anchor_description : prev.anchor_description
+                                                                                         }));
+                                                                                         setRefSelectionMode(null);
+                                                                                     }}
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-primary/80 hover:bg-primary text-white"
+                                                                                 >
+                                                                                     {t('图与锚点', 'Replace Both')}
+                                                                                 </button>
+                                                                                 <button
+                                                                                     onClick={() => {
+                                                                                         setRefImage(selectedLibraryAsset);
+                                                                                         setRefSelectionMode(null);
+                                                                                     }}
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border"
+                                                                                 >
+                                                                                     {t('仅用作参考', 'Ref Only')}
+                                                                                 </button>
+                                                                             </div>
                                                                          </div>
                                                                      </div>
                                                                  ) : (

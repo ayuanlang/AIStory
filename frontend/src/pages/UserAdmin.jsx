@@ -6750,12 +6750,12 @@ const UserAdmin = () => {
                                     <div className="mt-3 space-y-2 text-xs text-gray-300">
                                         <div>{t('阶段选择：若 shot_count > 0 => 当前阶段=budget；否则若 scene_count > 0 => 当前阶段=suggested；否则=overview。', 'Stage selection: if shot_count > 0 => stage=budget; else if scene_count > 0 => stage=suggested; else overview.')}</div>
                                         <div>{t('概要成本 raw_overview = word_count * overview.word_rate', 'Overview raw_overview = word_count * overview.word_rate')}</div>
-                                        <div>{t('建议成本（逐 Scene）：scene_cost = duration * base_scene_point * ((role_count - 1) * role_complexity + (env_count - 1) * env_complexity + (prop_count - 1) * prop_complexity) * entity_tier_ratio * project_info_multiplier', 'Suggested (per scene): scene_cost = duration * base_scene_point * ((role_count - 1) * role_complexity + (env_count - 1) * env_complexity + (prop_count - 1) * prop_complexity) * entity_tier_ratio * project_info_multiplier')}</div>
-                                        <div>{t('汇总：raw_suggested = sum(scene_cost) * dimension_multiplier_only（避免 project_info_multiplier 重复乘算）', 'Aggregation: raw_suggested = sum(scene_cost) * dimension_multiplier_only (to avoid double-multiplying project_info_multiplier)')}</div>
+                                        <div>{t('建议成本（逐 Scene）：scene_cost = duration * base_scene_point * (1.0 + (role_count - 1) * role_complexity + (env_count - 1) * env_complexity + prop_count * prop_complexity) * entity_tier_ratio * project_info_multiplier', 'Suggested (per scene): scene_cost = duration * base_scene_point * (1.0 + (role_count - 1) * role_complexity + (env_count - 1) * env_complexity + prop_count * prop_complexity) * entity_tier_ratio * project_info_multiplier')}</div>
+                                        <div>{t('汇总：raw_suggested = sum(scene_cost) * dimension_multiplier_only（因逐景计算已含项目系数）', 'Aggregation: raw_suggested = sum(scene_cost) * dimension_multiplier_only (scene cost already includes project mult)')}</div>
                                         <div>{t('预算成本 raw_budget = sum(shot_complexity) * budget.shot_unit_rate', 'Budget raw_budget = sum(shot_complexity) * budget.shot_unit_rate')}</div>
                                         <div>{t('shot_complexity = duration_weight * duration + asset_weight * shot_asset_count', 'shot_complexity = duration_weight * duration + asset_weight * shot_asset_count')}</div>
                                         <div>{t('总倍率 total_multiplier = project_info_multiplier * dimension_multiplier', 'total_multiplier = project_info_multiplier * dimension_multiplier')}</div>
-                                        <div>{t('阶段估算值 estimated_stage_cost = raw_stage * total_multiplier', 'estimated_stage_cost = raw_stage * total_multiplier')}</div>
+                                        <div>{t('最终估算：概览/预算阶段 = raw * total_multiplier，建议阶段已在汇总时自动乘齐。', 'Final: overview/budget = raw * total_multiplier, suggested is already scaled.')}</div>
                                     </div>
                                 </details>
 

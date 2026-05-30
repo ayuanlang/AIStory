@@ -1092,8 +1092,13 @@ class BillingService:
 
         if unit_type == 'per_second':
             quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0)
+            if quantity <= 0 and payload.get('image_count'):
+                # fallback for misconfigured per_second image pricing rules
+                quantity = float(BillingService._to_int(payload.get('image_count'), 1))
         elif unit_type == 'per_minute':
             quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0) / 60.0
+            if quantity <= 0 and payload.get('image_count'):
+                quantity = float(BillingService._to_int(payload.get('image_count'), 1))
 
         if quantity <= 0 and unit_type in {'per_second', 'per_minute'}:
             return 0.0 if return_float else 0

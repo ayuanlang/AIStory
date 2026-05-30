@@ -34669,3 +34669,191 @@ def get_llm_logs(
         query = query.filter(LLMCallLog.tag == tag)
     logs = query.offset(offset).limit(limit).all()
     return logs
+
+
+@router.get("/projects/{project_id}/backup_export")
+def export_project_backup(
+    project_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or access denied")
+    
+    # Preload required data
+    episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    entities = db.query(Entity).filter(Entity.project_id == project_id).all()
+    assets = db.query(Asset).filter(Asset.project_id == project_id).all()
+    
+    ep_ids = [e.id for e in episodes]
+    scenes = db.query(Scene).filter(Scene.episode_id.in_(ep_ids)).all() if ep_ids else []
+    script_segments = db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(ep_ids)).all() if ep_ids else []
+    
+    sc_ids = [s.id for s in scenes]
+    shots = db.query(Shot).filter(Shot.scene_id.in_(sc_ids)).all() if sc_ids else []
+
+    def to_dict(obj):
+        d = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+        return d
+
+    return {
+        "project": to_dict(project),
+        "episodes": [to_dict(e) for e in episodes],
+        "entities": [to_dict(e) for e in entities],
+        "assets": [to_dict(a) for a in assets],
+        "scenes": [to_dict(s) for s in scenes],
+        "script_segments": [to_dict(seg) for seg in script_segments],
+        "shots": [to_dict(sh) for sh in shots]
+    }
+
+class ImportBackupPayload(BaseModel):
+    backup: dict
+
+@router.post("/projects/import_backup")
+def import_project_backup(
+    payload: ImportBackupPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    data = payload.backup
+    if not data or "project" not in data:
+        raise HTTPException(status_code=400, detail="Invalid backup payload")
+
+    p_data = data["project"]
+    proj = Project(
+        title=p_data.get("title", "Imported Project") + " (Imported)",
+        owner_id=current_user.id,
+        global_info=p_data.get("global_info", {})
+    )
+    db.add(proj)
+    db.flush()
+
+    new_project_id = proj.id
+
+    episodes = data.get("episodes", [])
+    entities = data.get("entities", [])
+    assets = data.get("assets", [])
+    scenes = data.get("scenes", [])
+    script_segments = data.get("script_segments", [])
+    shots = data.get("shots", [])
+
+    # Maps old ids to new ids
+    ep_map = {}
+    sc_map = {}
+
+    for ep in episodes:
+        old_ep_id = ep.get("id")
+        new_ep = Episode(
+            project_id=new_project_id,
+            title=ep.get("title", ""),
+            episode_info=ep.get("episode_info", {}),
+            script_content=ep.get("script_content", ""),
+            character_profiles=ep.get("character_profiles", []),
+            ai_scene_analysis_result=ep.get("ai_scene_analysis_result"),
+            ai_scene_analysis_subject_index=ep.get("ai_scene_analysis_subject_index"),
+            ai_scene_analysis_adaptation=ep.get("ai_scene_analysis_adaptation"),
+            ai_entity_design_result=ep.get("ai_entity_design_result"),
+            ai_stage_outputs=ep.get("ai_stage_outputs")
+        )
+        db.add(new_ep)
+        db.flush()
+        ep_map[old_ep_id] = new_ep.id
+
+    for ent in entities:
+        new_ent = Entity(
+            project_id=new_project_id,
+            episode_id=ep_map.get(ent.get("episode_id")) if ent.get("episode_id") else None,
+            name=ent.get("name"),
+            type=ent.get("type"),
+            description=ent.get("description"),
+            name_en=ent.get("name_en"),
+            base_name_en=ent.get("base_name_en"),
+            gender=ent.get("gender"),
+            role=ent.get("role"),
+            archetype=ent.get("archetype"),
+            appearance_cn=ent.get("appearance_cn"),
+            clothing=ent.get("clothing"),
+            action_characteristics=ent.get("action_characteristics"),
+            atmosphere=ent.get("atmosphere"),
+            visual_params=ent.get("visual_params"),
+            narrative_description=ent.get("narrative_description"),
+            visual_dependencies=ent.get("visual_dependencies", []),
+            dependency_strategy=ent.get("dependency_strategy", {}),
+            image_url=ent.get("image_url"),
+            generation_prompt_en=ent.get("generation_prompt_en"),
+            generation_prompt_cn=ent.get("generation_prompt_cn"),
+            anchor_description=ent.get("anchor_description"),
+            custom_attributes=ent.get("custom_attributes", {})
+        )
+        db.add(new_ent)
+
+    for a in assets:
+        new_asset = Asset(
+            user_id=current_user.id,
+            project_id=new_project_id,
+            episode_id=ep_map.get(a.get("episode_id")) if a.get("episode_id") else None,
+            is_current_project_asset=a.get("is_current_project_asset", False),
+            type=a.get("type"),
+            url=a.get("url"),
+            filename=a.get("filename"),
+            meta_info=a.get("meta_info", {}),
+            remark=a.get("remark")
+        )
+        db.add(new_asset)
+
+    for seg in script_segments:
+        new_seg = ScriptSegment(
+            episode_id=ep_map.get(seg.get("episode_id")),
+            pid=seg.get("pid"),
+            title=seg.get("title"),
+            content_revised=seg.get("content_revised"),
+            content_original=seg.get("content_original"),
+            narrative_function=seg.get("narrative_function"),
+            analysis=seg.get("analysis")
+        )
+        db.add(new_seg)
+
+    for sc in scenes:
+        old_sc_id = sc.get("id")
+        new_sc = Scene(
+            episode_id=ep_map.get(sc.get("episode_id")),
+            scene_no=sc.get("scene_no"),
+            scene_name=sc.get("scene_name"),
+            original_script_text=sc.get("original_script_text"),
+            equivalent_duration=sc.get("equivalent_duration"),
+            core_scene_info=sc.get("core_scene_info"),
+            environment_name=sc.get("environment_name"),
+            linked_characters=sc.get("linked_characters"),
+            key_props=sc.get("key_props"),
+            ai_shots_result=sc.get("ai_shots_result")
+        )
+        db.add(new_sc)
+        db.flush()
+        sc_map[old_sc_id] = new_sc.id
+
+    for sh in shots:
+        new_sh = Shot(
+            scene_id=sc_map.get(sh.get("scene_id")),
+            project_id=new_project_id,
+            episode_id=ep_map.get(sh.get("episode_id")),
+            shot_id=sh.get("shot_id"),
+            shot_name=sh.get("shot_name"),
+            scene_code=sh.get("scene_code"),
+            start_frame=sh.get("start_frame"),
+            end_frame=sh.get("end_frame"),
+            video_content=sh.get("video_content"),
+            duration=sh.get("duration"),
+            keyframes=sh.get("keyframes"),
+            associated_entities=sh.get("associated_entities"),
+            shot_logic_cn=sh.get("shot_logic_cn"),
+            technical_notes=sh.get("technical_notes"),
+            image_url=sh.get("image_url"),
+            video_url=sh.get("video_url"),
+            prompt=sh.get("prompt")
+        )
+        db.add(new_sh)
+
+    db.commit()
+    return {"message": "Import successful", "project_id": new_project_id}
+

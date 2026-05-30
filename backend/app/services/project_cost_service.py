@@ -519,13 +519,13 @@ def _compute_scene_suggested_cost(
 	entity_total = role_count + env_count + prop_count
 	tier_ratio = _resolve_entity_tier_ratio(entity_total, tier_cfg)
 
-	complexity_score = (
+	complexity_score = 1.0 + (
 		(role_count - 1) * role_complexity
 		+ (env_count - 1) * env_complexity
-		+ (prop_count - 1) * prop_complexity
+		+ prop_count * prop_complexity
 	)
 	# Guard: ensure a minimum positive complexity score
-	complexity_score = max(0.0, complexity_score)
+	complexity_score = max(1.0, complexity_score)
 
 	raw = duration * base_scene_point * complexity_score * tier_ratio * max(0.0, float(project_info_multiplier))
 	result = max(0.0, raw)
@@ -926,7 +926,7 @@ def compute_project_cost_estimation(
 
 	# --- Suggested stage: per-scene formula ---
 	# scene_cost = duration * base_scene_point
-	#   * ((role_count * role_complexity) + (env_count-1) * env_complexity + (prop_count-1) * prop_complexity)
+	#   * (1.0 + (role_count-1) * role_complexity + (env_count-1) * env_complexity + prop_count * prop_complexity)
 	#   * entity_tier_ratio * project_info_multiplier
 	# Then scale by dimension_multiplier_only for project total.
 	dimension_multiplier_only = total_multiplier / max(1e-9, float(project_multiplier))
