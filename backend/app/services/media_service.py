@@ -599,16 +599,7 @@ class MediaGenerationService:
 
     def _merge_negative_prompt(self, prompt: Any, negative_prompt: Any) -> str:
         base_prompt = str(prompt or "").strip()
-        neg_prompt = str(negative_prompt or "").strip()
-        if not neg_prompt:
-            return base_prompt
-        if re.search(r"negative\s*prompt\s*:", base_prompt, flags=re.IGNORECASE):
-            return base_prompt
-        if base_prompt:
-            return f"""{base_prompt}
-
-Negative prompt constraints: {neg_prompt}"""
-        return f"Negative prompt constraints: {neg_prompt}"
+        return base_prompt
 
     def _looks_like_scene_subject_placeholder_prompt(self, prompt: Any) -> bool:
         text = str(prompt or "").strip().lower()

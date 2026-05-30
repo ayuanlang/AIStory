@@ -31525,10 +31525,7 @@ def _append_video_api_ref_mapping(
             if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
                 continue
 
-            raw_entity_name = str(row.get("name") or "").strip() if row else ""
-            entity_name = raw_entity_name[1:] if raw_entity_name.startswith("@") else raw_entity_name
-            if not entity_name:
-                entity_name = raw_name.lstrip("@").strip()
+            entity_name = raw_name.lstrip("@").strip()
             if not entity_name:
                 continue
 
@@ -31616,7 +31613,8 @@ def _append_video_api_ref_mapping(
 
     seen_urls: set[str] = set()
 
-    mentioned_entity_keys = {normalized for normalized, _ in _collect_prompt_entity_mentions(text)}
+    mentioned_entity_map = {normalized: raw_name for normalized, raw_name in _collect_prompt_entity_mentions(text)}
+    mentioned_entity_keys = set(mentioned_entity_map.keys())
     if entity_lookup:
         # Relaxed matching to map any entity in ordered_refs
         for key, row in entity_lookup.items():
@@ -31641,10 +31639,7 @@ def _append_video_api_ref_mapping(
 
             if matched and image_url not in seen_urls:
                 seen_urls.add(image_url)
-                raw_name = str(row.get('name') or '')
-                char_name = raw_name[1:] if raw_name.startswith('@') else raw_name
-                if not char_name:
-                    char_name = norm_key
+                char_name = mentioned_entity_map[norm_key]
                 # Anchor injection should follow the asset-level Anchor Description for the matched entity.
                 anchor_text = str(row.get("anchor_description") or "").strip()
                 pairs.append((mapped_idx, char_name, anchor_text))
