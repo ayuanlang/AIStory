@@ -31687,6 +31687,8 @@ def _append_video_api_ref_mapping(
                         base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
                     else:
                         base = f"{base}({anchor_text})"
+                else:
+                    base = re.sub(r"\([^\)]*\)", "", base)
                 return f"{prefix}{base}"
 
             # Replace ALL occurrences instead of just 1
@@ -31712,6 +31714,8 @@ def _append_video_api_ref_mapping(
                     base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
                 else:
                     base = f"{base}({anchor_text})"
+            else:
+                base = re.sub(r"\([^\)]*\)", "", base)
             return f"{prefix}{base}"
 
         # Replace ALL occurrences instead of just 1
