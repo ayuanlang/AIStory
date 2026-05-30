@@ -5881,8 +5881,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         } else {
              // Normal user flow
-             // executeAnalysis will set it back to true, but we can leave it true since it will continue turning
-            executeAnalysis(stage1Input, null, true);
+             try {
+                 const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+                 executeAdvancedAnalysis(stage1Input, res.content, 0, true);
+             } catch (e) {
+                 console.error("Failed to fetch system prompt for normal user", e);
+                 // Fallback
+                 executeAnalysis(stage1Input, null, true);
+             }
         }
     };
 
@@ -6841,7 +6847,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         },
                         projectId
                     ),
-                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: '' }
+                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: baselineAnalysisText }
                 );
 
                 const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
@@ -6904,11 +6910,35 @@ ${stage2_1Text}`;
                         },
                         projectId
                     ),
-                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: '' }
+                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: stage2_1Text }
                 );
 
                 const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
                 
+                // --- 验证 Stage 2.2 结果是否有上游错误或格式异常 ---
+                let isUpstreamError2 = false;
+                let errMsg2 = '';
+                const matchObjStr2 = stage2_2Text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+                if (matchObjStr2.startsWith('{')) {
+                    try {
+                        const parseObj = JSON.parse(matchObjStr2);
+                        if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
+                            isUpstreamError2 = true;
+                            errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
+                        }
+                    } catch(e) {}
+                }
+                if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(stage2_2Text)) {
+                    isUpstreamError2 = true;
+                    errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${stage2_2Text.slice(0, 100)}`;
+                }
+                if (isUpstreamError2) {
+                    throw new Error(errMsg2);
+                }
+                if (!String(stage2_2Text).trim() || !stage2_2Text.includes("|")) {
+                    throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
+                }
+
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
                 finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
 
@@ -7256,9 +7286,9 @@ ${stage2_1Text}`;
                     },
                     projectId
                 ),
-                { startedAt, baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim() }
+                { startedAt, baselineText: stage2_1Text }
             );
-            
+
             const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
             
             // To emulate 'stage2Text' that gets saved, we combine them

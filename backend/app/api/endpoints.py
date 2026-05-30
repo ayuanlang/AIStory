@@ -31114,11 +31114,11 @@ def _inject_shot_prompt_anchors(
     if not text:
         return text
 
-    regex = re.compile(r"[\[【](.*?)[\]】]")
+    regex = re.compile(r"\[[\s\S]+?\]|\{[\s\S]+?\}|【[\s\S]+?】|｛[\s\S]+?｝|(?<=^|[\s,，;；])@[^\s,，;；\]\[\(\)（）\{\}【】]+")
     injected_entities: set[str] = set()
 
     def _replace(match: re.Match) -> str:
-        token = str(match.group(1) or "").strip()
+        token = str(match.group(0) or "").strip()
         normalized = _normalize_entity_anchor_token(token)
         tail = text[match.end():]
         if re.match(r"^\s*[\(（]", tail):
@@ -31174,15 +31174,23 @@ def _collect_associated_entities_refs(associated_entities_str: Optional[str], en
     return [x for x in dict.fromkeys(refs) if x]
 
 
+def _extract_frontend_aligned_entity_raw_names(text: str) -> list[str]:
+    raw_names = []
+    for p in [r"\[([\s\S]+?)\]", r"\{([\s\S]+?)\}", r"【([\s\S]+?)】", r"｛([\s\S]+?)｝"]:
+        for m in re.finditer(p, text):
+            raw_names.append(m.group(1))
+    for m in re.finditer(r"(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)", text):
+        raw_names.append(m.group(1))
+    return raw_names
+
 def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
     text = str(prompt or "")
     if not text:
         return []
 
     refs: List[str] = []
-    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
-    for m in regex.finditer(text):
-        raw_name = m.group(1) or m.group(2) or ""
+    raw_names = _extract_frontend_aligned_entity_raw_names(text)
+    for raw_name in raw_names:
         normalized = _normalize_entity_anchor_token(raw_name)
         if not normalized:
             continue
@@ -31435,10 +31443,10 @@ def _prepend_keyframe_story_progression_instruction(prompt: Any, keyframe_ref_co
     if keyframe_ref_count <= 0:
         return base_prompt
 
-    ref_labels = [f"@Image{idx}" for idx in range(1, keyframe_ref_count + 1)]
+    ref_labels = [f"参考@Image{idx}" for idx in range(1, keyframe_ref_count + 1)]
     normalized_language = str(language or "en").strip().lower()
     if normalized_language.startswith("zh") or normalized_language.startswith("cn"):
-        prefix = f"参考{'，'.join(ref_labels)}的情节走向进行视频生成。"
+        prefix = f"{'，'.join(ref_labels)}的情节走向进行视频生成。"
     else:
         prefix = f"Generate the video by following the story progression in {', '.join(ref_labels)}."
 
@@ -31453,12 +31461,8 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
 
     refs: List[str] = []
     index_map: Dict[str, int] = {}
-    import re
-    # We use u3010 and u3011 for chinese brackets 【】
-    regex = re.compile(r"(?:CHAR|ENV|PROP|VEFX|SFX)?\s*:\s*[\[【](.*?)[\]】]|[\[【](.*?)[\]】]", re.IGNORECASE)
-
-    for m in regex.finditer(text):
-        raw_name = m.group(1) or m.group(2) or ""
+    raw_names = _extract_frontend_aligned_entity_raw_names(text)
+    for raw_name in raw_names:
         normalized = _normalize_entity_anchor_token(raw_name)
         if not normalized:
             continue
@@ -31509,13 +31513,9 @@ def _append_video_api_ref_mapping(
     def _collect_prompt_entity_mentions(source_text: str, require_lookup: bool = True) -> List[Tuple[str, str]]:
         mentions: List[Tuple[str, str]] = []
         seen_entities: set[str] = set()
-        mention_regex = re.compile(
-            r"(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?([^\]】]+?)\s*[\]】]|[\[【]\s*@?([^\]】]+?)\s*[\]】]",
-            re.IGNORECASE,
-        )
-
-        for match in mention_regex.finditer(source_text):
-            raw_name = str(match.group(1) or match.group(2) or "").strip()
+        raw_names = _extract_frontend_aligned_entity_raw_names(source_text)
+        for raw_name in raw_names:
+            raw_name = str(raw_name or "").strip()
             normalized = _normalize_entity_anchor_token(raw_name)
             if not normalized or normalized in seen_entities:
                 continue
@@ -31536,8 +31536,8 @@ def _append_video_api_ref_mapping(
 
         return mentions
 
-    # Remove legacy inline URL-index tags injected into prompt anchors.
-    text = re.sub(r"@Image\d+\s*", "", text, flags=re.IGNORECASE)
+    # Remove legacy inline URL-index tags injected into prompt anchors (but preserve our intentional '参考@ImageX' markers).
+    text = re.sub(r"(?<!参考)@Image\d+\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
         "",
@@ -31666,13 +31666,14 @@ def _append_video_api_ref_mapping(
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
-        prefix = f"@Image{mapped_idx} "
+        prefix = f"参考@Image{mapped_idx} "
         escaped_entity = re.escape(entity_name)
         unprefixed_guard = rf"(?<!{re.escape(prefix)})"
         anchor_patterns = [
+            rf"{unprefixed_guard}(?:(?:CHAR|ENV|PROP)\s*:\s*)?[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
             rf"{unprefixed_guard}[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{unprefixed_guard}(?:CHAR|ENV|PROP)\s*:\s*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{unprefixed_guard}[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"{unprefixed_guard}[\{{｛]\s*@?{escaped_entity}\s*[\}}｝](?:\([^\)]*\))?",
+            rf"{unprefixed_guard}(?:^|[\s,，;；])(@{escaped_entity})(?:\([^\)]*\))?",
         ]
 
         replaced = False

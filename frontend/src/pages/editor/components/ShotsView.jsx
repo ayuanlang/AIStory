@@ -7109,10 +7109,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const keyframeRefLabels = resolvedKeyframeRefs
                     .map((url) => imageRefs.findIndex((imageUrl) => imageUrl === url))
                     .filter((index) => index >= 0)
-                    .map((index) => `@Image${index + 1}`);
+                    .map((index) => `参考@Image${index + 1}`);
                 if (keyframeRefLabels.length > 0) {
                     const keyframeLead = resolvedPromptSubmitLang === 'cn'
-                        ? `参考${keyframeRefLabels.join('，')}的情节走向进行视频生成。`
+                        ? `${keyframeRefLabels.join('，')}的情节走向进行视频生成。`
                         : `Generate the video by following the story progression in ${keyframeRefLabels.join(', ')}. `;
                     finalPrompt = `${keyframeLead}${finalPrompt}`;
                 }
@@ -7128,11 +7128,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const endIdx = prioritizedResolvedRefs.indexOf(resolvedEndUrl) + 1;
 
                 if (startIdx > 0 && endIdx > 0) {
-                    finalPrompt = `@Image${startIdx} 作为第一帧, ` + finalPrompt + `, @Image${endIdx} 作为最后一帧`;
+                    finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt + `, 参考@Image${endIdx} 作为最后一帧`;
                 } else if (startIdx > 0) {
-                    finalPrompt = `@Image${startIdx} 作为第一帧, ` + finalPrompt;
+                    finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt;
                 } else if (endIdx > 0) {
-                    finalPrompt = finalPrompt + `, @Image${endIdx} 作为最后一帧`;
+                    finalPrompt = finalPrompt + `, 参考@Image${endIdx} 作为最后一帧`;
                 }
             }
 

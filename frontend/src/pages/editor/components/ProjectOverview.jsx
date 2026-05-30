@@ -274,11 +274,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [hasSetDefaultEp, setHasSetDefaultEp] = useState(false);
     
     useEffect(() => {
-        if (episodes && episodes.length > 0) {
+        if (episodes) {
             let defaultEp = 1;
-            const getEpNum = (e, i) => Number(e.episode_number) || parseEpisodeNumberFromText(e.title) || (i + 1);
-            defaultEp = Math.max(...episodes.map((e, index) => getEpNum(e, index))) + 1;
-            
+            if (episodes.length > 0) {
+                const getEpNum = (e, i) => Number(e.episode_number) || parseEpisodeNumberFromText(e.title) || (i + 1);
+                defaultEp = Math.max(...episodes.map((e, index) => getEpNum(e, index))) + 1;
+                if (episodes.length === 1 && (!episodes[0].script_content || !episodes[0].script_content.trim())) {
+                    defaultEp = 1;
+                }
+            }
             if (!hasSetDefaultEp) {
                 setTargetEpisodeNumberForGen(String(defaultEp));
                 setHasSetDefaultEp(true);

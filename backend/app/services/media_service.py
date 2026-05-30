@@ -10477,7 +10477,24 @@ class MediaGenerationService:
             and str(model_lower or "").strip().lower() in {"grok-imagine/image-to-image"}
         )
 
+        is_gpt_image_family = bool(
+            gen_type == "image"
+            and ("gpt-image" in str(model_lower or "").strip().lower() or "gpt4o-image" in str(model_lower or "").strip().lower())
+        )
+        is_gemini_image = bool(
+            gen_type == "image"
+            and "gemini" in str(model_lower or "").strip().lower()
+        )
+
         if gen_type == "image":
+            if is_gemini_image:
+                payload_input["image_size"] = str(tool_conf.get("image_size") or payload_input.get("image_size") or "2k").strip().lower()
+            if is_gpt_image_family:
+                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
+                if quality_val not in {"auto", "low", "medium", "high"}:
+                    quality_val = "high"
+                payload_input["quality"] = quality_val
+
             # z-image family requires aspect_ratio in input (per KIE API examples).
             # Keep a safe default to avoid "This field is required" errors when ratio
             # is not provided by upstream context.
@@ -10503,11 +10520,6 @@ class MediaGenerationService:
                 if ar_val not in allowed_ar:
                     ar_val = "3:2"
                 payload_input["aspect_ratio"] = ar_val
-
-                quality_val = str(tool_conf.get("quality") or payload_input.get("quality") or "").strip().lower()
-                if quality_val not in {"medium", "high"}:
-                    quality_val = "medium"
-                payload_input["quality"] = quality_val
 
                 payload_input.pop("image_size", None)
             elif is_seedream_5_lite_i2i:

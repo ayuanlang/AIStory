@@ -353,6 +353,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
+    const [isUploadingRef, setIsUploadingRef] = useState(false);
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
     const [assetsLoading, setAssetsLoading] = useState(false);
@@ -2910,6 +2911,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setCreateMode('manual');
         // Create a temporary "New Entity" state to open the modal in "Create Mode"
         // We use a special ID 'new' to signal that this is not yet in DB
+        setRefImage(null);
         setViewingEntity({
             id: 'new',
             name: '',
@@ -3001,6 +3003,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             await deleteAllEntities(projectId);
             loadEntities();
             setViewingEntity(null);
+            setRefImage(null);
         } catch (e) {
             console.error(e);
             alert(`Failed to delete all entities: ${e?.message || 'Unknown error'}`);
@@ -4240,12 +4243,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleRefUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        setIsUploadingRef(true);
         try {
              // We reuse uploadAsset but don't assign to entity yet, just set as refImage
              const asset = await uploadAsset(file);
              setRefImage(asset);
         } catch (e) {
             console.error(e);
+        } finally {
+            setIsUploadingRef(false);
+            if (e.target) e.target.value = null; // reset input
         }
     };
 
@@ -5011,7 +5018,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         return (
                         <div
                             key={entity.id}
-                            onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); }}
+                            onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); setRefImage(null); }}
                             className={`bg-card border rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col ${(() => {
                                 const deps = parseVisualDependencies(entity.visual_dependencies);
                                 const hasDependencies = deps && deps.length > 0;
@@ -5124,7 +5131,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     <ImageIcon size={16} />
                                 </button>
                                 <button 
-                                    onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
+                                    onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); setRefImage(null); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
                                     disabled={imageActionLocked}
                                     className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={t('生成 AI 图片', 'Generate AI Image')}
@@ -5264,7 +5271,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     (() => {
                         const viewingEntityImageLocked = isSubjectImageActionLocked(viewingEntity);
                         return (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8" onClick={() => setViewingEntity(null)}>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8" onClick={() => { setViewingEntity(null); setRefImage(null); }}>
                         <motion.div 
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
@@ -5349,7 +5356,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         />
                                     </div>
                                     <button
-                                        onClick={() => setViewingEntity(null)}
+                                        onClick={() => { setViewingEntity(null); setRefImage(null); }}
                                         className="p-2 hover:bg-white/10 rounded-full text-muted-foreground hover:text-white transition-colors"
                                     >
                                         <X size={24} />
@@ -5678,7 +5685,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     {viewingEntity.id === 'new' && (
                                         <div className="mt-8 pt-4 border-t border-white/10 flex justify-end gap-3 sticky bottom-0 bg-[#1e1e1e] pb-2 z-10">
                                             <button 
-                                                onClick={() => setViewingEntity(null)}
+                                                onClick={() => { setViewingEntity(null); setRefImage(null); }}
                                                 className="px-4 py-2 rounded-lg font-bold text-xs text-muted-foreground hover:bg-white/10 transition-colors uppercase"
                                             >
                                                 {t('取消', 'Cancel')}
@@ -5895,13 +5902,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                   >
                                                                       <FolderOpen size={14} /> Assets
                                                                   </button>
-                                                                  <div className="relative overflow-hidden w-24">
-                                                                      <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center">
-                                                                        <Upload size={14} /> Upload
+                                                                  <div className="relative overflow-hidden min-w-[6rem]">
+                                                                      <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center disabled:cursor-not-allowed" disabled={isUploadingRef}>
+                                                                        {isUploadingRef ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Upload size={14} />} {isUploadingRef ? t("上传中...", "Uploading...") : t("上传", "Upload")}
                                                                       </button>
                                                                       <input
                                                                         type="file"
-                                                                        className="absolute inset-0 opacity-0 cursor-pointer"
+                                                                        className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed" disabled={isUploadingRef}
                                                                         accept="image/*"
                                                                         onChange={handleRefUpload}
                                                                       />
@@ -6274,6 +6281,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 handleGenerate(viewingEntity, null, getEntityPromptByLang(viewingEntity, effectivePromptSubmitLang));
                                             } else {
                                                 setViewingEntity(null);
+                                                setRefImage(null);
                                                 handleOpenImageModal(viewingEntity, 'generate');
                                             }
                                         }}
@@ -6630,13 +6638,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                               >
                                                                   <FolderOpen size={14} /> Assets
                                                               </button>
-                                                              <div className="relative overflow-hidden w-24">
-                                                                  <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center">
-                                                                    <Upload size={14} /> Upload
+                                                              <div className="relative overflow-hidden min-w-[6rem]">
+                                                                  <button className="w-full p-2 bg-black/40 border border-white/10 rounded text-xs font-bold hover:bg-white/10 text-muted-foreground flex items-center gap-1 justify-center disabled:cursor-not-allowed" disabled={isUploadingRef}>
+                                                                    {isUploadingRef ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Upload size={14} />} {isUploadingRef ? t("上传中...", "Uploading...") : t("上传", "Upload")}
                                                                   </button>
                                                                   <input 
                                                                     type="file" 
-                                                                    className="absolute inset-0 opacity-0 cursor-pointer" 
+                                                                    className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed" disabled={isUploadingRef} 
                                                                     accept="image/*"
                                                                     onChange={handleRefUpload}
                                                                   />
