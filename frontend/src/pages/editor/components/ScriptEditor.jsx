@@ -7626,7 +7626,7 @@ ${stage2_1Text}`;
                     label: t('重跑全部', 'Rerun All'),
                     icon: 'play',
                     onClick: () => handleRetryPhase2({}),
-                    disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                    disabled: isAnalyzing || isRetryingPhase2 || !(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index')),
                     loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
                 }
             ],
@@ -7683,7 +7683,7 @@ ${stage2_1Text}`;
                         label: t(cat.btnZh, cat.btnEn),
                         icon: 'repeat',
                         onClick: () => handleRetryPhase2({ targetEntityTypes: [cat.key] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !getStageOutputContent('stage2', 'subject_index'),
+                        disabled: isAnalyzing || isRetryingPhase2 || !(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index')),
                         loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key),
                     }
                 ],
