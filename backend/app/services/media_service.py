@@ -5464,7 +5464,7 @@ class MediaGenerationService:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
         # Increased timeout to 300s
-        def _post(): return requests.post(url, json=payload, headers=headers, timeout=(30, 300), verify=False)
+        def _post(): return requests.post(url, json=payload, headers=headers, timeout=(30, 600), verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
@@ -11650,7 +11650,7 @@ class MediaGenerationService:
             _debug_log(f"[KIE_{kie_tag}] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
-            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 300), verify=False)
+            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 600), verify=False)
 
         def _kie_response_details(response: requests.Response) -> Dict[str, Any]:
             raw_text = ""

@@ -3160,10 +3160,10 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
         payload.reuse_subject_assets = reuseSubjectAssets;
     }
-    const submitTimeoutRaw = Number(import.meta?.env?.VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS || 300000);
+    const submitTimeoutRaw = Number(import.meta?.env?.VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS || 600000);
     const submitTimeout = Number.isFinite(submitTimeoutRaw)
         ? Math.max(30000, Math.min(600000, Math.floor(submitTimeoutRaw)))
-        : 300000;
+        : 600000;
 
     let data = {};
     try {

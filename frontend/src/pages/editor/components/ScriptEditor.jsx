@@ -6218,7 +6218,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'script_opt',
-                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
@@ -6659,7 +6659,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'script_opt',
-                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能要 3~4 分钟，先喝杯水休息下吧~', 'LLM submitted. Waiting for response. Submit timeout is about 300s and total wait can take up to about 600s.'),
+                message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
