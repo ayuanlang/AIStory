@@ -30912,7 +30912,6 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
         anchor = str(
             row.anchor_description
             or row.narrative_description
-            or row.description
             or canonical_name
             or ""
         ).strip()
@@ -31139,6 +31138,7 @@ def _inject_shot_prompt_anchors(
                 # image models from interpreting repeated descriptions as
                 # multiple subjects (二宫格 / split-panel issue).
                 if ref_no:
+                    logger.info(f"[_inject_shot_prompt_anchors] Re-injected: {normalized} -> ref_image_url: #{ref_no}")
                     return f"{match.group(0)}(ref_image_url: #{ref_no})"
                 return match.group(0)
 
@@ -31146,6 +31146,8 @@ def _inject_shot_prompt_anchors(
             anchor_with_ref = anchor
             if ref_no:
                 anchor_with_ref = f"{anchor} | ref_image_url: #{ref_no}"
+            
+            logger.info(f"[_inject_shot_prompt_anchors] Injected: {normalized} -> {anchor_with_ref}")
             return f"{match.group(0)}({anchor_with_ref})"
         return match.group(0)
 

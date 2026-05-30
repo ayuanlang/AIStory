@@ -6186,12 +6186,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                 if (entity) {
                     modified = true;
-                    const anchor = entity.anchor_description || entity.description || '';
+                    const anchor = entity.anchor_description || '';
                     const isSubject = isSubjectEntity(entity);
                     const refNo = isSubject ? subjectRefIndexMap.get(String(entity?.id || '')) : null;
 
                     if (injectedEntities.has(cleanKey)) {
-                        return refNo ? `${match}(ref_image_url: #${refNo})` : match;
+                        const refText = refNo ? `ref_image_url: #${refNo}` : '';
+                        console.log(`[injectEntityFeatures] Re-injected ${cleanKey} -> ${refText}`);
+                        return refNo ? `${match}(${refText})` : match;
                     }
 
                     injectedEntities.add(cleanKey);
@@ -6199,6 +6201,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         anchor,
                         (isSubject && refNo) ? `ref_image_url: #${refNo}` : ''
                     ].filter(Boolean).join(' | ');
+                    console.log(`[injectEntityFeatures] Injected ${cleanKey} -> ${anchorWithRef}`);
                     return anchorWithRef ? `${match}(${anchorWithRef})` : match;
                 }
             }
