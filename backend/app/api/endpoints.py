@@ -31114,7 +31114,7 @@ def _inject_shot_prompt_anchors(
     if not text:
         return text
 
-    regex = re.compile(r"\[[\s\S]+?\]|\{[\s\S]+?\}|【[\s\S]+?】|｛[\s\S]+?｝|(?<=^|[\s,，;；])@[^\s,，;；\]\[\(\)（）\{\}【】]+")
+    regex = re.compile(r"\[[\s\S]+?\]|\{[\s\S]+?\}|【[\s\S]+?】|｛[\s\S]+?｝|(?<=^)@[^\s,，;；\]\[\(\)（）\{\}【】]+|(?<=[\s,，;；])@[^\s,，;；\]\[\(\)（）\{\}【】]+")
     injected_entities: set[str] = set()
 
     def _replace(match: re.Match) -> str:

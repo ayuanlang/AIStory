@@ -4183,20 +4183,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: "assets_gen",
-            message: t("✨ 正在执行第四阶段资产设计 (共 4 项并发推演)...", "Running Stage 4 asset design..."),
+            message: t("✨ 正在执行第四阶段资产设计 (共 3 项并发推演)...", "Running Stage 4 asset design..."),
         });
 
-        const targetAssetsCount = 4;
+        const targetAssetsCount = 3;
         let assetsGenCompletedCount = 0;
 
         try {
-            onLog?.(`[Stage 3 Asset Design] Preparing to fetch 4 entity_design prompts`);
+            onLog?.(`[Stage 3 Asset Design] Preparing to fetch 3 entity_design prompts`);
             
             const promptFiles = [
                 { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
                 { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
-                { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' },
-                { key: 'posters', path: 'skills/scene_analysis_feature_stack/entity_design_poster.md' }
+                { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
             ].filter(p => !options.targetEntityTypes || options.targetEntityTypes.includes(p.key));
 
             const commonPromptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design_common.md").catch(() => null);
@@ -4246,7 +4245,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
             }
 
-            onLog?.('[Stage 3 Asset Design] Launching 4 parallel asset-design LLM calls...');
+            onLog?.('[Stage 3 Asset Design] Launching 3 parallel asset-design LLM calls...');
 
             const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
                 || Number(localStorage.getItem('func_api_script_analysis') || 0)
@@ -4275,8 +4274,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         let allowedKeywords = [];
                         if (targetTypeKey === 'characters') allowedKeywords = ['character', '角色', '人物'];
                         else if (targetTypeKey === 'props') allowedKeywords = ['prop', '道具', '物件'];
-                        else if (targetTypeKey === 'environments') allowedKeywords = ['environment', 'env', '场景', '环境'];
-                        else if (targetTypeKey === 'posters') allowedKeywords = ['poster', 'cover_poster', 'cover', '海报', '封面'];
+                        else if (targetTypeKey === 'environments') allowedKeywords = ['environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
 
                         const allEntityKeywords = ['character', '角色', '人物', 'prop', '道具', '物件', 'environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
 
@@ -4507,10 +4505,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const savedByBackend = !!(result?.meta?.saved_to_episode);
                 try {
-                    if (!savedByBackend || (canonicalAssetDesignText && canonicalAssetDesignText !== String(analyzedText || '').trim())) {
+                    if (true || !savedByBackend || (canonicalAssetDesignText && canonicalAssetDesignText !== String(analyzedText || '').trim())) {
                         await persistLlmResultContent(canonicalAssetDesignText || '', 'ai_entity_design_result');
                     } else {
-                        await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
+                        // await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' }); // TEMPORARY DISABLE
                     }
                 } catch (persistErr) {
                     onLog?.(`[Stage 3 Asset Design] Recovery save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -4636,7 +4634,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             let rawResultPersistedEarly = false;
 
-            if (!savedByBackend) {
+            if (true || !savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis-immediate' });
@@ -4702,14 +4700,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             try {
-                if (!savedByBackend && !rawResultPersistedEarly) {
+                if (true || !savedByBackend && !rawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
                     await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'resume-analysis' });
                 } else {
                     if (savedByBackend) {
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
                     }
-                    await refreshAnalysisFromDB();
+                    // await refreshAnalysisFromDB(); // TEMPORARY DISABLE
                 }
             } finally {
                 phaseMarks.persistFinishedAt = Date.now();
@@ -6254,7 +6252,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             // --- 第一时间保存对应卡片！---
             const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (!savedByBackend) {
+            if (true || !savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting raw LLM output immediately after return...', 'process');
@@ -6335,7 +6333,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastLoadedAnalysisRef.current = analyzedText;
 
             try {
-                if (!savedByBackend && !rawResultPersistedEarly) {
+                if (true || !savedByBackend && !rawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving raw LLM output to episode analysis field...', 'process');
                     await persistLlmResultContent(analyzedText, 'ai_scene_analysis_result', { source: 'standard-analysis' });
@@ -6344,7 +6342,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
                     }
                     if (onLog) onLog('LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
-                    await refreshAnalysisFromDB();
+                    // await refreshAnalysisFromDB(); // TEMPORARY DISABLE
                 }
             } catch (persistErr) {
                 if (onLog) onLog(`Raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -6702,7 +6700,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             // --- 第一时间保存对应卡片！---
             const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (!savedByBackend) {
+            if (true || !savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
                 try {
                     if (onLog) onLog('Persisting advanced raw LLM output immediately after Stage 1 return...', 'process');
@@ -6716,9 +6714,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             // --- 其他处理 ---
-            setLlmRawResultContent(analyzedText || "");
-            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
-            lastLoadedAnalysisRef.current = analyzedText || "";
+            if (!splitStage1Flow) setLlmRawResultContent(analyzedText || '');
+            if (!splitStage1Flow) setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ''));
+            if (!splitStage1Flow) lastLoadedAnalysisRef.current = analyzedText || '';
             if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
                 throw new Error("出现供应商政策不允许内容");
             }
@@ -6976,7 +6974,7 @@ ${stage2_1Text}`;
             lastLoadedAnalysisRef.current = finalAnalysisText || '';
 
             try {
-                if (!savedByBackend && !finalRawResultPersistedEarly) {
+                if (true || !savedByBackend && !finalRawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
                     await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
@@ -6989,7 +6987,7 @@ ${stage2_1Text}`;
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
                     }
                     if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
-                    await refreshAnalysisFromDB();
+                    // await refreshAnalysisFromDB(); // TEMPORARY DISABLE
                     if (onUpdateEpisodeInfo && activeEpisode?.id) {
                         await onUpdateEpisodeInfo(activeEpisode.id, {
                             ai_stage_outputs: JSON.stringify(buildStageOutputsObject({

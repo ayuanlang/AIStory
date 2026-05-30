@@ -4,12 +4,12 @@
 # Version: 2026-05-24-Compact-Examples-v2
 
 ## 核心任务
-本部分具体目标是进行**场景类**的实体设计。你**仅负责且只能负责**针对上游 `Subject Index` 中的 `场景` 类别实体进行美术设计、规范化与镜头转译 ，并最终无损封装为你专属的 JSON（包含 `environments` 数组）；不再负责剧情切片、动作编排或实体抽取，也**绝不**处理其他类型的实体设计的任务。
+本部分具体目标是进行**场景类**与**封面海报类**的实体设计。你**仅负责且只能负责**针对上游 `Subject Index` 中的 `场景` 与 `海报、封面` 类别实体进行美术设计、规范化与镜头转译 ，并最终无损封装为你专属的 JSON（包含 `environments` 与 `posters` 数组）；不再负责剧情切片、动作编排或实体抽取，也**绝不**处理其他类型的实体设计的任务。
 
 ## 🎬 内部专家执行顺序 (Execution Workflow)
 在接收到上级节点的输出后，你必须按顺序在脑海里激活以下专家节点以完成流水线推导：
 
-**🏆 最高优先级警告：Subjects JSON 必须全量输出！** Node 4 生成的 `environments` 数组必须逐条覆盖上游 Subject Index 中的场景；任何缺漏都判废重写。
+**🏆 最高优先级警告：Subjects JSON 必须全量输出！** Node 4 生成的 `environments` 和 `posters` 数组必须逐条覆盖上游 Subject Index 中的场景和封面海报；任何缺漏都判废重写。
 
 请严格按此顺序在脑海中完成推导，最后再按规定的末尾模板输出结果（确保只输出 JSON 结果，仅保留最终设定）：
 
@@ -218,6 +218,25 @@
           }
       }
   ],
+  "posters": [
+      {
+          "subject_no": "S004",
+          "name": "封面海报",
+          "name_en": "Cover Poster",
+          "base_name_en": "Project Cover Poster",
+          "atmosphere": "Premium theatrical tension with dramatic layered poster depth",
+          "visual_params": "Poster/Cover/4:3",
+          "description_cn": "整集封面海报核心画布，专为 4:3 横版海报设计。林月和其搭档在办公室内背靠背持枪戒备的画面组合。底色为雨夜灯光映射下的阴冷构图空间。项目大标题置于画面顶部(y=30%-35%)的专属留白区，侧重黄金分割视觉，确保左右与底部的净空率以规避设备界面元素。",
+          "generation_prompt_cn": "电影级写实封面海报资产，固定名为封面海报。专门基于4:3横向定图画布渲染。顶级电影海报表现手法：林月与同伴在港口办公室内背对背站立警戒，胸前的警务证书挂绳充当前景视觉引导结构。主光由桌面暖灯与后方冷蓝雨夜反射共同建立，主角面部与身体轮廓被清楚压出，背景层次后退。机位略低于胸口高度，镜头保持水平，以稳定的对角线群像构图与上方标题安全区组织画面。画面正上方三分之一的专属展示区内水平布置加粗的项目中文大字标题，标题背后的背景纹理必须更克制、更低噪声，并通过受控暗底与冷暖分离保证足够可读性；人物高光、枪械轮廓、挂绳、烟雾与雨丝不得压住标题主阅读区。整体保留右侧与底部的干净间隙，用以容纳叠加的文字和界面装饰层，呈现出严谨、强冲突但标题一眼可读的大片级定格排版。",
+          "generation_prompt_en": "Premium theatrical cover poster named Cover Poster, utilizing a dedicated 4:3 horizontal poster canvas. Cinematic poster composition: Lin Yue and her male companion stand back-to-back in the Harbor Office, with the Police ID badge and lanyard creating a foreground leading line. The key light is built from a warm desk practical and cold blue rainy-night reflections behind them, carving the faces and body contours clearly while the background layers recede. Camera placed slightly below chest height, camera kept level, using a stable diagonal ensemble composition organized around a protected top title zone. Bold project title text sits clearly within the upper third safe area; the background behind the title must stay lower-noise and more restrained, with controlled dark value support and clear cool-warm separation so the title remains instantly readable. Character highlights, weapon silhouettes, lanyard lines, smoke, rain streaks, and flare details must not crowd the main reading zone. Clean margins remain on the right and bottom edges to preserve space for mobile UI overlays and secondary copy, resulting in a premium, high-conflict one-sheet layout with strong title readability.",
+          "negative_prompt_en": "comic grid, tiled collage, split-screen montage, characters out of proportion, 16:9 canvas, blurry faces.",
+          "anchor_description": "cover poster layout, top-third title safe zone, dramatic cool-warm poster contrast, layered key art depth",
+          "visual_dependencies": [
+              "CHAR:[@林月]",
+              "CHAR:[@同伴]",
+              "PROP:[警徽挂绳证件卡]",
+              "ENV:[港口办公室 正向 中景 夜]"
+          ],
           "dependency_strategy": {
               "type": "Type A",
               "logic": "Derived as a special cover-poster integrating key subjects into a single 4:3 layout."
