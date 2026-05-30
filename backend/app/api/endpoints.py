@@ -31520,6 +31520,12 @@ def _append_video_api_ref_mapping(
             if not normalized or normalized in seen_entities:
                 continue
             row = entity_lookup.get(normalized) if entity_lookup else None
+            
+            if not row and entity_lookup and "(" in normalized:
+                base_norm = normalized.split("(")[0].strip()
+                if base_norm:
+                    row = entity_lookup.get(base_norm)
+
             if require_lookup and not row:
                 continue
 
@@ -31668,21 +31674,21 @@ def _append_video_api_ref_mapping(
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"参考@Image{mapped_idx} "
         escaped_entity = re.escape(entity_name)
-        unprefixed_guard = rf"(?<!{re.escape(prefix)})"
         anchor_patterns = [
-            rf"{unprefixed_guard}(?:(?:CHAR|ENV|PROP)\s*:\s*)?[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{unprefixed_guard}[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"{unprefixed_guard}[\{{｛]\s*@?{escaped_entity}\s*[\}}｝](?:\([^\)]*\))?",
-            rf"{unprefixed_guard}(?:^|[\s,，;；])(@{escaped_entity})(?:\([^\)]*\))?",
+            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(?:(?:CHAR|ENV|PROP)\s*:\s*)?(?:(?:参考)?@Image\d+\s*)*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\{{｛]\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\}}｝](?:\([^\)]*\))?",
+            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(@{escaped_entity})(?:\([^\)]*\))?",
         ]
 
         replaced = False
         for pattern in anchor_patterns:
             def _prepend_prefix(match: re.Match[str]) -> str:
                 token = str(match.group(0) or "")
-                if token.startswith(prefix):
-                    return token
-                base = token
+                
+                # Clean out existing @Image tags to prevent duplicate accumulation
+                base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
+                
                 if anchor_text:
                     if "(" in base and ")" in base:
                         base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
@@ -31703,13 +31709,12 @@ def _append_video_api_ref_mapping(
             continue
 
         # Fallback: prepend marker directly before plain entity mentions.
-        plain_pattern = rf'{unprefixed_guard}(?<![a-zA-Z0-9_]){escaped_entity}(?![a-zA-Z0-9_])'
+        plain_pattern = rf'(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*{escaped_entity}(?![a-zA-Z0-9_])'
 
         def _prepend_marker(match: re.Match[str]) -> str:
             token = str(match.group(0) or "")
-            if token.startswith(prefix):
-                return token
-            base = token
+            base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
+            
             if anchor_text:
                 if "(" in base and ")" in base:
                     base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
@@ -31729,7 +31734,7 @@ def _append_video_api_ref_mapping(
             vid_tag = "@Video 1"
             vid_tag_nospace = "@Video1"
             if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                updated_text = f"延长\n\n{vid_tag}\n，一镜到底运镜。\n\n{updated_text.strip()}"
+                updated_text = f"延长{vid_tag_nospace}，一镜到底运镜。\n\n{updated_text.strip()}"
         
         added_videos = False
         for idx in range(1, len(reference_video_urls) + 1):

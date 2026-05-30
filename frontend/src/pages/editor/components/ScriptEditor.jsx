@@ -4364,7 +4364,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     if (bJson) {
                         if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
-                        if (r.value.key === 'environments' && bJson.environments) mergedBackendSubjectsJson.environments = bJson.environments;
+                        if (r.value.key === 'environments') {
+                            if (bJson.environments) mergedBackendSubjectsJson.environments = bJson.environments;
+                            if (bJson.posters) mergedBackendSubjectsJson.posters = bJson.posters;
+                            if (bJson.covers) mergedBackendSubjectsJson.covers = bJson.covers;
+                        }
                         if (r.value.key === 'props' && bJson.props) mergedBackendSubjectsJson.props = bJson.props;
                         if (r.value.key === 'posters') {
                             if (bJson.posters) mergedBackendSubjectsJson.posters = bJson.posters;
@@ -4372,14 +4376,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
                     }
                     if (aText) {
-                        let extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
-                        if (r.value.key === 'posters' && (!extractedArr || !extractedArr.length) && bJson?.covers) {
-                            extractedArr = bJson.covers;
-                        }
-                        if (extractedArr && extractedArr.length > 0) {
-                            rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
+                        if (r.value.key === 'environments') {
+                            let extEnv = bJson?.environments || [];
+                            let extPos = bJson?.posters || bJson?.covers || [];
+                            if (extEnv.length > 0 || extPos.length > 0) {
+                                let wrapObj = {};
+                                if (extEnv.length > 0) wrapObj.environments = extEnv;
+                                if (extPos.length > 0) wrapObj.posters = extPos;
+                                rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify(wrapObj, null, 2)}\n\`\`\`\n\n`);
+                            } else {
+                                rawTextParts.push(`\n\n${aText}\n\n`);
+                            }
                         } else {
-                            rawTextParts.push(`\n\n${aText}\n\n`);
+                            let extractedArr = bJson && bJson[r.value.key] ? bJson[r.value.key] : null;
+                            if (r.value.key === 'posters' && (!extractedArr || !extractedArr.length) && bJson?.covers) {
+                                extractedArr = bJson.covers;
+                            }
+                            if (extractedArr && extractedArr.length > 0) {
+                                rawTextParts.push(`\n\n\`\`\`json\n${JSON.stringify({[r.value.key]: extractedArr}, null, 2)}\n\`\`\`\n\n`);
+                            } else {
+                                rawTextParts.push(`\n\n${aText}\n\n`);
+                            }
                         }
                     }
                 } else if (r.status === 'rejected') {
@@ -8045,7 +8062,7 @@ ${stage2_1Text}`;
                                 </div>
                                 <div>
                                     <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('本次新增', 'Inserted this run')}
-                                    <span className="text-white font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.scenes?.created ?? analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0} </span>{t('个场景', 'shots')}
+                                    <span className="text-white font-semibold"> {(analysisUiReport.importReport?.dbRunInsertedCounts?.scenes?.created) || (analysisUiReport.importReport?.importStats?.scenesCreated) || (analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount) || (analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode) || 0} </span>{t('个场景', 'shots')}
                                     <span className="ml-1 text-white/70">({t('当前分集总量', 'Current episode total')}: <span className="text-white font-semibold">{analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0}</span>)</span>。
                                 </div>
                                 <div>

@@ -4638,7 +4638,7 @@ class MediaGenerationService:
                 ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
                 ref_list = [r for r in ref_list if r]
                 
-                resolved_refs = self._resolve_ref_list_for_api(ref_list, force_data_uri_for_local=True)
+                resolved_refs = self._resolve_ref_list_for_api(ref_list, force_data_uri_for_local=True, prefer_public_upload_url=True)
                     
                 if resolved_refs:
                     model_name = model or "doubao-seedream-4-5-251128"
@@ -10674,7 +10674,7 @@ class MediaGenerationService:
                 if use_veo_api:
                     resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
-                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, force_data_uri_for_local=True, prefer_public_upload_url=True)
                 if resolved:
                     resolved_refs.append(resolved)
 
@@ -10696,7 +10696,7 @@ class MediaGenerationService:
                 if use_veo_api:
                     resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
-                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, True)
+                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, force_data_uri_for_local=True, prefer_public_upload_url=True)
                 if resolved:
                     resolved_refs.append(resolved)
 
@@ -12554,6 +12554,11 @@ class MediaGenerationService:
 
     def _process_veo_image(self, url_or_path, aspect_ratio):
         """Helper to resize/crop images to strictly match Veo aspect ratio requirements"""
+        raw_url = str(url_or_path or '').strip()
+        if self._is_public_http_url(raw_url): return raw_url
+        if raw_url.startswith('/uploads/'):
+            public_url = self._resolve_public_upload_url(raw_url)
+            if public_url: return public_url
         try:
             # Reuse base fetch logic
             b64_raw = self._get_image_base64_for_api(url_or_path, force_data_uri=False)
@@ -12661,10 +12666,10 @@ class MediaGenerationService:
         except Exception:
             return False
 
-    async def _resolve_ref_for_api_async(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile=None):
+    async def _resolve_ref_for_api_async(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=True, data_uri_profile=None):
         return await asyncio.to_thread(self._resolve_ref_for_api, url_or_path, force_data_uri_for_local, prefer_public_upload_url, data_uri_profile)
 
-    def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
+    def _resolve_ref_for_api(self, url_or_path, force_data_uri_for_local=True, prefer_public_upload_url=True, data_uri_profile: Optional[str] = None):
         if isinstance(url_or_path, list):
             if not url_or_path:
                 return None
@@ -13139,7 +13144,7 @@ class MediaGenerationService:
         encoded = base64.b64encode(optimized_bytes).decode("utf-8")
         return f"data:{optimized_mime};base64,{encoded}"
 
-    def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True, prefer_public_upload_url=False, data_uri_profile: Optional[str] = None):
+    def _resolve_ref_list_for_api(self, refs, force_data_uri_for_local=True, prefer_public_upload_url=True, data_uri_profile: Optional[str] = None):
         source = refs if isinstance(refs, list) else [refs]
         result = []
         for item in source:

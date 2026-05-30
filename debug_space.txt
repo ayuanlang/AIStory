@@ -1,0 +1,1 @@
+参考@Image1 CHAR:[@主角] in 参考@Image2 ENV:[街道] holding 参考@Image3 PROP:[行李箱（大型，破损打开）]

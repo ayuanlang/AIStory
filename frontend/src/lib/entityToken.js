@@ -87,12 +87,29 @@ export const entityTokenMatchesName = (entity, rawToken) => {
     const comparableToken = normalizeEntityComparableToken(rawToken);
     if (!strictToken && !comparableToken) return false;
 
-    return collectEntityRawNames(entity).some((name) => {
+    const names = collectEntityRawNames(entity);
+
+    // Exact match passes first
+    if (names.some((name) => {
         const strictName = normalizeEntityToken(name);
         if (strictName && strictToken && strictName === strictToken) return true;
 
         const comparableName = normalizeEntityComparableToken(name);
         return Boolean(comparableName && comparableToken && comparableName === comparableToken);
+    })) {
+        return true;
+    }
+
+    // Fallback: Strip parentheses from the rawToken (e.g. "行李箱(大型)" -> "行李箱")
+    const baseRawToken = strictToken.split('(')[0].trim();
+    if (!baseRawToken) return false;
+    const baseComparableToken = normalizeEntityComparableToken(baseRawToken);
+
+    return names.some((name) => {
+        const strictName = normalizeEntityToken(name).split('(')[0].trim();
+        if (strictName && strictName === baseRawToken) return true;
+        const comparableName = normalizeEntityComparableToken(name.split('(')[0].trim());
+        return Boolean(comparableName && baseComparableToken && comparableName === baseComparableToken);
     });
 };
 
