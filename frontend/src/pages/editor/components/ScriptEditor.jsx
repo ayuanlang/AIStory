@@ -6242,14 +6242,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
-            setLlmRawResultContent(analyzedText || "");
-            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
-            lastLoadedAnalysisRef.current = analyzedText || "";
-            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
-                throw new Error("出现供应商政策不允许内容");
-            }
-            llmReturned = true;
-            phaseMarks.llmReturnedAt = Date.now();
+            
+            // --- 第一时间保存对应卡片！---
             const savedByBackend = !!(result?.meta?.saved_to_episode);
             if (!savedByBackend) {
                 phaseMarks.persistStartedAt = Date.now();
@@ -6263,6 +6257,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseMarks.persistFinishedAt = Date.now();
                 }
             }
+
+            // --- 其他处理 ---
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
+            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
+                throw new Error("出现供应商政策不允许内容");
+            }
+            llmReturned = true;
+            phaseMarks.llmReturnedAt = Date.now();
+
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
@@ -6684,6 +6689,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 { startedAt, baselineText: baselineAnalysisText }
             );
             const analyzedText = extractAnalysisTextFromResult(result);
+            
+            // --- 第一时间保存对应卡片！---
+            const savedByBackend = !!(result?.meta?.saved_to_episode);
+            if (!savedByBackend) {
+                phaseMarks.persistStartedAt = Date.now();
+                try {
+                    if (onLog) onLog('Persisting advanced raw LLM output immediately after Stage 1 return...', 'process');
+                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'advanced-analysis-stage1-immediate' });
+                    finalRawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
+            }
+
+            // --- 其他处理 ---
             setLlmRawResultContent(analyzedText || "");
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
             lastLoadedAnalysisRef.current = analyzedText || "";
@@ -6692,19 +6714,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
-            const savedByBackend = !!(result?.meta?.saved_to_episode);
-            if (!splitStage1Flow && !savedByBackend) {
-                phaseMarks.persistStartedAt = Date.now();
-                try {
-                    if (onLog) onLog('Persisting advanced raw LLM output immediately after return...', 'process');
-                    await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'advanced-analysis-immediate' });
-                    finalRawResultPersistedEarly = true;
-                } catch (persistErr) {
-                    if (onLog) onLog(`Immediate advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
-                } finally {
-                    phaseMarks.persistFinishedAt = Date.now();
-                }
-            }
 
             if (result && result.meta) {
                 try {
@@ -6832,6 +6841,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
 
                 const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
+                
+                // --- 第一时间保存 Stage 2.1 (提取的美术资产/Subject Index) 对应卡片！---
+                try {
+                    if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately after return...', 'process');
+                    await persistLlmResultContent(String(stage2_1Text || '').trim(), 'ai_scene_analysis_subject_index', {
+                        source: 'advanced-analysis-stage2_1-subject-index-immediate'
+                    });
+                } catch (persistErr) {
+                    if (onLog) onLog(`Failed to persist clean Subject Index immediately: ${persistErr?.message || persistErr}`, 'warning');
+                }
+
                 if (onLog) onLog('Stage 2.1 completed. Now starting Stage 2.2 (Beats Generation)...', 'info');
 
                 setAnalysisFlowStatus({
@@ -6885,23 +6905,15 @@ ${stage2_1Text}`;
 
                 const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
                 
-                // Directly persist the clean Subject Index (Stage 2.1) without coupling it to Stage 2.2 Scenes.
-                try {
-                    if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately...', 'process');
-                    await persistLlmResultContent(String(stage2_1Text || '').trim(), 'ai_scene_analysis_subject_index', {
-                        source: 'advanced-analysis-stage2_1-subject-index'
-                    });
-                } catch (persistErr) {
-                    if (onLog) onLog(`Failed to persist clean Subject Index: ${persistErr?.message || persistErr}`, 'warning');
-                }
-                
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
                 finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
 
                 importSourceText = finalAnalysisText;
                 phaseMarks.persistStartedAt = Date.now();
+                
+                // --- 第一时间保存 Stage 1 拼接 Stage 2 返回的完整结果卡片！---
                 try {
-                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Stage 2 return...', 'process');
+                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Stage 2.2 return...', 'process');
                     await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
                         source: 'advanced-analysis-split-combined-immediate',
                         stage1RawText: stage1PhaseRawText,
