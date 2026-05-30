@@ -31644,8 +31644,7 @@ def _append_video_api_ref_mapping(
                 seen_urls.add(image_url)
                 char_name = mentioned_entity_map[norm_key]
                 # Anchor injection should follow the asset-level Anchor Description for the matched entity.
-                # Fallback to general narrative anchor if anchor_description is not explicitly set.
-                anchor_text = str(row.get("anchor") or "").strip()
+                anchor_text = str(row.get("anchor_description") or "").strip()
                 pairs.append((mapped_idx, char_name, anchor_text))
     pairs.sort(key=lambda x: x[0])
 
