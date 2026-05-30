@@ -2818,7 +2818,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const expectedCount =
             (Array.isArray(subjectsJson.characters) ? subjectsJson.characters.length : 0)
             + (Array.isArray(subjectsJson.props) ? subjectsJson.props.length : 0)
-            + (Array.isArray(subjectsJson.environments) ? subjectsJson.environments.length : 0);
+            + (Array.isArray(subjectsJson.environments) ? subjectsJson.environments.length : 0)
+            + (Array.isArray(subjectsJson.posters) ? subjectsJson.posters.length : 0)
+            + (Array.isArray(subjectsJson.covers) ? subjectsJson.covers.length : 0);
         if (expectedCount <= 0) {
             return importReport;
         }
@@ -2827,7 +2829,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const createdCount =
             Number(importedCounts.character || 0)
             + Number(importedCounts.prop || 0)
-            + Number(importedCounts.environment || 0);
+            + Number(importedCounts.environment || 0)
+            + Number(importedCounts.poster || 0);
         const skippedCount = Array.isArray(importReport?.skippedSubjectItems)
             ? importReport.skippedSubjectItems.length
             : 0;
