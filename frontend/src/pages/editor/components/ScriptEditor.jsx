@@ -3208,7 +3208,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length;
     }, [llmMarkdownTable]);
 
-    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '' } = {}) => {
+    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '' } = {}) => {
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
@@ -3231,9 +3231,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const analysisSections = extractAnalysisSections(resolvedAnalysisRawText);
         const stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
+        const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         const stage2SubjectIndexText = String(
-            persistedSubjectIndex
+            explicitSubjectIndex || persistedSubjectIndex
             || (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
             || ''
         ).trim();
@@ -3792,10 +3793,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const logSource = String(options?.source || 'unspecified').trim() || 'unspecified';
 
             if (resultField === 'ai_scene_analysis_result') {
+                latestAnalysisRawTextRef.current = nextContent;
+                if (options?.stage2_1Text !== undefined) {
+                    latestStage2_1TextRef.current = options.stage2_1Text;
+                }
                 const extractedSections = extractAnalysisSections(nextContent);
-                const subjectIndexValue = extractedSections?.hasStructuredSubjectIndex
+                let subjectIndexValue = extractedSections?.hasStructuredSubjectIndex
                     ? String(extractedSections.subjectIndexText || '').trim()
                     : '';
+                if (options?.stage2_1Text !== undefined) {
+                    subjectIndexValue = String(options.stage2_1Text || '').trim();
+                }
                 const looksLikeAdaptedScript = /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(nextContent);
                 const adaptationValue = looksLikeAdaptedScript
                     ? String(extractStage1AdaptedScriptBody(nextContent) || '').trim()
@@ -3805,34 +3813,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_scene_analysis_adaptation = adaptationValue;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: nextContent,
-                    assetRawText: activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     stage1RawText: options?.stage1RawText || '',
                     stage2RawText: options?.stage2RawText || '',
+                    stage2_1Text: options?.stage2_1Text !== undefined ? options.stage2_1Text : (latestStage2_1TextRef.current || subjectIndexValue),
                 }), null, 2);
 
-                onLog?.(
-                    `[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${subjectIndexValue.length} adaptation_len=${adaptationValue.length}`,
-                    'info'
-                );
-                onLog?.(
-                    `[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`,
-                    'info'
-                );
+                onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${subjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
             } else if (resultField === 'ai_entity_design_result') {
+                latestAssetRawTextRef.current = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
-                    analysisRawText: activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
+                    analysisRawText: latestAnalysisRawTextRef.current || activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
                     assetRawText: nextContent,
+                    stage2_1Text: latestStage2_1TextRef.current || undefined
                 }), null, 2);
 
-                onLog?.(
-                    `[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`,
-                    'info'
-                );
+                onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
+            } else if (resultField === 'ai_scene_analysis_subject_index') {
+                latestStage2_1TextRef.current = nextContent;
+                updatePayload[resultField] = nextContent;
             } else {
-                onLog?.(
-                    `[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`,
-                    'info'
-                );
+                onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
             }
 
             await onUpdateEpisodeInfo(activeEpisode.id, updatePayload);
@@ -3845,10 +3846,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     // Keep the "LLM 返回结果" box in sync with DB-saved ai_scene_analysis_result.
     // Important: don't clobber local edits while user is typing.
     const lastLoadedAnalysisRef = useRef(null);
+    const latestAssetRawTextRef = useRef('');
+    const latestAnalysisRawTextRef = useRef('');
+    const latestStage2_1TextRef = useRef('');
+
     const llmRawAutoSaveTimerRef = useRef(null);
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
     const phase2ResolverRef = useRef(null);
+    const superuserModalMutexRef = useRef(Promise.resolve());
     const phase2GenerationInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
@@ -4130,7 +4136,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
                 const extractedSections = extractAnalysisSections(authoritativeSubjectText);
                 let subjectIndexText = options.explicitSubjectIndexText || persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
-                let adaptationBodyText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+                let adaptationBodyText = String(adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
                     adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
                 }
@@ -4225,15 +4231,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const isUserSuper = isSuperuser || isSuperuserRef.current;
             if (isUserSuper) {
-                setAnalysisModalMode('stage3');
-                setSystemPrompt(promptsData[0].content); // Show character one as representative
-                setUserPrompt(finalSubjectIndexText);
-                setShowAnalysisModal(true);
-                
-                onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
-                // Wait for the modal submit
-                const confirmed = await new Promise(resolve => {
-                    phase2ResolverRef.current = resolve;
+                const confirmed = await new Promise((resolve, reject) => {
+                    const previous = superuserModalMutexRef.current;
+                    superuserModalMutexRef.current = previous.then(async () => {
+                        try {
+                            setAnalysisModalMode('stage3');
+                            setSystemPrompt(promptsData[0].content); // Show character one as representative
+                            setUserPrompt(finalSubjectIndexText);
+                            setShowAnalysisModal(true);
+                            
+                            onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
+                            const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                            resolve(res);
+                        } catch (err) {
+                            reject(err);
+                        }
+                    }).catch(reject);
                 });
                 
                 if (!confirmed || typeof confirmed !== 'object') {
@@ -4471,7 +4484,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return emptyReport;
     }, [
         projectId, llmRawResultContent, llmResultContent, activeEpisode, t, onLog,
-        fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery,
+        fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery, adaptationText,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project
@@ -6783,6 +6796,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let analysisSections = extractAnalysisSections(finalAnalysisText);
             let stage1PhaseRawText = '';
             let stage2PhaseRawText = '';
+            let globalStage2_1Text = '';
 
             if (splitStage1Flow) {
                 stage1PhaseRawText = String(analyzedText || '').trim();
@@ -6821,14 +6835,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 let finalStage2_1UserInput = stage2UserInput;
 
                 if (isSuperuser || isSuperuserRef.current) {
-                    setAnalysisModalMode('stage2');
-                    setSystemPrompt(finalStage2_1Prompt);
-                    setUserPrompt(finalStage2_1UserInput);
-                    setShowAnalysisModal(true);
-                    if (onLog) onLog('Superuser Stage 2.1 submit: prompt preview opened before submission.', 'info');
-
-                    const confirmedStage2_1 = await new Promise(resolve => {
-                        phase2ResolverRef.current = resolve;
+                    const confirmedStage2_1 = await new Promise((resolve, reject) => {
+                        const previous = superuserModalMutexRef.current;
+                        superuserModalMutexRef.current = previous.then(async () => {
+                            try {
+                                setAnalysisModalMode('stage2');
+                                setSystemPrompt(finalStage2_1Prompt);
+                                setUserPrompt(finalStage2_1UserInput);
+                                setShowAnalysisModal(true);
+                                if (onLog) onLog('Superuser Stage 2.1 submit: prompt preview opened before submission.', 'info');
+            
+                                const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                                resolve(res);
+                            } catch (err) {
+                                reject(err);
+                            }
+                        }).catch(reject);
                     });
 
                     if (!confirmedStage2_1 || typeof confirmedStage2_1 !== 'object') {
@@ -6866,6 +6888,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
 
                 const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
+                globalStage2_1Text = stage2_1Text;
                 
                 // --- 第一时间保存 Stage 2.1 (提取的美术资产/Subject Index) 对应卡片！---
                 try {
@@ -6877,40 +6900,46 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (onLog) onLog(`Failed to persist clean Subject Index immediately: ${persistErr?.message || persistErr}`, 'warning');
                 }
 
-                if (onLog) onLog('Stage 2.1 completed. Now starting Stage 2.2 (Beats Generation)...', 'info');
+                if (onLog) onLog('Stage 2.1 completed. Kicking off Stage 2.2 (Beats Generation) and Stage 3 (Asset Design) concurrently...', 'info');
 
                 setAnalysisFlowStatus({
                     phase: 'scene_beats',
-                    message: t('📝 正在执行分镜规划，生成镜头节拍...', 'Running Scene Beats Generation...'),
+                    message: t('📝 正在并发执行：生成镜头节拍与资产细设...', 'Concurrently running Scene Beats and Asset Design...'),
                 });
 
-                const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
-                let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-                let finalStage2_2UserInput = `${stage2UserInput}\n\n### 銆愪笂娓告彁鍙栫殑璧勪骇娓呭崟 Subject Index銆慭
-${stage2_1Text}`;
+                const runStage2_2Task = async () => {
+                    const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
+                    let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
+                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`;
 
-                if (isSuperuser || isSuperuserRef.current) {
-                    // Re-use logic for stage 2.2 preview
-                    setAnalysisModalMode('stage2');
-                    setSystemPrompt(finalStage2_2Prompt);
-                    setUserPrompt(finalStage2_2UserInput);
-                    setShowAnalysisModal(true);
-                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
+                    if (isSuperuser || isSuperuserRef.current) {
+                        const confirmedStage2_2 = await new Promise((resolve, reject) => {
+                            const previous = superuserModalMutexRef.current;
+                            superuserModalMutexRef.current = previous.then(async () => {
+                                try {
+                                    setAnalysisModalMode('stage2');
+                                    setSystemPrompt(finalStage2_2Prompt);
+                                    setUserPrompt(finalStage2_2UserInput);
+                                    setShowAnalysisModal(true);
+                                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
+                                    
+                                    const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                                    resolve(res);
+                                } catch (err) {
+                                    reject(err);
+                                }
+                            }).catch(reject);
+                        });
 
-                    const confirmedStage2_2 = await new Promise(resolve => {
-                        phase2ResolverRef.current = resolve;
-                    });
+                        if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
+                            throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
+                        }
 
-                    if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
-                        throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
+                        finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
+                        finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
                     }
 
-                    finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
-                    finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
-                }
-
-                const stage2_2Result = await awaitAnalyzeSceneWithRecovery(
-                    () => analyzeScene(
+                    const stage2_2ResultObj = await analyzeScene(
                         finalStage2_2UserInput,
                         finalStage2_2Prompt,
                         null,
@@ -6923,36 +6952,60 @@ ${stage2_1Text}`;
                                 saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 3 });
                             },
                         },
-                        projectId
-                    ),
-                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: stage2_1Text }
-                );
+                        projectId,
+                        'script_analysis_stage_2_2_beats'
+                    );
 
-                const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
-                
-                // --- 验证 Stage 2.2 结果是否有上游错误或格式异常 ---
-                let isUpstreamError2 = false;
-                let errMsg2 = '';
-                const matchObjStr2 = stage2_2Text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-                if (matchObjStr2.startsWith('{')) {
+                    const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
+                    
+                    let isUpstreamError2 = false;
+                    let errMsg2 = '';
+                    const matchObjStr2 = text2_2.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+                    if (matchObjStr2.startsWith('{')) {
+                        try {
+                            const parseObj = JSON.parse(matchObjStr2);
+                            if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
+                                isUpstreamError2 = true;
+                                errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
+                            }
+                        } catch(e) {}
+                    }
+                    if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(text2_2)) {
+                        isUpstreamError2 = true;
+                        errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${text2_2.slice(0, 100)}`;
+                    }
+                    if (isUpstreamError2) {
+                        throw new Error(errMsg2);
+                    }
+                    if (!String(text2_2).trim() || !text2_2.includes("|")) {
+                        throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
+                    }
+                    
+                    return { stage2_2Text: text2_2, stage2_2Result: stage2_2ResultObj };
+                };
+
+                                const runStage3Task = async () => {
                     try {
-                        const parseObj = JSON.parse(matchObjStr2);
-                        if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
-                            isUpstreamError2 = true;
-                            errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
-                        }
-                    } catch(e) {}
+                        return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1Text, {
+                            explicitSubjectIndexText: globalStage2_1Text || stage2_1Text
+                        });
+                    } catch (e) {
+                        if (onLog) onLog(`Stage 3 background execution failed: ${e?.message || e}`, 'error');
+                        return null;
+                    }
+                };
+
+                const [beatsOutcome, assetsOutcome] = await Promise.allSettled([
+                    runStage2_2Task(),
+                    runStage3Task()
+                ]);
+
+                if (beatsOutcome.status !== 'fulfilled') {
+                    throw beatsOutcome.reason; // Let the caller catch block handle Beats generation failure
                 }
-                if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(stage2_2Text)) {
-                    isUpstreamError2 = true;
-                    errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${stage2_2Text.slice(0, 100)}`;
-                }
-                if (isUpstreamError2) {
-                    throw new Error(errMsg2);
-                }
-                if (!String(stage2_2Text).trim() || !stage2_2Text.includes("|")) {
-                    throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
-                }
+
+                const { stage2_2Text, stage2_2Result } = beatsOutcome.value;
+                postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
                 finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
@@ -6960,13 +7013,13 @@ ${stage2_1Text}`;
                 importSourceText = finalAnalysisText;
                 phaseMarks.persistStartedAt = Date.now();
                 
-                // --- 第一时间保存 Stage 1 拼接 Stage 2 返回的完整结果卡片！---
                 try {
-                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Stage 2.2 return...', 'process');
+                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Beats return...', 'process');
                     await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
                         source: 'advanced-analysis-split-combined-immediate',
                         stage1RawText: stage1PhaseRawText,
                         stage2RawText: stage2PhaseRawText,
+                        stage2_1Text: globalStage2_1Text,
                     });
                     finalRawResultPersistedEarly = true;
                 } catch (persistErr) {
@@ -6974,9 +7027,8 @@ ${stage2_1Text}`;
                 } finally {
                     phaseMarks.persistFinishedAt = Date.now();
                 }
-                // Override the extraction to ensure the pure stage2_1Text acts as the authoritative source
+
                 analysisSections = extractAnalysisSections(stage2PhaseRawText);
-                // We unconditionally treat stage2_1Text as our subject index
                 analysisSections.hasStructuredSubjectIndex = true;
                 analysisSections.subjectIndexText = String(stage2_1Text || '').trim();
             }
@@ -6998,13 +7050,13 @@ ${stage2_1Text}`;
                         source: splitStage1Flow ? 'advanced-analysis-split-combined' : 'advanced-analysis',
                         stage1RawText: stage1PhaseRawText,
                         stage2RawText: stage2PhaseRawText,
+                        stage2_1Text: globalStage2_1Text || undefined,
                     });
                 } else {
                     if (savedByBackend) {
                         phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
                     }
                     if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
-                    // await refreshAnalysisFromDB(); // TEMPORARY DISABLE
                     if (onUpdateEpisodeInfo && activeEpisode?.id) {
                         await onUpdateEpisodeInfo(activeEpisode.id, {
                             ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
@@ -7023,7 +7075,7 @@ ${stage2_1Text}`;
             phaseMarks.importStartedAt = Date.now();
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
-                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
+                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown into workspace...'),
             });
             try {
                 importReport = await runAutoImportAndSwitchToScenes(importSourceText || finalAnalysisText || '', {
@@ -7035,14 +7087,11 @@ ${stage2_1Text}`;
                     },
                 });
                 if (!importReport) {
-                    importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
+                    importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
                 }
             } catch (importErr) {
-                importWarningMessage = t(
-                    `自动导入失败：${importErr?.message || importErr}`,
-                    `Auto-import failed: ${importErr?.message || importErr}`
-                );
+                importWarningMessage = t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`);
                 if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
                 setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
             } finally {
@@ -7051,26 +7100,19 @@ ${stage2_1Text}`;
             importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
             maybeAlertIncompleteSubjectsImport(result, finalAnalysisText || '');
 
-            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText, {
-                explicitSubjectIndexText: analysisSections?.subjectIndexText || ''
-            });
-            if (importReport && typeof importReport === 'object') {
+            if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
                 importReport = {
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
                 };
-                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
-                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
-                }
-                if (postImportSceneSubjectReport?.dbPersistedCounts) {
-                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
-                }
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                if (postImportSceneSubjectReport?.dbPersistedCounts) importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
                 if (postImportSceneSubjectReport?.importedSubjectCounts) {
                     importReport.importedSubjectCounts = {
                         character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
                         prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
                         environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
-                          poster: (importReport.importedSubjectCounts?.poster || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.poster) || 0),
+                        poster: (importReport.importedSubjectCounts?.poster || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.poster) || 0),
                     };
                 }
             }
@@ -7279,34 +7321,114 @@ ${stage2_1Text}`;
             );
 
             const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-            if (onLog) onLog('Stage 2.1 completed, starting Stage 2.2 (Beats)...', 'info');
+            let globalStage2_1Text = stage2_1Text;
+            if (onLog) onLog('Stage 2.1 completed. Kicking off Stage 2.2 (Beats) and Stage 3 (Asset Design) concurrently for restart...', 'info');
 
-            const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
-            const stage2_2UserInput = `${stage2UserInput}\n\n### 銆愪笂娓告彁鍙栫殑璧勪骇娓呭崟 Subject Index銆慭
-${stage2_1Text}`;
-            
-            const stage2_2Result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
-                    stage2_2UserInput,
-                    stage2_2PromptRes?.content || '',
-                    null,
-                    null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 3 });
-                        },
-                    },
-                    projectId
-                ),
-                { startedAt, baselineText: stage2_1Text }
-            );
+            setAnalysisFlowStatus({
+                phase: 'scene_beats',
+                message: t('📝 正在并发执行：生成镜头节拍与资产细设...', 'Concurrently running Scene Beats and Asset Design...'),
+            });
 
-            const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
-            
-            // To emulate 'stage2Text' that gets saved, we combine them
+                        const runStage2_2Task = async () => { 
+                const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md'); 
+                let finalStage2_2Prompt = stage2_2PromptRes?.content || ''; 
+                let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`; 
+
+                if (isSuperuser || isSuperuserRef.current) {
+                        const confirmedStage2_2 = await new Promise((resolve, reject) => {
+                            const previous = superuserModalMutexRef.current;
+                            superuserModalMutexRef.current = previous.then(async () => {
+                                try {
+                                    setAnalysisModalMode('stage2');
+                                    setSystemPrompt(finalStage2_2Prompt);
+                                    setUserPrompt(finalStage2_2UserInput);
+                                    setShowAnalysisModal(true);
+                                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
+                                    
+                                    const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                                    resolve(res);
+                                } catch (err) {
+                                    reject(err);
+                                }
+                            }).catch(reject);
+                        });
+
+                        if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
+                            throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
+                        } 
+
+                    finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt; 
+                    finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput; 
+                } 
+
+                                const stage2_2ResultObj = await analyzeScene( 
+                    finalStage2_2UserInput, 
+                    finalStage2_2Prompt, 
+                    null, 
+                    null, 
+                    analysisAttentionNotes, 
+                    selectedReuseSubjectAssets, 
+                    { 
+                        onTaskCreated: (taskId) => { 
+                            setActiveAnalysisTaskId(String(taskId || '').trim()); 
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 3 }); 
+                        }, 
+                    }, 
+                    projectId,
+                    'script_analysis_stage_2_2_beats'
+                ); 
+
+                const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || ''; 
+                 
+                let isUpstreamError2 = false; 
+                let errMsg2 = ''; 
+                const matchObjStr2 = text2_2.trim().replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, ''); 
+                if (matchObjStr2.startsWith('{')) { 
+                    try { 
+                        const parseObj = JSON.parse(matchObjStr2); 
+                        if (parseObj.code === 500 || parseObj.error || parseObj.msg) { 
+                            isUpstreamError2 = true; 
+                            errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`; 
+                        } 
+                    } catch(e) {} 
+                } 
+                if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(text2_2)) { 
+                    isUpstreamError2 = true; 
+                    errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${text2_2.slice(0, 100)}`; 
+                } 
+                if (isUpstreamError2) { 
+                    throw new Error(errMsg2); 
+                } 
+                if (!String(text2_2).trim() || !text2_2.includes("|")) { 
+                    throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。\n' + text2_2.slice(0, 500)); 
+                } 
+                
+                return { stage2_2Text: text2_2, stage2_2Result: stage2_2ResultObj }; 
+            };
+
+                        const runStage3Task = async () => {
+                try {
+                    return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1Text, {
+                        explicitSubjectIndexText: globalStage2_1Text || stage2_1Text
+                    });
+                } catch (e) {
+                    if (onLog) onLog(`Stage 3 background execution failed: ${e?.message || e}`, 'error');
+                    return null;
+                }
+            };
+
+            const [beatsOutcome, assetsOutcome] = await Promise.allSettled([
+                runStage2_2Task(),
+                runStage3Task()
+            ]);
+
+            if (beatsOutcome.status !== 'fulfilled') {
+                throw beatsOutcome.reason;
+            }
+
+            const { stage2_2Text, stage2_2Result } = beatsOutcome.value;
+            const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
+
             const stage2Text = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
             const finalAnalysisText = [String(stage1SourceText || '').trim(), stage2Text].filter(Boolean).join('\n\n');
             
@@ -7348,8 +7470,7 @@ ${stage2_1Text}`;
             importReport = await ensureSubjectsImportedBeforePostChecks(stage2Result, importReport);
             maybeAlertIncompleteSubjectsImport(stage2Result, finalAnalysisText);
 
-            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText);
-            if (importReport && typeof importReport === 'object') {
+            if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
                 importReport = {
                     ...importReport,
                     sceneSubjectPostImportReport: postImportSceneSubjectReport,
@@ -7357,6 +7478,7 @@ ${stage2_1Text}`;
             }
 
             setAnalysisUiReport({
+            
                 status: 'completed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
@@ -7810,12 +7932,12 @@ ${stage2_1Text}`;
                         <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'}`}>
-                                {!!getStageOutputContent('stage1', 'optimized_script') ? <Check className="w-4 h-4" /> : 1}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage1', 'adapted_script') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'}`}>
+                                {!!getStageOutputContent('stage1', 'adapted_script') ? <Check className="w-4 h-4" /> : 1}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('剧本优化', 'Script Opt')}</span>
-                                {!!getStageOutputContent('stage1', 'optimized_script') ? (
+                                {!!getStageOutputContent('stage1', 'adapted_script') ? (
                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                 ) : (
                                     <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
@@ -7824,7 +7946,7 @@ ${stage2_1Text}`;
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'subject_index') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage1', 'optimized_script') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'subject_index') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage1', 'adapted_script') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
                                 {!!getStageOutputContent('stage2', 'subject_index') ? <Check className="w-4 h-4" /> : 2}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
@@ -7837,7 +7959,7 @@ ${stage2_1Text}`;
                                          </button>
                                      </div>
                                 ) : (
-                                    !!getStageOutputContent('stage1', 'optimized_script') ? (
+                                    !!getStageOutputContent('stage1', 'adapted_script') ? (
                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                             {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('可重跑', 'Ready')}
@@ -7947,10 +8069,20 @@ ${stage2_1Text}`;
                             const hasFinalReport = !!(analysisUiReport && analysisUiReport.status !== 'running');
                             const isTerminalWarning = phase === 'warning';
                             const isTerminalFailed = phase === 'failed';
+                            
+                            const hasArtifact = (key) => {
+                                if (key === 'script_opt') return !!getStageOutputContent('stage1', 'adapted_script');
+                                if (key === 'extract_assets') return !!getStageOutputContent('stage2', 'subject_index');
+                                if (key === 'scene_beats') return !!getStageOutputContent('stage2', 'scene_markdown');
+                                if (key === 'assets_gen') return !!getStageOutputContent('stage3', 'asset_design_json');
+                                if (key === 'completed') return hasFinalReport;
+                                return false;
+                            };
+                            
                             const isDone = !isTerminalFailed && (
                                 hasFinalReport
                                     ? stepIndex <= 3
-                                    : (isTerminalWarning ? stepIndex <= 2 : currentIndex > stepIndex || phase === 'completed')
+                                    : (isTerminalWarning ? stepIndex <= 2 : ((currentIndex > stepIndex) || phase === 'completed' || hasArtifact(step.key)))
                             );
                             const isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
                             const isFailed = isTerminalFailed && step.key === 'analyzing';
