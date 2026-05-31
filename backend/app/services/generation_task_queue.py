@@ -5,13 +5,16 @@ import asyncio
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
+    config = {"queue_threads": 4, "callback_threads": 20}
     if os.path.exists(QUEUE_CONFIG_FILE):
         try:
             with open(QUEUE_CONFIG_FILE, "r") as f:
-                return json.load(f)
+                d = json.load(f)
+                if isinstance(d, dict):
+                    config.update(d)
         except Exception:
             pass
-    return {}
+    return config
 
 _q_conf = _load_queue_config()
 

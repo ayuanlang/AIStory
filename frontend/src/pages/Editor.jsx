@@ -1480,6 +1480,7 @@ const Editor = ({
                     || (Array.isArray(backendSubjectsJson.props) && backendSubjectsJson.props.length > 0)
                     || (Array.isArray(backendSubjectsJson.environments) && backendSubjectsJson.environments.length > 0)
                     || (Array.isArray(backendSubjectsJson.covers) && backendSubjectsJson.covers.length > 0)
+                    || (Array.isArray(backendSubjectsJson.posters) && backendSubjectsJson.posters.length > 0)
                 );
 
             if (hasBackendSubjects) {

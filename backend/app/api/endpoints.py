@@ -4,13 +4,16 @@ import os
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
+    config = {"queue_threads": 4, "callback_threads": 20}
     if os.path.exists(QUEUE_CONFIG_FILE):
         try:
             with open(QUEUE_CONFIG_FILE, "r") as f:
-                return json.load(f)
+                d = json.load(f)
+                if isinstance(d, dict):
+                    config.update(d)
         except Exception:
             pass
-    return {}
+    return config
 
 _q_conf = _load_queue_config()
 
@@ -4767,7 +4770,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 except Exception:
                     continue
                 if isinstance(obj, list):
-                    grouped = {"characters": [], "props": [], "environments": [], "covers": []}
+                    grouped = {"characters": [], "props": [], "environments": [], "covers": [], "posters": []}
                     for item in obj:
                         if not isinstance(item, dict): continue
                         t = str(item.get("type") or item.get("subject_type") or item.get("entity_type") or "").strip().lower()
@@ -4778,7 +4781,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     obj = grouped
                 if not isinstance(obj, dict):
                     continue
-                for section in ("characters", "props", "environments", "covers"):
+                for section in ("characters", "props", "environments", "covers", "posters"):
                     items = obj.get(section)
                     if section == "covers" and not items and "posters" in obj:
                         items = obj.get("posters")
@@ -4792,7 +4795,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             entities_payload = parsed_entities if parsed_entities is not None else _extract_entities_from_json_candidates(text)
 
             json_subjects: List[str] = []
-            for section in ("characters", "props", "environments", "covers"):
+            for section in ("characters", "props", "environments", "covers", "posters"):
                 for item in entities_payload.get(section, []):
                     for raw_name in (item.get("name"), item.get("name_en")):
                         normalized = _normalize_subject_name(raw_name or "")
@@ -4913,7 +4916,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
 
             return {
-                "checked_sections": ["characters", "props", "environments", "posters"],
+                "checked_sections": ["characters", "props", "environments", "covers", "posters"],
                 "mismatch_count": len(mismatches),
                 "mismatches": mismatches,
                 "warning_codes": warning_codes,
@@ -5046,7 +5049,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "negative_prompt_en": "",
                     "anchor_description": "",
                 })
-            elif bucket in {"environments", "covers"}:
+            elif bucket in {"environments", "covers", "posters"}:
                 base_obj.update({
                     "atmosphere": "",
                     "visual_params": "",
@@ -5084,7 +5087,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 }
 
             item_refs: List[Dict[str, Any]] = []
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for idx, item in enumerate(normalized.get(bucket) or []):
                     item_refs.append({"bucket": bucket, "index": idx, "item": item})
 
@@ -5186,7 +5189,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
             expected_total = len(records)
             reconciled_subject_keys = _collect_subject_keys_by_bucket(reconciled)
-            expected_by_bucket: Dict[str, set] = {"characters": set(), "props": set(), "environments": set(), "covers": set()}
+            expected_by_bucket: Dict[str, set] = {"characters": set(), "props": set(), "environments": set(), "covers": set(), "posters": set()}
             for record in records:
                 bucket = str(record.get("bucket") or "")
                 if bucket not in expected_by_bucket:
@@ -5196,7 +5199,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     if key:
                         expected_by_bucket[bucket].add(key)
 
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 actual_keys = set((reconciled_subject_keys.get(bucket) or {}).keys())
                 for key in expected_by_bucket.get(bucket) or set():
                     if key not in actual_keys:
@@ -5260,7 +5263,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     },
                     "missing_total": 0,
                     "missing_by_bucket": {
-                        "characters": [], "props": [], "environments": [], "covers": []
+                        "characters": [], "props": [], "environments": [], "covers": [], "posters": []
                     },
                     "warning_codes": [],
                     "warnings": [],
@@ -5273,7 +5276,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "covers": set(),
             }
 
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for item in (subjects_payload.get(bucket) or []):
                     if not isinstance(item, dict):
                         continue
@@ -5288,7 +5291,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "environments": [],
                 "covers": [],
             }
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 expected_bucket = expected.get(bucket) or {}
                 for key, display in expected_bucket.items():
                     if key not in generated_keys[bucket]:
@@ -5344,7 +5347,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "environments": {},
                 "covers": {},
             }
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for item in (payload.get(bucket) or []):
                     if not isinstance(item, dict):
                         continue
@@ -5367,7 +5370,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "environments": [],
                 "covers": [],
             }
-            for bucket in ("characters", "props", "environments", "covers"):
+            for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for key, display in (aggregated_keys.get(bucket) or {}).items():
                     if key not in (selected_keys.get(bucket) or {}):
                         missing_in_selected_by_bucket[bucket].append(display)
@@ -5380,7 +5383,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if missing_total > 0:
                 warning_codes.append("ANALYSIS_SUBJECTS_JSON_EXTRACT_PARTIAL")
                 warning_text_parts: List[str] = []
-                for bucket in ("characters", "props", "environments", "covers"):
+                for bucket in ("characters", "props", "environments", "covers", "posters"):
                     count = len(missing_in_selected_by_bucket.get(bucket) or [])
                     if count > 0:
                         warning_text_parts.append(f"{bucket}差异{count}项")
@@ -6331,7 +6334,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Extract subjects_json from LLM output so frontend can use pre-parsed
         # clean JSON instead of re-parsing the raw markdown with heuristic regex.
         subjects_json = _extract_subjects_json_from_text(result_content)
-        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
+        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
 
@@ -6347,6 +6350,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "props": len(subjects_json.get("props") or []),
             "environments": len(subjects_json.get("environments") or []),
             "covers": len(subjects_json.get("covers") or []),
+            "posters": len(subjects_json.get("posters") or []),
         }
 
         extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
@@ -14212,7 +14216,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     ] if value
                 )
             normalized["description_cn"] = description_cn
-        elif section in ("props", "environments", "covers"):
+        elif section in ("props", "environments", "covers", "posters"):
             normalized["description_cn"] = _pick_text(
                 item.get("description_cn"),
                 item.get("description"),
@@ -14240,7 +14244,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
             # If the list itself is an array of entities, wrap them in a mock object
             # grouped by type, or just pass them as generic items if we determine they have type fields
             # Actually, let's just group them into a wrapper object
-            grouped = {"characters": [], "props": [], "environments": [], "covers": []}
+            grouped = {"characters": [], "props": [], "environments": [], "covers": [], "posters": []}
             for item in parsed:
                 if not isinstance(item, dict):
                     continue
@@ -14266,7 +14270,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     obj = obj[wrapper_key]
                     break
                     
-            for section in ("characters", "props", "environments", "covers"):
+            for section in ("characters", "props", "environments", "covers", "posters"):
                 items = obj.get(section)
                 if section == "covers" and not items and "posters" in obj:
                     items = obj.get("posters")
@@ -14282,7 +14286,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     normalized_items.append(normalized)
                 payload[section].extend(normalized_items)
 
-        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
+        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
             return payload
 
     return payload
@@ -14708,7 +14712,7 @@ async def regenerate_scene(
         raise HTTPException(status_code=502, detail="Failed to parse regenerated scene markdown table")
 
     subjects_json = _extract_subjects_json_from_text(raw)
-    if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers")):
+    if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
         subjects_json = _extract_subjects_json_from_text(cleaned)
 
     parsed_rows = parsed_rows[:safe_max_scenes]
@@ -34264,6 +34268,7 @@ async def admin_update_queue_config(config: QueueConfigBase, current_user: User 
     # Reload locally and let user know it applies on restart
     global _q_conf
     _q_conf = config.dict()
+    return config
     
 
 

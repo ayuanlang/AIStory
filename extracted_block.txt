@@ -1,0 +1,241 @@
+
+
+                setAnalysisFlowStatus({
+                    phase: 'scene_beats',
+                    message: t('📝 正在执行分镜规划，生成镜头节拍...', 'Running Scene Beats Generation...'),
+                });
+
+                const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
+                let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
+                let finalStage2_2UserInput = `${stage2UserInput}\n\n### 銆愪笂娓告彁鍙栫殑璧勪骇娓呭崟 Subject Index銆慭
+${stage2_1Text}`;
+
+                if (isSuperuser || isSuperuserRef.current) {
+                    // Re-use logic for stage 2.2 preview
+                    setAnalysisModalMode('stage2');
+                    setSystemPrompt(finalStage2_2Prompt);
+                    setUserPrompt(finalStage2_2UserInput);
+                    setShowAnalysisModal(true);
+                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
+
+                    const confirmedStage2_2 = await new Promise(resolve => {
+                        phase2ResolverRef.current = resolve;
+                    });
+
+                    if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
+                        throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
+                    }
+
+                    finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
+                    finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
+                }
+
+                const stage2_2Result = await awaitAnalyzeSceneWithRecovery(
+                    () => analyzeScene(
+                        finalStage2_2UserInput,
+                        finalStage2_2Prompt,
+                        null,
+                        null,
+                        analysisAttentionNotes,
+                        selectedReuseSubjectAssets,
+                        {
+                            onTaskCreated: (taskId) => {
+                                setActiveAnalysisTaskId(String(taskId || '').trim());
+                                saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 3 });
+                            },
+                        },
+                        projectId
+                    ),
+                    { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: stage2_1Text }
+                );
+
+                const stage2_2Text = extractAnalysisTextFromResult(stage2_2Result) || '';
+                
+                // --- 验证 Stage 2.2 结果是否有上游错误或格式异常 ---
+                let isUpstreamError2 = false;
+                let errMsg2 = '';
+                const matchObjStr2 = stage2_2Text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+                if (matchObjStr2.startsWith('{')) {
+                    try {
+                        const parseObj = JSON.parse(matchObjStr2);
+                        if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
+                            isUpstreamError2 = true;
+                            errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
+                        }
+                    } catch(e) {}
+                }
+                if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(stage2_2Text)) {
+                    isUpstreamError2 = true;
+                    errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${stage2_2Text.slice(0, 100)}`;
+                }
+                if (isUpstreamError2) {
+                    throw new Error(errMsg2);
+                }
+                if (!String(stage2_2Text).trim() || !stage2_2Text.includes("|")) {
+                    throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
+                }
+
+                stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
+                finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
+
+                importSourceText = finalAnalysisText;
+                phaseMarks.persistStartedAt = Date.now();
+                
+                // --- 第一时间保存 Stage 1 拼接 Stage 2 返回的完整结果卡片！---
+                try {
+                    if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Stage 2.2 return...', 'process');
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
+                        source: 'advanced-analysis-split-combined-immediate',
+                        stage1RawText: stage1PhaseRawText,
+                        stage2RawText: stage2PhaseRawText,
+                        stage2_1Text: globalStage2_1Text,
+                    });
+                    finalRawResultPersistedEarly = true;
+                } catch (persistErr) {
+                    if (onLog) onLog(`Immediate split-flow raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+                } finally {
+                    phaseMarks.persistFinishedAt = Date.now();
+                }
+                // Override the extraction to ensure the pure stage2_1Text acts as the authoritative source
+                analysisSections = extractAnalysisSections(stage2PhaseRawText);
+                // We unconditionally treat stage2_1Text as our subject index
+                analysisSections.hasStructuredSubjectIndex = true;
+                analysisSections.subjectIndexText = String(stage2_1Text || '').trim();
+            }
+
+            if (!analysisSections.hasStructuredSubjectIndex) {
+                if (onLog) onLog('Missing asset index after Stage 2 output validation. Skipping auto-import and triggering cleanup retry.', 'warning');
+                throw new Error(SUBJECT_INDEX_PARSE_ERROR);
+            }
+
+            setLlmRawResultContent(finalAnalysisText || '');
+            setLlmResultContent(normalizeLlmMarkdownTable(finalAnalysisText || ''));
+            lastLoadedAnalysisRef.current = finalAnalysisText || '';
+
+            try {
+                if (true || !savedByBackend && !finalRawResultPersistedEarly) {
+                    phaseMarks.persistStartedAt = Date.now();
+                    if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
+                        source: splitStage1Flow ? 'advanced-analysis-split-combined' : 'advanced-analysis',
+                        stage1RawText: stage1PhaseRawText,
+                        stage2RawText: stage2PhaseRawText,
+                        stage2_1Text: globalStage2_1Text || undefined,
+                    });
+                } else {
+                    if (savedByBackend) {
+                        phaseMarks.persistStartedAt = phaseMarks.persistStartedAt || Date.now();
+                    }
+                    if (onLog) onLog('Advanced LLM raw output already saved by backend. Refreshing local episode cache...', 'info');
+                    // await refreshAnalysisFromDB(); // TEMPORARY DISABLE
+                    if (onUpdateEpisodeInfo && activeEpisode?.id) {
+                        await onUpdateEpisodeInfo(activeEpisode.id, {
+                            ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
+                                analysisRawText: finalAnalysisText || analyzedText || '',
+                                assetRawText: activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                            }), null, 2),
+                        });
+                    }
+                }
+            } catch (persistErr) {
+                if (onLog) onLog(`Advanced raw LLM output save warning: ${persistErr?.message || persistErr}`, 'warning');
+            } finally {
+                phaseMarks.persistFinishedAt = Date.now();
+            }
+
+            phaseMarks.importStartedAt = Date.now();
+            setAnalysisFlowStatus({
+                phase: 'scene_beats',
+                message: t('📝 分析框架解构完毕，正在导入您的工作区...', 'Importing Markdown and JSON into workspace...'),
+            });
+            try {
+                importReport = await runAutoImportAndSwitchToScenes(importSourceText || finalAnalysisText || '', {
+                    switchToScenes: false,
+                    importOptions: {
+                        autoSupplementSceneSubjects: false,
+                        suppressAlerts: true,
+                        subjectsJson: result?.subjects_json || null,
+                    },
+                });
+                if (!importReport) {
+                    importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
+                    setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                }
+            } catch (importErr) {
+                importWarningMessage = t(
+                    `自动导入失败：${importErr?.message || importErr}`,
+                    `Auto-import failed: ${importErr?.message || importErr}`
+                );
+                if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+                setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+            } finally {
+                phaseMarks.importFinishedAt = Date.now();
+            }
+            importReport = await ensureSubjectsImportedBeforePostChecks(result, importReport);
+            maybeAlertIncompleteSubjectsImport(result, finalAnalysisText || '');
+
+            postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, finalAnalysisText, {
+                explicitSubjectIndexText: analysisSections?.subjectIndexText || ''
+            });
+            if (importReport && typeof importReport === 'object') {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                };
+                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                }
+                if (postImportSceneSubjectReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                }
+                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                    importReport.importedSubjectCounts = {
+                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
+                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
+                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
+                          poster: (importReport.importedSubjectCounts?.poster || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.poster) || 0),
+                    };
+                }
+            }
+
+            let firstPassReport = null;
+            try {
+                firstPassReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true, persist: true });
+                if (firstPassReport && !firstPassReport.ok) {
+                    setAnalysisFlowStatus({
+                        phase: 'warning',
+                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
+                    });
+                    setTimeout(() => {
+                        setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
+                    }, 5000);
+                }
+            } catch (consistencyErr) {
+                firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
+                setSubjectConsistencyReport(firstPassReport);
+                if (onLog) onLog(`Subject consistency check warning: ${consistencyErr?.message || consistencyErr}`, 'warning');
+            }
+
+            firstPassReport = firstPassReport || buildSubjectConsistencyReport(analyzedText || '');
+            const followupIssues = await persistFirstPassIssuesToAttentionNotes(
+                firstPassReport,
+                integrityWarnings,
+                importWarningMessage ? [importWarningMessage] : []
+            );
+            if (followupIssues.length > 0) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
+                });
+                if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
+            }
+
+            setPendingSwitchAfterPostChecks(false);
+            phaseMarks.completedAt = Date.now();
+            const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            const combinedReportWarning = [importWarningMessage, retryResetNotice, preflightSceneSyncNotice]
+                .map(item => String(item || '').trim())
+                .filter(Boolean)
+                .join('；');
+
+            
