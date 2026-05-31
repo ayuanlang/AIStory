@@ -270,6 +270,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         constraints: "",
     });
     const [promoFrameworkViewMode, setPromoFrameworkViewMode] = useState('preview');
+    const [storyFrameworkViewMode, setStoryFrameworkViewMode] = useState('preview');
     const [targetEpisodeNumberForGen, setTargetEpisodeNumberForGen] = useState('');
     const [hasSetDefaultEp, setHasSetDefaultEp] = useState(false);
     
@@ -1670,6 +1671,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     }
                 };
                 setInfo(merged);
+                setStoryFrameworkViewMode('preview');
 
                 if (updated.global_info.story_generator_global_input && typeof updated.global_info.story_generator_global_input === 'object') {
                     skipNextGlobalStoryAutosaveRef.current = true;
@@ -3012,22 +3014,6 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 </button>
                             </div>
                             <button
-                                onClick={() => handleGenerateEpisodeScripts({ forceStart: true })}
-                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('强制启动所有目标分集并覆盖已有剧本', 'Force start generation for all target episodes and overwrite existing scripts')}
-                            >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('强制启动剧本', 'Force Start Scripts')}</>}
-                            </button>
-                            <button
-                                onClick={() => handleGenerateEpisodeScripts({ retryFailedOnly: true })}
-                                disabled={episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${(episodeScriptsRunning || isGeneratingGlobalStory || isStoppingEpisodeScripts) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('仅重试上次运行失败的分集', 'Retry only failed episodes from the last run')}
-                            >
-                                {episodeScriptsRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('执行中...', 'Running...')}</> : <><RefreshCw className="w-4 h-4" /> {t('重试失败分集', 'Retry Failed Episodes')}</>}
-                            </button>
-                            <button
                                 onClick={handleStopEpisodeScripts}
                                 disabled={isStoppingEpisodeScripts}
                                 className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isStoppingEpisodeScripts ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
@@ -3171,13 +3157,47 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     </div>
 
                     <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-48 resize-none"
-                            value={info.story_dna_global_md || ''}
-                            onChange={(e) => updateField('story_dna_global_md', e.target.value)}
-                            placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
-                        />
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                            <label className="text-xs text-muted-foreground uppercase font-bold block">{t('已生成全局框架（Markdown）', 'Generated Global Framework (Markdown)')}</label>
+                            <div className="flex items-center gap-1 bg-black/20 border border-white/10 rounded-md p-1">
+                                <button
+                                    type="button"
+                                    onClick={() => setStoryFrameworkViewMode('preview')}
+                                    className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'preview' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                >
+                                    {t('预览', 'Preview')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setStoryFrameworkViewMode('edit')}
+                                    className={`px-2 py-1 rounded text-xs font-bold ${storyFrameworkViewMode === 'edit' ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+                                >
+                                    {t('编辑', 'Edit')}
+                                </button>
+                            </div>
+                        </div>
+
+                        {storyFrameworkViewMode === 'edit' ? (
+                            <textarea
+                                ref={(el) => {
+                                    if (el) {
+                                        el.style.height = 'auto';
+                                        el.style.height = el.scrollHeight + 'px';
+                                    }
+                                }}
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[12rem] resize-none overflow-hidden"
+                                value={info.story_dna_global_md || ''}
+                                onChange={(e) => updateField('story_dna_global_md', e.target.value)}
+                                placeholder={t('（生成后，全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, the global framework will appear here. You can edit it and Save Changes.)')}
+                            />
+                        ) : (
+                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 min-h-[12rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1">
+                                {(info.story_dna_global_md || '').trim()
+                                    ? <ReactMarkdown>{info.story_dna_global_md}</ReactMarkdown>
+                                    : <div className="text-sm text-muted-foreground">{t('（生成后，全局框架会显示在这里。）', '(After generation, the global framework will appear here.)')}</div>
+                                }
+                            </div>
+                        )}
                     </div>
                 </div>
                 )}
@@ -3280,7 +3300,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
                         {promoFrameworkViewMode === 'edit' ? (
                             <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-56 resize-none"
+                                ref={(el) => {
+                                    if (el) {
+                                        el.style.height = 'auto';
+                                        el.style.height = el.scrollHeight + 'px';
+                                    }
+                                }}
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[14rem] resize-none overflow-hidden"
                                 value={info.promo_dna_global_md || ''}
                                 onChange={(e) => updateField('promo_dna_global_md', e.target.value)}
                                 placeholder={t('（生成后，宣传片全局框架会显示在这里。你可以编辑后保存修改。）', '(After generation, promo global framework will appear here. You can edit it and Save Changes.)')}
@@ -3297,83 +3323,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 </div>
                 )}
 
-                {/* Character Canon (Project) */}
-                {mode === 'generator' && projectTab === 'story_generator' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-lg font-semibold text-primary">{t('角色设定集（项目）', 'Character Canon (Project)')}</h3>
-                        <div className="flex items-center gap-2">
-                            <FunctionApiSelector functionName="generate_subjects" configs={functionApiConfigs} />
-                            <button
-                                onClick={() => setShowCanonModal(true)}
-                                disabled={isGeneratingCanon}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isGeneratingCanon ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                title={t('生成权威角色档案并追加到项目级角色设定集', 'Generate an authoritative character profile and append it to the project-level canon')}
-                            >
-                                {isGeneratingCanon ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('生成中...', 'Generating...')}</> : <><Sparkles className="w-4 h-4" /> {t('生成并追加', 'Generate & Append')}</>}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('设定集输出（Markdown）', 'Canon Output (Markdown)')}</label>
-                        <div className="space-y-3">
-                            {Array.isArray(info.character_profiles) && info.character_profiles.length > 0 ? (
-                                info.character_profiles.map((p, idx) => {
-                                    const name = String(p?.name || '').trim() || `${t('角色', 'Character')} ${idx + 1}`;
-                                    const md = String(p?.description_md || '').trim();
-                                    const updatedAt = String(p?.updated_at || '').trim();
-                                    return (
-                                        <div key={`${name}-${idx}`} className="bg-black/20 border border-white/10 rounded-lg p-3 space-y-2">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div>
-                                                    <div className="text-sm font-bold text-white">{name}</div>
-                                                    {updatedAt ? (
-                                                        <div className="text-xs text-muted-foreground">{t('更新时间', 'Updated')}: {updatedAt}</div>
-                                                    ) : null}
-                                                </div>
-                                                {String(p?.name || '').trim() ? (
-                                                    <button
-                                                        onClick={() => handleDeleteCanonCharacter(String(p.name))}
-                                                        className="px-2 py-1 rounded-md text-xs font-bold bg-white/10 text-white hover:bg-white/20 flex items-center gap-2"
-                                                        title={t('从设定集中删除该角色', 'Delete this character from canon')}
-                                                    >
-                                                        <Trash2 size={14} /> {t('删除', 'Delete')}
-                                                    </button>
-                                                ) : null}
-                                            </div>
-                                            <textarea
-                                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-40 resize-none"
-                                                value={md || ''}
-                                                readOnly
-                                                placeholder={t('（生成后，该角色的设定 Markdown 会显示在这里。）', "(This character's canonical markdown will appear here after generation.)")}
-                                            />
-                                        </div>
-                                    );
-                                })
-                            ) : (
-                                <textarea
-                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white w-full h-28 resize-none"
-                                    value={''}
-                                    readOnly
-                                    placeholder={t('（暂无角色。点击“生成并追加”创建首个角色设定。）', '(No characters yet. Click Generate & Append to create the first canon profile.)')}
-                                />
-                            )}
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('角色关系（纯文本）', 'Character Relationships (Plain Text)')}</label>
-                        <textarea
-                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-28 resize-none"
-                            value={info.character_relationships || ''}
-                            onChange={(e) => updateField('character_relationships', e.target.value)}
-                            placeholder={t('示例：A 是 B 的上司；B 暗恋 C；C 是 A 的对手...', "Example: A is B's boss; B secretly loves C; C is A's rival...")}
-                        />
-                    </div>
-                </div>
-                )}
-            </div>
+      </div>
 
             {showEpisodeScriptsProgressModal && (
                 <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setShowEpisodeScriptsProgressModal(false)}>
