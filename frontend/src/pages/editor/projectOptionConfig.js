@@ -63,6 +63,22 @@ export const PROJECT_EP_LANGUAGE_OPTIONS = [
 
 export const PROJECT_EP_BASE_POSITIONING_OPTIONS = [
 
+    "短剧快节奏 / Short Drama",
+
+    "动作片 / Action Feature",
+
+    "爱情情感 / Romance / Emotional",
+
+    "悬疑惊悚 / Mystery / Thriller",
+
+    "喜剧轻快 / Comedy / Light",
+
+    "仙侠奇幻 / Xianxia / Fantasy",
+
+    "青春成长 / Youth Coming-of-Age",
+
+    "通用连续剧 / General Series",
+
     "都市情感 / Urban Romance",
 
     "都市轻喜剧 / Urban Light Comedy",

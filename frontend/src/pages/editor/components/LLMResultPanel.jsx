@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { ChevronDown, Loader2, RefreshCw, PlayCircle } from 'lucide-react';
 
 export default function LLMResultPanel({
@@ -101,7 +103,7 @@ export default function LLMResultPanel({
                                         )}
                                         <div className="px-4 pb-4 pt-3 prose prose-invert prose-p:my-1.5 prose-headings:my-2 prose-li:my-0.5 prose-pre:bg-black/40 prose-pre:border prose-pre:border-white/10 prose-code:text-amber-200 max-w-none text-sm text-white/85">
                                             {String(card.content || '').trim()
-                                                ? <ReactMarkdown>{String(card.content || '')}</ReactMarkdown>
+                                                ? <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{String(card.content || '')}</ReactMarkdown>
                                                 : <div className="text-xs text-white/35 italic">{card.placeholder || placeholder || t('暂无阶段输出。', 'No stage output yet.')}</div>}
                                         </div>
                                     </>

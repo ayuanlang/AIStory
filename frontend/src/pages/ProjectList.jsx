@@ -2054,7 +2054,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 <InputGroup label={t("语言", "Language")} value={newLanguage} onChange={setNewLanguage} list={projectCreateOptions.language} />
                                             </div>
                                             <div>
-                                                <InputGroup label={t("基础定位", "Base Positioning")} value={newBasePositioning} onChange={setNewBasePositioning} list={projectCreateOptions.base_positioning} />
+                                                <InputGroup label={t("剧本模式 (基础定位)", "Script Mode (Base Positioning)")} value={newBasePositioning} onChange={setNewBasePositioning} list={projectCreateOptions.base_positioning} />
                                             </div>
                                             <div>
                                                 <InputGroup label={t("画幅比例", "Aspect Ratio")} value={newAspectRatio} onChange={setNewAspectRatio} list={projectCreateOptions.aspect_ratio || PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS} />

@@ -2040,7 +2040,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             { label: t('剧本标题', 'Script Title'), value: resolvedScriptTitle },
             { label: t('类型', 'Type'), value: resolvedType },
             { label: t('语言', 'Language'), value: resolvedLanguage },
-            { label: t('基础定位', 'Base Positioning'), value: resolvedBasePositioning },
+            { label: t('剧本模式 (基础定位)', 'Script Mode (Base Positioning)'), value: resolvedBasePositioning },
             { label: t('全局风格', 'Global Style'), value: resolvedGlobalStyle },
         ];
     }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.Global_Style, project?.title, t]);
@@ -2049,7 +2049,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         if (!String(info?.script_title || project?.title || '').trim()) missing.push(t('剧本标题', 'Script Title'));
         if (!String(info?.type || '').trim()) missing.push(t('类型', 'Type'));
         if (!String(info?.language || '').trim()) missing.push(t('语言', 'Language'));
-        if (!String(info?.base_positioning || '').trim()) missing.push(t('基础定位', 'Base Positioning'));
+        if (!String(info?.base_positioning || '').trim()) missing.push(t('剧本模式 (基础定位)', 'Script Mode (Base Positioning)'));
         if (!String(info?.Global_Style || '').trim()) missing.push(t('全局风格', 'Global Style'));
         return missing;
     }, [info?.script_title, info?.type, info?.language, info?.base_positioning, info?.Global_Style, project?.title, t]);
@@ -2293,7 +2293,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                      list={PROJECT_EP_LANGUAGE_OPTIONS}
                         />
                         <InputGroup idPrefix={prefix}
-                            label={t('基础定位', 'Base Positioning')}
+                            label={t('剧本模式 (基础定位)', 'Script Mode (Base Positioning)')}
                             value={info.base_positioning}
                             onChange={v => updateField('base_positioning', v)}
                             list={PROJECT_EP_BASE_POSITIONING_OPTIONS}

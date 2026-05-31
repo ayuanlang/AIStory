@@ -9,7 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -346,7 +346,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [showImageModal, setShowImageModal] = useState(false);
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
     const [generating, setGenerating] = useState(false);
-    const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
+    const [uploading, setUploading] = useState(false);
     const [prompt, setPrompt] = useState('');
     const [promptDrafts, setPromptDrafts] = useState({ cn: '', en: '' });
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -4054,38 +4054,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleUpload = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        setUploadState('uploading');
+        setUploading(true);
         try {
             const asset = await uploadAsset(file);
-            // Before calling updateEntityImage, change state to analyzing
-            // Actually wait, let's look at updateEntityImage. It does:
-            // 1. dbUpdate (fast)
-            // 2. if (!skipAnalyze), handleAnalyzeEntity (slow)
-            // It calls handleAnalyzeEntity inside updateEntityImage if we don't pass skipAnalyze.
-            // But how do we change state to analyzing? Let's do it before updateEntityImage 
-            // and assume it spends most of its time in analysis. Or maybe we can split it.
-            // Wait, we can just pass skipAnalyze=true to updateEntityImage, and call handleAnalyzeEntity ourselves here! Let's do that!
-            const updatedEntity = await updateEntityImage(asset.url, false, null, { skipAnalyze: true });
-            
+            const updatedEntity = await updateEntityImage(asset.url, false);
             if (updatedEntity) {
-                setUploadState('analyzing');
-                const analyzed = await handleAnalyzeEntity(updatedEntity);
-                if (!analyzed) {
-                    setUploadState('idle');
-                    return;
-                }
-                setUploadState('completed');
-                setTimeout(() => {
-                    setShowImageModal(false);
-                    setUploadState('idle');
-                }, 1500);
-            } else {
-                setUploadState('idle');
+                setShowImageModal(false);
             }
         } catch (e) {
             console.error(e);
-            setUploadState('idle');
-        } 
+        } finally {
+            setUploading(false);
+        }
     };
 
     const handleGenerate = async (entityOverride = null, customRefs = null, customPrompt = null, extraProviderOptions = null) => {
@@ -4876,11 +4856,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 {label} ({stat.generated}/{stat.total})
                             </button>
                         )})}
-                        <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
-                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图: ", "T2I: ")} />
-                            <FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图: ", "I2I: ")} />
+                        <div className="flex items-center ml-2 border-l border-white/20 pl-2">
+                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} />
                         </div>
-                        <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
+                        <div className="flex items-center ml-2 border-l border-white/20 pl-2">
                             <select
                                 value={entityEpisodeScope}
                                 onChange={(e) => setEntityEpisodeScope(e.target.value)}
@@ -4890,47 +4869,90 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 <option value="all">{t('整个项目', 'Whole Project')}</option>
                             </select>
                         </div>
-                        <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
-                            <button
-                                onClick={openAiEntityCreateModal}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 transition-colors whitespace-nowrap"
-                                title={t('按 subjects index + entity_design 自动新增实体', 'Add entities via subjects index + entity_design')}
-                            >
-                                <span className="whitespace-nowrap">{t('新增资产', 'Add Asset')}</span>
-                            </button>
-                             <button 
-                                onClick={handleBatchGenerateEntities}
-                                disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors whitespace-nowrap"
-                                title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
-                            >
-                                 {isBatchGeneratingEntities ? (
-                                     <span className="whitespace-nowrap">{t('批处理中', 'Batching')} {batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : '...'}</span>
-                                 ) : (
-                                     <span className="whitespace-nowrap">{t('批量生图', 'Batch Generate Images')}</span>
-                                 )}
-                            </button>
-                            <button
-                                onClick={handleStopSubjectBatchTasks}
-                                disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-red-500 outline-none hover:border-red-500/50 disabled:opacity-50 transition-colors whitespace-nowrap"
-                                title={t('停止当前批量任务（支持批量生图/批量提示词反推/批量参考生图）', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
-                            >
-                                {isStoppingBatchGenerateEntities ? (
-                                    <span className="whitespace-nowrap">{t('停止中', 'Stopping')}</span>
-                                ) : (
-                                    <span className="whitespace-nowrap">{t('停止', 'Stop')}</span>
-                                )}
-                            </button>
-                             <button 
-                                onClick={handleDeleteAllEntities}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white hover:text-red-400 outline-none hover:border-red-500/50 transition-colors flex items-center justify-center"
-                                title={t('删除全部主体资产', 'Delete All Subjects')}
-                            >
-                                <Trash2 size={16} />
-                            </button>
-                        </div>
                     </div>
+                </div>
+                <div className="flex items-center gap-4 flex-wrap justify-end">
+                    <button
+                        onClick={openAiEntityCreateModal}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 flex items-center gap-2 transition-all border border-emerald-300/20"
+                        title={t('按 subjects index + entity_design 自动新增实体', 'Add entities via subjects index + entity_design')}
+                    >
+                        <Plus size={12} /> {t('AI新增实体', 'AI Add Entity')}
+                    </button>
+                     <button 
+                        onClick={handleDeleteAllEntities}
+                        className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md transition-colors"
+                    title={t('删除全部主体资产', 'Delete All Subjects')}
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                     <button 
+                        onClick={handleBatchGenerateEntities}
+                        disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 disabled:opacity-50 transition-all border border-white/10"
+                        title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
+                    >
+                         {isBatchGeneratingEntities ? (
+                             <>
+                                 <RefreshCw className="animate-spin" size={12} /> 
+                                 {t('批处理中', 'Batching')} {batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : '...'}
+                             </>
+                         ) : (
+                             <>
+                                <Wand2 size={12} /> {t('批量生图', 'Batch Generate Images')}
+                             </>
+                         )}
+                    </button>
+                    <button
+                        onClick={handleStopSubjectBatchTasks}
+                        disabled={!hasRunningSubjectBatchTask || isStoppingBatchGenerateEntities}
+                        className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-red-500/20 hover:bg-red-500/30 text-red-200 flex items-center gap-2 disabled:opacity-50 transition-all border border-red-400/20"
+                        title={t('停止当前批量任务（支持批量生图/批量提示词反推/批量参考生图）', 'Stop current batch task (supports batch generation / prompt reverse / reference generation)')}
+                    >
+                        {isStoppingBatchGenerateEntities ? (
+                            <>
+                                <Loader2 className="animate-spin" size={12} />
+                                {t('停止中', 'Stopping')}
+                            </>
+                        ) : (
+                            <>
+                                <X size={12} /> {t('停止', 'Stop')}
+                            </>
+                        )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeExistingSubjects}
+                        disabled={isBatchAnalyzingEntities || isBatchGeneratingEntities || isBatchReconstructingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="p-2 text-xs font-bold uppercase rounded-md bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 flex items-center justify-center disabled:opacity-50 transition-all border border-indigo-400/20"
+                        title={t('仅批量对“用户上传图片”执行提示词反推并反写信息', 'Batch prompt reverse user-uploaded subject images only and write back metadata')}
+                    >
+                        {isBatchAnalyzingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={14} />
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={14} />
+                            </>
+                        )}
+                    </button>
+                    <button
+                        onClick={handleBatchAnalyzeAndReconstructSubjects}
+                        disabled={isBatchReconstructingEntities || isBatchAnalyzingEntities || isBatchGeneratingEntities || isReconstructingEntity || isAnalyzingEntity}
+                        className="p-2 text-xs font-bold uppercase rounded-md bg-violet-500/20 hover:bg-violet-500/30 text-violet-100 flex items-center justify-center disabled:opacity-50 transition-all border border-violet-400/20"
+                        title={t('仅对用户上传图片执行：批量参考生图', 'Batch reference image generation for user-uploaded images only')}
+                    >
+                        {isBatchReconstructingEntities ? (
+                            <>
+                                <RefreshCw className="animate-spin" size={14} />
+                            </>
+                        ) : (
+                            <>
+                                <Wand2 size={14} />
+                            </>
+                        )}
+                    </button>
+
                 </div>
             </div>
 
@@ -5106,13 +5128,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={imageActionLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片（素材库/上传）', 'Change Image (Library/Upload)')}
                                 >
-                                    <ImagePlus size={16} />
+                                    <ImageIcon size={16} />
                                 </button>
                                 <button 
                                     onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); setRefImage(null); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
                                     disabled={imageActionLocked}
                                     className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title={t('生成图片', 'Generate Image')}
+                                    title={t('生成 AI 图片', 'Generate AI Image')}
                                 >
                                     <Wand2 size={16} />
                                 </button>
@@ -5250,19 +5272,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 )}
                                 
                                 {viewingEntity.id !== 'new' && (
-                                    <div className="absolute top-4 left-4 flex gap-2 z-10">
+                                    <div className="absolute top-4 left-4 flex gap-2">
                                          
                                          <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setViewingEntity(null); 
-                                                handleOpenImageModal(viewingEntity, 'library');
-                                            }}
+                                            onClick={() => { setViewingEntity(null); handleOpenImageModal(viewingEntity, 'library'); }}
                                             disabled={viewingEntityImageLocked}
                                             className="p-3 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                                           title={viewingEntityImageLocked ? t('图片任务运行中，不能更换图片', 'Image job is running; image changes are disabled') : t('更换图片', 'Change Image')}
                                          >
-                                             <ImagePlus size={20} />
+                                             <ImageIcon size={20} />
                                          </button>
                                          <button
                                             onClick={(e) => {
@@ -6422,29 +6440,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 accept="image/*" 
                                                 onChange={handleUpload}
                                                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                                disabled={uploadState !== 'idle' || selectedEntityImageLocked} 
+                                                disabled={uploading || selectedEntityImageLocked} 
                                             />
-                                            {uploadState !== 'idle' ? (
-                                                uploadState === 'completed' ? (
-                                                    <CheckCircle className="text-green-500 mb-2" size={32} />
-                                                ) : uploadState === 'analyzing' ? (
-                                                    <RefreshCw className="animate-spin text-purple-400 mb-2" size={32} />
-                                                ) : (
-                                                    <RefreshCw className="animate-spin text-blue-400 mb-2" size={32} />
-                                                )
+                                            {uploading ? (
+                                                <RefreshCw className="animate-spin text-primary mb-2" size={32} />
                                             ) : (
                                                 <Upload className="text-muted-foreground mb-2" size={32} />
                                             )}
-                                            <span className={`text-sm font-medium ${
-                                                uploadState === 'uploading' ? 'text-blue-400' :
-                                                uploadState === 'analyzing' ? 'text-purple-400' :
-                                                uploadState === 'completed' ? 'text-green-500' :
-                                                'text-muted-foreground'
-                                            }`}>
-                                                {uploadState === 'uploading' && t('正在上传...', 'Uploading...')}
-                                                {uploadState === 'analyzing' && t('正在分析...', 'Analyzing...')}
-                                                {uploadState === 'completed' && t('已分析完成', 'Analysis completed')}
-                                                {uploadState === 'idle' && t('点击或拖拽图片到此处', 'Click or drop image here')}
+                                            <span className="text-sm font-medium text-muted-foreground">
+                                                {uploading ? t('上传中...', 'Uploading...') : t('点击或拖拽图片到此处', 'Click or drop image here')}
                                             </span>
                                         </div>
                                         
@@ -6452,59 +6456,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                              <div className="text-xs text-muted-foreground mb-2 uppercase font-bold tracking-wider">{t('或通过 URL 导入', 'Or import from URL')}</div>
                                              <div className="flex gap-2">
                                                 <input 
-                                                    id="url-import-input"
                                                     type="text" 
                                                     placeholder={t('请输入图片链接（https://...）', 'Enter image URL (https://...)')} 
                                                     className="flex-1 bg-black/40 border border-white/10 rounded-md px-3 py-2 text-sm focus:border-primary/50 outline-none"
-                                                    disabled={selectedEntityImageLocked || uploadState !== 'idle'}
-                                                    onKeyDown={async (e) => {
-                                                        if (e.key === 'Enter') {
-                                                            const url = e.target.value;
-                                                            if (!url) return;
-                                                            setUploadState('analyzing');
-                                                            const updatedEntity = await updateEntityImage(url, false, null, { skipAnalyze: true });
-                                                            if (updatedEntity) {
-                                                                const analyzed = await handleAnalyzeEntity(updatedEntity);
-                                                                if (!analyzed) {
-                                                                    setUploadState('idle');
-                                                                    return;
-                                                                }
-                                                                setUploadState('completed');
-                                                                setTimeout(() => {
-                                                                    setShowImageModal(false);
-                                                                    setUploadState('idle');
-                                                                }, 1500);
-                                                            } else {
-                                                                setUploadState('idle');
-                                                            }
-                                                        }
+                                                    disabled={selectedEntityImageLocked}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') updateEntityImage(e.target.value);
                                                     }}
                                                 />
-                                                <button 
-                                                    disabled={selectedEntityImageLocked || uploadState !== 'idle'} 
-                                                    className="p-2 bg-white/10 hover:bg-white/20 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                                    onClick={async () => {
-                                                        const el = document.getElementById('url-import-input');
-                                                        const url = el?.value;
-                                                        if (!url) return;
-                                                        setUploadState('analyzing');
-                                                        const updatedEntity = await updateEntityImage(url, false, null, { skipAnalyze: true });
-                                                        if (updatedEntity) {
-                                                            const analyzed = await handleAnalyzeEntity(updatedEntity);
-                                                            if (!analyzed) {
-                                                                setUploadState('idle');
-                                                                return;
-                                                            }
-                                                            setUploadState('completed');
-                                                            setTimeout(() => {
-                                                                setShowImageModal(false);
-                                                                setUploadState('idle');
-                                                            }, 1500);
-                                                        } else {
-                                                            setUploadState('idle');
-                                                        }
-                                                    }}
-                                                >
+                                                <button disabled={selectedEntityImageLocked} className="p-2 bg-white/10 hover:bg-white/20 rounded-md disabled:opacity-50 disabled:cursor-not-allowed">
                                                     <LinkIcon size={18} />
                                                 </button>
                                              </div>

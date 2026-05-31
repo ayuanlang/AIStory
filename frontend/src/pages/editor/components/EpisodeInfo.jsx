@@ -454,7 +454,7 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                     </div>
 
                     <InputGroup idPrefix={prefix}
-                        label={t('基础定位', 'Base Positioning')} 
+                        label={t('剧本模式 (基础定位)', 'Script Mode (Base Positioning)')} 
                         value={data.base_positioning} 
                         onChange={v => updateField('base_positioning', v)} 
                         list={PROJECT_EP_BASE_POSITIONING_OPTIONS}
