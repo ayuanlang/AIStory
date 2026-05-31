@@ -4451,6 +4451,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             const workerLimit = Math.max(1, SUBJECT_BATCH_PARALLEL_LIMIT);
             const activeTasks = new Map();
 
+            const getSceneContextLabel = () => {
+                if (currentSceneRank == null) return '';
+                if (currentSceneRank >= 99999) return t(' (全局/跨场景素材)', ' (Global/Cross-scene assets)');
+                if (scenesToScan.length > 0) {
+                    return t(` (场景 ${currentSceneRank + 1}/${scenesToScan.length})`, ` (Scene ${currentSceneRank + 1}/${scenesToScan.length})`);
+                }
+                return '';
+            };
+
             const updateGenerateActiveStatus = () => {
                 if (activeTasks.size === 0) return;
                 const activeLabels = Array.from(activeTasks.values())
@@ -4460,7 +4469,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 updateGenerateBatchRuntimeState(true, {
                     current: Math.min(processedCount + 1, toGenerate.length),
                     total: toGenerate.length,
-                    status: t(`生成中：${activeLabels}`, `Generating: ${activeLabels}`),
+                    status: t(`生成中${getSceneContextLabel()}：${activeLabels}`, `Generating${getSceneContextLabel()}: ${activeLabels}`),
                 });
             };
 
@@ -4665,7 +4674,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 updateGenerateBatchRuntimeState(true, {
                     current: processedCount,
                     total: toGenerate.length,
-                    status: t(`已处理 ${processedCount}/${toGenerate.length}`, `Processed ${processedCount}/${toGenerate.length}`),
+                    status: t(`已处理 ${processedCount}/${toGenerate.length}${getSceneContextLabel()}`, `Processed ${processedCount}/${toGenerate.length}${getSceneContextLabel()}`),
                 });
                 updateGenerateActiveStatus();
             }

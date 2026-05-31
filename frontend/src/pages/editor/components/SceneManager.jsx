@@ -559,6 +559,35 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     )
 };
 
+export const parseDurationSeconds = (str) => {
+    if (!str) return 0;
+    const s = String(str).trim();
+    // try timespan: 00:13-00:25 or 00:13:00-00:25:00
+    const timespanMatch = s.match(/(?:(\d+):)?(\d+):(\d+)\s*-\s*(?:(\d+):)?(\d+):(\d+)/);
+    if (timespanMatch) {
+        const start = (parseInt(timespanMatch[1] || '0') * 3600) + parseInt(timespanMatch[2]) * 60 + parseInt(timespanMatch[3]);
+        const end = (parseInt(timespanMatch[4] || '0') * 3600) + parseInt(timespanMatch[5]) * 60 + parseInt(timespanMatch[6]);
+        return Math.max(0, end - start);
+    }
+    // try time format: 00:12 or 01:23:45
+    const timeMatch = s.match(/^(?:(\d+):)?(\d+):(\d+)/);
+    if (timeMatch) {
+         return (parseInt(timeMatch[1] || '0') * 3600) + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
+    }
+    // try simple number with optional 's' or 'm'
+    const match = s.match(/^(\d+(?:\.\d+)?)\s*(s|m|)?/i);
+    if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2]?.toLowerCase();
+        if (unit === 'm') return val * 60;
+        return val;
+    }
+    // extract any number
+    const numMatch = s.match(/(\d+(?:\.\d+)?)/);
+    if (numMatch) return parseFloat(numMatch[1]);
+    return 0;
+};
+
 export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, onClick, onGenerateShots, onStopGenerateShots, onSupplementShots, onDelete, selected = false, onToggleSelect, uiLang = 'zh', generatingShots = false, subjectGap = null, onSupplementSubjects = null, supplementingSubjects = false, onRecomputeCost = null, sceneCostData = null }) => {
     const [images, setImages] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -4260,7 +4289,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                 {t('所有场景数', 'Total Scenes')}: <span className="text-white font-medium">{scenes?.length || 0}</span>
                             </span>
                             <span>
-                                {t('预计总时长', 'Est. Total Duration')}: <span className="text-white font-medium">{Math.round((scenes || []).reduce((sum, s) => sum + (Number(s.equivalent_duration) || 0), 0) * 10) / 10}s</span>
+                                {t('预计总时长', 'Est. Total Duration')}: <span className="text-white font-medium">{Math.round((scenes || []).reduce((sum, s) => sum + parseDurationSeconds(s.equivalent_duration), 0) * 10) / 10}s</span>
                             </span>
                             <span>
                                 {t('预计总建议成本', 'Est. Total Cost')}: <span className="text-emerald-300 font-medium">¥{((scenes || []).reduce((sum, s) => sum + (Number(sceneCostMap[s?.id]?.suggested_cost) || 0), 0)).toFixed(2)}</span>
