@@ -4743,6 +4743,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "characters": [], "covers": [],
                 "props": [],
                 "environments": [],
+                "posters": [],
             }
             raw = str(text or "")
             if not raw:
@@ -4941,6 +4942,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": {},
                 "environments": {},
                 "covers": {},
+                "posters": {},
             }
             raw = str(text or "")
             if not raw:
@@ -5103,6 +5105,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": [],
                 "environments": [],
                 "covers": [],
+                "posters": [],
             }
 
             def _find_match(record: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -5260,6 +5263,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         "props": 0,
                         "environments": 0,
                         "covers": 0,
+                        "posters": 0,
                     },
                     "missing_total": 0,
                     "missing_by_bucket": {
@@ -5290,6 +5294,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": [],
                 "environments": [],
                 "covers": [],
+                "posters": [],
             }
             for bucket in ("characters", "props", "environments", "covers", "posters"):
                 expected_bucket = expected.get(bucket) or {}
@@ -5310,14 +5315,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     parts.append(f"props缺失{len(missing_by_bucket['props'])}项")
                 if missing_by_bucket["environments"]:
                     parts.append(f"environments缺失{len(missing_by_bucket['environments'])}项")
-                if missing_by_bucket["covers"]:
-                    parts.append(f"posters/covers缺失{len(missing_by_bucket['covers'])}项")
+                if missing_by_bucket["covers"] or missing_by_bucket["posters"]:
+                    parts.append(f"posters/covers缺失{len(missing_by_bucket['covers']) + len(missing_by_bucket['posters'])}项")
 
                 preview_items = (
                     missing_by_bucket["props"][:5]
                     + missing_by_bucket["characters"][:5]
                     + missing_by_bucket["environments"][:5]
                     + missing_by_bucket["covers"][:5]
+                    + missing_by_bucket["posters"][:5]
                 )
                 preview = ", ".join([str(x or "").strip() for x in preview_items if str(x or "").strip()])
                 warnings.append(
@@ -5333,6 +5339,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "props": len(expected.get("props") or {}),
                     "environments": len(expected.get("environments") or {}),
                     "covers": len(expected.get("covers") or {}),
+                    "posters": len(expected.get("posters") or {}),
                 },
                 "missing_total": missing_total,
                 "missing_by_bucket": missing_by_bucket,
@@ -5346,6 +5353,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": {},
                 "environments": {},
                 "covers": {},
+                "posters": {},
             }
             for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for item in (payload.get(bucket) or []):
@@ -5369,6 +5377,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": [],
                 "environments": [],
                 "covers": [],
+                "posters": [],
             }
             for bucket in ("characters", "props", "environments", "covers", "posters"):
                 for key, display in (aggregated_keys.get(bucket) or {}).items():
@@ -5405,12 +5414,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "props": len(selected_keys.get("props") or {}),
                     "environments": len(selected_keys.get("environments") or {}),
                     "covers": len(selected_keys.get("covers") or {}),
+                    "posters": len(selected_keys.get("posters") or {}),
                 },
                 "aggregated_counts": {
                     "characters": len(aggregated_keys.get("characters") or {}),
                     "props": len(aggregated_keys.get("props") or {}),
                     "environments": len(aggregated_keys.get("environments") or {}),
                     "covers": len(aggregated_keys.get("covers") or {}),
+                    "posters": len(aggregated_keys.get("posters") or {}),
                 },
                 "missing_in_selected_by_bucket": missing_in_selected_by_bucket,
                 "missing_total": missing_total,
@@ -13852,6 +13863,7 @@ def _build_project_subject_inventory(
         "characters": [], "covers": [],
         "props": [],
         "environments": [],
+        "posters": [],
     }
 
     entities_query = db.query(Entity).filter(Entity.project_id == int(project_id))
@@ -13911,7 +13923,8 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
         "characters": "角色",
         "props": "道具",
         "environments": "场景",
-        "covers": "封面"
+        "covers": "封面",
+        "posters": "海报"
     }
 
     def _format_bucket(bucket_name: str) -> str:
@@ -14077,6 +14090,7 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         "characters": [], "covers": [],
         "props": [],
         "environments": [],
+        "posters": [],
     }
     text = str(raw_text or "").strip()
     if not text:
@@ -14807,6 +14821,8 @@ async def regenerate_scene(
             "characters": len(subjects_json.get("characters") or []),
             "props": len(subjects_json.get("props") or []),
             "environments": len(subjects_json.get("environments") or []),
+            "covers": len(subjects_json.get("covers") or []),
+            "posters": len(subjects_json.get("posters") or []),
         },
         "scenes": [
             {

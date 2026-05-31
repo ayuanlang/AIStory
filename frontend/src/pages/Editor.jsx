@@ -1922,7 +1922,7 @@ const Editor = ({
                     }
 
                     // Posters
-                    const resolvedPosters = (data.posters && Array.isArray(data.posters)) ? data.posters : ((data.covers && Array.isArray(data.covers)) ? data.covers : null);
+                    const resolvedPosters = (data.posters && Array.isArray(data.posters) && data.posters.length > 0) ? data.posters : ((data.covers && Array.isArray(data.covers) && data.covers.length > 0) ? data.covers : null);
                     if (resolvedPosters) {
                         for (const poster of resolvedPosters) {
                                       const entityName = String(

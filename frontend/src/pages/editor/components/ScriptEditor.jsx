@@ -4187,22 +4187,67 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         phase2GenerationInFlightRef.current = true;
 
+
+
+        const promptFilesRaw = [
+
+
+            { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
+
+
+            { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
+
+
+            { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
+
+
+        ];
+
+
+
+        let targetFilters = options.targetEntityTypes;
+
+
+        if (targetFilters && (targetFilters.includes('posters') || targetFilters.includes('covers')) && !targetFilters.includes('environments')) {
+
+
+            targetFilters = [...targetFilters, 'environments'];
+
+
+        }
+
+
+
+        const promptFiles = promptFilesRaw.filter(p => !targetFilters || targetFilters.includes(p.key));
+
+
+        const targetAssetsCount = promptFiles.length;
+
+
+
         setAnalysisFlowStatus({
+
+
             phase: "assets_gen",
-            message: t("✨ 正在执行第四阶段资产设计 (共 3 项并发推演)...", "Running Stage 4 asset design..."),
+
+
+            message: t(`✨ 正在执行第四阶段资产设计 (共 ${targetAssetsCount} 项并发推演)...`, `Running Stage 4 asset design (${targetAssetsCount} tasks)...`),
+
+
         });
 
-        const targetAssetsCount = 3;
+
+
         let assetsGenCompletedCount = 0;
 
+
+
         try {
-            onLog?.(`[Stage 3 Asset Design] Preparing to fetch 3 entity_design prompts`);
-            
-            const promptFiles = [
-                { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
-                { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
-                { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
-            ].filter(p => !options.targetEntityTypes || options.targetEntityTypes.includes(p.key));
+
+
+            onLog?.(`[Stage 3 Asset Design] Preparing to fetch ${targetAssetsCount} entity_design prompts`);
+
+
 
             const commonPromptRes = await fetchPrompt("skills/scene_analysis_feature_stack/entity_design_common.md").catch(() => null);
             const commonPromptContent = commonPromptRes?.content || "";
@@ -4353,12 +4398,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             // Merge results
             let mergedBackendSubjectsJson = { characters: [], environments: [], props: [], posters: [], covers: [] };
-            if (options.targetEntityTypes) {
+            if (options.targetEntityTypes && Array.isArray(options.targetEntityTypes)) {
                 const existingEntities = getAnalysisEntitiesPayloadFromJsonText(
                     activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || ''
                 ) || {};
                 ['characters', 'environments', 'props', 'posters', 'covers'].forEach(k => {
-                    if (!options.targetEntityTypes.includes(k) && existingEntities[k]) {
+                    const isTarget = options.targetEntityTypes.includes(k) || ((k === 'posters' || k === 'covers') && (options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers')));
+                    if (!isTarget && existingEntities[k]) {
                         mergedBackendSubjectsJson[k] = existingEntities[k];
                     }
                 });
@@ -4375,17 +4421,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         bJson = getAnalysisEntitiesPayloadFromJsonText(aText) || {};
                     }
 
-                    if (bJson) {
-                        if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
-                        if (r.value.key === 'environments') {
-                            if (bJson.environments) mergedBackendSubjectsJson.environments = bJson.environments;
-                            if (bJson.posters) mergedBackendSubjectsJson.posters = bJson.posters;
-                            if (bJson.covers) mergedBackendSubjectsJson.covers = bJson.covers;
-                        }
-                        if (r.value.key === 'props' && bJson.props) mergedBackendSubjectsJson.props = bJson.props;
+                                          if (bJson) {
+                          if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
+                          if (r.value.key === 'environments') {
+                              if (bJson.environments && (!options.targetEntityTypes || options.targetEntityTypes.includes('environments'))) mergedBackendSubjectsJson.environments = bJson.environments;
+                              if (bJson.posters && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) mergedBackendSubjectsJson.posters = bJson.posters;
+                              if (bJson.covers && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) mergedBackendSubjectsJson.covers = bJson.covers;
+                          }
+                          if (r.value.key === 'props' && bJson.props) mergedBackendSubjectsJson.props = bJson.props;
                         if (r.value.key === 'posters') {
-                            if (bJson.posters) mergedBackendSubjectsJson.posters = bJson.posters;
-                            if (bJson.covers) mergedBackendSubjectsJson.covers = bJson.covers;
+                            if (bJson.posters && (!options.targetEntityTypes || options.targetEntityTypes.includes('posters') || options.targetEntityTypes.includes('covers'))) mergedBackendSubjectsJson.posters = bJson.posters;
+                            if (bJson.covers && (!options.targetEntityTypes || options.targetEntityTypes.includes('covers') || options.targetEntityTypes.includes('posters'))) mergedBackendSubjectsJson.covers = bJson.covers;
                         }
                     }
                     if (aText) {
