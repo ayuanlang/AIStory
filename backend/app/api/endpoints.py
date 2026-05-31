@@ -21090,29 +21090,6 @@ def get_assets(
             "created_at": a.created_at
         })
 
-
-    if assets_filter_debug or episode_id or include_null_episode_for_project_scope:
-        logger.info(
-            "[AssetsFilterDiag] user_id=%s params=%s stats=%s reasons=%s episode_reject_samples=%s",
-            int(getattr(current_user, "id", 0) or 0),
-            {
-                "type": type,
-                "project_id": project_id,
-                "episode_id": episode_id,
-                "include_project_null_episode": include_project_null_episode,
-                "current_project_asset": current_project_asset,
-                "skip": safe_skip,
-                "limit": safe_limit,
-                "strict_meta_filter": strict_meta_filter,
-            },
-            filter_stats,
-            filter_reason_stats,
-            episode_reject_samples,
-        )
-
-    if results:
-        logger.info("Asset response count=%s", len(results))
-
     return results
 
 def create_asset_url(

@@ -383,6 +383,7 @@ class LoggingMiddleware:
             "/openapi.json",
             "/favicon.ico",
             "/healthz",
+            "/api/v1/system_logs/actions",
         }
         is_noise = path in noise_exact or any(path.startswith(p) for p in noise_prefixes)
 
@@ -433,13 +434,8 @@ class LoggingMiddleware:
             size_part = f" | ReqBytes: {content_length}" if content_length else ""
 
             if 200 <= status_code < 400:
-                is_basic_get = method == "GET" and not any(k in path for k in ("/export", "/download"))
-                if not is_basic_get:
-                    logger.info(
-                        f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
-                        f"Action: {action} | Method: {method} | Path: {path} | "
-                        f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
-                    )
+                # 屏蔽所有正常访问的日志（前后端简单访问日志都去掉）
+                pass
             elif 400 <= status_code < 500:
                 logger.warning(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "

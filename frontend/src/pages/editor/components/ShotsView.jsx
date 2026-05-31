@@ -912,10 +912,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const finalList = Array.from(dedupMap.values())
                 .concat(fallbackFromShot)
                 .sort((a, b) => (Number(b?.createdAtMs || 0) - Number(a?.createdAtMs || 0)));
-            onLog?.(
-                `[ShotHistoryDiag] shot_id=${stableShotId} source=assets_only assets=${persistedAssets.length} fallback=${fallbackFromShot.length} final=${finalList.length}`,
-                finalList.length > 0 ? 'info' : 'warning'
-            );
             setShotGenerationHistory(finalList.slice(0, 16));
         } catch (e) {
             onLog?.(`Failed to load shot generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
