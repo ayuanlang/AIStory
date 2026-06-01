@@ -82,3 +82,6 @@ wrapt==2.1.1
 boto3
 email-validator
 h2
+
+volcengine-python-sdk
+volcenginesdkarkruntime

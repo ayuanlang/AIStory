@@ -5267,7 +5267,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     },
                     "missing_total": 0,
                     "missing_by_bucket": {
-                        "characters": [], "props": [], "environments": [], "covers": [], "posters": []
+                        "characters": [], "props": [], "environments": [], "covers": [], "posters": [], "posters": []
                     },
                     "warning_codes": [],
                     "warnings": [],

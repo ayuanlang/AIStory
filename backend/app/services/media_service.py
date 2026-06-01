@@ -1,4 +1,4 @@
-
+﻿
 import requests
 import re
 import urllib.parse
@@ -514,6 +514,177 @@ class MediaGenerationService:
             or cfg.get("pricing_tier")
         )
 
+
+    def _do_volc_request(self, method: str, action: str, version: str, req_body: str, service: str, ak: str, sk: str) -> dict:
+        import urllib.parse
+        from volcenginesdkcore.signv4 import SignerV4
+        import requests
+        
+        host = "open.volcengineapi.com"
+        headers = {
+            "Content-Type": "application/json",
+            "Host": host
+        }
+        query = {
+            "Action": action,
+            "Version": version
+        }
+        
+        # We must use SignerV4 to inject Authorization, X-Date, etc. into headers
+        SignerV4.sign('/', method, headers, req_body, None, query, ak, sk, "cn-beijing", service)
+        
+        url = f"https://{host}/?Action={action}&Version={version}"
+        print(f"[Volcengine] Requesting: {url} | payload length: {len(req_body)}")
+        resp = requests.request(method, url, headers=headers, data=req_body.encode('utf-8'))
+        print(f"[Volcengine] Response {resp.status_code}: {resp.text[:500]}")
+        
+        if resp.status_code != 200:
+            raise Exception(f"Volcengine HTTP {resp.status_code}: {resp.text}")
+            
+        r_json = resp.json()
+        if "ResponseMetadata" in r_json and "Error" in r_json["ResponseMetadata"]:
+            raise Exception(f"Volcengine API Error: {r_json['ResponseMetadata']['Error']}")
+            
+        return r_json.get("Result", r_json)
+
+    async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, duration=None, aspect_ratio=None) -> dict:
+        api_key = config.get("api_key", "")
+        ak, sk, dp_token = "", "", ""
+        if ":" in api_key and api_key.count(":") >= 2:
+            parts = api_key.split(":", 2)
+            ak = parts[0]
+            sk = parts[1]
+            dp_token = parts[2]
+        else:
+            return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
+            
+        ref_image = reference_image_url
+        if isinstance(ref_image, list):
+            ref_image = ref_image[0] if len(ref_image) > 0 else None
+            
+        if not ref_image:
+            return {"error": "seedance 2.0 requires an image reference"}
+            
+        import base64
+        import json
+        
+        img_b64 = ""
+        if str(ref_image).startswith("http"):
+            import requests
+            img_b64 = base64.b64encode(requests.get(ref_image).content).decode("utf-8")
+            asset_url = ref_image
+        else:
+            marker = ";base64,"
+            idx = ref_image.find(marker)
+            if idx != -1:
+                img_b64 = ref_image[idx + len(marker):].strip()
+            else:
+                img_b64 = ref_image
+            asset_url = ref_image if str(ref_image).startswith("data:") else f"data:image/jpeg;base64,{img_b64}"
+                
+        try:
+            group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", json.dumps({"Name": "seedance_asset"}), "ark", ak, sk)
+            asset_group_id = group_res.get("GroupId") or group_res.get("Id")
+            if not asset_group_id:
+                return {"error": f"Failed to create AssetGroupId: {group_res}"}
+                
+            asset_payload = json.dumps({
+                "GroupId": asset_group_id,
+                "AssetType": "Image",
+                "URL": asset_url,
+                "Name": "seedance_image"
+            })
+            asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
+            asset_id = asset_res.get("Asset", {}).get("AssetId") or asset_res.get("Asset", {}).get("Id") or asset_res.get("Id")
+            if not asset_id:
+                return {"error": f"Failed to create Asset: {asset_res}"}
+                
+            import time
+            import asyncio
+            max_polls = 180
+            ready = False
+            for _ in range(max_polls):
+                await asyncio.sleep(5)
+                poll_req = json.dumps({"Id": asset_id})
+                poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
+                try:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"GetAsset response: {poll_res}")
+                except:
+                    print(f"GetAsset response: {poll_res}")
+                    
+                status = poll_res.get("Asset", {}).get("Status", "")
+                if not status:
+                    status = poll_res.get("Asset", {}).get("status", "")
+                    
+                status = str(status).lower()
+                
+                if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
+                    ready = True
+                    break
+                if status == "failed":
+                    return {"error": f"Asset upload failed during polling: {poll_res}"}
+                    
+            if not ready:
+                return {"error": "Timed out waiting for Ark asset to become ready"}
+                
+            # Fire the generation task
+            task_endpoint = "https://ark.cn-beijing.volces.com/api/v3/content_generation/tasks"
+            
+            model_id = config.get("model", "") # Get the model endpoint ID from config
+            if not model_id or model_id in ["default", ""]:
+                # If they leave it empty, use the generic default for seedance model
+                model_id = "doubao-seedance-2-0-260128"
+                
+            task_payload = {
+                "model": model_id,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"asset://{asset_id}"
+                        },
+                        "role": "reference_image"
+                    }
+                ],
+                "generate_audio": True,
+                "watermark": True
+            }
+            
+            if duration:
+                try:
+                    task_payload["duration"] = int(duration)
+                except:
+                    pass
+            
+            if aspect_ratio:
+                task_payload["ratio"] = str(aspect_ratio)
+                
+            task_headers = {
+                "Authorization": f"Bearer {dp_token}",
+                "Content-Type": "application/json"
+            }
+            
+            _debug_log(f"Submitting seedance 2.0 generation (task create) -> {task_endpoint}", "info")
+            extra_metadata = {"provider": "ark-seedance", "model": model_id}
+            
+            return await self._submit_and_poll_video(
+                url=task_endpoint,
+                payload=task_payload,
+                api_key=dp_token,
+                log_tag="ark-seedance",
+                extra_metadata=extra_metadata,
+                poll_timeout_seconds=300
+            )
+        except Exception as e:
+            import traceback
+            _debug_log(f"ark-seedance exception: {e}\n{traceback.format_exc()}", "error")
+            return {"error": str(e)}
     def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
         has_output = bool(payload.get("url")) or bool(payload.get("video_url"))
@@ -3180,6 +3351,8 @@ class MediaGenerationService:
                     return await self._handle_doubao_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if effective_provider == "grsai":
                     return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
+                if effective_provider == "ark-seedance":
+                    return await self._handle_ark_seedance_generation("video", prompt, active_config, effective_reference_image_url, duration=duration, aspect_ratio=aspect_ratio)
                 if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
@@ -5048,7 +5221,7 @@ class MediaGenerationService:
             # Poll
             poll_url = f"{endpoint}/{task_id}"
             for _ in range(90):
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 p_resp = await asyncio.to_thread(
                     lambda: requests.get(poll_url, headers=headers, timeout=30)
                 )
@@ -5480,7 +5653,7 @@ class MediaGenerationService:
 
             # Poll
             for _ in range(90):
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
 
                 def _poll():
                     return requests.post(result_url, json={"id": task_id}, headers=headers, timeout=30, verify=False)
@@ -5622,7 +5795,7 @@ class MediaGenerationService:
             if not job_id: return {"error": "No JobId"}
             
             for _ in range(60):
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 q_resp = await call_tencent_api("QueryTextToImageJob", {"JobId": job_id})
                 if q_resp.status_code == 200:
                     q_data = q_resp.json()
@@ -5774,7 +5947,7 @@ class MediaGenerationService:
         task_endpoint = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
         
         for _ in range(120):
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
             def _poll(): return requests.get(task_endpoint, headers={"Authorization": f"Bearer {api_key}"}, timeout=30, verify=False)
             p_resp = await asyncio.to_thread(_poll)
             
@@ -7617,7 +7790,7 @@ class MediaGenerationService:
         poll_url = f"{poll_base}/tasks/{task_id}"
 
         for attempt in range(150):
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
             try:
                 poll_resp = await asyncio.to_thread(requests.get, poll_url, headers=headers, timeout=30, verify=False)
                 if poll_resp.status_code in [200, 201] and poll_resp.text:
@@ -9909,7 +10082,7 @@ class MediaGenerationService:
                     )
 
             for i in range(150):
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
 
                 def _poll():
                     return requests.post(poll_url, json={"id": task_id}, headers=headers, timeout=(10, 30), verify=False)
@@ -11813,7 +11986,7 @@ class MediaGenerationService:
                 resp = await asyncio.to_thread(_post_submit, submit_payload)
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as first_err:
                 _debug_log(f"[KIE] Submit connection/timeout error, retrying once: {str(first_err)[:150]}", "warning")
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 resp = await asyncio.to_thread(_post_submit, submit_payload)
         except requests.exceptions.RequestException as e:
             return {"error": "KIE request failed", "details": str(e), "submit_failed": True}

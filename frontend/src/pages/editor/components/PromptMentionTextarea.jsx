@@ -108,30 +108,6 @@ export const PromptMentionTextarea = React.forwardRef(({
     const [pickerOpen, setPickerOpen] = useState(false);
     const [pickerPos, setPickerPos] = useState({ x: 0, y: 0 });
 
-    const isAutoSize = props.autoSize !== false;
-
-    const adjustHeight = () => {
-        if (resolvedRef.current && isAutoSize) {
-            resolvedRef.current.style.height = 'inherit';
-            const height = resolvedRef.current.scrollHeight;
-            resolvedRef.current.style.height = `${Math.max(height, props.minHeight || 0)}px`;
-        }
-    };
-
-    useEffect(() => {
-        if (isAutoSize) {
-            adjustHeight();
-        }
-    }, [value, isAutoSize]);
-
-    // Handle ResizeObserver to recalculate if width changes
-    useEffect(() => {
-        if (!isAutoSize || !resolvedRef.current) return;
-        const ro = new ResizeObserver(() => adjustHeight());
-        ro.observe(resolvedRef.current);
-        return () => ro.disconnect();
-    }, [isAutoSize]);
-
     const handleKeyDown = (e) => {
         // If picker is open, let the user close it with Escape
         if (pickerOpen && e.key === 'Escape') {

@@ -264,7 +264,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
         <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4 mt-3">
             <div className="text-[11px] text-muted-foreground uppercase font-bold mb-2">{userLang('脚本修改与重新生成', 'Modify Script & Regenerate')}</div>
             <PromptMentionTextarea entities={[]} uiLang={uiLang}
-                className="w-full min-h-[96px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                className="w-full h-[192px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                 placeholder={userLang("输入剧本修改与重新生成指令（例如：把狗的颜色换成黑色）...", "Enter instructions to modify script and regenerate (e.g., change the dog's color to black)...")}
                 value={instruction}
                 onChange={e => setInstruction(e.target.value)}
@@ -8517,7 +8517,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  {selectedSceneId ? (
                      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6 pb-20">
                         {isShotsLoading && !hasShotInitialLoadCompleted && sortedShots.length === 0 && (
-                            <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
+                            <div className="col-span-full min-h-[256px] flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
                                 <Loader2 className="w-12 h-12 mb-4 animate-spin text-primary" />
                                 <p>{t('镜头预装入中...', 'Preloading shots...')}</p>
                             </div>
@@ -8616,7 +8616,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             );
                         })}
                         {sortedShots.length === 0 && !isShotsLoading && hasShotInitialLoadCompleted && (
-                            <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
+                            <div className="col-span-full min-h-[256px] flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
                                 <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>
                                 <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>{t('导入镜头表', 'Import Shots Table')}</button>
@@ -8778,7 +8778,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 min-h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[160px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
                                     readOnly={true}
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
@@ -8792,7 +8792,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
@@ -8912,7 +8912,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             )}
                                         </div>
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             onChange={(e) => {
@@ -8967,7 +8967,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                     {/* End Frame */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('结束帧', 'End Frame')}
@@ -9126,7 +9126,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         </div>
 
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             onChange={(e) => {
@@ -9159,7 +9159,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                     {/* Final Video Output (Moved Here) */}
                                     <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-hidden pr-1 justify-center' : ''}`}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('最终视频', 'Final Video')}
@@ -9274,8 +9274,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     )}</span>
                                                 </div>
                                             )}
-                                            {(editingShot.video_url) ? (
-                                                (isEditingVideoPreviewArmed || currentGeneratingState.video) ? (
+                                            {currentGeneratingState.video ? (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 overflow-hidden pointer-events-none">
+                                                    {resolveShotVideoPosterUrl(editingShot) ? (
+                                                        <SafeImage
+                                                            src={resolveShotVideoPosterUrl(editingShot)}
+                                                            alt={editingShot.shot_name || 'video poster'}
+                                                            loading="lazy"
+                                                            className="absolute inset-0 w-full h-full object-contain opacity-40 mix-blend-overlay"
+                                                        />
+                                                    ) : null}
+                                                </div>
+                                            ) : (editingShot.video_url) ? (
+                                                isEditingVideoPreviewArmed ? (
                                                     <ManagedVideoPlayer
                                                         src={editingShot.video_url}
                                                         poster={resolveShotVideoPosterUrl(editingShot)}
@@ -9283,7 +9294,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         wrapperClassName="w-full h-full"
                                                         preload="metadata"
                                                         suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
-                                                        hideBusyOverlay={Boolean(currentGeneratingState.video)}
+                                                        hideBusyOverlay={false}
                                                         uiLang={uiLang}
                                                         onClick={(e) => e?.preventDefault?.()}
                                                     />
@@ -9380,7 +9391,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     </button>
 </div>
 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
@@ -9722,7 +9733,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                                 {/* Prompt Area */}
                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang} 
-                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[60px] focus:border-primary/50 outline-none resize-none"
+                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[120px] focus:border-primary/50 outline-none resize-none"
                                                     placeholder={t('关键帧描述...', 'Keyframe Description...')}
                                                     value={kf.prompt}
                                                     onChange={(e) => {
@@ -10354,7 +10365,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextEn}
                                                                         onChange={(e) => {
                                                                             setEditingShot({...editingShot, start_frame: e.target.value});
@@ -10364,7 +10375,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('start_frame_cn', e.target.value);
@@ -10470,7 +10481,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextEn}
                                                                         onChange={(e) => {
                                                                             handleManualEndFrameInputChange(e.target.value);
@@ -10480,7 +10491,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('end_frame_cn', e.target.value);
@@ -10693,7 +10704,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('中文提示词', 'Prompt (CN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextCn}
                                                                     onChange={(e) => {
                                                                         updateTechField('video_prompt_cn', e.target.value);
@@ -10703,7 +10714,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextEn}
                                                                     onChange={(e) => {
                                                                         setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
@@ -10781,7 +10792,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 })}
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full min-h-[224px] bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full h-[448px] bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
@@ -10789,7 +10800,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             }} />
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                className="w-full min-h-[192px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                className="w-full h-[384px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
                                                                 onChange={(e) => {
                                                                     const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
@@ -10970,7 +10981,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     <div className="flex flex-col gap-2">
                                         <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
                                         <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono h-64 focus:outline-none focus:border-primary/50 resize-y"
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono min-h-[256px] focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.user_prompt || ''}
                                             onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, user_prompt: e.target.value}}))}
                                         />
@@ -10982,7 +10993,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                               <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
                                          </div>
                                         <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-32 focus:outline-none focus:border-primary/50 resize-y"
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono min-h-[128px] focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.system_prompt || ''}
                                             onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, system_prompt: e.target.value}}))}
                                         />
@@ -11064,7 +11075,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
                                             </div>
                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('内容', 'Content')}</div>
-                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] h-[176px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
                                                 const newData = [...shotReviewModal.data];
                                                 newData[idx] = { ...shot, "Video Content": e.target.value };
                                                 setShotReviewModal(prev => ({...prev, data: newData}));

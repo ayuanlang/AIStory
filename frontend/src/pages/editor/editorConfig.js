@@ -18,6 +18,7 @@ export const PROVIDER_LABELS = {
         "Stable Video": "Stable Video Component",
         "Doubao Video": "Doubao (豆包 - Volcengine)",
         "Zlhub Video": "Zlhub (中联 / Doubao Seedance)",
+        "ark-seedance": "Ark-Seedance (火山原生)",
         "Wanxiang": "Wanxiang (通义万相 - Aliyun)",
         "Vidu (Video)": "Vidu (Shengshu)"
     }
@@ -77,6 +78,9 @@ export const MODEL_OPTIONS = {
         ],
         "Sora": [
              { label: "Sora", value: "sora" }
+        ],
+        "ark-seedance": [
+            { label: "Doubao Seedance 2.0 (ep)", value: "ep-doubao-seedance-2" }
         ],
         "Grsai-Video": [
             { label: "Sora Video", value: "sora-video" },
