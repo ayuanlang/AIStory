@@ -20034,9 +20034,21 @@ def remind_admin_expired_files(
     reminded_count = 0
     for u_id, stats in users_to_remind.items():
         mb_size = stats["size"] / (1024*1024)
-        msg_content = f"<h1>Storage Lifecycle Exceeded</h1><p>Dear user,</p><p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 60-day storage limit.</p><p>Please back them up. They will be removed within 3 working days.</p>"
+        msg_content = (
+            f"<h1>Storage Lifecycle Exceeded / 超期文件清理通知</h1>"
+            f"<p>Dear user / 尊敬的用户,</p>"
+            f"<p>You have {stats['count']} file(s) occupying {mb_size:.2f} MB that have exceeded the 60-day storage limit.</p>"
+            f"<p>您的账号中有 {stats['count']} 个文件（占用空间 {mb_size:.2f} MB）已超过 60 天存储期限。</p>"
+            f"<p>Please back them up. They will be removed within 3 working days.</p>"
+            f"<p>请及时备份这些文件。系统将在 3 个工作日内进行清理。</p>"
+        )
         try:
-            _send_email_via_runtime_smtp(stats["email"], "Action Required: Expired Files Deletion", content="You have files exceeding the 60-day limit. Please back them up.", html_content=msg_content)
+            _send_email_via_runtime_smtp(
+                stats["email"], 
+                "Action Required: Expired Files Deletion / 需要操作：超期文件清理", 
+                content="You have files exceeding the 60-day limit. Please back them up. / 您的文件已超过60天存储期限，请及时备份。", 
+                html_content=msg_content
+            )
             reminded_count += 1
         except Exception as e:
             logger.error(f"Failed to send reminder email to {stats['email']}: {e}")

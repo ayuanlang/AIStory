@@ -63,20 +63,20 @@
 
 ### Part 1: Scenes Table (Markdown)
 【字段填写铁则（缺一不可）】：
-- **{Env Anchor}**: 给出本次使用的 `ENV:[...]`，正反打双环境等同场使用的全部罗列。
-- **{Dependent Envs}**: 环境是否有重查借用关系？无则标注 `None`。
-- **{Environment Context}**: 给出物理大基调以及可演戏区域的光照提示（正常亮度默认清晰可见，隐匿黑暗局需要交代轮廓可见度基准）。
-- **{Plot Stage}**: 【序幕 / 建置 / 激励事件 / 发展 / 危机与中点 / 转折 / 高潮 / 回收下落 / 结局 / 悬念钩子】择一。
-- **{Plot Summary}** & **{Previous Scene Summary}**：用极限压缩词汇简要总结。
-- **{Transition Strategy}**: 转场策略交代法（如何从上一个环境过度到本环境的）。
-- **{Duration Estimate Basis}**: 耗时的算术计算过程。
-- **{Plot Coverage}**: "已按要求完整覆盖" 或待补记录。
-- **{Continuity Audit}**: 1句话自我证明站位连续无“瞬穿”。
-- **{Scene Subjects}**: 登场实体的合法枚举 `CHAR:` / `ENV:` / `PROP:`。
+- **{环境锚点}**: 明确列出本场戏使用的全部环境锚点（如 `ENV:[...]`），必须结合前面提取出的全部“建置要求”进行罗列（包括正反打等双环境同场使用的情况）。在此字段首部，**每个场景开始时，必须提供一段对当前环境中涉及的所有角色、道具的整体空间布局描述，并且强性要求指定一个相对显目且固定的实体**（例如房间的大门、中央的长桌或某棵大树等环境的固有部分）作为【核心锚点】，以此锚点来固定并丈量所有关键角色与道具的相对空间关系。
+- **{依赖环境}**: 说明当前环境是否与其他环境存在借用或重用关系（若没有，必须严格填写 `None`）。
+- **{环境基调}**: 描述场景的物理基调及表演区域的光照情况（正常亮度默认为清晰可见；暗场或隐匿环境需明确指出角色轮廓的可见度基准）。
+- **{剧情阶段}**: 仅从【序幕 / 建置 / 激励事件 / 发展 / 危机与中点 / 转折 / 高潮 / 回收下落 / 结局 / 悬念钩子】中择一填写。
+- **{剧情摘要}** & **{前场摘要}**: 使用极限压缩的精炼词汇，简明扼要地概括本场剧情及上一场剧情。
+- **{转场策略}**: 交代具体的转场策略与手法（说明镜头或情节是如何从上一个环境过渡到当前本环境的）。
+- **{耗时估算依据}**: 列出本场耗时预估的具体算术计算公式与加法过程。
+- **{剧情覆盖}**: 根据情况填写“已按要求完整覆盖”或明确列举出本场待补的残缺记录。
+- **{连贯性审计}**: 用一句话精练自证角色站位动线连贯合理，不存在“瞬间穿梭”的时空断层漏洞。
+- **{登场实体}**: 登场实体的合法枚举，必须严格包含在 `CHAR:` / `ENV:` / `PROP:` 标签内。
 - **{Beats}**：必须死板、严密地遵循每一行段的微片模板组装如下内容，不要随性打破语法连缀（注意尖括号等标记）：
     `Beat [编号/索引]: **[Scene Type]**: [小标题概括]。[Beat切换说明: <过渡方式描述>]<br>[Observer View: 在 ENV:[单个纯环境名称], 由 <位置/起点实体> 观察向 <方向/终端朝向>] {空间:重新以环境锚点描述主体的坐标落位与防穿模状态}；{主体关系:主体与当前画中其余角色的相对站位层级交待}；{环境交互:该主体与物理环境/道具的精确发力或受力起点至终点的完整交互反应}；{对白与说话标注:[说话人全称]开口讲话，(voice_type:[声音类型], tone:[语调], speed:[语速], volume:[音量])并伴随{对白:Stage 1 原文逐字};[其余人]紧闭双唇（状态:可写 None）} -> {结果动作/终局态落位} [状态触发: ...]`
 - **Adapted Script Text**：从原剧本抽取头尾（如 “今天天气真好...再也不相见了。”），代表已读核销。千万禁止填“同上”。
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EPXX | EPXX_SC01 | 1 | 诊所对谈 | Xxs | - **{Env Anchor}**: ENV:[Office Front], ENV:[Office Reverse]。<br>- **{Dependent Envs}**: ENV:[Office Reverse] 为 ENV:[Office Front] 的变体。<br>- **{Environment Context}**: Front 为会客区...有打光极佳<br>- **{Plot Stage}**: 【建置】。<br>- **{Plot Summary}**: 触发关键记忆。<br>- **{Previous Scene Summary}**: 无，开场首戏。<br>- **{Transition Strategy}**: 特写入场，反打推进。<br>- **{Duration Estimate Basis}**: 语言(x字/4) + 动作层级...估算总和。<br>- **{Plot Coverage}**: 完整覆盖。<br>- **{Continuity Audit}**: 站位完美传承。<br>- **{Scene Subjects}**: CHAR:[...], ENV:[...], PROP:[...]<br>- **{Beats}**:<br>- Beat 1: **对话**: 试探。[Beat切换说明: 开场无过度]<br>[Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 右侧观察向 CHAR:[@Lin] 正面] {空间:以办公桌为核心点，状态落位防穿模}；{主体关系:林某在前，医生在后桌旁}；{环境交互:双手交叉在桌沿压迫}；{对白与说话标注:CHAR:[@Lin]开口讲话，(voice_type:低沉男声, tone:冷峻, speed:中速, volume:中等)并伴随{对白:"原文..."}; [其余人]紧闭双唇} -> {落定前倾状态} [状态触发: 防备建立] | 今天这是不错...输定了。 | Office Front, Office Reverse | NEW, VARIANT_OF:Office Front | None, Office Front | None, 反向 | Lin落座 | 气场爆发 | CHAR:[...], CHAR:[...] | PROP:[...] |
+| EPXX | EPXX_SC01 | 1 | 诊所对谈 | Xxs | - **{环境锚点}**: ENV:[Office Front], ENV:[Office Reverse]；[空间布局]: 以核心锚点【办公桌】为固定参考物，医生坐在桌后主位，林某站在桌前3步处的客位，核心道具 PROP:[病历] 放置在桌面上。<br>- **{依赖环境}**: ENV:[Office Reverse] 为 ENV:[Office Front] 的变体。<br>- **{环境基调}**: Front 为会客区...有打光极佳<br>- **{剧情阶段}**: 【建置】。<br>- **{剧情摘要}**: 触发关键记忆。<br>- **{前场摘要}**: 无，开场首戏。<br>- **{转场策略}**: 特写入场，反打推进。<br>- **{耗时估算依据}**: 语言(x字/4) + 动作层级...估算总和。<br>- **{剧情覆盖}**: 完整覆盖。<br>- **{连贯性审计}**: 站位完美传承。<br>- **{登场实体}**: CHAR:[...], ENV:[...], PROP:[...]<br>- **{Beats}**:<br>- Beat 1: **对话**: 试探。[Beat切换说明: 开场无过度]<br>[Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 右侧观察向 CHAR:[@Lin] 正面] {空间:以办公桌为核心点，状态落位防穿模}；{主体关系:林某在前，医生在后桌旁}；{环境交互:双手交叉在桌沿压迫}；{对白与说话标注:CHAR:[@Lin]开口讲话，(voice_type:低沉男声, tone:冷峻, speed:中速, volume:中等)并伴随{对白:"原文..."}; [其余人]紧闭双唇} -> {落定前倾状态} [状态触发: 防备建立] | 今天这是不错...输定了。 | Office Front, Office Reverse | NEW, VARIANT_OF:Office Front | None, Office Front | None, 反向 | Lin落座 | 气场爆发 | CHAR:[...], CHAR:[...] | PROP:[...] |

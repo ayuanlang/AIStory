@@ -999,6 +999,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const [sceneSubjectSupplementingMap, setSceneSubjectSupplementingMap] = useState({});
     const [isSuperuser, setIsSuperuser] = useState(false);
     const [editingScene, setEditingScene] = useState(null);
+    const [previewCoreInfo, setPreviewCoreInfo] = useState(true);
     const [sceneRegenRequirements, setSceneRegenRequirements] = useState('');
     const [sceneRegenEntityOnlyMode, setSceneRegenEntityOnlyMode] = useState(true);
     const [sceneRegenerating, setSceneRegenerating] = useState(false);
@@ -4634,13 +4635,40 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                                 </div>
                                             </div>
                                         )}
-                                         <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider mb-2 block text-primary/80">{t('核心场景信息（视觉指导）', 'Core Scene Info (Visual Direction)')}</label>
-                                         <textarea 
-                                            className="w-full flex-1 bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none custom-scrollbar font-mono leading-relaxed min-h-[400px]"
-                                            value={editingScene.core_scene_info || ''}
-                                            onChange={e => handleSceneUpdate({...editingScene, core_scene_info: e.target.value})}
-                                            placeholder={t('输入视觉指导、光照、情绪、构图等...', 'Enter visual direction, lighting, mood, composition...')}
-                                        />
+                                        <div className="flex items-center justify-between mb-2">
+                                            <label className="text-xs text-muted-foreground uppercase font-bold tracking-wider block text-primary/80">{t('核心场景信息（视觉指导）', 'Core Scene Info (Visual Direction)')}</label>
+                                            <button
+                                                className="text-xs text-muted-foreground hover:text-white transition-colors border border-white/10 hover:bg-white/5 rounded px-2 py-1 flex items-center"
+                                                onClick={() => setPreviewCoreInfo(!previewCoreInfo)}
+                                            >
+                                                {previewCoreInfo ? t('编辑模式', 'Edit Mode') : t('预览模式', 'Preview')}
+                                            </button>
+                                        </div>
+                                        {previewCoreInfo ? (
+                                            <div className="w-full flex-1 bg-black/60 border border-white/10 rounded p-4 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary min-h-[400px] overflow-auto custom-scrollbar">
+                                                <div className="prose prose-invert prose-sm max-w-none">
+                                                    <ReactMarkdown components={{
+                                                        p: ({node, ...props}) => <p className="mb-2 leading-relaxed" {...props} />,
+                                                        ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 space-y-1" {...props} />,
+                                                        ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 space-y-1" {...props} />,
+                                                        strong: ({node, ...props}) => <strong className="font-bold text-amber-500" {...props} />,
+                                                        code: ({node, inline, ...props}) => inline ? <code className="bg-white/10 rounded px-1 py-0.5 text-xs text-emerald-300" {...props} /> : <code className="block bg-black/50 p-2 rounded text-xs text-emerald-300 my-2" {...props} />,
+                                                        h1: ({node, ...props}) => <h1 className="text-lg font-bold mb-3 mt-4 text-primary" {...props} />,
+                                                        h2: ({node, ...props}) => <h2 className="text-base font-bold mb-2 mt-3 text-primary/90" {...props} />,
+                                                        h3: ({node, ...props}) => <h3 className="text-sm font-bold mb-1 mt-2 text-primary/80" {...props} />
+                                                    }}>
+                                                        {editingScene.core_scene_info || t('暂无内容...', 'No content...')}
+                                                    </ReactMarkdown>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <textarea 
+                                                className="w-full flex-1 bg-black/40 border border-white/10 rounded p-3 text-white text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none custom-scrollbar font-mono leading-relaxed min-h-[400px]"
+                                                value={editingScene.core_scene_info || ''}
+                                                onChange={e => handleSceneUpdate({...editingScene, core_scene_info: e.target.value})}
+                                                placeholder={t('输入视觉指导、光照、情绪、构图等...', 'Enter visual direction, lighting, mood, composition...')}
+                                            />
+                                        )}
                                     </div>
 
                                     <div className="pt-4 border-t border-white/5">

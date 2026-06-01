@@ -264,7 +264,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
         <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4 mt-3">
             <div className="text-[11px] text-muted-foreground uppercase font-bold mb-2">{userLang('脚本修改与重新生成', 'Modify Script & Regenerate')}</div>
             <PromptMentionTextarea entities={[]} uiLang={uiLang}
-                className="w-full h-24 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                className="w-full min-h-[96px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                 placeholder={userLang("输入剧本修改与重新生成指令（例如：把狗的颜色换成黑色）...", "Enter instructions to modify script and regenerate (e.g., change the dog's color to black)...")}
                 value={instruction}
                 onChange={e => setInstruction(e.target.value)}
@@ -8778,7 +8778,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-20 focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 min-h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
                                     readOnly={true}
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
@@ -10354,7 +10354,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextEn}
                                                                         onChange={(e) => {
                                                                             setEditingShot({...editingShot, start_frame: e.target.value});
@@ -10364,7 +10364,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('start_frame_cn', e.target.value);
@@ -10470,7 +10470,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextEn}
                                                                         onChange={(e) => {
                                                                             handleManualEndFrameInputChange(e.target.value);
@@ -10480,7 +10480,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('end_frame_cn', e.target.value);
@@ -10693,7 +10693,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('中文提示词', 'Prompt (CN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextCn}
                                                                     onChange={(e) => {
                                                                         updateTechField('video_prompt_cn', e.target.value);
@@ -10703,7 +10703,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full h-32 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextEn}
                                                                     onChange={(e) => {
                                                                         setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
@@ -10781,7 +10781,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 })}
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full h-56 bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full min-h-[224px] bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
@@ -10789,7 +10789,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             }} />
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                className="w-full h-48 bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                className="w-full min-h-[192px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
                                                                 onChange={(e) => {
                                                                     const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
