@@ -6,6 +6,7 @@ import TunePromptAgentModal from "./TunePromptAgentModal";
 import AgentChat from '../../../components/AgentChat';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
+import FunctionApiSelector from '../../../components/FunctionApiSelector';
 import { ReferenceManager } from './SceneManager';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
