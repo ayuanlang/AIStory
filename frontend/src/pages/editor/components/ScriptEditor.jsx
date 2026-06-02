@@ -3230,14 +3230,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ).trim();
 
         const analysisSections = extractAnalysisSections(resolvedAnalysisRawText);
-        const stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+        const rawStage2_1Text = explicitSubjectIndex || persistedSubjectIndex || '';
+
+        let parsedSubjectIndexText = rawStage2_1Text;
+        let parsedSceneArrangementText = '';
+
+        if (rawStage2_1Text) {
+            const sections = extractAnalysisSections(rawStage2_1Text);
+            if (sections.hasStructuredSubjectIndex && sections.subjectIndexText) {
+                parsedSubjectIndexText = sections.subjectIndexText;
+            }
+            const match = rawStage2_1Text.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体|\[Reusable Subject Assets)/i);
+            if (match && match.index > 0) {
+                parsedSceneArrangementText = rawStage2_1Text.slice(0, match.index).trim();
+            }
+        }
+
         const stage2SubjectIndexText = String(
-            explicitSubjectIndex || persistedSubjectIndex
+            parsedSubjectIndexText
             || (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
             || ''
         ).trim();
+
+        let stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
+        if (parsedSceneArrangementText) {
+            if (stage2SceneMarkdown) {
+                stage2SceneMarkdown = `${parsedSceneArrangementText}\n\n${stage2SceneMarkdown}`;
+            } else {
+                stage2SceneMarkdown = parsedSceneArrangementText;
+            }
+        }
         const stage2VisualBackfillJson = String(
             extractProjectVisualBackfillJsonText(resolvedStage2RawText || resolvedAnalysisRawText) || stage1VisualBackfillJson || ''
         ).trim();
@@ -3381,6 +3405,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const currentStageOutputs = useMemo(() => {
         const persisted = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        if (persisted && persisted?.stages?.stage2?.outputs?.subject_index) {
+             let subjOutput = persisted.stages.stage2.outputs.subject_index.content || '';
+             let sceneOutput = persisted.stages.stage2.outputs.scene_markdown.content || '';
+             
+             const match = subjOutput.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体|\[Reusable Subject Assets)/i);
+             if (match && match.index > 0) {
+                 const arrangement = subjOutput.slice(0, match.index).trim();
+                 persisted.stages.stage2.outputs.subject_index.content = subjOutput.slice(match.index).trim();
+                 
+                 if (sceneOutput && !sceneOutput.includes(arrangement)) {
+                     persisted.stages.stage2.outputs.scene_markdown.content = `${arrangement}\n\n${sceneOutput}`;
+                 } else if (!sceneOutput) {
+                     persisted.stages.stage2.outputs.scene_markdown.content = arrangement;
+                 }
+             }
+        }
         if (persisted) return persisted;
         return buildStageOutputsObject({
             analysisRawText: llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '',
@@ -7937,7 +7977,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 className="w-4 h-4" /> {t('AI 剧本分析', 'AI Script Analysis')}
+                                        <Wand2 className="w-4 h-4" /> {t('AI 剧本分析与生成', 'AI Script Analysis & Generation')}
                                     </>
                                 )}
                             </button>

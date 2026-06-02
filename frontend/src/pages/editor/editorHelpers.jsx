@@ -297,7 +297,7 @@ export const normalizeAsciiSubjectSeparators = normalizeAsciiSubjectSeparatorsFo
 export const normalizeSubjectName = normalizeSubjectNameForDeps;
 export const normalizeSubjectKey = normalizeSubjectKeyForDeps;
 export const normalizeImportSubjectKey = normalizeSubjectKeyForDeps;
-export const IMG_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+export const IMG_PLACEHOLDER_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 export const parseVisualDependencies = (value) => {
     let candidates = [];
@@ -411,7 +411,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 />
             )}
             <img
-                src={shouldLoad ? resolvedSrc : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='}
+                src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
                 alt={alt}
                 className={`absolute inset-0 w-full h-full transition-all duration-700 z-10 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
                     isLoaded ? 'opacity-100 blur-0 scale-100 bg-transparent' : 'opacity-0 blur-[10px] scale-110 bg-transparent'
@@ -419,7 +419,8 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 loading={imgProps.loading || 'lazy'}
                 decoding={imgProps.decoding || 'async'}
                 fetchpriority={imgProps.fetchPriority || 'low'}
-                onLoad={() => {
+                onLoad={(e) => {
+                    if (e.target.src === IMG_PLACEHOLDER_SRC) return;
                     rememberWarmMediaUrl(rawSrc);
                     setIsLoaded(true);
                     if (typeof userOnLoad === 'function') userOnLoad();

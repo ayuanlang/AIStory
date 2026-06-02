@@ -1,4 +1,4 @@
-﻿
+
 import requests
 import re
 import urllib.parse
@@ -555,7 +555,14 @@ class MediaGenerationService:
             ak = parts[0]
             sk = parts[1]
             dp_token = parts[2]
-        else:
+            
+        project_name = config.get("config", {}).get("project_name", "default")
+        if ":" in dp_token:
+            subparts = dp_token.split(":", 1)
+            dp_token = subparts[0]
+            project_name = subparts[1]
+            
+        if not ak or not sk or not dp_token:
             return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
             
         ref_image = reference_image_url
@@ -568,12 +575,10 @@ class MediaGenerationService:
         import base64
         import json
         
-        img_b64 = ""
-        if str(ref_image).startswith("http"):
-            import requests
-            img_b64 = base64.b64encode(requests.get(ref_image).content).decode("utf-8")
-            asset_url = ref_image
-        else:
+        asset_id_or_url = ref_image
+        
+        if not str(ref_image).startswith("http"):
+            img_b64 = ""
             marker = ";base64,"
             idx = ref_image.find(marker)
             if idx != -1:
@@ -582,109 +587,125 @@ class MediaGenerationService:
                 img_b64 = ref_image
             asset_url = ref_image if str(ref_image).startswith("data:") else f"data:image/jpeg;base64,{img_b64}"
                 
-        try:
-            group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", json.dumps({"Name": "seedance_asset"}), "ark", ak, sk)
-            asset_group_id = group_res.get("GroupId") or group_res.get("Id")
-            if not asset_group_id:
-                return {"error": f"Failed to create AssetGroupId: {group_res}"}
-                
-            asset_payload = json.dumps({
-                "GroupId": asset_group_id,
-                "AssetType": "Image",
-                "URL": asset_url,
-                "Name": "seedance_image"
-            })
-            asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
-            asset_id = asset_res.get("Asset", {}).get("AssetId") or asset_res.get("Asset", {}).get("Id") or asset_res.get("Id")
-            if not asset_id:
-                return {"error": f"Failed to create Asset: {asset_res}"}
-                
-            import time
-            import asyncio
-            max_polls = 180
-            ready = False
-            for _ in range(max_polls):
-                await asyncio.sleep(5)
-                poll_req = json.dumps({"Id": asset_id})
-                poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
-                try:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.info(f"GetAsset response: {poll_res}")
-                except:
-                    print(f"GetAsset response: {poll_res}")
+            try:
+                group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", json.dumps({"Name": "seedance_asset", "ProjectName": project_name}), "ark", ak, sk)
+                asset_group_id = group_res.get("GroupId") or group_res.get("Id")
+                if not asset_group_id:
+                    return {"error": f"Failed to create AssetGroupId: {group_res}"}
                     
-                status = poll_res.get("Asset", {}).get("Status", "")
-                if not status:
-                    status = poll_res.get("Asset", {}).get("status", "")
+                asset_payload = json.dumps({
+                    "GroupId": asset_group_id,
+                    "AssetType": "Image",
+                    "URL": asset_url,
+                    "Name": "seedance_image",
+                "ProjectName": project_name
+                })
+                asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
+                asset_id = asset_res.get("Asset", {}).get("AssetId") or asset_res.get("Asset", {}).get("Id") or asset_res.get("Id")
+                if not asset_id:
+                    return {"error": f"Failed to create Asset: {asset_res}"}
                     
-                status = str(status).lower()
-                
-                if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
-                    ready = True
-                    break
-                if status == "failed":
-                    return {"error": f"Asset upload failed during polling: {poll_res}"}
+                import time
+                import asyncio
+                max_polls = 180
+                ready = False
+                for _ in range(max_polls):
+                    await asyncio.sleep(5)
+                    poll_req = json.dumps({"Id": asset_id, "ProjectName": project_name})
+                    poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
                     
-            if not ready:
-                return {"error": "Timed out waiting for Ark asset to become ready"}
+                    status = poll_res.get("Status", "")
+                    if not status:
+                        status = poll_res.get("status", "")
+                    if not status:
+                        status = poll_res.get("Asset", {}).get("Status", "")
+                    if not status:
+                        status = poll_res.get("Asset", {}).get("status", "")
+                        
+                    status = str(status).lower()
+                    
+                    if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
+                        ready = True
+                        break
+                    if status == "failed":
+                        return {"error": f"Asset upload failed during polling: {poll_res}"}
+                        
+                if not ready:
+                    return {"error": "Timed out waiting for Ark asset to become ready"}
                 
-            # Fire the generation task
-            task_endpoint = "https://ark.cn-beijing.volces.com/api/v3/content_generation/tasks"
+                asset_id_or_url = f"asset://{asset_id}"
+            except Exception as e:
+                return {"error": f"Asset upload raised exception: {e}"}
+                
+        # Fire the generation task
+        inner_conf = config.get("config", {})
+        task_endpoint_raw = config.get("base_url") or inner_conf.get("base_url") or config.get("endpoint") or inner_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+        
+        # Smart routing: If API key is native Volcengine (ark- or ep-), force native endpoint
+        if dp_token and (dp_token.startswith("ark-") or dp_token.startswith("ep-")):
+            if "zlhub" in task_endpoint_raw.lower() or "zhonglian" in task_endpoint_raw.lower():
+                task_endpoint_raw = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+
+        task_endpoint = self._normalize_doubao_video_tasks_endpoint(task_endpoint_raw)
+        
+        # Smart Model: ZLHub prefers base_model. Native requires actual model.
+        if "zlhub" in task_endpoint.lower() or "zhonglian" in task_endpoint.lower():
+            model_id = config.get("base_model") or inner_conf.get("base_model") or config.get("model") or inner_conf.get("model", "")
+        else:
+            model_id = config.get("model") or inner_conf.get("model") or config.get("base_model") or inner_conf.get("base_model", "")
+
+        if not model_id or model_id in ["default", ""]:
+            model_id = "doubao-seedance-2-0-260128"
             
-            model_id = config.get("model", "") # Get the model endpoint ID from config
-            if not model_id or model_id in ["default", ""]:
-                # If they leave it empty, use the generic default for seedance model
-                model_id = "doubao-seedance-2-0-260128"
-                
-            task_payload = {
-                "model": model_id,
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
+        # Ensure the prompt references the image to satisfy Volcengine requirement
+        final_prompt = prompt
+        if "图片" not in final_prompt and "素材" not in final_prompt:
+            final_prompt = "图片1中，" + final_prompt
+
+        task_payload = {
+            "model": model_id,
+            "content": [
+                {
+                    "type": "text",
+                    "text": final_prompt
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": asset_id_or_url
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"asset://{asset_id}"
-                        },
-                        "role": "reference_image"
-                    }
-                ],
-                "generate_audio": True,
-                "watermark": True
-            }
+                    "role": "reference_image"
+                }
+            ],
+            "generate_audio": True,
+            "watermark": True
+        }
+        
+        if duration:
+            try:
+                task_payload["duration"] = int(duration)
+            except:
+                pass
+        
+        if aspect_ratio:
+            task_payload["ratio"] = str(aspect_ratio)
             
-            if duration:
-                try:
-                    task_payload["duration"] = int(duration)
-                except:
-                    pass
-            
-            if aspect_ratio:
-                task_payload["ratio"] = str(aspect_ratio)
-                
-            task_headers = {
-                "Authorization": f"Bearer {dp_token}",
-                "Content-Type": "application/json"
-            }
-            
-            _debug_log(f"Submitting seedance 2.0 generation (task create) -> {task_endpoint}", "info")
-            extra_metadata = {"provider": "ark-seedance", "model": model_id}
-            
-            return await self._submit_and_poll_video(
-                url=task_endpoint,
-                payload=task_payload,
-                api_key=dp_token,
-                log_tag="ark-seedance",
-                extra_metadata=extra_metadata,
-                poll_timeout_seconds=300
-            )
-        except Exception as e:
-            import traceback
-            _debug_log(f"ark-seedance exception: {e}\n{traceback.format_exc()}", "error")
-            return {"error": str(e)}
+        task_headers = {
+            "Authorization": f"Bearer {dp_token}",
+            "Content-Type": "application/json"
+        }
+        
+        _debug_log(f"Submitting seedance 2.0 generation (task create) -> {task_endpoint}", "info")
+        extra_metadata = {"provider": "ark-seedance", "model": model_id}
+        
+        return await self._submit_and_poll_video(
+            url=task_endpoint,
+            payload=task_payload,
+            api_key=dp_token,
+            log_tag="ark-seedance",
+            extra_metadata=extra_metadata,
+            poll_timeout_seconds=300
+        )
     def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
         has_output = bool(payload.get("url")) or bool(payload.get("video_url"))
@@ -2140,7 +2161,7 @@ class MediaGenerationService:
                         metadata.update(extra_metadata)
                     return {"url": image_url, "metadata": metadata}
                 if status_l in ["failed", "error", "canceled", "cancelled"]:
-                    return {"error": "Generation Failed", "details": p_data.get("error") or p_data}
+                    return {"error": f"Generation Failed: {p_data.get('error') or p_data}", "details": p_data.get("error") or p_data}
 
             return {"error": f"Timeout after {poll_timeout_seconds}s"}
         except requests.exceptions.Timeout as e:

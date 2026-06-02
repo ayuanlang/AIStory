@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { RefreshCw, Trash2, StopCircle, Clock, PlayCircle, Loader2, Save, X } from 'lucide-react';
-import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, updateAdminQueueConfig } from '../services/api';
+import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
 import { confirmUiMessage, notifyUiMessage } from '../lib/uiMessage';
 
 export default function QueueAdmin() {
@@ -9,6 +9,7 @@ export default function QueueAdmin() {
   const [config, setConfig] = useState({ queue_threads: 20, callback_threads: 20 });
   const [savingConfig, setSavingConfig] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [systemApis, setSystemApis] = useState([]);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -29,12 +30,26 @@ export default function QueueAdmin() {
     } catch(e) {}
   };
 
+  const fetchSystemApis = async () => {
+    try {
+      const dbApis = await getSystemSettingsManage();
+      setSystemApis(Array.isArray(dbApis) ? dbApis : []);
+    } catch(e) {}
+  };
+
   useEffect(() => {
     fetchTasks();
     fetchConfig();
+    fetchSystemApis();
     const timer = setInterval(fetchTasks, 30000);
     return () => clearInterval(timer);
   }, []);
+
+  const getApiName = (apiId) => {
+    if (!apiId) return null;
+    const found = systemApis.find(a => a.id === apiId);
+    return found ? found.name : `ID: ${apiId}`;
+  };
 
   const handleSaveConfig = async () => {
     setSavingConfig(true);
@@ -195,6 +210,15 @@ export default function QueueAdmin() {
                   <div className="text-xs text-gray-500 mb-1 font-medium">Attempt</div>
                   <div className="text-sm font-semibold text-orange-300">{selectedTask.attempt_count}</div>
                 </div>
+                {(selectedTask.payload?.system_api_id || selectedTask.payload?.function_name) && (
+                  <div className="col-span-2 lg:col-span-4 bg-black/20 p-3 rounded-lg border border-white/5">
+                    <div className="text-xs text-gray-500 mb-1 font-medium">API Called</div>
+                    <div className="text-sm font-semibold text-pink-300">
+                      {getApiName(selectedTask.payload?.system_api_id) || selectedTask.payload?.function_name || 'Unknown'}
+                      {selectedTask.payload?.function_name && <span className="ml-2 text-xs text-gray-500 font-normal opacity-70">({selectedTask.payload.function_name})</span>}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Timestamps */}
@@ -247,7 +271,12 @@ export default function QueueAdmin() {
                 </div>
                 <div className="relative">
                   <pre className="text-gray-300 text-xs whitespace-pre-wrap font-mono bg-[#111114] p-4 rounded border border-white/5 overflow-x-auto selection:bg-blue-500/30">
-                    {JSON.stringify(selectedTask.payload || {}, null, 2)}
+                    {JSON.stringify(
+                      Object.fromEntries(
+                        Object.entries(selectedTask.payload || {}).filter(([_, v]) => v !== null && v !== undefined && v !== '')
+                      ), 
+                      null, 2
+                    )}
                   </pre>
                 </div>
               </div>

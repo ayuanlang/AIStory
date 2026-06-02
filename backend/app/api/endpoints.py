@@ -11018,6 +11018,14 @@ class EpisodeUpdate(BaseModel):
     ai_entity_design_result: Optional[str] = None
     ai_stage_outputs: Optional[str] = None
 
+class EpisodeListOut(BaseModel):
+    id: int
+    project_id: int
+    title: str
+    episode_info: Optional[Dict] = {}
+    class Config:
+        from_attributes = True
+
 class EpisodeOut(BaseModel):
     id: int
     project_id: int
@@ -11046,7 +11054,7 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     extra_notes: Optional[str] = None
     strict_markdown: bool = True
 
-@router.get("/projects/{project_id}/episodes", response_model=List[EpisodeOut])
+@router.get("/projects/{project_id}/episodes", response_model=List[EpisodeListOut])
 def read_episodes(
     project_id: int,
     db: Session = Depends(get_db),
@@ -11058,11 +11066,33 @@ def read_episodes(
     from sqlalchemy.orm import selectinload, defer, noload
     episodes = (
         db.query(Episode)
-        .options(noload(Episode.script_segments))
+        .options(
+            defer(Episode.script_content),
+            defer(Episode.ai_scene_analysis_result),
+            defer(Episode.ai_scene_analysis_subject_index),
+            defer(Episode.ai_scene_analysis_adaptation),
+            defer(Episode.ai_entity_design_result),
+            defer(Episode.ai_stage_outputs),
+            defer(Episode.character_profiles),
+            noload(Episode.script_segments)
+        )
         .filter(Episode.project_id == project_id)
         .all()
     )
     return _sort_project_episodes(episodes)
+
+@router.get("/episodes/{episode_id}", response_model=EpisodeOut)
+def read_episode(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from sqlalchemy.orm import noload
+    episode = db.query(Episode).options(noload(Episode.script_segments)).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return episode
 
 @router.put("/episodes/{episode_id}/segments", response_model=List[ScriptSegmentOut])
 def update_episode_segments(

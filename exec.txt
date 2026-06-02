@@ -1,0 +1,34 @@
+def _execute_generation_by_provider(
+        self,
+        category: str,
+        provider: str,
+        prompt: str,
+        negative_prompt: Optional[str],
+        api_config: Dict[str, Any],
+        reference_image_url: Optional[Union[str, List[str]]],
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        image_size: Optional[str] = None,
+        aspect_ratio: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        duration: int = 5,
+        keyframes: Optional[List[str]] = None,
+        ref_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        runtime_config = dict(api_config or {})
+        runtime_inner_cfg = self._safe_json_dict(runtime_config.get("config"))
+        if provider:
+            runtime_inner_cfg.setdefault("provider", provider)
+            runtime_inner_cfg.setdefault("__provider", provider)
+
+        provider_key_pool = self._normalize_api_keys(runtime_inner_cfg.get("provider_api_keys"))
+        fallback_key_pool = self._normalize_api_keys(runtime_config.get("api_key"))
+        selectable_key_pool = provider_key_pool or fallback_key_pool
+
+        runtime_config["api_key"] = self._pick_runtime_api_key(
+            runtime_inner_cfg,
+            selectable_key_pool if selectable_key_pool else runtime_config.get("api_key"),
+        )
+        runtime_config["config"] = runtime_inner_cfg
+
+        

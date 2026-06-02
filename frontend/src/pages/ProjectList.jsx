@@ -2258,9 +2258,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                        {p.cover_image && (
                                                            <img 
                                                                src={resolveProjectListImageUrl(p.cover_image)} 
-                                                               alt={p.title} 
-                                                               className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 z-10"
-                                                               onError={(e) => { e.target.style.display = 'none'; }}
+                                                                 loading="lazy"
                                                            />
                                                        )}
                                                        

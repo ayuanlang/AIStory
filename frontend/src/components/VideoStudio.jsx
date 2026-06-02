@@ -389,7 +389,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                             <div key={shot.id} className="group relative bg-gray-800 rounded border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer overflow-hidden p-2 flex gap-3 items-center" onClick={() => addToPlaylist(shot)}>
                                 <div className="w-20 h-12 bg-black rounded overflow-hidden flex-shrink-0 relative">
                                     {shot.image_url ? (
-                                        <img src={shot.image_url} alt="" className="w-full h-full object-cover" />
+                                        <img src={shot.image_url} loading="lazy" alt="" className="w-full h-full object-cover" />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center bg-gray-700"><Film size={12}/></div>
                                     )}

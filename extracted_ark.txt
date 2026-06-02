@@ -1,0 +1,692 @@
+
+import requests
+import re
+import urllib.parse
+import urllib3
+import time
+import base64
+import json
+import hashlib
+import hmac
+import asyncio
+import uuid
+import os
+import random
+import io
+import traceback
+import math
+import ipaddress
+import mimetypes
+import shutil
+import tempfile
+from PIL import Image
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Union, Callable, Set
+
+from app.db.session import SessionLocal
+from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
+from app.core.config import settings
+from app.core.mp4_faststart import optimize_mp4_faststart
+from app.services.billing_service import BillingService
+from app.services.oss_storage_service import oss_storage_service
+from app.services.system_default_api_service import get_task_default_system_setting
+from sqlalchemy import cast, String, func, text
+from sqlalchemy.orm import load_only
+
+# Suppress InsecureRequestWarning from urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+import logging
+logger = logging.getLogger("media_service")
+# ... imports ...
+
+DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))
+DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS = max(120, int(os.getenv("N1N_IMAGE_READ_TIMEOUT_SECONDS", "300")))
+
+_BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
+_RAW_BASE64_PATTERN = re.compile(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?:={0,2})(?![A-Za-z0-9+/=])')
+_LOG_STRING_PREVIEW_CHARS = max(128, int(os.getenv("MEDIA_LOG_STRING_PREVIEW_CHARS", "400")))
+_LOG_LIST_PREVIEW_ITEMS = max(4, int(os.getenv("MEDIA_LOG_LIST_PREVIEW_ITEMS", "12")))
+_LOG_DICT_PREVIEW_KEYS = max(8, int(os.getenv("MEDIA_LOG_DICT_PREVIEW_KEYS", "40")))
+_LOG_MAX_DEPTH = max(2, int(os.getenv("MEDIA_LOG_MAX_DEPTH", "4")))
+_LOG_SERIALIZED_MAX_CHARS = max(1024, int(os.getenv("MEDIA_LOG_SERIALIZED_MAX_CHARS", "8000")))
+MEDIA_DEBUG_LOG_ENABLED = os.getenv("MEDIA_DEBUG_LOG", "0") == "1"
+MEDIA_DEBUG_LOG_MAX_CHARS = max(512, int(os.getenv("MEDIA_DEBUG_LOG_MAX_CHARS", "1800") or 1800))
+
+def _strip_base64_from_log(obj):
+    """Recursively strip base64 content from data structures before logging."""
+    if isinstance(obj, str):
+        if obj.startswith("data:") and ";base64," in obj[:64]:
+            prefix = obj[:obj.index(";base64,") + 8]
+            return f"{prefix}<BASE64_STRIPPED len={len(obj)}>"
+        stripped = _BASE64_PATTERN.sub(r'\1<BASE64_STRIPPED>', obj)
+        stripped = _RAW_BASE64_PATTERN.sub(lambda match: f"<BASE64_STRIPPED len={len(match.group(0))}>", stripped)
+        return stripped
+    if isinstance(obj, dict):
+        return {k: _strip_base64_from_log(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strip_base64_from_log(item) for item in obj]
+    return obj
+
+def _strip_query_from_log_url(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        if parsed.scheme and parsed.netloc:
+            return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:
+        pass
+    return raw[:300]
+
+def _sanitize_payload_for_log(obj: Any, depth: int = 0) -> Any:
+    if depth >= _LOG_MAX_DEPTH:
+        return f"<TRUNCATED depth={depth}>"
+
+    if isinstance(obj, str):
+        stripped = _strip_base64_from_log(obj)
+        if len(stripped) > _LOG_STRING_PREVIEW_CHARS:
+            return f"{stripped[:_LOG_STRING_PREVIEW_CHARS]}...<TRUNCATED len={len(stripped)}>"
+        return stripped
+
+    if isinstance(obj, dict):
+        items = list(obj.items())
+        limited = {
+            str(k): _sanitize_payload_for_log(v, depth + 1)
+            for k, v in items[:_LOG_DICT_PREVIEW_KEYS]
+        }
+        if len(items) > _LOG_DICT_PREVIEW_KEYS:
+            limited["__truncated_keys__"] = len(items) - _LOG_DICT_PREVIEW_KEYS
+        return limited
+
+    if isinstance(obj, (list, tuple)):
+        seq = list(obj)
+        limited_items = [_sanitize_payload_for_log(item, depth + 1) for item in seq[:_LOG_LIST_PREVIEW_ITEMS]]
+        if len(seq) > _LOG_LIST_PREVIEW_ITEMS:
+            limited_items.append(f"<TRUNCATED items={len(seq) - _LOG_LIST_PREVIEW_ITEMS}>")
+        return limited_items
+
+    return obj
+
+def _format_payload_for_log(payload: Any) -> str:
+    try:
+        sanitized = _sanitize_payload_for_log(payload)
+        rendered = json.dumps(sanitized, ensure_ascii=False, default=str)
+    except Exception as e:
+        rendered = f"<UNSERIALIZABLE payload error={type(e).__name__}>"
+    if len(rendered) > _LOG_SERIALIZED_MAX_CHARS:
+        return f"{rendered[:_LOG_SERIALIZED_MAX_CHARS]}...<TRUNCATED len={len(rendered)}>"
+    return rendered
+
+def _debug_log(msg, level="info"):
+    """Bounded debug logger for optional verbose traces.
+
+    Info-level debug traces are disabled by default and only enabled with
+    MEDIA_DEBUG_LOG=1. Warning/error logs still flow for diagnostics.
+    """
+    method = getattr(logger, level, logger.info)
+    if level not in {"warning", "error", "critical"} and not MEDIA_DEBUG_LOG_ENABLED:
+        return
+    text = str(msg or "")
+    if len(text) > MEDIA_DEBUG_LOG_MAX_CHARS:
+        text = f"{text[:MEDIA_DEBUG_LOG_MAX_CHARS]}...<TRUNCATED len={len(text)}>"
+    method(text)
+
+class MediaGenerationService:
+# ...
+    DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
+    SMART_ROUTER_PROVIDER = "smart_router"
+    USER_API_STRATEGY_FIXED = "fixed"
+    USER_API_STRATEGY_SMART_DEFAULT = "smart_default"
+
+    def _build_local_generated_url(self, user_id: int, filename: str) -> str:
+        relative_path = f"/uploads/{user_id}/{filename}"
+        if settings.RENDER_EXTERNAL_URL:
+            return f"{settings.RENDER_EXTERNAL_URL.rstrip('/')}{relative_path}"
+        return relative_path
+
+    def _persist_binary_locally(self, binary: bytes, *, user_id: int, filename: str) -> str:
+        upload_dir = settings.UPLOAD_DIR
+        user_dir = os.path.join(upload_dir, str(user_id))
+        if not os.path.isabs(user_dir):
+            user_dir = os.path.abspath(user_dir)
+        os.makedirs(user_dir, exist_ok=True)
+        file_path = os.path.join(user_dir, filename)
+        with open(file_path, "wb") as handle:
+            handle.write(binary)
+        return self._build_local_generated_url(user_id, filename)
+
+    def _persist_generated_bytes(
+        self,
+        binary: bytes,
+        *,
+        user_id: int,
+        filename: str,
+        content_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        uploaded = oss_storage_service.upload_bytes(
+            binary,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            category="generated",
+            metadata=metadata,
+            cache_control="public, max-age=31536000",
+        )
+        if uploaded and uploaded.get("url"):
+            return str(uploaded["url"])
+        return self._persist_binary_locally(binary, user_id=user_id, filename=filename)
+
+    def _finalize_generated_file(
+        self,
+        file_path: str,
+        *,
+        user_id: int,
+        filename: str,
+        content_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        uploaded = oss_storage_service.upload_file(
+            file_path,
+            user_id=user_id,
+            filename=filename,
+            content_type=content_type,
+            category="generated",
+            metadata=metadata,
+            cache_control="public, max-age=31536000",
+        )
+        if uploaded and uploaded.get("url"):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            return str(uploaded["url"])
+
+        upload_dir = settings.UPLOAD_DIR
+        user_dir = os.path.join(upload_dir, str(user_id))
+        if not os.path.isabs(user_dir):
+            user_dir = os.path.abspath(user_dir)
+        os.makedirs(user_dir, exist_ok=True)
+        final_path = os.path.join(user_dir, filename)
+        if os.path.abspath(file_path) != os.path.abspath(final_path):
+            shutil.move(file_path, final_path)
+        return self._build_local_generated_url(user_id, filename)
+
+    def _build_generated_storage_metadata(
+        self,
+        *,
+        asset_type: Optional[str] = None,
+        provider_options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        provider_options = provider_options if isinstance(provider_options, dict) else {}
+        meta: Dict[str, Any] = {}
+        resolved_asset_type = str(provider_options.get("__asset_type") or asset_type or "").strip().lower()
+        if resolved_asset_type:
+            meta["asset_type"] = resolved_asset_type
+        for src_key, dst_key in (
+            ("__subject_type", "subject_type"),
+            ("__subject_name", "subject_name"),
+            ("__entity_id", "entity_id"),
+            ("__entity_name", "entity_name"),
+            ("__entity_type", "entity_type"),
+            ("__project_id", "project_id"),
+            ("__episode_id", "episode_id"),
+            ("__scene_id", "scene_id"),
+            ("__shot_id", "shot_id"),
+        ):
+            value = provider_options.get(src_key)
+            if value not in (None, ""):
+                meta[dst_key] = value
+        subject_name_ascii = provider_options.get("__subject_name_ascii")
+        if subject_name_ascii not in (None, ""):
+            meta["subject_name"] = subject_name_ascii
+        entity_name_ascii = provider_options.get("__entity_name_ascii")
+        if entity_name_ascii not in (None, ""):
+            meta["entity_name"] = entity_name_ascii
+        return meta
+    USER_API_STRATEGY_LOW_PRICE_REPLACE = "low_price_replace"
+    _AGENT_POLICY_CATEGORY = "System_Payment"
+    _AGENT_POLICY_PROVIDER = "agent_policy"
+    _AGENT_POLICY_MODEL = "tool_acl"
+    _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
+    _provider_key_cursors: Dict[str, int] = {}
+
+    def _normalize_api_strategy(self, value: Any, default: str = USER_API_STRATEGY_SMART_DEFAULT) -> str:
+        raw = str(value or "").strip().lower()
+        if raw in {self.USER_API_STRATEGY_FIXED, self.USER_API_STRATEGY_SMART_DEFAULT, self.USER_API_STRATEGY_LOW_PRICE_REPLACE}:
+            return raw
+        return default
+
+    def _normalize_generation_mode(self, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "text-to-image": "t2i",
+            "image-to-image": "i2i",
+            "text-to-video": "t2v",
+            "image-to-video": "i2v",
+            "image2video": "i2v",
+            "img2video": "i2v",
+            "image2image": "i2i",
+            "img2img": "i2i",
+            "text2video": "t2v",
+            "text2image": "t2i",
+            "video-to-video": "v2v",
+        }
+        return aliases.get(raw, raw)
+
+    def _normalize_input_format(self, value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        aliases = {
+            "img": "image",
+            "images": "image",
+            "picture": "image",
+            "pictures": "image",
+            "photo": "image",
+            "photos": "image",
+            "txt": "text",
+            "prompt": "text",
+            "prompts": "text",
+            "vid": "video",
+            "videos": "video",
+        }
+        return aliases.get(raw, raw)
+
+    def _get_media_routing_limit(
+        self,
+        category: str,
+        suffix: str,
+        default: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        raw_default = default
+        try:
+            raw_default = int(default)
+        except Exception:
+            raw_default = minimum
+        raw_default = max(minimum, min(maximum, raw_default))
+
+        env_keys = [
+            f"{str(category or '').strip().upper()}_{suffix}",
+            f"MEDIA_{suffix}",
+        ]
+        for env_key in env_keys:
+            raw_value = str(os.getenv(env_key, "")).strip()
+            if not raw_value:
+                continue
+            try:
+                return max(minimum, min(maximum, int(raw_value)))
+            except Exception:
+                logger.warning(
+                    "Invalid media routing limit env ignored | key=%s value=%s default=%s",
+                    env_key,
+                    raw_value,
+                    raw_default,
+                )
+        return raw_default
+
+    def _is_n1n_kling_image_row(self, row: Any) -> bool:
+        model_lower = str(getattr(row, "model", "") or "").strip().lower()
+        if model_lower == "kling_image":
+            return True
+        supplier_info = self._safe_json_dict(getattr(row, "supplier_info", None) if row is not None else None)
+        n1n_info = self._safe_json_dict(supplier_info.get("n1n"))
+        protocol_key = str(n1n_info.get("protocol_key") or "").strip().lower()
+        family_key = str(n1n_info.get("family_key") or "").strip().lower()
+        return protocol_key == "kling_image" or family_key == "kling"
+
+    def _system_row_supports_generation_mode(self, row: Any, target_generation_mode: Any, cfg: Optional[Dict[str, Any]] = None) -> bool:
+        target_mode = self._normalize_generation_mode(target_generation_mode)
+        if not target_mode:
+            return True
+
+        raw_cfg = cfg if isinstance(cfg, dict) else self._safe_json_dict(getattr(row, "config", None) if row is not None else None)
+        modality = self._safe_json_dict(getattr(row, "modality", None) if row is not None else None)
+        supplier_info = self._safe_json_dict(getattr(row, "supplier_info", None) if row is not None else None)
+
+        containers: List[Dict[str, Any]] = []
+        for item in (
+            raw_cfg,
+            modality.get("capability_flags"),
+            modality.get("image_capabilities"),
+            modality.get("video_capabilities"),
+            modality,
+            supplier_info,
+        ):
+            normalized = self._safe_json_dict(item)
+            if normalized:
+                containers.append(normalized)
+        for nested in supplier_info.values() if isinstance(supplier_info, dict) else []:
+            normalized = self._safe_json_dict(nested)
+            if normalized:
+                containers.append(normalized)
+
+        raw_generation_modes: List[str] = []
+        raw_input_formats: List[str] = []
+        for container in containers:
+            for key in ("generation_modes", "generationModes", "supported_generation_modes", "supportedGenerationModes"):
+                raw_generation_modes.extend(self._normalize_str_list(container.get(key)))
+            for key in ("input_formats", "inputFormats", "supported_input_formats", "supportedInputFormats"):
+                raw_input_formats.extend(self._normalize_str_list(container.get(key)))
+
+        normalized_generation_modes = {
+            self._normalize_generation_mode(item)
+            for item in raw_generation_modes
+            if str(item or "").strip().lower() not in {"", "n/a", "na", "none", "unknown", "all", "any"}
+        }
+        if raw_generation_modes:
+            if not normalized_generation_modes:
+                return False
+            if target_mode not in normalized_generation_modes:
+                return False
+
+        required_input_by_mode = {
+            "t2i": "text",
+            "i2i": "image",
+            "t2v": "text",
+            "i2v": "image",
+            "v2v": "video",
+        }
+        normalized_input_formats = {
+            self._normalize_input_format(item)
+            for item in raw_input_formats
+            if str(item or "").strip().lower() not in {"", "n/a", "na", "none", "unknown", "all", "any"}
+        }
+        if self._is_n1n_kling_image_row(row):
+            normalized_input_formats.update({"text", "image"})
+        required_input = required_input_by_mode.get(target_mode)
+        if raw_input_formats and required_input and required_input not in normalized_input_formats:
+            return False
+
+        model_lower = str(getattr(row, "model", "") or "").strip().lower()
+        if target_mode == "i2i":
+            if self._is_n1n_kling_image_row(row):
+                return True
+            if any(token in model_lower for token in ("image-to-image", "/edit", "-edit", "_edit", "i2i")):
+                return True
+            if any(token in model_lower for token in ("text-to-image", "t2i")):
+                return False
+            if model_lower in {"kling_image", "midjourney_image", "replicate_image", "tencent_image_image"}:
+                return False
+
+        return True
+
+    def _provider_ci_filter(self, provider: Any):
+        provider_norm = str(provider or "").strip().lower()
+        return func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm
+
+    def _vendor_label(self, provider: Any) -> str:
+        raw = str(provider or "").strip()
+        normalized = raw.lower()
+        if normalized in {"lzhbu", "zlhub", "zhonglian"}:
+            return "zlhub"
+        return raw or "unknown"
+
+    def _vendor_failed_message(self, provider: Any, reason: Any) -> str:
+        vendor = self._vendor_label(provider)
+        detail = str(reason or "unknown error").strip()
+        if "供应商调用失败" in detail:
+            return detail
+        return f"{vendor}供应商调用失败: {detail}"
+
+    def _safe_json_dict(self, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    def _is_json_object_value(self, value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, dict):
+            return True
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                value = value.decode("utf-8", errors="ignore")
+            except Exception:
+                return False
+        if isinstance(value, str):
+            raw_obj: Any = value
+            for _ in range(3):
+                if isinstance(raw_obj, dict):
+                    return True
+                if not isinstance(raw_obj, str):
+                    return False
+
+                raw = raw_obj.strip()
+                if not raw:
+                    return True
+
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    return False
+                raw_obj = parsed
+
+            return isinstance(raw_obj, dict)
+        return False
+
+    def _flatten_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            parts = []
+            for key in ["message", "msg", "error", "status", "reason", "code", "details"]:
+                if key in value:
+                    parts.append(self._flatten_text(value.get(key)))
+            for item in value.values():
+                parts.append(self._flatten_text(item))
+            return " ".join(p for p in parts if p)
+        if isinstance(value, list):
+            return " ".join(self._flatten_text(item) for item in value)
+        return str(value)
+
+    def _normalize_retry_group(self, value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _get_retry_group_from_config(self, config_obj: Any) -> str:
+        cfg = self._safe_json_dict(config_obj)
+        return self._normalize_retry_group(
+            cfg.get("retry_group")
+            or cfg.get("routing_group")
+            or cfg.get("smart_group")
+        )
+
+    def _get_retry_price_group_from_config(self, config_obj: Any) -> str:
+        cfg = self._safe_json_dict(config_obj)
+        return self._normalize_retry_group(
+            cfg.get("retry_price_group")
+            or cfg.get("price_tier_group")
+            or cfg.get("pricing_tier")
+        )
+
+
+    def _do_volc_request(self, method: str, action: str, version: str, req_body: str, service: str, ak: str, sk: str) -> dict:
+        import urllib.parse
+        from volcenginesdkcore.signv4 import SignerV4
+        import requests
+        
+        host = "open.volcengineapi.com"
+        headers = {
+            "Content-Type": "application/json",
+            "Host": host
+        }
+        query = {
+            "Action": action,
+            "Version": version
+        }
+        
+        # We must use SignerV4 to inject Authorization, X-Date, etc. into headers
+        SignerV4.sign('/', method, headers, req_body, None, query, ak, sk, "cn-beijing", service)
+        
+        url = f"https://{host}/?Action={action}&Version={version}"
+        print(f"[Volcengine] Requesting: {url} | payload length: {len(req_body)}")
+        resp = requests.request(method, url, headers=headers, data=req_body.encode('utf-8'))
+        print(f"[Volcengine] Response {resp.status_code}: {resp.text[:500]}")
+        
+        if resp.status_code != 200:
+            raise Exception(f"Volcengine HTTP {resp.status_code}: {resp.text}")
+            
+        r_json = resp.json()
+        if "ResponseMetadata" in r_json and "Error" in r_json["ResponseMetadata"]:
+            raise Exception(f"Volcengine API Error: {r_json['ResponseMetadata']['Error']}")
+            
+        return r_json.get("Result", r_json)
+
+    async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, duration=None, aspect_ratio=None) -> dict:
+        api_key = config.get("api_key", "")
+        ak, sk, dp_token = "", "", ""
+        if ":" in api_key and api_key.count(":") >= 2:
+            parts = api_key.split(":", 2)
+            ak = parts[0]
+            sk = parts[1]
+            dp_token = parts[2]
+        else:
+            return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
+            
+        ref_image = reference_image_url
+        if isinstance(ref_image, list):
+            ref_image = ref_image[0] if len(ref_image) > 0 else None
+            
+        if not ref_image:
+            return {"error": "seedance 2.0 requires an image reference"}
+            
+        import base64
+        import json
+        
+        img_b64 = ""
+        if str(ref_image).startswith("http"):
+            import requests
+            img_b64 = base64.b64encode(requests.get(ref_image).content).decode("utf-8")
+            asset_url = ref_image
+        else:
+            marker = ";base64,"
+            idx = ref_image.find(marker)
+            if idx != -1:
+                img_b64 = ref_image[idx + len(marker):].strip()
+            else:
+                img_b64 = ref_image
+            asset_url = ref_image if str(ref_image).startswith("data:") else f"data:image/jpeg;base64,{img_b64}"
+                
+        try:
+            group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", json.dumps({"Name": "seedance_asset"}), "ark", ak, sk)
+            asset_group_id = group_res.get("GroupId") or group_res.get("Id")
+            if not asset_group_id:
+                return {"error": f"Failed to create AssetGroupId: {group_res}"}
+                
+            asset_payload = json.dumps({
+                "GroupId": asset_group_id,
+                "AssetType": "Image",
+                "URL": asset_url,
+                "Name": "seedance_image"
+            })
+            asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
+            asset_id = asset_res.get("Asset", {}).get("AssetId") or asset_res.get("Asset", {}).get("Id") or asset_res.get("Id")
+            if not asset_id:
+                return {"error": f"Failed to create Asset: {asset_res}"}
+                
+            import time
+            import asyncio
+            max_polls = 180
+            ready = False
+            for _ in range(max_polls):
+                await asyncio.sleep(5)
+                poll_req = json.dumps({"Id": asset_id})
+                poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
+                try:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"GetAsset response: {poll_res}")
+                except:
+                    print(f"GetAsset response: {poll_res}")
+                    
+                status = poll_res.get("Status", "")
+                if not status:
+                    status = poll_res.get("status", "")
+                if not status:
+                    status = poll_res.get("Asset", {}).get("Status", "")
+                if not status:
+                    status = poll_res.get("Asset", {}).get("status", "")
+                    
+                status = str(status).lower()
+                
+                if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
+                    ready = True
+                    break
+                if status == "failed":
+                    return {"error": f"Asset upload failed during polling: {poll_res}"}
+                    
+            if not ready:
+                return {"error": "Timed out waiting for Ark asset to become ready"}
+                
+            # Fire the generation task
+            inner_conf = config.get("config", {})
+            task_endpoint_raw = config.get("base_url") or inner_conf.get("base_url") or config.get("endpoint") or inner_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+            task_endpoint = self._normalize_doubao_video_tasks_endpoint(task_endpoint_raw)
+            
+            model_id = config.get("base_model") or inner_conf.get("base_model") or config.get("model") or inner_conf.get("model", "")
+            if not model_id or model_id in ["default", ""]:
+                model_id = "doubao-seedance-2-0-260128"
+                
+            task_payload = {
+                "model": model_id,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"asset://{asset_id}"
+                        },
+                        "role": "reference_image"
+                    }
+                ],
+                "generate_audio": True,
+                "watermark": True
+            }
+            
+            if duration:
+                try:
+                    task_payload["duration"] = int(duration)
+                except:
+                    pass
+            
+            if aspect_ratio:
+                task_payload["ratio"] = str(aspect_ratio)
+                
+            task_headers = {
+                "Authorization": f"Bearer {dp_token}",
+                "Content-Type": "application/json"
+            }
+            
+            _debug_log(f"Submitting seedance 2.0 generation (task create) -> {task_endpoint}", "info")
+            extra_metadata = {"provider": "ark-seedance", "model": model_id}
+            
+            return await self._submit_and_poll_video(
+                url=task_endpoint,
+                payload=task_payload,
+                api_key=dp_token,
+                log_tag="ark-seedance",
+                extra_metadata=extra_metadata,
+                poll_timeout_seconds=300
+            )
+        except Exception as e:
+            import traceback
+            _debug_log(f"ark-seedance exception: {e}\n{traceback.format_exc()}", "error")
+            return {"error": str(e)}

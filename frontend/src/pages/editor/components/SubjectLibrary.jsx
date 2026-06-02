@@ -5006,7 +5006,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         <div
                             key={entity.id}
                             onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); setRefImage(null); }}
-                            className={`bg-card border rounded-xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/50 transition-all min-h-[260px] flex flex-col ${(() => {
+                            className={`bg-card/90 border rounded-2xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/40 hover:-translate-y-1 hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] shadow-[0_4px_20px_rgb(0,0,0,0.3)] transition-all duration-300 min-h-[260px] flex flex-col ${(() => {
                                 const deps = parseVisualDependencies(entity.visual_dependencies);
                                 const hasDependencies = deps && deps.length > 0;
                                 const isDependedOn = dependedKeys.has(normalizeSubjectKeyForDeps(entity.name)) || (entity.name_en && dependedKeys.has(normalizeSubjectKeyForDeps(entity.name_en)));
@@ -5094,7 +5094,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 <SafeImage
                                     src={entity.image_url}
                                     alt={entity.name}
-                                    className="absolute inset-0 object-cover w-full h-full"
+                                    className="absolute inset-0 object-contain object-center w-full h-full"
                                     loading={entityIndex < 8 ? 'eager' : 'lazy'}
                                     fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}

@@ -1,5 +1,5 @@
 
-
+import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import TunePromptAgentModal from "./TunePromptAgentModal";
@@ -264,7 +264,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
         <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4 mt-3">
             <div className="text-[11px] text-muted-foreground uppercase font-bold mb-2">{userLang('脚本修改与重新生成', 'Modify Script & Regenerate')}</div>
             <PromptMentionTextarea entities={[]} uiLang={uiLang}
-                className="w-full h-[192px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                className="w-full min-h-[96px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                 placeholder={userLang("输入剧本修改与重新生成指令（例如：把狗的颜色换成黑色）...", "Enter instructions to modify script and regenerate (e.g., change the dog's color to black)...")}
                 value={instruction}
                 onChange={e => setInstruction(e.target.value)}
@@ -295,6 +295,7 @@ const AdvancedModifyFrame = ({ type, promptText, currentImage, onPromptUpdate, o
 };
 
 export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingShot, setEditingShot, isSuperuser = false, uiLang = 'zh', focusRequest = null, restoreEditingShotId = null, userBatchParallelLimit = 3 }) => {
+    const functionApiConfigs = useFunctionApis();
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
     const isPortrait = aspectParts && aspectParts.heightPart > aspectParts.widthPart;
     
@@ -8320,9 +8321,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     return (
         <div className="flex flex-col h-full w-full p-6 overflow-hidden">
              {/* Header / Toolbar */}
-             <div className="flex justify-between items-center flex-wrap mb-6 shrink-0 gap-y-4">
-                <div className="flex items-center flex-wrap gap-4 w-full">
-                    {/* Title & Status */}
+             <div className="flex justify-between items-center mb-6 shrink-0">
+                <div className="flex items-center gap-4">
                     <h2 className="text-2xl font-bold flex items-center gap-2">
                         {t('镜头管理', 'Shot Manager')}
                         <span className="text-sm font-normal text-muted-foreground ml-2">({shots.length})</span>
@@ -8333,163 +8333,150 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             </span>
                         )}
                     </h2>
+                    <div className="relative">
+                         <select 
+                            className="bg-black/40 border border-white/20 rounded px-3 py-1.5 text-sm min-w-[200px] text-white"
+                            value={selectedSceneId || ''}
+                            onChange={(e) => setSelectedSceneId(e.target.value)}
+                         >
+                            <option value="">{t('选择场景...', 'Select a Scene...')}</option>
+                            <option value="all">{t('全部场景', 'All Scenes')}</option>
+                        {scenes.map(s => (
+                                <option key={s.id} value={s.id}>{s.scene_no} - {s.scene_name || t('未命名', 'Untitled')}</option>
+                            ))}
+                         </select>
+                        <button 
+                            onClick={handleDeleteAllShots}
+                            className="ml-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded text-xs border border-red-500/20"
+                            title={t('删除当前显示的全部镜头', 'Delete All Displayed Shots')}
+                        >
+                            <Trash2 className="w-3 h-3"/>
+                        </button>
+                        <button
+                            onClick={() => toggleSelectAllVisibleShots(true)}
+                            className="ml-2 px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs border border-white/20"
+                            title={t('全选当前显示镜头', 'Select all visible shots')}
+                        >
+                            {t('全选', 'Select All')}
+                        </button>
+                        <button
+                            onClick={() => toggleSelectAllVisibleShots(false)}
+                            className="ml-1 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-white/80 rounded text-xs border border-white/10"
+                            title={t('清空已选镜头', 'Clear selected shots')}
+                        >
+                            {t('清空', 'Clear')}
+                        </button>
+                        <button
+                            onClick={handleDeleteSelectedShots}
+                            disabled={(selectedShotIds || []).length === 0}
+                            className="ml-1 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs border border-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={t('删除已选镜头', 'Delete selected shots')}
+                        >
+                            {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
+                        </button>
+                        <button
+                            onClick={openOrderedVideoPlaylist}
+                            disabled={orderedVideoShots.length === 0}
+                            className="ml-2 px-3 py-1.5 bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 rounded text-xs border border-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                            title={t('按当前卡片顺序连续播放视频', 'Play videos sequentially in current card order')}
+                        >
+                            <Video className="w-3 h-3" />
+                            {t('连续播放', 'Playlist')} ({orderedVideoShots.length})
+                        </button>
 
-                    {/* Action Bar Groupings */}
-                    <div className="flex flex-wrap items-center gap-3">
-                        {/* Group 1: Filter */}
-                        <div className="flex items-center bg-black/40 border border-white/10 rounded-lg p-1 min-w-[200px]">
-                             <select 
-                                className="bg-transparent border-none outline-none focus:ring-0 text-sm w-full text-white cursor-pointer px-2 py-1 select-none"
-                                value={selectedSceneId || ''}
-                                onChange={(e) => setSelectedSceneId(e.target.value)}
-                             >
-                                <option value="">{t('选择场景...', 'Select a Scene...')}</option>
-                                <option value="all">{t('全部场景', 'All Scenes')}</option>
-                                {scenes.map(s => (
-                                    <option key={s.id} value={s.id}>{s.scene_no} - {s.scene_name || t('未命名', 'Untitled')}</option>
-                                ))}
-                             </select>
-                        </div>
-
-                        {/* Group 2: Selection & Delete */}
-                        <div className="flex items-center gap-1 bg-black/40 border border-white/10 rounded-lg p-1 relative">
-                            <button
-                                onClick={() => toggleSelectAllVisibleShots(true)}
-                                className="px-3 py-1.5 hover:bg-white/10 text-white rounded text-xs transition-colors"
-                                title={t('全选当前显示镜头', 'Select all visible shots')}
-                            >
-                                {t('全选', 'Select All')}
-                            </button>
-                            <button
-                                onClick={() => toggleSelectAllVisibleShots(false)}
-                                className="px-3 py-1.5 hover:bg-white/10 text-white/80 rounded text-xs transition-colors"
-                                title={t('清空已选镜头', 'Clear selected shots')}
-                            >
-                                {t('清空', 'Clear')}
-                            </button>
-                            <div className="w-px h-4 bg-white/10 mx-1"></div>
-                            <button
-                                onClick={handleDeleteSelectedShots}
-                                disabled={(selectedShotIds || []).length === 0}
-                                className="px-3 py-1.5 hover:bg-red-500/20 text-red-300 rounded text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                title={t('删除已选镜头', 'Delete selected shots')}
-                            >
-                                {t('删除选中', 'Delete Selected')} ({(selectedShotIds || []).length})
-                            </button>
-                            <button 
-                                onClick={handleDeleteAllShots}
-                                className="px-2 py-1.5 hover:bg-red-500/20 text-red-500 rounded text-xs transition-colors ml-1 border border-red-500/20 bg-red-500/10"
-                                title={t('删除当前显示的全部镜头', 'Delete All Displayed Shots')}
-                            >
-                                <Trash2 className="w-3 h-3"/>
-                            </button>
-                        </div>
-
-                        {/* Group 3: Playlist */}
-                        <div className="flex items-center bg-black/40 border border-white/10 rounded-lg p-1">
-                            <button
-                                onClick={openOrderedVideoPlaylist}
-                                disabled={orderedVideoShots.length === 0}
-                                className="px-3 py-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-200 rounded text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                                title={t('按当前卡片顺序连续播放视频', 'Play videos sequentially in current card order')}
-                            >
-                                <Video className="w-3.5 h-3.5" />
-                                {t('连续播放', 'Playlist')} ({orderedVideoShots.length})
-                            </button>
-                        </div>
-
-                        {/* Group 4: Batch Generate */}
-                        <div className="flex items-center bg-black/40 border border-white/10 rounded-lg p-1">
-                            <div className="relative inline-flex items-center bg-transparent">
-                                        <div className="relative flex items-center">
-                                            <button 
-                                                onClick={handleBatchGenerate}
-                                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                                className={`px-3 py-1.5 rounded-l text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                                title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
-                                            >
-                                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
-                                                <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('批量生成镜头', 'Batch Gen Shots')}</span>
-                                            </button>
-                                            <button 
-                                                onClick={() => setIsBatchMenuOpen(!isBatchMenuOpen)}
-                                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
-                                                className={`px-1.5 py-1.5 rounded-r text-xs flex items-center transition-all ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
-                                            >
-                                                <ChevronDown className="w-3 h-3" />
-                                            </button>
-                                            
-                                            {isBatchMenuOpen && (
-                                                <>
-                                                    <div 
-                                                        className="fixed inset-0 z-40"
-                                                        onClick={() => setIsBatchMenuOpen(false)}
-                                                    />
-                                                    <div className="absolute top-full left-0 mt-1 w-48 bg-[#1e1e1e] border border-white/20 rounded shadow-xl z-50 overflow-hidden text-white dropdown-menu-container">
-                                                        <button
-                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerate(); }}
-                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                        >
-                                                            <Wand2 className="w-3 h-3 text-muted-foreground"/>
-                                                            {t('首尾帧依次 (默认)', 'Sequential Start/End')}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateJointDiptych(); }}
-                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                        >
-                                                            <PanelsTopLeft className="w-3 h-3 text-muted-foreground"/>
-                                                            {t('首尾联生', 'Joint Start/End Diptych')}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateVideo(); }}
-                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
-                                                            title={t('仅处理已有首尾帧且当前无视频的镜头', 'Only shots with existing start/end frames and no current video')}
-                                                        >
-                                                            <Film className="w-3 h-3 text-muted-foreground"/>
-                                                            {t('视频', 'Video')}
-                                                        </button>
-                                                    </div>
-                                                </>
-                                            )}
-                                        </div>
-
-                                        {isBatchGenerating && (
+                        <div className="relative inline-flex items-center ml-2 border border-white/20 rounded bg-transparent">
+                            <div className="relative flex items-center">
+                                <button 
+                                    onClick={handleBatchGenerate}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                    title={t('批量生成缺失的起始/结束帧', 'Batch Generate Missing Start/End Frames')}
+                                >
+                                    {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                                    <span>{(isBatchGenerating || isShotBatchStarting) ? t('批量执行中...', 'Running...') : t('批量生成镜头', 'Batch Gen Shots')}</span>
+                                </button>
+                                <button 
+                                    onClick={() => setIsBatchMenuOpen(!isBatchMenuOpen)}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    className={`px-1.5 py-1.5 text-xs flex items-center transition-all border-r border-white/10 ${(isBatchGenerating || isShotBatchStarting) ? 'bg-primary/20 text-primary cursor-wait' : 'bg-primary/10 text-primary hover:bg-primary/20'}`}
+                                >
+                                    <ChevronDown className="w-3 h-3" />
+                                </button>
+                                
+                                {isBatchMenuOpen && (
+                                    <>
+                                        <div 
+                                            className="fixed inset-0 z-40"
+                                            onClick={() => setIsBatchMenuOpen(false)}
+                                        />
+                                        <div className="absolute top-full left-0 mt-1 w-48 bg-[#1e1e1e] border border-white/20 rounded shadow-xl z-50 overflow-hidden text-white dropdown-menu-container">
                                             <button
-                                                onClick={handleStopShotBatch}
-                                                disabled={isStoppingShotBatch || batchProgress.stopRequested}
-                                                className={`ml-1 rounded px-3 py-1.5 text-xs flex items-center gap-1 transition-all ${isStoppingShotBatch ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'}`}
-                                                title={t('停止当前批处理任务', 'Stop current batch task')}
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerate(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
                                             >
-                                                {isStoppingShotBatch ? <Loader2 className="w-3 h-3 animate-spin"/> : <X className="w-3 h-3"/>}
-                                                <span>
-                                                    {isStoppingShotBatch
-                                                        ? t('停止中...', 'Stopping...')
-                                                        : (batchProgress.stopRequested ? t('等待退出', 'Waiting to Stop') : t('停止', 'Stop'))}
-                                                </span>
+                                                <Wand2 className="w-3 h-3 text-muted-foreground"/>
+                                                {t('首尾帧依次 (默认)', 'Sequential Start/End')}
                                             </button>
-                                        )}
+                                            <button
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateJointDiptych(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                            >
+                                                <PanelsTopLeft className="w-3 h-3 text-muted-foreground"/>
+                                                {t('首尾联生', 'Joint Start/End Diptych')}
+                                            </button>
+                                            <button
+                                                onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateVideo(); }}
+                                                className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                                title={t('仅处理已有首尾帧且当前无视频的镜头', 'Only shots with existing start/end frames and no current video')}
+                                            >
+                                                <Film className="w-3 h-3 text-muted-foreground"/>
+                                                {t('视频', 'Video')}
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
                             </div>
+
+
+                            {isBatchGenerating && (
+                                <button
+                                    onClick={handleStopShotBatch}
+                                    disabled={isStoppingShotBatch || batchProgress.stopRequested}
+                                    className={`px-3 py-1.5 text-xs flex items-center gap-1 transition-all ${isStoppingShotBatch ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'}`}
+                                    title={t('停止当前批处理任务', 'Stop current batch task')}
+                                >
+                                    {isStoppingShotBatch ? <Loader2 className="w-3 h-3 animate-spin"/> : <X className="w-3 h-3"/>}
+                                    <span>
+                                        {isStoppingShotBatch
+                                            ? t('停止中...', 'Stopping...')
+                                            : (batchProgress.stopRequested ? t('等待退出', 'Waiting to Stop') : t('停止', 'Stop'))}
+                                    </span>
+                                </button>
+                            )}
                         </div>
 
-                        {/* Group 5: Checkboxes */}
-                        <div className="flex items-center gap-4 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 h-[34px]">
-                            <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
-                                <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
-                                    {isDraftMode && <Check className="w-2.5 h-2.5 text-white" />}
-                                </div>
-                                <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
-                                <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
-                            </label>
-                            <div className="w-px h-3 bg-white/10 mx-1"></div>
-                            <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后会优先沿用上一镜的视频内容，帮助当前镜头继续续写并保持连贯。', 'Continue from the previous shot to keep the current shot visually consistent.')}>
-                                <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
-                                    {usePrevVideo && <Check className="w-2.5 h-2.5 text-white" />}
-                                </div>
-                                <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
-                                <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜续写', 'Shot Continuation')}</span>
-                            </label>
-                        </div>
                     </div>
+
+                </div>
+                
+                <div className="flex items-center gap-4 ml-auto">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
+                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                            {isDraftMode && <Check className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                        <input type="checkbox" className="hidden" checked={isDraftMode} onChange={(e) => setIsDraftMode(e.target.checked)} />
+                        <span className={isDraftMode ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('草稿(480p)', 'Draft(480p)')}</span>
+                    </label>
+
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后会优先沿用上一镜的视频内容，帮助当前镜头继续续写并保持连贯。', 'Continue from the previous shot to keep the current shot visually consistent.')}>
+                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${usePrevVideo ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                            {usePrevVideo && <Check className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                        <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
+                        <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜续写', 'Shot Continuation')}</span>
+                    </label>
+
+                     {/* Settings Button Moved to Edit Shot View */}
                 </div>
             </div>
 
@@ -8528,9 +8515,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              {/* Main Content */}
              <div className="flex-1 overflow-auto custom-scrollbar">
                  {selectedSceneId ? (
-                     <div className={`grid ${isPortrait ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6' : 'grid-cols-[repeat(auto-fill,minmax(300px,1fr))]'} gap-6 pb-20`}>
+                     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-6 pb-20">
                         {isShotsLoading && !hasShotInitialLoadCompleted && sortedShots.length === 0 && (
-                            <div className="col-span-full min-h-[256px] flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
+                            <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-primary/20 rounded-xl bg-primary/5">
                                 <Loader2 className="w-12 h-12 mb-4 animate-spin text-primary" />
                                 <p>{t('镜头预装入中...', 'Preloading shots...')}</p>
                             </div>
@@ -8544,7 +8531,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             return (
                             <div 
                                 key={shot.id} 
-                                className="bg-card/90 backdrop-blur-sm rounded-2xl border border-white/10 overflow-hidden group hover:border-primary/40 hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] shadow-[0_4px_20px_rgb(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300 cursor-pointer relative"
+                                className="bg-card/80 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden group hover:border-primary/50 transition-all cursor-pointer relative"
                                 onClick={() => setEditingShot(shot)}
                             >
                                 {/* Image / Thumbnail */}
@@ -8629,7 +8616,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             );
                         })}
                         {sortedShots.length === 0 && !isShotsLoading && hasShotInitialLoadCompleted && (
-                            <div className="col-span-full min-h-[256px] flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
+                            <div className="col-span-full h-64 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed border-white/10 rounded-xl">
                                 <Film className="w-12 h-12 mb-4 opacity-20" />
                                 <p>{t('该场景暂无镜头。', 'No shots in this scene.')}</p>
                                 <button className="text-primary text-sm hover:underline mt-2" onClick={() => setIsImportOpen(true)}>{t('导入镜头表', 'Import Shots Table')}</button>
@@ -8781,6 +8768,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 </div>
                             </h3>
                             <div className="flex items-center gap-2">
+                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型', 'Image Model')} />
+                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型', 'Video Model')} />
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
@@ -8789,7 +8778,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[160px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 min-h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
                                     readOnly={true}
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
@@ -8808,7 +8797,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
                                             </div>
-                                            <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/40 border border-white/10 rounded-md p-1.5 w-full shadow-sm">
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('start')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -8923,7 +8912,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             )}
                                         </div>
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('起始帧提示词（中文）...', 'Start Frame Prompt (CN)...') : t('起始帧提示词...', 'Start Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             onChange={(e) => {
@@ -8983,7 +8972,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('结束帧', 'End Frame')}
                                             </div>
-                                            <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/40 border border-white/10 rounded-md p-1.5 w-full shadow-sm">
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('end')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded"
@@ -9137,7 +9126,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         </div>
 
                                         <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('结束帧提示词（中文）...', 'End Frame Prompt (CN)...') : t('结束帧提示词...', 'End Frame Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             onChange={(e) => {
@@ -9176,7 +9165,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 {t('最终视频', 'Final Video')}
                                             </div>
 
-                                            <div className="flex flex-wrap items-center justify-center gap-1.5 bg-black/40 border border-white/10 rounded-md p-1.5 w-full shadow-sm">
+                                            <div className="flex flex-wrap items-center justify-center gap-1">
                                                 <button
                                                     onClick={() => openAssetDetailModal('video')}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
@@ -9285,19 +9274,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     )}</span>
                                                 </div>
                                             )}
-                                            {currentGeneratingState.video ? (
-                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20 overflow-hidden pointer-events-none">
-                                                    {resolveShotVideoPosterUrl(editingShot) ? (
-                                                        <SafeImage
-                                                            src={resolveShotVideoPosterUrl(editingShot)}
-                                                            alt={editingShot.shot_name || 'video poster'}
-                                                            loading="lazy"
-                                                            className="absolute inset-0 w-full h-full object-contain opacity-40 mix-blend-overlay"
-                                                        />
-                                                    ) : null}
-                                                </div>
-                                            ) : (editingShot.video_url) ? (
-                                                isEditingVideoPreviewArmed ? (
+                                            {(editingShot.video_url) ? (
+                                                (isEditingVideoPreviewArmed || currentGeneratingState.video) ? (
                                                     <ManagedVideoPlayer
                                                         src={editingShot.video_url}
                                                         poster={resolveShotVideoPosterUrl(editingShot)}
@@ -9305,7 +9283,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         wrapperClassName="w-full h-full"
                                                         preload="metadata"
                                                         suspend={assetDetailModal.open && assetDetailModal.type === 'video'}
-                                                        hideBusyOverlay={false}
+                                                        hideBusyOverlay={Boolean(currentGeneratingState.video)}
                                                         uiLang={uiLang}
                                                         onClick={(e) => e?.preventDefault?.()}
                                                     />
@@ -9402,7 +9380,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     </button>
 </div>
 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[216px] shrink-0"
+                                            className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs focus:border-primary/50 outline-none resize-none h-[108px] shrink-0"
                                             placeholder={shotPromptDisplayLang === 'cn' ? t('动作 / 运动提示词（中文）...', 'Action / Motion Prompt (CN)...') : t('动作 / 运动提示词...', 'Action / Motion Prompt...')}
                                             value={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''; } catch (e) { return ''; } })() : getShotVideoPromptEn(editingShot)}
                                             onChange={(e) => {
@@ -9744,7 +9722,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                                 {/* Prompt Area */}
                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang} 
-                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[120px] focus:border-primary/50 outline-none resize-none"
+                                                    className="w-full bg-black/20 border border-white/10 rounded p-1.5 text-[10px] h-[60px] focus:border-primary/50 outline-none resize-none"
                                                     placeholder={t('关键帧描述...', 'Keyframe Description...')}
                                                     value={kf.prompt}
                                                     onChange={(e) => {
@@ -10376,7 +10354,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextEn}
                                                                         onChange={(e) => {
                                                                             setEditingShot({...editingShot, start_frame: e.target.value});
@@ -10386,7 +10364,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={startPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('start_frame_cn', e.target.value);
@@ -10492,7 +10470,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('英文提示词', 'Prompt (EN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextEn}
                                                                         onChange={(e) => {
                                                                             handleManualEndFrameInputChange(e.target.value);
@@ -10502,7 +10480,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         {t('中文提示词', 'Prompt (CN)')}
                                                                     </div>
                                                                     <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                        className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                        className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                         value={endPromptTextCn}
                                                                         onChange={(e) => {
                                                                             updateTechField('end_frame_cn', e.target.value);
@@ -10715,7 +10693,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('中文提示词', 'Prompt (CN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextCn}
                                                                     onChange={(e) => {
                                                                         updateTechField('video_prompt_cn', e.target.value);
@@ -10725,7 +10703,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     {t('英文提示词', 'Prompt (EN)')}
                                                                 </div>
                                                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                    className="w-full h-[256px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                    className="w-full min-h-[128px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                     value={videoPromptTextEn}
                                                                     onChange={(e) => {
                                                                         setEditingShot({ ...editingShot, ...buildVideoPromptEnUpdates(e.target.value) });
@@ -10803,7 +10781,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 })}
                                                             </div>
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('英文提示词', 'Prompt (EN)')}</div>
-                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full h-[448px] bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
+                                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full min-h-[224px] bg-black/30 border border-white/10 rounded p-3 text-sm" value={keyframe?.prompt || ''} onChange={(e) => {
                                                                 const updated = [...localKeyframes];
                                                                 if (!updated[assetDetailModal.keyframeIndex]) return;
                                                                 updated[assetDetailModal.keyframeIndex].prompt = e.target.value;
@@ -10811,7 +10789,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             }} />
                                                             <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('中文对照提示词', 'Prompt (CN)')}</div>
                                                             <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                                                className="w-full h-[384px] bg-black/30 border border-white/10 rounded p-3 text-sm"
+                                                                className="w-full min-h-[192px] bg-black/30 border border-white/10 rounded p-3 text-sm"
                                                                 value={(tech.keyframe_prompt_cn_map && keyframe?.time) ? (tech.keyframe_prompt_cn_map[keyframe.time] || '') : ''}
                                                                 onChange={(e) => {
                                                                     const nextMap = { ...(tech.keyframe_prompt_cn_map || {}) };
@@ -10992,7 +10970,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     <div className="flex flex-col gap-2">
                                         <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
                                         <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono min-h-[256px] focus:outline-none focus:border-primary/50 resize-y"
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono h-64 focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.user_prompt || ''}
                                             onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, user_prompt: e.target.value}}))}
                                         />
@@ -11004,7 +10982,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                               <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
                                          </div>
                                         <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono min-h-[128px] focus:outline-none focus:border-primary/50 resize-y"
+                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-32 focus:outline-none focus:border-primary/50 resize-y"
                                             value={shotPromptModal.data?.system_prompt || ''}
                                             onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, system_prompt: e.target.value}}))}
                                         />
@@ -11086,7 +11064,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 {(shot['Shot ID'] || shot.shot_id || `#${idx + 1}`)} · {(shot['Shot Name'] || shot.shot_name || t('未命名镜头', 'Untitled Shot'))}
                                             </div>
                                             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{t('内容', 'Content')}</div>
-                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] h-[176px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
+                                            <PromptMentionTextarea entities={entities} uiLang={uiLang} className="w-full bg-black/30 border border-white/10 rounded-md px-2.5 py-2.5 text-[13px] min-h-[88px]" value={shot["Video Content"] || shot.video_content || ''} onChange={e => {
                                                 const newData = [...shotReviewModal.data];
                                                 newData[idx] = { ...shot, "Video Content": e.target.value };
                                                 setShotReviewModal(prev => ({...prev, data: newData}));

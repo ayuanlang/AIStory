@@ -25,6 +25,7 @@ import {
     analyzeProjectNovel,
     generateProjectCharacterProfile,
     fetchEpisodes, 
+    fetchEpisode,
     createEpisode, 
     updateEpisode,
     updateEpisodeSegments,
@@ -3155,7 +3156,21 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
         return t('未标记', 'Unscoped');
     }, [t]);
 
-    const activeEpisode = episodes.find(e => e.id === activeEpisodeId);
+    // Lazy load full episode data if missing
+    useEffect(() => {
+        if (!activeEpisodeId) return;
+        const ep = episodes.find(e => e.id === activeEpisodeId);
+        if (!ep) return;
+        if (!ep._fullLoaded) {
+            fetchEpisode(activeEpisodeId).then(fullEp => {
+                setEpisodes(prev => prev.map(e => e.id === activeEpisodeId ? { ...fullEp, _fullLoaded: true } : e));
+            }).catch(err => {
+                console.error("Failed to fetch full episode", err);
+            });
+        }
+    }, [activeEpisodeId, episodes]);
+
+    const activeEpisode = episodes.find(e => e.id === activeEpisodeId) || null;
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
     const activeEpisodeLabel = activeEpisode
         ? buildEpisodeDisplayLabel({
@@ -3354,10 +3369,11 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                         onClick={() => {
                             trackMenuAction('editor.action.generator', t('生成器', 'Generator'), () => setActiveTab('generator'));
                         }}
-                        className={`p-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'generator' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
+                        className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'generator' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
                         title={t('生成器', 'Generator')}
                     >
                         <Wand2 className="w-4 h-4" />
+                        <span className="text-xs font-medium hidden sm:block">{t('剧本生成', 'Scripts Gen')}</span>
                         
                     </button>
                     <button

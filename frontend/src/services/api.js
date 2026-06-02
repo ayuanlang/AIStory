@@ -1085,6 +1085,13 @@ export const fetchEpisodes = async (projectId) => {
     return rows.map(sanitizeEpisodePayload);
 }
 
+export const fetchEpisode = async (episodeId) => {
+    const response = await api.get(`/episodes/${episodeId}`);
+    const ext = response.data;
+    if (ext.script_content === null) ext.script_content = "";
+    return sanitizeEpisodePayload(ext);
+}
+
 export const createEpisode = async (projectId, data) => {
     const payload = { ...(data || {}) };
     delete payload.episode_info;

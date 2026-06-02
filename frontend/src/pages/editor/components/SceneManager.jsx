@@ -714,7 +714,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
 
     return (
         <div 
-            className="bg-card/80 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden group hover:border-primary/50 transition-all cursor-pointer relative flex flex-col"
+            className="bg-card/90 backdrop-blur-sm rounded-2xl border border-white/10 overflow-hidden group hover:border-primary/40 hover:-translate-y-1 hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] shadow-[0_4px_20px_rgb(0,0,0,0.3)] transition-all duration-300 cursor-pointer relative flex flex-col"
             onClick={onClick}
         >
             <div className="aspect-video bg-black/60 flex items-center justify-center text-muted-foreground relative group-hover:bg-black/40 transition-colors overflow-hidden border-b border-white/10">
@@ -722,11 +722,12 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                     <motion.img 
                         key={imgUrl}
                         src={getFullUrl(imgUrl)} 
+                        loading="lazy"
                         onError={handleSceneImageError}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ duration: 0.5 }}
-                        className="w-full h-full object-cover absolute inset-0" 
+                        className="w-full h-full object-contain object-center absolute inset-0" 
                         alt={scene.scene_name}
                     />
                 ) : (

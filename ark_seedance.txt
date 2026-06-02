@@ -1,0 +1,111 @@
+    def _handle_ark_seedance_generation(self, task_record, tool_conf, logger, on_update):
+        # Format for AK/SK inside endpoint string or via api_key
+        # For this prototype we assume format AK:SK:APIKEY or similar in api_key
+        # But we'll try to extract them safely
+        api_key = tool_conf.get("api_key", "")
+        ak, sk, dp_token = "", "", ""
+        if ":" in api_key and api_key.count(":") >= 2:
+            parts = api_key.split(":", 2)
+            ak = parts[0]
+            sk = parts[1]
+            dp_token = parts[2]
+        else:
+            raise Exception("ark-seedance provider requires api_key format: AK:SK:EP_TOKEN")
+            
+        # Extract images from task_record
+        payload = task_record.payload
+        ref_image = payload.get("image") or payload.get("image_url")
+        prompt = payload.get("prompt", "A video")
+        
+        if not ref_image:
+            raise Exception("seedance 2.0 requires an image reference")
+            
+        # 1. Base64 encode the image
+        import base64
+        import json
+        import xTool.utils.api_request as req_util
+        
+        img_b64 = ""
+        # Let's download if it's a URL, or strip data:image if it's base64
+        if str(ref_image).startswith("http"):
+            import requests
+            img_b64 = base64.b64encode(requests.get(ref_image).content).decode("utf-8")
+        else:
+            marker = ";base64,"
+            idx = ref_image.find(marker)
+            if idx != -1:
+                img_b64 = ref_image[idx + len(marker):].strip()
+            else:
+                img_b64 = ref_image
+                
+        # 2. Upload to Ark
+        # CreateAssetGroup
+        group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", "{}", "ark", ak, sk)
+        asset_group_id = group_res.get("GroupId")
+        if not asset_group_id:
+            raise Exception(f"Failed to create AssetGroupId: {group_res}")
+            
+        # CreateAsset
+        asset_payload = json.dumps({
+            "GroupId": asset_group_id,
+            "Type": "image",
+            "URL": ref_image
+        })
+        asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
+        asset_id = asset_res.get("Asset", {}).get("AssetId")
+        if not asset_id:
+            raise Exception(f"Failed to create Asset: {asset_res}")
+            
+        # Poll GetAsset until ready
+        import time
+        max_polls = 15
+        ready = False
+        for _ in range(max_polls):
+            time.sleep(2)
+            poll_req = json.dumps({"AssetId": asset_id})
+            poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
+            status = poll_res.get("Asset", {}).get("Status", "processing")
+            if status == "ready":
+                ready = True
+                break
+            if status == "failed":
+                raise Exception(f"Asset upload failed during polling: {poll_res}")
+                
+        if not ready:
+            raise Exception("Timed out waiting for Ark asset to become ready")
+            
+        # 3. Fire the chat completion
+        bot_endpoint = "https://ark.cn-beijing.volces.com/api/v3/bots/chat/completions"
+        chat_payload = {
+            "model": dp_token,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"asset://{asset_id}"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        chat_headers = {
+            "Authorization": f"Bearer {dp_token}",
+            "Content-Type": "application/json"
+        }
+        
+        logger.info(f"Submitting seedance 2.0 generation -> {bot_endpoint}")
+        import requests
+        gen_res = requests.post(bot_endpoint, headers=chat_headers, json=chat_payload)
+        logger.info(f"Generation output: {gen_res.text[:500]}")
+        
+        return gen_res.json()
+

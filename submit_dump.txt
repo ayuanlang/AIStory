@@ -1,0 +1,111 @@
+async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
+        
+        _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
+        
+        def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
+            request_headers = dict(headers)
+            if connection_close:
+                request_headers["Connection"] = "close"
+            c_timeout = connect_timeout or 60
+            kwargs = {"json": payload, "headers": request_headers, "timeout": (c_timeout, 60), "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.post(url, **kwargs)
+
+        def _poll(use_proxy=True, task_id=None):
+            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.get(f"{url}/{task_id}", **kwargs)
+        
+        try:
+            try:
+                resp = await asyncio.to_thread(_post, True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
+                _debug_log(f"[{log_tag}] Submit failed with proxy ({str(e)[:120]}), retrying without proxy (connect_timeout=15s)...", "warning")
+                try:
+                    resp = await asyncio.to_thread(_post, False, False, 15)
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e2:
+                    return self._build_ambiguous_submit_result(provider_name, log_tag, e2, url, extra_metadata)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e2:
+                    _debug_log(f"[{log_tag}] Submit retry without proxy failed ({str(e2)[:120]}), retrying with connection close...", "warning")
+                    try:
+                        resp = await asyncio.to_thread(_post, False, True, 15)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e3:
+                        return self._build_ambiguous_submit_result(provider_name, log_tag, e3, url, extra_metadata)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
+            if resp.status_code not in [200, 201]: 
+                return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
+            
+            data = resp.json()
+            task_id = data.get("id") or data.get("task_id")
+            if not task_id and isinstance(data.get("data"), dict):
+                task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id")
+            if not task_id: return {"error": "No Task ID", "submit_failed": True}
+            
+            # Poll
+            max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
+            for _ in range(max_attempts):
+                await asyncio.sleep(poll_interval_seconds)
+                try:
+                    p_resp = await asyncio.to_thread(_poll, True, task_id)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    p_resp = await asyncio.to_thread(_poll, False, task_id)
+                except requests.exceptions.Timeout:
+                    continue
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    status = str(p_data.get("status") or p_data.get("state") or "").strip()
+                    status_l = status.lower()
+                    if status_l in ["succeeded", "success", "completed", "done"]:
+                        content = p_data.get("content") or {}
+                        video_url = None
+                        if isinstance(content, dict):
+                            video_url = content.get("video_url") or content.get("url")
+                        if not video_url and isinstance(p_data.get("data"), dict):
+                            data_content = p_data.get("data", {}).get("content", {}) or {}
+                            video_url = data_content.get("video_url") or data_content.get("url")
+                        # Veo-style: url at top level of poll response
+                        if not video_url:
+                            video_url = p_data.get("video_url") or p_data.get("url")
+                        # Veo async API: separate /content endpoint
+                        if not video_url and task_id:
+                            try:
+                                content_url = f"{url}/{task_id}/content"
+                                c_resp = await asyncio.to_thread(lambda: requests.get(content_url, headers=headers, timeout=30, verify=False))
+                                if c_resp.status_code == 200:
+                                    c_data = c_resp.json()
+                                    video_url = c_data.get("url") or c_data.get("video_url")
+                            except Exception:
+                                pass
+                        if not video_url:
+                            return {
+                                "error": "Generation completed without video URL",
+                                "details": f"task_id={task_id} status={status or '<empty>'}",
+                                "raw": p_data,
+                            }
+                        metadata = {"raw": p_data}
+                        if extra_metadata:
+                            metadata.update(extra_metadata)
+                        return {"url": video_url, "metadata": metadata}
+                    elif status_l in ["failed", "error", "canceled", "cancelled"]:
+                        return {"error": "Generation Failed", "details": p_data.get("error")}
+            return {"error": f"Timeout after {poll_timeout_seconds}s"}
+        except requests.exceptions.Timeout as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
+            return {"error": "Upstream request timeout", "details": str(e), "submit_failed": True}
+        except requests.exceptions.RequestException as e:
+            if self._is_ambiguous_submit_transport_error(provider_name, log_tag, e):
+                return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
+            details = str(e)
+            if "10054" in details or "ConnectionResetError" in details:
+                details = f"{details}. Possible network middlebox/proxy reset on large request body; retried with no-proxy once."
+            return {"error": "Upstream request failed", "details": details, "submit_failed": True}
+        except Exception as e:
+            return {"error": str(e), "submit_failed": True}
+
+    async def 

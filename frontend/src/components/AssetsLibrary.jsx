@@ -57,7 +57,7 @@ const inferDownloadName = (asset, index = 0) => {
 
 
 const LOCAL_DIR_RESTORE_HINT_KEY = 'assets_local_dir_restore_hint_v1';
-const GRID_MEDIA_PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const GRID_MEDIA_PLACEHOLDER_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 const isKnownBrokenLegacyUrl = (url) => {
     const raw = String(url || '').trim();

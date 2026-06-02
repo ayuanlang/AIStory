@@ -1,179 +1,161 @@
-_handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
-        provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "apiyi")
-        api_key = str(config.get("api_key") or "").strip()
-        if not api_key:
-            return {"error": f"No {provider_name} API Key", "submit_failed": True}
-
-        tool_conf = config.get("config", {}) or {}
-        base_url = str(config.get("base_url") or "https://api.apiyi.com").strip().rstrip("/")
-        endpoint = str(tool_conf.get("endpoint") or tool_conf.get("endpoint_hint") or "").strip()
-        model = str(config.get("model") or "").strip()
-        
-        provider_key = str(provider_name).strip().lower()
-        if not endpoint:
-            if provider_key == "aiclub":
-                if gen_type == "image":
-                    endpoint = "/v1/images/generations"
-                elif gen_type == "video":
-                    endpoint = "/v1/videos"
-                else:
-                    return {"error": f"{provider_name} generation type not supported by default endpoint injection", "submit_failed": True}
-            else:
-                return {"error": f"{provider_name} endpoint missing from system configuration", "submit_failed": True}
-
-        submit_url = endpoint if re.match(r"^https?://", endpoint, flags=re.IGNORECASE) else f"{base_url}{endpoint if endpoint.startswith('/') else '/' + endpoint}"
-
-        def _sanitize_video_prompt_if_needed(raw_prompt: Any, raw_negative_prompt: Optional[str] = None, resolved_model_name: Optional[str] = None) -> str:
-            merged_prompt = self._merge_negative_prompt(raw_prompt, raw_negative_prompt)
-            model_name = str(resolved_model_name or model or "").strip().lower()
-            if not model_name.startswith("sora"):
-                return merged_prompt
-            sanitized_prompt = self._sanitize_sora_prompt_mentions(merged_prompt)
-            if sanitized_prompt and sanitized_prompt != str(merged_prompt or ""):
-                logger.warning(
-                    "APIYI Sora prompt mention sanitizer applied | model=%s removed_at_mentions=%s",
-                    resolved_model_name or model,
-                    str(merged_prompt or "").count("@"),
-                )
-            return sanitized_prompt
-
-        if gen_type == "image":
-            endpoint_lower = endpoint.lower()
-            if "/v1/images/generations" not in endpoint_lower:
-                return {"error": f"{provider_name} image endpoint family not supported yet: {endpoint}", "submit_failed": True}
-
-            normalized_image_size = self._normalize_image_size_value(
-                image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
-            )
-            size_value = self._resolve_openai_compatible_image_size(
-                model=model,
-                explicit_size=tool_conf.get("size"),
-                normalized_image_size=normalized_image_size,
-                aspect_ratio=aspect_ratio,
-            )
-
-            payload = {
-                "model": model,
-                "prompt": self._merge_negative_prompt(prompt, negative_prompt),
-                "n": int(tool_conf.get("n") or 1),
-                "size": str(size_value),
-            }
-            resolved_refs = self._resolve_ref_list_for_api(
-                ref_image,
-                force_data_uri_for_local=True,
-                prefer_public_upload_url=True,
-                data_uri_profile="n1n_image_ref",
-            ) if ref_image else []
-            if resolved_refs:
-                payload["image_urls"] = resolved_refs
-                payload["imageUrls"] = resolved_refs
-                payload["filesUrl"] = resolved_refs[:5]
-                if len(resolved_refs) == 1:
-                    payload["fileUrl"] = resolved_refs[0]
-                mask_url_candidate = str(tool_conf.get("maskUrl") or tool_conf.get("mask_url") or "").strip()
-                if mask_url_candidate:
-                    payload["maskUrl"] = mask_url_candidate
-            if str(provider_name).strip().lower() != "n1n":
-                payload["response_format"] = str(tool_conf.get("response_format") or "url")
-            for optional_key in ["quality", "output_format", "output_compression", "background", "user"]:
-                if tool_conf.get(optional_key) is not None:
-                    payload[optional_key] = tool_conf.get(optional_key)
-
-            base_metadata = {
-                "provider": provider_name,
-                "model": model,
-                "prompt": prompt,
-                "submit_url": submit_url,
-                "endpoint_family": "/v1/images/generations",
-            }
-            return await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image", extra_metadata=base_metadata)
-
-        if gen_type == "video":
-            endpoint_lower = endpoint.lower()
-            if "/v1/chat/completions" in endpoint_lower:
-                if last_frame_url:
-                    return {"error": f"{provider_name} chat/completions video does not support last-frame control", "submit_failed": True}
-
-                resolved_model = self._resolve_apiyi_chat_video_model(model, aspect_ratio=aspect_ratio, duration=duration)
-                resolved_refs = self._resolve_ref_list_for_api(
-                    ref_image,
-                    force_data_uri_for_local=True,
-                    prefer_public_upload_url=True,
-                ) if ref_image else []
-                content_payload: List[Dict[str, Any]] = []
-                merged_prompt = _sanitize_video_prompt_if_needed(prompt, negative_prompt, resolved_model)
-                if merged_prompt:
-                    content_payload.append({"type": "text", "text": merged_prompt})
-                if resolved_refs:
-                    content_payload.append({
-                        "type": "image_url",
-                        "image_url": {"url": resolved_refs[0]},
-                    })
-
-                payload = {
-                    "model": resolved_model,
-                    "stream": True,
-                    "messages": [{
-                        "role": "user",
-                        "content": content_payload,
-                    }],
-                }
-                base_metadata = {
-                    "provider": provider_name,
-                    "model": resolved_model,
-                    "requested_model": model,
-                    "prompt": prompt,
-                    "submit_url": submit_url,
-                    "endpoint_family": "/v1/chat/completions",
-                    "requested_duration": int(duration or 0),
-                    "requested_aspect_ratio": str(aspect_ratio or "").strip() or None,
-                    "resolved_reference_count": len(resolved_refs),
-                    "resolved_video_size": self._apiyi_chat_video_size_for_model(resolved_model),
-                }
-                return await self._submit_apiyi_chat_video_stream(
-                    submit_url,
-                    payload,
-                    api_key,
-                    f"{str(provider_name).lower()}_video",
-                    extra_metadata=base_metadata,
-                )
-            elif "/v1/videos" not in endpoint_lower:
-                return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
-
-            payload = {
-                "model": model,
-                "prompt": _sanitize_video_prompt_if_needed(prompt, negative_prompt, model),
-                "seconds": str(int(duration or tool_conf.get("seconds") or 4)),
-                "size": str(tool_conf.get("size") or "1280x720"),
-            }
-            if aspect_ratio and not tool_conf.get("size"):
-                size_map = {
-                    "16:9": "1280x720",
-                    "9:16": "720x1280",
-                }
-                payload["size"] = size_map.get(str(aspect_ratio).strip(), payload["size"])
-
-            # APIYI /v1/videos: non-fl models are text-to-video only — silently
-            # ignore any reference image the caller passes through.  For -fl models
-            # the async API requires multipart upload which is not implemented yet.
-            model_lower = model.lower()
-            is_frame_model = model_lower.endswith("-fl") or "-fl-" in model_lower
-            if is_frame_model and (ref_image or last_frame_url):
-                return {"error": f"{provider_name} /v1/videos frame-to-video (multipart upload) is not enabled yet in media service", "submit_failed": True}
-            # For non-fl models, just drop the ref images
-            if not is_frame_model:
-                ref_image = None
-                last_frame_url = None
-
-            base_metadata = {
-                "provider": provider_name,
-                "model": model,
-                "prompt": prompt,
-                "submit_url": submit_url,
-                "endpoint_family": "/v1/videos",
-                "seconds": payload.get("seconds"),
-                "size": payload.get("size"),
-            }
-            return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
-
-        return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
+@router.get("/admin/queue/tasks")
+@router.post("/admin/queue/tasks/{job_id}/cancel")
+@router.post("/admin/queue/tasks/cancel-queued")
+@router.get("/tasks/{task_id}")
+@router.post("/tasks/{task_id}/cancel")
+@router.post("/fix-db-schema")
+@router.post("/system_logs/actions", response_model=SystemLogOut)
+@router.get("/settings/effective")
+@router.get("/prompts/{filename:path}")
+@router.get("/prompts/skills")
+@router.get("/prompts/skills/{skill_id}")
+@router.get("/prompts/scene-analysis/features")
+@router.post("/prompts/scene-analysis/route-preview")
+@router.get("/projects/{project_id}/subject_inventory_prompt")
+@router.post("/analyze_scene", response_model=Dict[str, Any])
+@router.post("/tools/translate")
+@router.post("/tools/refine_prompt")
+@router.post("/agent/command", response_model=AgentResponse)
+@router.post("/agent/system-management/command", response_model=AgentResponse)
+@router.post("/agent/command/stream")
+@router.post("/agent/system-management/command/stream")
+@router.post("/projects/", response_model=ProjectOut)
+@router.get("/projects/{project_id}/shares", response_model=List[ProjectShareOut])
+@router.post("/projects/{project_id}/shares", response_model=ProjectShareOut)
+@router.get("/projects/{project_id}/review_threads", response_model=List[ProjectAssetReviewThreadOut])
+@router.get("/projects/review_threads/inbox", response_model=List[ProjectAssetReviewThreadOut])
+@router.get("/projects/review_threads/outbox", response_model=List[ProjectAssetReviewThreadOut])
+@router.post("/projects/{project_id}/review_threads", response_model=ProjectAssetReviewThreadOut)
+@router.get("/review_threads/{thread_id}", response_model=ProjectAssetReviewThreadOut)
+@router.post("/review_threads/{thread_id}/read", response_model=ProjectAssetReviewThreadOut)
+@router.get("/review_threads/{thread_id}/rounds", response_model=List[ProjectAssetReviewRoundOut])
+@router.post("/review_threads/{thread_id}/rounds", response_model=ProjectAssetReviewRoundOut)
+@router.get("/review_rounds/{round_id}/messages", response_model=List[ProjectAssetReviewMessageOut])
+@router.post("/review_rounds/{round_id}/messages", response_model=ProjectAssetReviewMessageOut)
+@router.post("/projects/{project_id}/story_generator/global", response_model=ProjectOut)
+@router.get("/projects/{project_id}/story_generator/global/export", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])
+@router.get("/projects/", response_model=List[ProjectOut])
+@router.get("/projects/{project_id}", response_model=ProjectOut)
+@router.get("/projects/{project_id}/cost_estimation", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/episodes/{episode_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/scenes/{scene_id}/cost_estimation/recompute", response_model=Dict[str, Any])
+@router.get("/projects/{project_id}/episodes", response_model=List[EpisodeOut])
+@router.post("/projects/{project_id}/episodes", response_model=EpisodeOut)
+@router.get("/projects/{project_id}/character_profiles", response_model=List[Dict[str, Any]])
+@router.post("/projects/{project_id}/character_profiles/generate", response_model=ProjectOut)
+@router.get("/episodes/{episode_id}/character_profiles", response_model=List[Dict[str, Any]])
+@router.post("/episodes/{episode_id}/character_profiles/generate", response_model=EpisodeOut)
+@router.post("/episodes/{episode_id}/story_generator", response_model=EpisodeOut)
+@router.post("/episodes/{episode_id}/script_generator/scenes", response_model=Dict[str, Any])
+@router.post("/episodes/{episode_id}/script_generator/scenes/start", response_model=Dict[str, Any])
+@router.get("/episodes/{episode_id}/script_generator/scenes/status", response_model=Dict[str, Any])
+@router.post("/episodes/{episode_id}/script_generator/scenes/stop", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/script_generator/episodes/scripts", response_model=Dict[str, Any])
+@router.get("/projects/{project_id}/script_generator/episodes/scripts/status", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/script_generator/episodes/scripts/stop", response_model=Dict[str, Any])
+@router.get("/episodes/{episode_id}/scenes", response_model=List[SceneOut])
+@router.post("/episodes/{episode_id}/scenes", response_model=SceneOut)
+@router.post("/scenes/{scene_id}/regenerate", response_model=Dict[str, Any])
+@router.get("/episodes/{episode_id}/shots", response_model=List[ShotOut])
+@router.get("/episodes/{episode_id}/shots/download-zip")
+@router.get("/shots/{shot_id}", response_model=ShotOut)
+@router.get("/scenes/{scene_id}/ai_prompt_preview")
+@router.get("/prompts/shot-generation/features")
+@router.post("/prompts/shot-generation/route-preview")
+@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/start", response_model=Dict[str, Any])
+@router.get("/episodes/{episode_id}/scenes/ai_shots/batch/status", response_model=Dict[str, Any])
+@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/stop", response_model=Dict[str, Any])
+@router.post("/scenes/{scene_id}/ai_generate_shots")
+@router.post("/scenes/{scene_id}/ai_regenerate_shots")
+@router.get("/scenes/{scene_id}/latest_ai_result")
+@router.post("/scenes/{scene_id}/apply_ai_result")
+@router.get("/scenes/{scene_id}/shots", response_model=List[ShotOut])
+@router.post("/scenes/{scene_id}/shots", response_model=ShotOut)
+@router.get("/projects/{project_id}/entities", response_model=List[EntityOut])
+@router.post("/projects/{project_id}/entities", response_model=EntityOut)
+@router.post("/projects/{project_id}/entities/{entity_id}/clone_with_llm", response_model=EntityOut)
+@router.post("/entities/{entity_id}/generate_sora_character")
+@router.post("/users/", response_model=UserOut)
+@router.post("/users/verification/send")
+@router.post("/users/verification/confirm", response_model=UserOut)
+@router.post("/login/access-token", response_model=Token)
+@router.post("/login", response_model=Token)
+@router.post("/password/forgot")
+@router.post("/password/reset")
+@router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])
+@router.get("/admin/runtime-logs/view", response_model=RuntimeLogViewOut)
+@router.get("/admin/storage-usage", response_model=AdminStorageUsageOut)
+@router.get("/admin/storage-usage/expired", response_model=AdminExpiredFilesOut)
+@router.post("/admin/storage-usage/expired/remind", response_model=GenericMessageOut)
+@router.post("/admin/storage-usage/expired/delete", response_model=GenericMessageOut)
+@router.get("/assets/unreferenced-ids", response_model=dict)
+@router.get("/assets/proxy")
+@router.get("/assets/thumb/{filename:path}")
+@router.get("/assets/", response_model=List[dict])
+@router.post("/assets/upload", response_model=dict)
+@router.post("/assets/batch-delete")
+@router.post("/assets/{asset_id}/mark-current", response_model=dict)
+@router.post("/assets/rebind-shot-media", response_model=dict)
+@router.get("/admin/payment-config", response_model=PaymentConfig)
+@router.post("/admin/payment-config", response_model=PaymentConfig)
+@router.get("/admin/smtp-config", response_model=SMTPConfig)
+@router.post("/admin/smtp-config", response_model=SMTPConfig)
+@router.post("/admin/smtp-config/test")
+@router.post("/admin/smtp-config/broadcast")
+@router.get("/admin/maintenance-status", response_model=MaintenanceStatusOut)
+@router.get("/admin/maintenance-config", response_model=MaintenanceConfig)
+@router.post("/admin/maintenance-config", response_model=MaintenanceConfig)
+@router.get("/admin/runtime-stats")
+@router.get("/admin/upstream-diagnostics/grsai")
+@router.get("/billing/recharge/plans", response_model=List[RechargePlanOut])
+@router.post("/billing/recharge/create", response_model=PaymentOrderOut)
+@router.get("/billing/recharge/status/{order_no}")
+@router.post("/billing/recharge/notify")
+@router.post("/billing/recharge/mock_pay/{order_no}")
+@router.get("/billing/options")
+@router.get("/billing/feature-pricing", response_model=FeaturePricingOut)
+@router.get("/billing/default-api-pricing", response_model=DefaultApiPricingOut)
+@router.get("/billing/taxonomy/preview")
+@router.get("/billing/project/{project_id}/stats")
+@router.get("/billing/transactions", response_model=List[TransactionOut])
+@router.post("/billing/users/{user_id}/credits")
+@router.post("/generate/image")
+@router.post("/generate/image/submit")
+@router.get("/generate/image/jobs/{job_id}")
+@router.get("/users/me", response_model=UserOut)
+@router.post("/users/me/avatar", response_model=UserOut)
+@router.get("/users", response_model=List[UserOut])
+@router.get("/users/page", response_model=UserPageOut)
+@router.post("/generate/video")
+@router.post("/generate/voice")
+@router.post("/generate/callback/{ticket}")
+@router.get("/generate/callback/{ticket}")
+@router.post("/generate/video/submit")
+@router.get("/generate/video/jobs/{job_id}")
+@router.get("/generate/jobs/pool")
+@router.post("/generate/jobs/repair-history")
+@router.post("/generate/jobs/{kind}/{job_id}/stop")
+@router.post("/generate/jobs/stop-all")
+@router.post("/episodes/{episode_id}/shots/batch-media/start", response_model=Dict[str, Any])
+@router.get("/episodes/{episode_id}/shots/batch-media/status", response_model=Dict[str, Any])
+@router.post("/episodes/{episode_id}/shots/batch-media/stop", response_model=Dict[str, Any])
+@router.post("/projects/{project_id}/montage")
+@router.post("/assets/analyze", response_model=Dict[str, str])
+@router.post("/entities/{entity_id}/analyze")
+@router.get("/entities/{entity_id}/latest_analysis")
+@router.post("/entities/{entity_id}/apply_analysis")
+@router.post("/analyze_scene/stream")
+@router.get("/admin/queue/config", response_model=QueueConfigBase)
+@router.post("/projects/{project_id}/episodes/{episode_id}/split")
+@router.get("/entities/{entity_id}/history")
+@router.post("/entities/{entity_id}/save_history")
+@router.post("/entities/history/{history_id}/restore")
+@router.post("/entities/sync")
+@router.post("/projects/{project_id}/entities/llm-text", response_model=EntityOut)
+@router.post("/projects/{project_id}/entities/llm-image", response_model=EntityOut)
+@router.post("/projects/{project_id}/entities/llm-derive", response_model=EntityOut)
+@router.get('/admin/llm_logs')
+@router.get("/projects/{project_id}/backup_export")
+@router.post("/projects/import_backup")
