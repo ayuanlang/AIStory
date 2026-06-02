@@ -298,7 +298,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
     const isPortrait = aspectParts && aspectParts.heightPart > aspectParts.widthPart;
     
-    const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
+    const { functionApiConfigs, generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
@@ -8781,6 +8781,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 </div>
                             </h3>
                             <div className="flex items-center gap-2">
+                                <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型: ', 'Image: ')} />
+                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
