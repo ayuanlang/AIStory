@@ -140,7 +140,7 @@
 - **分类完整性硬约束（新增强制）**：最终核对时，除了检查条目总数，还必须逐条检查“输入 Subject Index 的实体类型”与“输出 JSON 所在数组”是否一一对应。总数正确但数组归类错误，仍然视为失败。
 - **类型专属字段硬约束（新增强制）**：四个数组不仅归属不同，字段模板也必须按类型严格分离。`characters[]` 才允许使用 `gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics` 等角色专属字段；`props[]` 允许使用物件状态/类型字段（如 `type`）；`environments[]` 与 `posters[]` 应使用环境/海报字段（如 `atmosphere`、`visual_params`）并围绕空间或海报构图组织描述。禁止把角色字段复制到 prop/environment/poster，对道具/环境/海报借壳套用角色对象模板，或让不同数组只靠 `name` 区分、其余字段结构完全同构。
 - **命名绝对防篡改与零容错校验（极度严格）**：所有资产的 `name` / `name_en`（及其层级名称）必须与输入 `subjects index` 完全一致；输出前必须逐条执行“输入 `subjects index.name` -> 输出 JSON `name`”一对一核对。任意字符差异（含空格、全半角、大小写、下划线、连字符、后缀、括号）都视为严重错误，必须修正后再输出。
-- **description_cn 传导硬约束**：必须将上游输入的 `entity_attributes` 字段属性原文一字不改、**原样填写**到本实体对应的 `description_cn` 字段中，不要做任何二次创作或删减。
+- **description_cn 传导与光学强化约束**：除了需将上游输入的 `entity_attributes` 核心要素完全纳入外，还必须在 `description_cn` 以及生成的 `generation_prompt_cn/en` 中明确说明主光（Key Light）和辅光（Fill Light）的应用，包括光源的方位、亮度和色温对比，以构建更为立体的光影层次与真实的空间体积感。
 - **固定双语输出字段契约**：严格沿用定义的中英双轨字段要求，特别是 `generation_prompt_cn/en`。
 - **继承约束**：每个实体都必须提供 `visual_dependencies`（数组）与 `dependency_strategy`（包含 `type` 和 `logic` 两个对象属性），详见前文状态演化链要求。**绝对禁止在 `visual_dependencies` 中填入 `S001`、`E001` 等 `subject_no`，实体名引用必须逐字符一致 (如 `CHAR:[@...]` 等)！**
 
@@ -155,7 +155,7 @@
           "name_en": "Police ID Badge Lanyard",
           "base_name_en": "Police ID Badge Lanyard",
           "type": "held/static",
-          "description_cn": "英文项目警探日常使用的身份挂绳。其组成包含：顶部深蓝色编制尼龙长绳、带有使用痕迹的硬质全透明亚克力卡套、前端带有老旧黄铜拉丝质感的五角星警徽以及英文排版的文字ID卡面。",
+          "description_cn": "英文项目警探日常使用的身份挂绳。其组成包含：顶部深蓝色编制尼龙长绳、带有使用痕迹的硬质全透明亚克力卡套、前端带有老旧黄铜拉丝质感的五角星警徽以及英文排版的文字ID卡面。主光（Key Light）聚焦于带有黄铜拉丝质感的警徽产生高光反射；辅光（Fill Light）以柔和的漫反射点亮亚克力卡套边缘的透明质感。",
           "generation_prompt_cn": "写实英文项目道具四视图：警徽挂绳证件卡。固定于16:9横向单画布。居中转台相机视角。该道具呈现深蓝尼龙织带、边缘磨损的硬体宽卡套、划痕做旧的铜表面警徽及英文证件图文。视图呈现为四个视角面格并排，横向宽度明确分配：第一宫微距特写，占整体画布横向宽度的35%，特写主体纵向居中于该宫格内，重点展现金属划痕与纤维细节；第二宫正面视图、第三宫侧面视图、第四宫背面视图共享剩余65%，且四格必须严格只在同一横排完整铺开，禁止第二排、换行、错层或2x2拼贴。侧重打光材质厚度，顶部柔和关键光源分离轮廓深度。四个面板均保持边缘清楚、材质纹理可读、清晰度一致，不允许某一格明显发虚。静物单体展示，四个视角的静物共同生长在同一块纯净连续的单一全白背景画布中，自然留白并呈现完美的平面整体性。",
           "generation_prompt_en": "Photoreal prop sheet for a Police ID Badge Lanyard on a 16:9 horizontal canvas. Centered turntable view. Exactly four views laid out side-by-side with clear horizontal width allocation: Close-up panel (highlighting brass badge scratches, acrylic texture, and nylon fibers) occupies 35% of the total canvas width with the subject centered vertically; Front, Side, and Back panels share the remaining 65%. The layout must remain one and only one horizontal row, with no second row, no line break, no staggered stacking, and no 2x2 arrangement. Display navy woven strap, worn brass clip and badge, rigid clear acrylic holder, and English layout ID card. Soft top-angle key light with clean rim separation to emphasize material depth and wear. All four panels remain crisp and evenly readable, with clear edges and consistent material sharpness across the sheet. All four angles naturally share a single continuous, pure white background canvas, forming a cohesive and unified image plane.",
           "negative_prompt_en": "human hands, fingers, holding, Chinese text, toy-like plastic, 3D render, fewer than 4 panels, more than 4 panels, comic lines.",

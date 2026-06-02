@@ -130,7 +130,7 @@
 - **信息组织层级（语法流）**：
   - 默认顺序结构：`身份定位与功能 -> 主光源与光影结构 -> 全面外貌（需融合2.1基线比例） -> 服装与鞋履 -> 动作特征 -> 构图机位/补充光色要求`。
 - **特定字段转化规范（从概念到画面）**：
-  - `description_cn`：将输入Subjects Index的 entity_attributes 属性原文直接填写到此处。
+  - `description_cn`：将输入Subjects Index的 entity_attributes 属性原文纳入，并在此基础上按上述“传导与光学强化约束”补充写清主光和辅光的应用。
   - `archetype`：将输入Subjects Index的Action Characteristics属性原文直接填写到此处。
   - `gender` / `role`：不可只停留在 JSON 标签，必须转化为具体的画面语义（如特定的职业装束起势、眼神状态）。
   - `appearance_cn` / `clothing`：具体版型、材质与配色必须全部进入 Prompt。
@@ -157,7 +157,7 @@
 - **分类完整性硬约束（新增强制）**：最终核对时，除了检查条目总数，还必须逐条检查“输入 Subject Index 的实体类型”与“输出 JSON 所在数组”是否一一对应。总数正确但数组归类错误，仍然视为失败。
 - **类型专属字段硬约束（新增强制）**：四个数组不仅归属不同，字段模板也必须按类型严格分离。`characters[]` 才允许使用 `gender`、`role`、`archetype`、`appearance_cn`、`clothing`、`action_characteristics` 等角色专属字段；`props[]` 允许使用物件状态/类型字段（如 `type`）；`environments[]` 与 `posters[]` 应使用环境/海报字段（如 `atmosphere`、`visual_params`）并围绕空间或海报构图组织描述。禁止把角色字段复制到 prop/environment/poster，对道具/环境/海报借壳套用角色对象模板，或让不同数组只靠 `name` 区分、其余字段结构完全同构。
 - **命名绝对防篡改与零容错校验（极度严格）**：所有资产的 `name` / `name_en`（及其层级名称）必须与输入 `subjects index` 完全一致；输出前必须逐条执行“输入 `subjects index.name` -> 输出 JSON `name`”一对一核对。任意字符差异（含空格、全半角、大小写、下划线、连字符、后缀、括号）都视为严重错误，必须修正后再输出。
-- **description_cn 传导硬约束**：必须将上游输入的 `entity_attributes` 字段属性原文一字不改、**原样填写**到本实体对应的 `description_cn` 字段中，不要做任何二次创作或删减。
+- **description_cn 传导与光学强化约束**：除了需将上游输入的 `entity_attributes` 核心要素完全纳入外，还必须在 `description_cn` 以及生成的 `generation_prompt_cn/en` 中明确说明主光（Key Light）和辅光（Fill Light）的应用，包括光源的方位、亮度和色温对比，以构建更为立体的光影层次与真实的空间体积感。
 - **固定双语输出字段契约**：严格沿用定义的中英双轨字段要求，特别是 `generation_prompt_cn/en`。
 - **继承约束**：每个实体都必须提供 `visual_dependencies`（数组）与 `dependency_strategy`（包含 `type` 和 `logic` 两个对象属性），详见前文状态演化链要求。**绝对禁止在 `visual_dependencies` 中填入 `S001`、`E001` 等 `subject_no`，实体名引用必须逐字符一致 (如 `CHAR:[@...]` 等)！**
 
@@ -171,7 +171,7 @@
           "name": "林月",
           "name_en": "Lin Yue",
           "base_name_en": "Lin Yue",
-          "description_cn": "调查记者，28岁。冷静、警觉且在危机中追求真相的克制型人物。下颌线清晰利落，具有观察者的深邃眼神。",
+          "description_cn": "调查记者，28岁。冷静、警觉且在危机中追求真相的克制型人物。下颌线清晰利落，具有观察者的深邃眼神。主光（Key Light）从侧前方打下，刻画清晰的骨骼起伏；辅光（Fill Light）以冷调均匀补足暗部，突显冷静的性格基调。",
           "gender": "F",
           "role": "Investigative Reporter",
           "archetype": "习惯有0.5秒的停滞停顿等动作特征原文",

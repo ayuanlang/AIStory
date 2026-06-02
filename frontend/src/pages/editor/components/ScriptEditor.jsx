@@ -7809,6 +7809,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 badge: subjectIndex ? t('可导入', 'Importable') : t('待输出', 'Pending'),
                 summary: t('单独保存第二阶段的资产清单，可按当前结果重新导入。', 'Stores the Stage 2 asset index separately for re-import.'),
                 content: subjectIndex,
+                onSave: async (newVal) => {
+                    setSubjectIndexText(newVal);
+                    if (activeEpisode?.id) {
+                        try {
+                            await onUpdateEpisode(activeEpisode.id, {
+                                ai_scene_analysis_subject_index: newVal
+                            });
+                        } catch(e) {
+                            console.error('Failed to update stage2 subject index', e);
+                        }
+                    }
+                },
                 actions: [
                     {
                         key: 'reimport-stage2-subject-index',
@@ -8351,7 +8363,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </table>
         </div>
                     )}
-        <div className="flex flex-col gap-4 h-full shrink-0 mt-4 border-t border-white/10 pt-4 px-6 pb-6">
+        <div className="flex flex-col gap-4 flex-none max-h-[60vh] mt-4 border-t border-white/10 pt-4 px-6 pb-6 overflow-y-auto custom-scrollbar">
         {/* Stage 1 Panel */}
         <div className="flex-none overflow-hidden h-[300px]">
             <LLMResultPanel
@@ -8362,7 +8374,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             />
         </div>
         {/* Stage 2 Panel */}
-        <div className="flex-none overflow-hidden h-[400px]">
+        <div className="flex-none h-auto min-h-[400px]">
             <LLMResultPanel
                 title={t('第二阶段：场景分析结果 / 资产清单', 'Stage 2: Scene Analysis Result / Asset Index')}
                 t={t}
