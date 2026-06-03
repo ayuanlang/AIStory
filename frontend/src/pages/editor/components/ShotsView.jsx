@@ -8792,7 +8792,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div>
                                 <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
-                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[160px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
+                                    className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
                                     readOnly={true}
                                     placeholder={t('镜头逻辑描述（中文）...', 'Shot logic description (Chinese)...')}
