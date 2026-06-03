@@ -11247,24 +11247,9 @@ class MediaGenerationService:
                     resolved_refs.append(resolved)
 
         if resolved_refs:
-            preuploaded_refs: List[str] = []
-            for idx, ref in enumerate(resolved_refs):
-                hosted_ref = await asyncio.to_thread(
-                    self._upload_kie_ref_to_hosted_url,
-                    ref,
-                    api_key=api_key,
-                    upload_path="market-inputs",
-                    file_name_prefix=f"kie-ref-{idx + 1}",
-                )
-                if not hosted_ref:
-                    return {
-                        "error": "KIE pre-upload failed",
-                        "details": "Failed to upload reference file before KIE submission",
-                        "submit_failed": True,
-                        "runtime_model": model,
-                    }
-                preuploaded_refs.append(hosted_ref)
-            resolved_refs = preuploaded_refs
+            # Use resolved public URLs (for example OSS URLs) directly in KIE payloads.
+            # Avoid KIE pre-upload as requested and keep references untouched.
+            resolved_refs = [str(item or "").strip() for item in resolved_refs if str(item or "").strip()]
 
         is_sora2_i2v_model = bool(gen_type == "video" and str(model_lower or "").strip().startswith("sora-2") and "image-to-video" in str(model_lower or "").strip())
 
@@ -11410,20 +11395,9 @@ class MediaGenerationService:
             else:
                 last_ref = await self._resolve_ref_for_api_async(last_frame_url, force_data_uri_for_local=True)
 
-            hosted_last_ref = await self._upload_kie_ref_to_hosted_url_async(
-                last_ref,
-                api_key=api_key,
-                upload_path="market-inputs",
-                file_name_prefix="kie-last-frame",
-            )
-            if not hosted_last_ref:
-                return {
-                    "error": "KIE pre-upload failed",
-                    "details": "Failed to upload last_frame_url before KIE submission",
-                    "submit_failed": True,
-                    "runtime_model": model,
-                }
-            payload_input["last_frame_url"] = hosted_last_ref
+            last_ref_text = str(last_ref or "").strip()
+            if last_ref_text:
+                payload_input["last_frame_url"] = last_ref_text
 
         if is_seedance_video_model:
             seedance_refs: List[str] = []
@@ -12281,25 +12255,14 @@ class MediaGenerationService:
                 for src in src_list:
                     rebuilt = self._process_veo_image(src, normalized_ar or "16:9")
                     if rebuilt:
-                        hosted_rebuilt = self._upload_kie_ref_to_hosted_url(
-                            rebuilt,
-                            api_key=api_key,
-                            upload_path="veo-inputs",
-                            file_name_prefix="veo-retry",
-                        )
-                        if hosted_rebuilt:
-                            rebuilt_refs.append(hosted_rebuilt)
+                        rebuilt_text = str(rebuilt or "").strip()
+                        if rebuilt_text:
+                            rebuilt_refs.append(rebuilt_text)
             if last_frame_url:
                 rebuilt_last = self._process_veo_image(last_frame_url, normalized_ar or "16:9")
-                if rebuilt_last and rebuilt_last not in rebuilt_refs:
-                    hosted_last = self._upload_kie_ref_to_hosted_url(
-                        rebuilt_last,
-                        api_key=api_key,
-                        upload_path="veo-inputs",
-                        file_name_prefix="veo-retry-last",
-                    )
-                    if hosted_last and hosted_last not in rebuilt_refs:
-                        rebuilt_refs.append(hosted_last)
+                rebuilt_last_text = str(rebuilt_last or "").strip()
+                if rebuilt_last_text and rebuilt_last_text not in rebuilt_refs:
+                    rebuilt_refs.append(rebuilt_last_text)
             return rebuilt_refs
 
         async def _retry_veo_on_image_size_limit(current_resp: requests.Response, current_payload: Dict[str, Any]):
