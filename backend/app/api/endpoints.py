@@ -1338,8 +1338,19 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
             return
         raise HTTPException(status_code=503, detail="Webhook signature key not configured")
 
-    timestamp_raw = str(request.headers.get("x-webhook-timestamp") or "").strip()
-    received_signature = _normalize_webhook_signature_header(request.headers.get("x-webhook-signature"))
+    timestamp_raw = ""
+    for header_name in ("x-webhook-timestamp", "x-kie-timestamp", "x-timestamp"):
+        candidate = str(request.headers.get(header_name) or "").strip()
+        if candidate:
+            timestamp_raw = candidate
+            break
+
+    received_signature = ""
+    for header_name in ("x-webhook-signature", "x-kie-signature", "x-signature"):
+        candidate = _normalize_webhook_signature_header(request.headers.get(header_name))
+        if candidate:
+            received_signature = candidate
+            break
     if not timestamp_raw or not received_signature:
         raise HTTPException(status_code=401, detail="Missing webhook signature headers")
 
@@ -29957,7 +29968,26 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
     except Exception as e:
         logger.error(f"Failed to log webhook payload: {e}")
 
-    _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
+    try:
+        _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
+        logger.info("[WebhookVerify] accepted | ticket=%s", stable_ticket)
+    except HTTPException as verify_exc:
+        logger.warning(
+            "[WebhookVerify] rejected | ticket=%s detail=%s has_timestamp=%s has_signature=%s",
+            stable_ticket,
+            getattr(verify_exc, "detail", None),
+            bool(
+                str(request.headers.get("x-webhook-timestamp") or "").strip()
+                or str(request.headers.get("x-kie-timestamp") or "").strip()
+                or str(request.headers.get("x-timestamp") or "").strip()
+            ),
+            bool(
+                str(request.headers.get("x-webhook-signature") or "").strip()
+                or str(request.headers.get("x-kie-signature") or "").strip()
+                or str(request.headers.get("x-signature") or "").strip()
+            ),
+        )
+        raise
 
     await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
     normalized_payload = _get_generation_callback_payload(stable_ticket)
