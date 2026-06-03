@@ -6,7 +6,7 @@ import TunePromptAgentModal from "./TunePromptAgentModal";
 import AgentChat from '../../../components/AgentChat';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
-import FunctionApiSelector from '../../../components/FunctionApiSelector';
+import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
 import { ReferenceManager } from './SceneManager';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
@@ -299,7 +299,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const aspectParts = parseAspectRatioParts(getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9');
     const isPortrait = aspectParts && aspectParts.heightPart > aspectParts.widthPart;
     
-    const { functionApiConfigs, generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
+    const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
+    const functionApiConfigs = useFunctionApis();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
