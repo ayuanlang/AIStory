@@ -3359,11 +3359,15 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     if provider_task_id and callback_task_id and callback_task_id != provider_task_id:
         return job
 
-    normalized_status = _normalize_generation_status(callback_payload.get("status"))
-    current_status = _normalize_generation_status(job.get("status"))
     result = _build_result_from_provider_callback(callback_payload)
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
+    callback_status_raw = str(callback_payload.get("status") or "").strip() or _extract_callback_status(callback_payload)
+    normalized_status = _normalize_generation_status(callback_status_raw)
+    if not normalized_status and callback_result_url:
+        normalized_status = "succeeded"
+
+    current_status = _normalize_generation_status(job.get("status"))
     current_error = str(job.get("error") or "").strip()
     current_has_stable_result = bool(current_result_url) and not _is_ephemeral_provider_media_url(current_result_url)
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
