@@ -168,7 +168,7 @@ export const MediaDetailModal = ({ media, onClose }) => {
                             src={media.url}
                             controls
                             autoPlay
-                            className="max-w-full max-h-full shadow-lg rounded"
+                            className="w-full h-full object-contain shadow-lg rounded"
                             visibleDelayMs={160}
                             fallback={<Video className="w-8 h-8 opacity-30" />}
                         />

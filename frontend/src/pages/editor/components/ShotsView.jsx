@@ -10589,9 +10589,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <ManagedVideoPlayer
                                                                             src={detailPreviewUrl || editingShot.video_url}
                                                                             poster={resolveShotVideoPosterUrl(editingShot)}
-                                                                            className="max-w-full max-h-full object-contain"
+                                                                            className="w-full h-full object-contain"
                                                                             wrapperClassName="w-full h-full"
                                                                             preload="metadata"
+                                                                            suspend={Boolean(currentGeneratingState.video)}
                                                                             hideBusyOverlay={Boolean(currentGeneratingState.video)}
                                                                             uiLang={uiLang}
                                                                         />

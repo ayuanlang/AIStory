@@ -1720,7 +1720,7 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                     {category === 'image' ? (
                         <img src={getFullUrl(asset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
                     ) : (
-                        <video src={getFullUrl(asset.url)} controls className="max-w-full max-h-full rounded-lg shadow-2xl" />
+                        <video src={getFullUrl(asset.url)} controls className="w-full h-full object-contain rounded-lg shadow-2xl" />
                     )}
                     <div className="absolute top-4 left-4 p-2 bg-black/60 backdrop-blur rounded-lg text-xs text-white/50 font-mono">
                         {typeLabel}

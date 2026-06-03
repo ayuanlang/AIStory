@@ -2,6 +2,7 @@
 import json
 import os
 from typing import Any, Dict
+import importlib
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
@@ -11,7 +12,7 @@ def _load_queue_config():
         "pure_callback_mode_auto": True,
         "pure_callback_mode": False,
         "callback_loss_retry_enabled": True,
-        "callback_loss_retry_after_seconds": 1800,
+        "callback_loss_retry_after_seconds": 1200,
         "callback_loss_max_submit_retries": 1,
         "callback_compensation_scan_enabled": True,
         "callback_compensation_scan_interval_seconds": 60,
@@ -802,7 +803,8 @@ def _run_callback_compensation_once() -> None:
 
     safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 20, minimum=1, maximum=200)
     retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
-    retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1800, minimum=60, maximum=86400)
+    retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
+    timeout_retry_after_seconds = min(retry_after_seconds, 120)
     max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
 
     now_ts = time.time()
@@ -814,7 +816,11 @@ def _run_callback_compensation_once() -> None:
                 break
             job = dict(payload or {})
             status = _normalize_generation_status(job.get("status"))
-            if status not in {"queued", "running"}:
+            is_timeout_failed = (
+                status == "failed"
+                and "timed out" in str(job.get("error") or "").strip().lower()
+            )
+            if status not in {"queued", "running"} and not is_timeout_failed:
                 continue
             callback_ticket = _extract_job_provider_callback_ticket(job)
             if not callback_ticket:
@@ -839,12 +845,25 @@ def _run_callback_compensation_once() -> None:
         if not retry_enabled:
             continue
 
-        started_dt = _parse_iso_datetime(job.get("started_at") or job.get("created_at"))
-        if not started_dt:
-            continue
-        elapsed_seconds = max(0, int(now_ts - started_dt.timestamp()))
-        if elapsed_seconds < retry_after_seconds:
-            continue
+        status = _normalize_generation_status(job.get("status"))
+        is_timeout_failed = (
+            status == "failed"
+            and "timed out" in str(job.get("error") or "").strip().lower()
+        )
+        if is_timeout_failed:
+            timeout_base_dt = _parse_iso_datetime(job.get("finished_at") or job.get("started_at") or job.get("created_at"))
+            if not timeout_base_dt:
+                continue
+            elapsed_seconds = max(0, int(now_ts - timeout_base_dt.timestamp()))
+            if elapsed_seconds < timeout_retry_after_seconds:
+                continue
+        else:
+            started_dt = _parse_iso_datetime(job.get("started_at") or job.get("created_at"))
+            if not started_dt:
+                continue
+            elapsed_seconds = max(0, int(now_ts - started_dt.timestamp()))
+            if elapsed_seconds < retry_after_seconds:
+                continue
 
         retry_attempts = _safe_int(job.get("callback_submit_retries"), 0)
         if retry_attempts >= max_submit_retries:
@@ -867,17 +886,18 @@ def _run_callback_compensation_once() -> None:
                 started_at=None,
                 finished_at=None,
                 error=None,
-                upstream_submit_state="callback_retry_requeued",
+                upstream_submit_state="callback_timeout_retry_requeued" if is_timeout_failed else "callback_retry_requeued",
                 callback_submit_retries=retry_attempts + 1,
                 callback_retry_at=now_bj_iso(),
             )
             logger.warning(
-                "[VideoJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s",
+                "[VideoJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s timeout_failed=%s",
                 job_id,
                 callback_ticket,
                 elapsed_seconds,
                 retry_attempts + 1,
                 max_submit_retries,
+                is_timeout_failed,
             )
         except Exception as exc:
             logger.warning(
@@ -1110,6 +1130,52 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
             if normalized:
                 return normalized
 
+        for block_key in ("output", "result"):
+            block = data.get(block_key)
+            if isinstance(block, dict):
+                for value in (
+                    block.get("id"),
+                    block.get("task_id"),
+                    block.get("taskId"),
+                    block.get("job_id"),
+                    block.get("jobId"),
+                ):
+                    normalized = str(value or "").strip()
+                    if normalized:
+                        return normalized
+
+    return ""
+
+
+def _extract_callback_status(payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    def _first_status(source: Dict[str, Any]) -> str:
+        if not isinstance(source, dict):
+            return ""
+        for key in ("status", "state", "task_status", "taskStatus", "job_status", "jobStatus", "phase"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    for candidate in (
+        _first_status(payload),
+        _first_status(payload.get("eventData") if isinstance(payload.get("eventData"), dict) else {}),
+        _first_status(payload.get("data") if isinstance(payload.get("data"), dict) else {}),
+    ):
+        if candidate:
+            return candidate
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for block_key in ("output", "result"):
+            block = data.get(block_key)
+            candidate = _first_status(block if isinstance(block, dict) else {})
+            if candidate:
+                return candidate
+
     return ""
 
 
@@ -1180,11 +1246,15 @@ def _compact_generation_callback_payload(payload: Dict[str, Any]) -> Dict[str, A
         return dict(payload)
 
     callback_task_id = _extract_callback_task_id(payload)
-    callback_status = _normalize_generation_status(payload.get("status"))
+    callback_status_raw = _extract_callback_status(payload)
+    callback_status = _normalize_generation_status(callback_status_raw)
     callback_result_url = _extract_job_result_url(payload)
 
+    if not callback_status and callback_result_url:
+        callback_status = "succeeded"
+
     compact: Dict[str, Any] = {
-        "status": callback_status or str(payload.get("status") or "").strip() or None,
+        "status": callback_status or callback_status_raw or None,
         "task_id": callback_task_id or None,
         "taskId": callback_task_id or None,
         "result_url": callback_result_url or None,
@@ -1195,9 +1265,11 @@ def _compact_generation_callback_payload(payload: Dict[str, Any]) -> Dict[str, A
 
     data_block = payload.get("data")
     if isinstance(data_block, dict):
+        data_status_raw = _extract_callback_status(data_block)
+        data_status = _normalize_generation_status(data_status_raw) or data_status_raw
         compact["data"] = {
             "id": str(data_block.get("id") or data_block.get("task_id") or data_block.get("taskId") or "").strip() or None,
-            "status": str(data_block.get("status") or "").strip() or None,
+            "status": data_status or None,
             "result_url": _extract_job_result_url(data_block) or None,
             "error": str(data_block.get("error") or data_block.get("message") or "").strip() or None,
         }
@@ -2637,6 +2709,24 @@ def _get_generation_callback_payload(ticket: str) -> Dict[str, Any]:
             error_val = event_data.get("errorMessage") or event_data.get("failedReason") or event_data.get("errorCode")
             if error_val:
                 normalized["error"] = str(error_val)
+
+    callback_status_raw = _extract_callback_status(normalized)
+    callback_status = _normalize_generation_status(callback_status_raw)
+    if callback_status:
+        normalized["status"] = callback_status
+    elif callback_status_raw and "status" not in normalized:
+        normalized["status"] = callback_status_raw
+
+    callback_task_id = _extract_callback_task_id(normalized)
+    if callback_task_id:
+        normalized.setdefault("task_id", callback_task_id)
+        normalized.setdefault("taskId", callback_task_id)
+
+    callback_result_url = _extract_job_result_url(normalized)
+    if callback_result_url:
+        normalized.setdefault("result_url", callback_result_url)
+        if not str(normalized.get("status") or "").strip():
+            normalized["status"] = "succeeded"
                 
     return normalized
 
@@ -3649,6 +3739,20 @@ def _safe_json_dict(value: Any) -> Dict[str, Any]:
         except Exception:
             return {}
     return {}
+
+
+def _loads_json5_if_available(text: str) -> Optional[Any]:
+    raw = str(text or "")
+    if not raw.strip():
+        return None
+    try:
+        json5_mod = importlib.import_module("json5")
+    except Exception:
+        return None
+    try:
+        return json5_mod.loads(raw)
+    except Exception:
+        return None
 
 
 def _episode_info_read_disabled() -> bool:
@@ -18200,19 +18304,12 @@ def _extract_first_json_payload(text: str):
     text = str(text or "")
     
     # Attempt 1: Try json5 if available
-    try:
-        import json5
+    has_json5 = False
+    json5_obj = _loads_json5_if_available(text)
+    if isinstance(json5_obj, (dict, list)):
+        return json5_obj
+    if json5_obj is not None:
         has_json5 = True
-    except ImportError:
-        has_json5 = False
-
-    if has_json5:
-        try:
-            res = json5.loads(text)
-            if isinstance(res, (dict, list)):
-                return res
-        except Exception:
-            pass
 
     # Attempt 2: Extract substring from first {/[ to last }/]
     first_idx = -1
@@ -18231,25 +18328,18 @@ def _extract_first_json_payload(text: str):
         sub_text = text[first_idx:last_idx + 1]
         try:
             if has_json5:
-                res = json5.loads(sub_text)
-            else:
-                res = json.loads(sub_text)
-            if isinstance(res, (dict, list)):
-                return res
-        except Exception:
-            pass
-
-    # Attempt 3: Fallback to old sequential candidate check
-    decoder = json.JSONDecoder()
-    for idx, ch in enumerate(text):
-        if ch not in "{[":
-            continue
-        try:
+                res = _loads_json5_if_available(sub_text)
+            has_json5 = False
+            json5_obj = _loads_json5_if_available(text)
+            if isinstance(json5_obj, (dict, list)):
+                return json5_obj
+            if json5_obj is not None:
+                has_json5 = True
             obj, _ = decoder.raw_decode(text[idx:])
             if isinstance(obj, (dict, list)):
                 return obj
         except Exception:
-            continue
+                        res = _loads_json5_if_available(sub_text)
     return None
 
 
@@ -28194,8 +28284,8 @@ async def generate_voice_endpoint(
                         # Register correctly whether OSS'd or not
                         final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
                         final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
-                        if job_id:
-                            final_meta["idempotency_key"] = job_id
+                        if not str(final_meta.get("idempotency_key") or "").strip() and req_obj.shot_id:
+                            final_meta["idempotency_key"] = f"voice-shot-{int(req_obj.shot_id)}"
                         await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
@@ -29608,9 +29698,10 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
     _verify_kie_webhook_request(request, payload if isinstance(payload, dict) else {})
 
     await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
-    payload_status = str((payload or {}).get("status") or "").strip().lower() if isinstance(payload, dict) else ""
-    payload_result_url = _extract_job_result_url(payload if isinstance(payload, dict) else {})
-    callback_task_id = _extract_callback_task_id(payload if isinstance(payload, dict) else {})
+    normalized_payload = _get_generation_callback_payload(stable_ticket)
+    payload_status = _normalize_generation_status(normalized_payload.get("status"))
+    payload_result_url = _extract_job_result_url(normalized_payload)
+    callback_task_id = _extract_callback_task_id(normalized_payload)
     logger.info(
         "[GenerationCallback] received ticket=%s task_id=%s status=%s has_result_url=%s result_url=%s remote=%s",
         stable_ticket,
@@ -32249,7 +32340,11 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             
         is_seedance_batch = False
         if system_api_id_val:
-            pre_api_cfg = _fetch_system_api_config(item_db, system_api_id_val, "video")
+            pre_api_row = get_system_api_setting(item_db, setting_id=int(system_api_id_val))
+            pre_api_cfg = {
+                "provider": str(getattr(pre_api_row, "provider", "") or "").strip(),
+                "model": str(getattr(pre_api_row, "model", "") or "").strip(),
+            }
             if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
                 is_seedance_batch = True
 
@@ -32994,7 +33089,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             normalized_last_frame_url,
                             None,
                             entity_lookup=entity_lookup,
-                            use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
+                            use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                         )
                         if video_mode == "keyframes_entity_refs":
                             keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
@@ -33012,7 +33107,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_last_frame_url,
                                 None,
                                 entity_lookup=entity_lookup,
-                                use_prev_video=getattr(req, "use_prev_video", False) if hasattr(req, "use_prev_video") else False,
+                                use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                             )
                             if video_mode == "keyframes_entity_refs":
                                 keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
@@ -33648,7 +33743,7 @@ async def analyze_asset_image(
 
     # 5. Call Service
     try:
-        if billing_service.is_token_pricing(db, "analysis", api_setting.provider, api_setting.model):
+        if billing_service.is_token_pricing(db, "analysis", api_provider, api_model):
             # Estimate based on the actual text prompt + conservative image token budget.
             # OpenAI vision format uses user message with [text, image_url].
             est_messages = [
@@ -34127,19 +34222,12 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             import json
             text = str(text or "")
             
-            try:
-                import json5
+            has_json5 = False
+            json5_obj = _loads_json5_if_available(text)
+            if isinstance(json5_obj, (dict, list)):
+                return json5_obj
+            if json5_obj is not None:
                 has_json5 = True
-            except ImportError:
-                has_json5 = False
-
-            if has_json5:
-                try:
-                    res = json5.loads(text)
-                    if isinstance(res, (dict, list)):
-                        return res
-                except Exception:
-                    pass
 
             first_idx = -1
             last_idx = -1
@@ -34157,7 +34245,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
                 sub_text = text[first_idx:last_idx + 1]
                 try:
                     if has_json5:
-                        res = json5.loads(sub_text)
+                        res = _loads_json5_if_available(sub_text)
                     else:
                         res = json.loads(sub_text)
                     if isinstance(res, (dict, list)):
@@ -34557,7 +34645,7 @@ class QueueConfigBase(BaseModel):
     pure_callback_mode_auto: bool = True
     pure_callback_mode: bool = False
     callback_loss_retry_enabled: bool = True
-    callback_loss_retry_after_seconds: int = 1800
+    callback_loss_retry_after_seconds: int = 1200
     callback_loss_max_submit_retries: int = 1
     callback_compensation_scan_enabled: bool = True
     callback_compensation_scan_interval_seconds: int = 60
