@@ -8806,8 +8806,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 {/* 3 Column Layout: Start | End | Video */}
                                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                     {/* Start Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full  pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('起始帧', 'Start Frame')}
@@ -8981,8 +8981,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
 
                                     {/* End Frame */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full  pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('结束帧', 'End Frame')}
@@ -9173,8 +9173,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     </div>
 
                                     {/* Final Video Output (Moved Here) */}
-                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full max-h-[650px] 2xl:max-h-[720px] overflow-hidden' : 'space-y-2'}>
-                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full overflow-y-auto custom-scrollbar pr-1 justify-start' : ''}`}>
+                                    <div className={isPortrait ? 'flex items-stretch gap-2.5 h-full' : 'space-y-2'}>
+                                        <div className={`flex-1 space-y-2 flex flex-col ${isPortrait ? 'min-w-0 max-h-full  pr-1 justify-start' : ''}`}>
                                             <div className="flex flex-col min-h-[52px] items-center justify-center gap-1.5">
                                             <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center justify-center gap-2">
                                                 {t('最终视频', 'Final Video')}
