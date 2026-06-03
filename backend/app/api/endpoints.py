@@ -1316,9 +1316,20 @@ def _compute_webhook_signature(task_id: str, timestamp_seconds: int, secret: str
     return base64.b64encode(digest).decode("utf-8")
 
 
+def _normalize_webhook_signature_header(raw_signature: Any) -> str:
+    signature = str(raw_signature or "").strip()
+    if not signature:
+        return ""
+    # Be tolerant of prefixed forms like: sha256=<base64>
+    lower_sig = signature.lower()
+    if lower_sig.startswith("sha256="):
+        signature = signature.split("=", 1)[1].strip()
+    return signature
+
+
 def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> None:
     global _UNSIGNED_WEBHOOK_WARNING_EMITTED
-    secret = str(settings.WEBHOOK_HMAC_KEY or "").strip()
+    secret = str(getattr(settings, "KIE_WEBHOOK_HMAC_KEY", "") or settings.WEBHOOK_HMAC_KEY or "").strip()
     if not secret:
         if settings.WEBHOOK_HMAC_ALLOW_UNSIGNED:
             if not _UNSIGNED_WEBHOOK_WARNING_EMITTED:
@@ -1328,7 +1339,7 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
         raise HTTPException(status_code=503, detail="Webhook signature key not configured")
 
     timestamp_raw = str(request.headers.get("x-webhook-timestamp") or "").strip()
-    received_signature = str(request.headers.get("x-webhook-signature") or "").strip()
+    received_signature = _normalize_webhook_signature_header(request.headers.get("x-webhook-signature"))
     if not timestamp_raw or not received_signature:
         raise HTTPException(status_code=401, detail="Missing webhook signature headers")
 
@@ -1339,7 +1350,7 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
 
     now_seconds = int(time.time())
     max_skew = max(30, int(settings.WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS))
-    if abs(now_seconds - timestamp_seconds) > max_skew:
+    if timestamp_seconds <= 0 or abs(now_seconds - timestamp_seconds) > max_skew:
         raise HTTPException(status_code=401, detail="Webhook timestamp expired")
 
     task_id = _extract_callback_task_id(payload)
@@ -1552,6 +1563,89 @@ def _persist_data_uri_image_result(
     return normalized_url, updated_metadata
 
 
+_KIE_GENERATED_MEDIA_HOST_PATTERNS = [
+    re.compile(r"(^|\.)aiquickdraw\.com$", re.IGNORECASE),
+    re.compile(r"(^|\.)kie\.ai$", re.IGNORECASE),
+]
+
+
+def _looks_like_kie_generated_media_url(value: Any) -> bool:
+    raw = str(value or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return False
+    hostname = str(parsed.hostname or "").strip().lower()
+    if not hostname:
+        return False
+    for pattern in _KIE_GENERATED_MEDIA_HOST_PATTERNS:
+        if pattern.search(hostname):
+            return True
+    return False
+
+
+def _resolve_kie_download_api_key() -> str:
+    candidates = [
+        getattr(settings, "KIE_API_KEY", ""),
+        os.getenv("KIE_API_KEY", ""),
+        os.getenv("KIE_DOWNLOAD_API_KEY", ""),
+    ]
+    for candidate in candidates:
+        key = str(candidate or "").strip()
+        if key:
+            return key
+    return ""
+
+
+def _resolve_kie_downloadable_url(source_url: Any) -> str:
+    raw_url = str(source_url or "").strip()
+    if not raw_url or not _looks_like_kie_generated_media_url(raw_url):
+        return ""
+
+    api_key = _resolve_kie_download_api_key()
+    if not api_key:
+        return ""
+
+    endpoint = str(os.getenv("KIE_DOWNLOAD_URL_ENDPOINT") or "https://api.kie.ai/api/v1/common/download-url").strip()
+    if not endpoint:
+        return ""
+
+    try:
+        resp = requests.post(
+            endpoint,
+            json={"url": raw_url},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "AIStory/1.0",
+            },
+            timeout=(10, 30),
+        )
+        if resp.status_code != 200:
+            logger.info(
+                "[ImageResultNormalize] KIE download-url non-200 | status=%s source_url=%s",
+                resp.status_code,
+                raw_url,
+            )
+            return ""
+
+        data = resp.json() if resp.content else {}
+        code = data.get("code") if isinstance(data, dict) else None
+        candidate = str(data.get("data") or "").strip() if isinstance(data, dict) else ""
+        if code in (200, "200") and candidate.lower().startswith(("http://", "https://")):
+            return candidate
+        return ""
+    except Exception as exc:
+        logger.info(
+            "[ImageResultNormalize] KIE download-url resolve failed | source_url=%s err=%s",
+            raw_url,
+            exc,
+        )
+        return ""
+
+
 def _persist_remote_image_result(
     current_user: User,
     media_url: Optional[str],
@@ -1573,6 +1667,15 @@ def _persist_remote_image_result(
     hostname = str(parsed.hostname or "").strip().lower()
     if hostname in {"localhost", "127.0.0.1"}:
         return media_url, metadata
+
+    source_url = raw
+    resolved_kie_download_url = _resolve_kie_downloadable_url(source_url)
+    if resolved_kie_download_url and resolved_kie_download_url != raw:
+        raw = resolved_kie_download_url
+        try:
+            parsed = urllib.parse.urlparse(raw)
+        except Exception:
+            parsed = urllib.parse.urlparse(source_url)
 
     max_remote_image_bytes = max(1, int(os.getenv("REMOTE_IMAGE_LOCALIZE_MAX_MB", "25"))) * 1024 * 1024
 
@@ -1679,6 +1782,9 @@ def _persist_remote_image_result(
 
     updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     updated_metadata["stored_from_remote_url"] = raw
+    if resolved_kie_download_url:
+        updated_metadata["stored_from_remote_url_source"] = source_url
+        updated_metadata["stored_from_remote_url_resolved_via"] = "kie_download_url"
     updated_metadata["stored_from_remote_url_bytes"] = bytes_written
     if content_type:
         updated_metadata["stored_from_remote_url_content_type"] = content_type
@@ -1748,6 +1854,7 @@ def _persist_remote_image_result(
 
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
+    re.compile(r"(^|\.)aiquickdraw\.com$", re.IGNORECASE),
 ]
 
 
@@ -2551,10 +2658,58 @@ def _extract_job_result_url(result: Any) -> str:
     if not isinstance(result, dict):
         return ""
 
-    for key in ("url", "image_url", "imageUrl", "video_url", "videoUrl", "generated_url"):
+    direct_url_keys = (
+        "url",
+        "result_url",
+        "resultUrl",
+        "image_url",
+        "imageUrl",
+        "video_url",
+        "videoUrl",
+        "media_url",
+        "mediaUrl",
+        "generated_url",
+        "generatedUrl",
+        "output_url",
+        "outputUrl",
+        "file_url",
+        "fileUrl",
+        "download_url",
+        "downloadUrl",
+        "resource_url",
+        "resourceUrl",
+    )
+    for key in direct_url_keys:
         value = _normalize_candidate_url(result.get(key))
         if value:
             return value
+
+    direct_url_list_keys = (
+        "urls",
+        "result_urls",
+        "resultUrls",
+        "image_urls",
+        "imageUrls",
+        "video_urls",
+        "videoUrls",
+        "media_urls",
+        "mediaUrls",
+        "output_urls",
+        "outputUrls",
+        "resultUrlsList",
+    )
+    for key in direct_url_list_keys:
+        items = result.get(key)
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    nested_url = _extract_job_result_url(item)
+                    if nested_url:
+                        return nested_url
+                else:
+                    value = _normalize_candidate_url(item)
+                    if value:
+                        return value
 
     results = result.get("results")
     if isinstance(results, list):
@@ -2589,6 +2744,16 @@ def _extract_job_result_url(result: Any) -> str:
     nested = result.get("result")
     if isinstance(nested, dict):
         return _extract_job_result_url(nested)
+    if isinstance(nested, list):
+        for item in nested:
+            if isinstance(item, dict):
+                nested_url = _extract_job_result_url(item)
+                if nested_url:
+                    return nested_url
+            else:
+                value = _normalize_candidate_url(item)
+                if value:
+                    return value
 
     return ""
 

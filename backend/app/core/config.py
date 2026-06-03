@@ -66,7 +66,10 @@ class Settings(BaseSettings):
     MAX_ASSET_UPLOAD_MB: int = int(os.getenv("MAX_ASSET_UPLOAD_MB", "100"))
     MAX_AVATAR_UPLOAD_MB: int = int(os.getenv("MAX_AVATAR_UPLOAD_MB", "5"))
     WEBHOOK_HMAC_KEY: str = os.getenv("WEBHOOK_HMAC_KEY", "").strip()
-    WEBHOOK_HMAC_ALLOW_UNSIGNED: bool = os.getenv("WEBHOOK_HMAC_ALLOW_UNSIGNED", "1") in {"1", "true", "True"}
+    # KIE can use a dedicated webhook secret; falls back to WEBHOOK_HMAC_KEY when unset.
+    KIE_WEBHOOK_HMAC_KEY: str = os.getenv("KIE_WEBHOOK_HMAC_KEY", "").strip()
+    # Secure-by-default: reject unsigned callbacks unless explicitly allowed.
+    WEBHOOK_HMAC_ALLOW_UNSIGNED: bool = os.getenv("WEBHOOK_HMAC_ALLOW_UNSIGNED", "0") in {"1", "true", "True"}
     WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS: int = int(os.getenv("WEBHOOK_TIMESTAMP_MAX_SKEW_SECONDS", "300"))
     UPLOAD_CACHE_CONTROL: str = os.getenv("UPLOAD_CACHE_CONTROL", "public, max-age=604800").strip()
 
