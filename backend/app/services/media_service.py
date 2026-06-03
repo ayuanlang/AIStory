@@ -21,7 +21,7 @@ import shutil
 import tempfile
 from PIL import Image
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union, Callable, Set
+from typing import List, Dict, Any, Optional, Union, Callable, Set, Tuple
 
 from app.db.session import SessionLocal
 from app.models.all_models import APISetting, SystemAPISetting, ProviderKeyPool
@@ -12327,7 +12327,7 @@ class MediaGenerationService:
                 or ("invalidparameter" in text and "image_url" in text)
             )
 
-        def _rehost_kie_submit_input_urls(payload_obj: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        def _rehost_kie_submit_input_urls(payload_obj: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
             candidate = copy.deepcopy(payload_obj or {})
             changed = False
 
@@ -12394,7 +12394,7 @@ class MediaGenerationService:
             current_resp: requests.Response,
             current_payload: Dict[str, Any],
             current_data: Optional[Dict[str, Any]] = None,
-        ) -> Tuple[requests.Response, Dict[str, Any], Optional[Dict[str, Any]]]:
+        ) -> tuple[requests.Response, Dict[str, Any], Optional[Dict[str, Any]]]:
             if gen_type not in {"image", "video"}:
                 return current_resp, current_payload, current_data
 
