@@ -1,6 +1,7 @@
 
 import json
 import os
+from typing import Any, Dict
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
