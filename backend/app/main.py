@@ -280,6 +280,19 @@ _RUNTIME_DIAG_STORE_SAMPLE_ITEMS = max(8, int(os.getenv("RUNTIME_DIAG_STORE_SAMP
 _RUNTIME_DIAG_TRACEMALLOC_ENABLED = os.getenv("RUNTIME_DIAG_TRACEMALLOC_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_TRACEMALLOC_FRAMES = max(5, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_FRAMES", "15") or 15))
 _RUNTIME_DIAG_TRACEMALLOC_TOP = max(3, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_TOP", "8") or 8))
+_QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "queue_config.json")
+
+
+def _read_queue_worker_threads_setting() -> Any:
+    try:
+        if os.path.exists(_QUEUE_CONFIG_FILE):
+            with open(_QUEUE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if isinstance(payload, dict):
+                return payload.get("queue_threads", "")
+    except Exception:
+        pass
+    return ""
 
 
 def _log_runtime_startup_profile() -> None:
@@ -294,7 +307,7 @@ def _log_runtime_startup_profile() -> None:
         os.getenv("GUNICORN_MAX_REQUESTS_JITTER", ""),
         _RUN_DB_BOOTSTRAP_ON_START,
         _RUN_GENERATION_QUEUE_WORKER_ON_START,
-        os.getenv("GENERATION_QUEUE_WORKER_THREADS", ""),
+        _read_queue_worker_threads_setting(),
         _RUNTIME_DIAG_LOG_ENABLED,
         _RUNTIME_DIAG_LOG_INTERVAL_SECONDS,
         _RUNTIME_DIAG_HIGH_WATERMARK_MB,

@@ -549,6 +549,7 @@ class MediaGenerationService:
 
     async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, duration=None, aspect_ratio=None) -> dict:
         api_key = config.get("api_key", "")
+        tool_conf = config.get("config", {}) or {}
         ak, sk, dp_token = "", "", ""
         if ":" in api_key and api_key.count(":") >= 2:
             parts = api_key.split(":", 2)
@@ -556,7 +557,7 @@ class MediaGenerationService:
             sk = parts[1]
             dp_token = parts[2]
             
-        project_name = config.get("config", {}).get("project_name", "default")
+        project_name = tool_conf.get("project_name", "default")
         if ":" in dp_token:
             subparts = dp_token.split(":", 1)
             dp_token = subparts[0]
@@ -638,8 +639,29 @@ class MediaGenerationService:
                 return {"error": f"Asset upload raised exception: {e}"}
                 
         # Fire the generation task
-        inner_conf = config.get("config", {})
+        inner_conf = tool_conf
         task_endpoint_raw = config.get("base_url") or inner_conf.get("base_url") or config.get("endpoint") or inner_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+
+        raw_callback_url = str(
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("webHook")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "ark-seedance-video"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "Ark Seedance callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
         
         # Smart routing: If API key is native Volcengine (ark- or ep-), force native endpoint
         if dp_token and (dp_token.startswith("ark-") or dp_token.startswith("ep-")):
@@ -680,6 +702,8 @@ class MediaGenerationService:
             "generate_audio": True,
             "watermark": True
         }
+        if callback_url and callback_url != "-1":
+            task_payload["callback_url"] = callback_url
         
         if duration:
             try:
@@ -695,8 +719,13 @@ class MediaGenerationService:
             "Content-Type": "application/json"
         }
         
-        _debug_log(f"Submitting seedance 2.0 generation (task create) -> {task_endpoint}", "info")
+        _debug_log(
+            f"Submitting seedance 2.0 generation (task create) -> {task_endpoint} | callback_enabled={bool(task_payload.get('callback_url'))}",
+            "info",
+        )
         extra_metadata = {"provider": "ark-seedance", "model": model_id}
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         
         return await self._submit_and_poll_video(
             url=task_endpoint,
@@ -704,7 +733,11 @@ class MediaGenerationService:
             api_key=dp_token,
             log_tag="ark-seedance",
             extra_metadata=extra_metadata,
-            poll_timeout_seconds=300
+            poll_timeout_seconds=300,
+            pure_callback_mode=pure_callback_mode,
+            callback_enabled=callback_enabled,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
         )
     def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
@@ -5855,6 +5888,22 @@ class MediaGenerationService:
             )
 
         prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        tool_conf = config.get("config", {}) or {}
+        raw_callback_url = str(
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("webHook")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "wanxiang-video"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         
         api_key = config.get("api_key") or os.getenv("DASHSCOPE_API_KEY")
         endpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis" 
@@ -5933,6 +5982,11 @@ class MediaGenerationService:
             "input": input_data,
             "parameters": parameters
         }
+        if callback_enabled:
+            payload["webhook_url"] = callback_url
+            payload["webhookUrl"] = callback_url
+            payload["callback_url"] = callback_url
+            payload["notify_url"] = callback_url
 
         # logger.info(f"[Wanxiang] Payload: {json.dumps(payload, ensure_ascii=False)}")
         
@@ -5964,6 +6018,31 @@ class MediaGenerationService:
 
         task_id = data.get("output", {}).get("task_id")
         if not task_id: return {"error": "No Task ID"}
+
+        if pure_callback_mode and callback_enabled:
+            logger.info(
+                "Wanxiang pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                task_id,
+                callback_ticket,
+                callback_url,
+            )
+            pending_meta = dict(base_metadata)
+            pending_meta.update(
+                {
+                    "raw": data,
+                    "submit_raw": data,
+                    "task_id": str(task_id),
+                    "taskId": str(task_id),
+                    "pending_callback": True,
+                    "callback_ticket": callback_ticket,
+                    "callback_url": callback_url,
+                }
+            )
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": pending_meta,
+            }
         
         task_endpoint = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
         
@@ -6000,6 +6079,22 @@ class MediaGenerationService:
             or "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
         ).strip()
         model = str(config.get("model") or "happyhorse-1.0-r2v").strip() or "happyhorse-1.0-r2v"
+        cfg = self._safe_json_dict(config.get("config"))
+        raw_callback_url = str(
+            cfg.get("_provider_callback_url")
+            or cfg.get("callback_url")
+            or cfg.get("callbackUrl")
+            or cfg.get("callBackUrl")
+            or cfg.get("webHook")
+            or ""
+        ).strip()
+        callback_ticket = str(cfg.get("_provider_callback_ticket") or "").strip() or "happyhorse-video"
+        callback_tool_conf = dict(cfg or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(cfg.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
 
         raw_refs: List[str] = []
         if isinstance(ref_image, list):
@@ -6052,7 +6147,6 @@ class MediaGenerationService:
         if len(resolved_refs) > 9:
             resolved_refs = resolved_refs[:9]
 
-        cfg = self._safe_json_dict(config.get("config"))
         ratio = str(
             aspect_ratio
             or config.get("ratio")
@@ -6102,6 +6196,11 @@ class MediaGenerationService:
                 "watermark": watermark,
             },
         }
+        if callback_enabled:
+            payload["webhook_url"] = callback_url
+            payload["webhookUrl"] = callback_url
+            payload["callback_url"] = callback_url
+            payload["notify_url"] = callback_url
         if seed_value is not None:
             payload["parameters"]["seed"] = seed_value
 
@@ -6136,6 +6235,31 @@ class MediaGenerationService:
         task_id = str((data.get("output") or {}).get("task_id") or "").strip()
         if not task_id:
             return {"error": "No Task ID", "details": data}
+
+        if pure_callback_mode and callback_enabled:
+            logger.info(
+                "HappyHorse pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                task_id,
+                callback_ticket,
+                callback_url,
+            )
+            pending_meta = {
+                "provider": "happyhorse",
+                "model": model,
+                "prompt": prompt,
+                "task_id": str(task_id),
+                "raw": data,
+                "submit_raw": data,
+                "reference_images": resolved_refs,
+                "pending_callback": True,
+                "callback_ticket": callback_ticket,
+                "callback_url": callback_url,
+            }
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": pending_meta,
+            }
 
         parsed = urllib.parse.urlparse(endpoint)
         if not parsed.scheme or not parsed.netloc:
@@ -6628,6 +6752,8 @@ class MediaGenerationService:
         if raw_callback_url:
             callback_tool_conf.setdefault("webhookUrl", raw_callback_url)
         callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         if callback_url and callback_url != raw_callback_url:
             logger.info(
                 "RunningHub callback auto-assigned | gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
@@ -6743,7 +6869,14 @@ class MediaGenerationService:
             })
 
             logger.info(f"[RunningHub] Image Payload: {_format_payload_for_log(payload)}")
-            return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubImage", extra_metadata=base_metadata)
+            return await self._submit_and_poll_runninghub(
+                submit_url,
+                query_url,
+                payload,
+                api_key,
+                "RunningHubImage",
+                extra_metadata=base_metadata,
+            )
 
         if gen_type == "audio":
             if "voice-clone" in endpoint_lower:
@@ -6763,7 +6896,14 @@ class MediaGenerationService:
                 payload["english_normalization"] = _normalize_bool(_pick_tool_value("english_normalization"), False)
 
             logger.info(f"[RunningHub] Audio Payload: {_format_payload_for_log(payload)}")
-            return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHubAudio", extra_metadata=base_metadata)
+            return await self._submit_and_poll_runninghub(
+                submit_url,
+                query_url,
+                payload,
+                api_key,
+                "RunningHubAudio",
+                extra_metadata=base_metadata,
+            )
 
         if gen_type != "video":
             return {"error": f"RunningHub generation type not supported: {gen_type}", "submit_failed": True}
@@ -6973,7 +7113,18 @@ class MediaGenerationService:
         print(f"======================================================\n")
 
         logger.info(f"[RunningHub] Video Payload: {_format_payload_for_log(payload)}")
-        return await self._submit_and_poll_runninghub(submit_url, query_url, payload, api_key, "RunningHub", extra_metadata=base_metadata)
+        return await self._submit_and_poll_runninghub(
+            submit_url,
+            query_url,
+            payload,
+            api_key,
+            "RunningHub",
+            extra_metadata=base_metadata,
+            pure_callback_mode=pure_callback_mode,
+            callback_enabled=callback_enabled,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
+        )
 
     async def _handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
         provider_name = self._vendor_label(config.get("provider") or ((config.get("config") or {}).get("provider")) or "apiyi")
@@ -7360,6 +7511,30 @@ class MediaGenerationService:
         if not tenant_id:
             return {"error": "No Pixelmove tenantId", "submit_failed": True}
 
+        raw_callback_url = str(
+            tool_conf.get("_provider_callback_url")
+            or tool_conf.get("callback_url")
+            or tool_conf.get("callbackUrl")
+            or tool_conf.get("callBackUrl")
+            or tool_conf.get("webHook")
+            or ""
+        ).strip()
+        callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or "pixelmove-video"
+        callback_tool_conf = dict(tool_conf or {})
+        if raw_callback_url:
+            callback_tool_conf.setdefault("callback_url", raw_callback_url)
+        callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
+        callback_payload_field = str(tool_conf.get("callback_field") or "callback_url").strip() or "callback_url"
+        if callback_url and callback_url != raw_callback_url:
+            logger.info(
+                "Pixelmove callback auto-assigned | ticket=%s callback_url=%s raw_callback=%s",
+                callback_ticket,
+                callback_url,
+                raw_callback_url or None,
+            )
+
         base_url = str(config.get("base_url") or tool_conf.get("base_url") or "https://portal.pixelmove.ai").strip().rstrip("/")
         endpoint = str(tool_conf.get("endpoint") or f"{base_url}/api/v1/bytedance/seedance-2.0").strip() or f"{base_url}/api/v1/bytedance/seedance-2.0"
 
@@ -7423,6 +7598,8 @@ class MediaGenerationService:
             "generate_audio": generate_audio,
             "seed": seed,
         }
+        if callback_enabled:
+            payload[callback_payload_field] = callback_url
 
         last_frame_resolved = self._resolve_ref_for_api(
             last_frame_url,
@@ -7601,6 +7778,31 @@ class MediaGenerationService:
                 "details": submit_data,
             }
 
+        if pure_callback_mode and callback_enabled:
+            logger.info(
+                "Pixelmove pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                task_id,
+                callback_ticket,
+                callback_url,
+            )
+            pending_meta = dict(base_metadata)
+            pending_meta.update(
+                {
+                    "raw": submit_data,
+                    "submit_raw": submit_data,
+                    "task_id": str(task_id),
+                    "taskId": str(task_id),
+                    "pending_callback": True,
+                    "callback_ticket": callback_ticket,
+                    "callback_url": callback_url,
+                }
+            )
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": pending_meta,
+            }
+
         poll_template = str(tool_conf.get("poll_endpoint") or f"{endpoint.rstrip('/')}/tasks/{{taskId}}")
         poll_url = poll_template.replace("{taskId}", urllib.parse.quote(task_id)).replace("{task_id}", urllib.parse.quote(task_id))
 
@@ -7676,6 +7878,8 @@ class MediaGenerationService:
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
         callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         base_url = str(config.get("base_url") or "https://aiclub.zimaocloud.com/model/openApi").strip().rstrip("/")
         model = str(config.get("model") or "nanoBanana").strip()
         
@@ -7807,6 +8011,31 @@ class MediaGenerationService:
 
         if not task_id:
             return {"error": f"No Task ID or URL returned: {data}", "submit_failed": True}
+
+        if pure_callback_mode and callback_enabled and str(gen_type or "").strip().lower() == "video":
+            logger.info(
+                "AICLUB pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                task_id,
+                callback_ticket,
+                callback_url,
+            )
+            pending_meta = dict(base_metadata)
+            pending_meta.update(
+                {
+                    "raw": data,
+                    "submit_raw": data,
+                    "task_id": str(task_id),
+                    "taskId": str(task_id),
+                    "pending_callback": True,
+                    "callback_ticket": callback_ticket,
+                    "callback_url": callback_url,
+                }
+            )
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": pending_meta,
+            }
 
         poll_url = f"{poll_base}/tasks/{task_id}"
 
@@ -8378,6 +8607,8 @@ class MediaGenerationService:
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
         callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         provider_name = self._vendor_label(config.get("provider") or tool_conf.get("provider") or "zlhub")
         base_url = str(config.get("base_url") or "https://api.zlhub.cn/v1").strip().rstrip("/")
         base_url = re.sub(r"https?://(?:[^/]*\.)?zlhub\.xiaowaiyou\.cn/zhonglian/api/v[0-9]+", "https://api.zlhub.cn/v1", base_url, flags=re.IGNORECASE)
@@ -8770,6 +9001,10 @@ class MediaGenerationService:
             api_key,
             "zlhub_video",
             extra_metadata=base_metadata,
+            pure_callback_mode=pure_callback_mode,
+            callback_enabled=callback_enabled,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
         )
 
     def _resolve_apiyi_chat_video_model(self, model: str, aspect_ratio: Optional[str] = None, duration: Optional[int] = None) -> str:
@@ -9402,7 +9637,21 @@ class MediaGenerationService:
             _debug_log(f"[{log_tag}] Exception: {e}", "error")
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_runninghub(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_runninghub(
+        self,
+        submit_url,
+        query_url,
+        payload,
+        api_key,
+        log_tag,
+        extra_metadata=None,
+        poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS,
+        poll_interval_seconds: int = 2,
+        pure_callback_mode: bool = False,
+        callback_enabled: bool = False,
+        callback_ticket: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
         max_submit_attempts = 1
@@ -9572,6 +9821,31 @@ class MediaGenerationService:
                     }
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
 
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "[RunningHub] pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                    task_id,
+                    callback_ticket or None,
+                    callback_url or None,
+                )
+                pending_meta = dict(extra_metadata or {})
+                pending_meta.update(
+                    {
+                        "raw": data,
+                        "submit_raw": data,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                    }
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": pending_meta,
+                }
+
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
             for _ in range(max_attempts):
                 await asyncio.sleep(poll_interval_seconds)
@@ -9622,7 +9896,20 @@ class MediaGenerationService:
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_video(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_video(
+        self,
+        url,
+        payload,
+        api_key,
+        log_tag,
+        extra_metadata=None,
+        poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS,
+        poll_interval_seconds: int = 2,
+        pure_callback_mode: bool = False,
+        callback_enabled: bool = False,
+        callback_ticket: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
         
@@ -9669,6 +9956,32 @@ class MediaGenerationService:
             if not task_id and isinstance(data.get("data"), dict):
                 task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id")
             if not task_id: return {"error": "No Task ID", "submit_failed": True}
+
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "[%s] pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                    log_tag,
+                    task_id,
+                    callback_ticket or None,
+                    callback_url or None,
+                )
+                pending_meta = dict(extra_metadata or {})
+                pending_meta.update(
+                    {
+                        "raw": data,
+                        "submit_raw": data,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                    }
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": pending_meta,
+                }
             
             # Poll
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
@@ -9732,7 +10045,21 @@ class MediaGenerationService:
         except Exception as e:
             return {"error": str(e), "submit_failed": True}
 
-    async def _submit_and_poll_zlhub_video(self, submit_url, query_url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_zlhub_video(
+        self,
+        submit_url,
+        query_url,
+        payload,
+        api_key,
+        log_tag,
+        extra_metadata=None,
+        poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS,
+        poll_interval_seconds: int = 2,
+        pure_callback_mode: bool = False,
+        callback_enabled: bool = False,
+        callback_ticket: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ):
         trace_id = None
         media_url = None
         # ZLHub V2 requires X-Track-Id and X-Trace-ID specifically to be 32-char hex string
@@ -9819,6 +10146,31 @@ class MediaGenerationService:
                         _strip_base64_from_log(data),
                     )
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
+
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "[ZLHub] pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                    task_id,
+                    callback_ticket or None,
+                    callback_url or None,
+                )
+                pending_meta = dict(extra_metadata or {})
+                pending_meta.update(
+                    {
+                        "raw": data,
+                        "submit_raw": data,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                    }
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": pending_meta,
+                }
 
             if is_seedance2:
                 logger.info(
@@ -12175,6 +12527,13 @@ class MediaGenerationService:
         if not task_id:
             return {"error": "No taskId from KIE", "details": data, "submit_failed": True, "runtime_model": submitted_model}
 
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
+        callback_assisted_job = bool(
+            callback_enabled
+            and str(callback_ticket or "").strip().startswith(("image-job-", "video-job-"))
+        )
+
         if callable(task_id_callback):
             try:
                 callback_result = task_id_callback(str(task_id))
@@ -12186,6 +12545,31 @@ class MediaGenerationService:
                     task_id,
                     callback_err,
                 )
+
+        if pure_callback_mode and callback_enabled and gen_type == "video":
+            logger.info(
+                "KIE pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                task_id,
+                callback_ticket or None,
+                callback_url or None,
+            )
+            pending_meta = dict(base_metadata or {})
+            pending_meta.update(
+                {
+                    "raw": data,
+                    "submit_raw": data,
+                    "task_id": str(task_id),
+                    "taskId": str(task_id),
+                    "pending_callback": True,
+                    "callback_ticket": callback_ticket,
+                    "callback_url": callback_url,
+                }
+            )
+            return {
+                "pending_callback": True,
+                "provider_task_id": str(task_id),
+                "metadata": pending_meta,
+            }
 
         if use_veo_api:
             final_generation_type = str((submit_payload or {}).get("generationType") or "").strip()
@@ -12343,11 +12727,6 @@ class MediaGenerationService:
                 deduped.append(stable)
             return deduped
 
-        callback_enabled = bool(callback_url and callback_url != "-1")
-        callback_assisted_job = bool(
-            callback_enabled
-            and str(callback_ticket or "").strip().startswith(("image-job-", "video-job-"))
-        )
         is_public_deploy = bool(
             str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
             or str(os.getenv("RENDER") or "").strip()
@@ -12759,7 +13138,8 @@ class MediaGenerationService:
             if not b64_raw: return ""
             
             img_data = base64.b64decode(b64_raw)
-            img = Image.open(io.BytesIO(img_data)).convert("RGB")
+            with Image.open(io.BytesIO(img_data)) as orig_img:
+                img = orig_img.convert("RGB")
             
             # Default target (16:9)
             w, h = 1280, 720

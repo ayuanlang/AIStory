@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import asyncio
+import contextlib
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
@@ -46,29 +47,28 @@ _QUEUE_ASYNC_STOP_EVENT = None  # asyncio.Event initialized when needed
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
 _QUEUE_RECLAIM_SECONDS = max(900.0, float(os.getenv("GENERATION_QUEUE_RECLAIM_SECONDS", "900") or 900.0))
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
+_WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
+_PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
 _REQUESTED_WORKER_THREADS = max(
     1,
-    int(
-        os.getenv(
-            "GENERATION_QUEUE_WORKER_THREADS",
-            str(_q_conf.get("queue_threads", _DEFAULT_WORKER_THREADS)),
-        ) or _DEFAULT_WORKER_THREADS
-    ),
+    int(_q_conf.get("queue_threads", _DEFAULT_WORKER_THREADS) or _DEFAULT_WORKER_THREADS),
 )
 # Keep the default queue target at 20 for dedicated worker processes, while
 # still degrading safely when the DB pool is smaller than that target.
-_WORKER_THREAD_CAP = max(1, min(20, _POOL_CAPACITY // 2))
+_WORKER_THREAD_CAP = max(1, min(20, _PER_PROCESS_POOL_BUDGET // 2))
 _QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
 
 if _REQUESTED_WORKER_THREADS > _QUEUE_WORKER_THREADS:
     logger.warning(
-        "generation queue workers capped to avoid DB pool starvation | requested=%s capped=%s pool_capacity=%s",
+        "generation queue workers capped to avoid DB pool starvation | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
         _REQUESTED_WORKER_THREADS,
         _QUEUE_WORKER_THREADS,
         _POOL_CAPACITY,
+        _WEB_CONCURRENCY,
+        _PER_PROCESS_POOL_BUDGET,
     )
 
 
@@ -143,10 +143,10 @@ def _try_acquire_queue_leader_lock() -> bool:
         return False
     except Exception as exc:
         logger.warning(
-            "generation queue leader lock probe failed; starting without cross-process guard | err=%s",
+            "generation queue leader lock probe failed; skipping worker startup until next probe | err=%s",
             exc,
         )
-        return True
+        return False
     finally:
         if conn is not None:
             try:
@@ -614,6 +614,33 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_
     finally:
         db.close()
 
+
+def _touch_task_heartbeat(job_id: str, worker_id: str) -> bool:
+    _ensure_queue_table_ready()
+    now = time.time()
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET last_heartbeat = :heartbeat
+                WHERE job_id = :job_id
+                  AND status = 'running'
+                  AND worker_id = :worker_id
+                """
+            ),
+            {
+                "job_id": str(job_id),
+                "worker_id": str(worker_id),
+                "heartbeat": now,
+            },
+        )
+        db.commit()
+        return int(result.rowcount or 0) > 0
+    finally:
+        db.close()
+
 _QUEUE_LAST_CLEANUP_TIME = 0.0
 _QUEUE_LAST_TIMEOUT_SWEEP_TIME = 0.0
 
@@ -668,8 +695,11 @@ def _cleanup_old_tasks() -> None:
 
 async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:
     logger.info("generation queue async worker started | worker=%s", worker_name)
+    heartbeat_interval_seconds = max(15.0, min(60.0, _QUEUE_RECLAIM_SECONDS / 3.0))
     while True:
         task = None
+        heartbeat_task = None
+        heartbeat_stop = None
         try:
             if _QUEUE_ASYNC_STOP_EVENT and _QUEUE_ASYNC_STOP_EVENT.is_set():
                 break
@@ -679,6 +709,17 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
             if not task:
                 await asyncio.sleep(_QUEUE_POLL_SECONDS)
                 continue
+
+            async def _heartbeat_loop() -> None:
+                while heartbeat_stop and not heartbeat_stop.is_set():
+                    await asyncio.sleep(heartbeat_interval_seconds)
+                    if heartbeat_stop.is_set():
+                        break
+                    await asyncio.to_thread(_touch_task_heartbeat, str(task.get("job_id") or ""), worker_name)
+
+            heartbeat_stop = asyncio.Event()
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
             result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
             try:
                 if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
@@ -712,8 +753,13 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
                 if str(latest.get("status") or "").strip().lower() != "canceled":
                     await asyncio.to_thread(_finish_task, job_id, status="failed", error=str(exc), only_if_running=True)
             continue
-            # CAUTION: we must continue, otherwise we exit the loop and the worker dies permanently
-            continue
+        finally:
+            if heartbeat_stop is not None:
+                heartbeat_stop.set()
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
 
 
 async def _async_event_loop(processor: Callable[[str, str, int, Dict[str, Any]], Any]) -> None:

@@ -4,7 +4,18 @@ import os
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
-    config = {"queue_threads": 4, "callback_threads": 20}
+    config = {
+        "queue_threads": 4,
+        "callback_threads": 20,
+        "pure_callback_mode_auto": True,
+        "pure_callback_mode": False,
+        "callback_loss_retry_enabled": True,
+        "callback_loss_retry_after_seconds": 1800,
+        "callback_loss_max_submit_retries": 1,
+        "callback_compensation_scan_enabled": True,
+        "callback_compensation_scan_interval_seconds": 60,
+        "callback_compensation_scan_batch_size": 20,
+    }
     if os.path.exists(QUEUE_CONFIG_FILE):
         try:
             with open(QUEUE_CONFIG_FILE, "r") as f:
@@ -16,6 +27,47 @@ def _load_queue_config():
     return config
 
 _q_conf = _load_queue_config()
+
+
+def _queue_runtime_config() -> Dict[str, Any]:
+    try:
+        loaded = _load_queue_config()
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception:
+        pass
+    return dict(_q_conf or {})
+
+
+def _queue_cfg_bool(key: str, default: bool = False) -> bool:
+    cfg = _queue_runtime_config()
+    value = cfg.get(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _queue_cfg_int(key: str, default: int, minimum: int = 0, maximum: int = 10**9) -> int:
+    cfg = _queue_runtime_config()
+    try:
+        raw = int(cfg.get(key, default))
+    except Exception:
+        raw = int(default)
+    return max(int(minimum), min(int(maximum), int(raw)))
+
+
+def _is_pure_callback_mode_enabled() -> bool:
+    auto_mode = _queue_cfg_bool("pure_callback_mode_auto", True)
+    if auto_mode:
+        is_public_deploy = bool(
+            str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+            or str(os.getenv("RENDER") or "").strip()
+            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+            or str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+            or str(os.getenv("VERCEL_URL") or "").strip()
+        )
+        return is_public_deploy
+    return _queue_cfg_bool("pure_callback_mode", False)
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Request, Query, Response
 from fastapi.responses import StreamingResponse, FileResponse
@@ -231,7 +283,38 @@ def admin_list_queue_tasks(limit: int = 100, offset: int = 0, current_user: "Use
     if not getattr(current_user, "is_superuser", False):
         raise HTTPException(status_code=403, detail="Superuser required")
     from app.services.generation_task_queue import list_generation_tasks
-    return {"tasks": list_generation_tasks(limit=limit, offset=offset)}
+    tasks = list_generation_tasks(limit=limit, offset=offset)
+
+    def _build_callback_diag(runtime_job: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "job_status": _normalize_generation_status(runtime_job.get("status")),
+            "upstream_submit_state": str(runtime_job.get("upstream_submit_state") or "").strip() or None,
+            "provider_task_id": str(runtime_job.get("provider_task_id") or "").strip() or None,
+            "provider_callback_ticket": str(runtime_job.get("provider_callback_ticket") or "").strip() or None,
+            "callback_submit_retries": _safe_int(runtime_job.get("callback_submit_retries"), 0),
+            "callback_retry_at": runtime_job.get("callback_retry_at"),
+            "started_at": runtime_job.get("started_at"),
+            "finished_at": runtime_job.get("finished_at"),
+            "error": str(runtime_job.get("error") or "").strip() or None,
+        }
+
+    enriched: List[Dict[str, Any]] = []
+    for task in tasks:
+        item = dict(task or {})
+        kind = str(item.get("kind") or "").strip().lower()
+        job_id = str(item.get("job_id") or "").strip()
+        if kind in {"video", "image"} and job_id:
+            runtime_job: Optional[Dict[str, Any]] = None
+            try:
+                runtime_job = _read_video_job_file(job_id) if kind == "video" else _read_image_job_file(job_id)
+            except Exception:
+                runtime_job = None
+            if isinstance(runtime_job, dict) and runtime_job:
+                item["job_runtime"] = runtime_job
+                item["callback_diag"] = _build_callback_diag(runtime_job)
+        enriched.append(item)
+
+    return {"tasks": enriched}
 
 @router.post("/admin/queue/tasks/{job_id}/cancel")
 def admin_cancel_queue_task(job_id: str, current_user: "User" = Depends(get_current_user)):
@@ -543,7 +626,10 @@ GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
 GENERATION_CALLBACK_NO_MATCH_LOG_LOCK = threading.Lock()
 _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 20)), max(5, _POOL_CAPACITY // 4)))
+_WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
+_PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
+_CALLBACK_FINALIZE_CAP = max(1, min(10, _PER_PROCESS_POOL_BUDGET // 4))
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 20)), _CALLBACK_FINALIZE_CAP))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -555,6 +641,16 @@ WEBHOOK_REPLAY_MAX_ITEMS = max(500, int(os.getenv("WEBHOOK_REPLAY_MAX_ITEMS", "6
 WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 _UNSIGNED_WEBHOOK_WARNING_EMITTED = False
+
+if int(_q_conf.get("callback_threads", 20)) > GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY:
+    logger.warning(
+        "generation callback finalize concurrency capped | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
+        int(_q_conf.get("callback_threads", 20)),
+        GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY,
+        _POOL_CAPACITY,
+        _WEB_CONCURRENCY,
+        _PER_PROCESS_POOL_BUDGET,
+    )
 
 SHOT_MEDIA_BATCH_CANCEL_EVENTS: Dict[int, threading.Event] = {}
 SHOT_MEDIA_BATCH_CANCEL_LOCK = threading.Lock()
@@ -686,7 +782,136 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
 def start_generation_queue_worker() -> None:
     from app.services.generation_task_queue import start_generation_task_worker
 
+    logger.info(
+        "generation callback mode at startup | pure_callback_mode=%s auto=%s",
+        _is_pure_callback_mode_enabled(),
+        _queue_cfg_bool("pure_callback_mode_auto", True),
+    )
     start_generation_task_worker(_process_generation_queue_task)
+    _start_callback_compensation_worker()
+
+
+_CALLBACK_COMPENSATION_STARTED = False
+_CALLBACK_COMPENSATION_LOCK = threading.Lock()
+
+
+def _run_callback_compensation_once() -> None:
+    if not _queue_cfg_bool("callback_compensation_scan_enabled", True):
+        return
+
+    safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 20, minimum=1, maximum=200)
+    retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
+    retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1800, minimum=60, maximum=86400)
+    max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
+
+    now_ts = time.time()
+    candidates: List[Tuple[str, Dict[str, Any]]] = []
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        for job_id, payload in VIDEO_JOB_STORE.items():
+            if len(candidates) >= safe_batch:
+                break
+            job = dict(payload or {})
+            status = _normalize_generation_status(job.get("status"))
+            if status not in {"queued", "running"}:
+                continue
+            callback_ticket = _extract_job_provider_callback_ticket(job)
+            if not callback_ticket:
+                continue
+            candidates.append((str(job_id), job))
+
+    if not candidates:
+        return
+
+    from app.services.generation_task_queue import enqueue_generation_task, get_generation_task_status
+
+    for job_id, job in candidates:
+        callback_ticket = _extract_job_provider_callback_ticket(job)
+        if not callback_ticket:
+            continue
+
+        callback_payload = _get_generation_callback_payload(callback_ticket)
+        if callback_payload:
+            _maybe_finalize_video_job_from_provider_callback(job_id, dict(job))
+            continue
+
+        if not retry_enabled:
+            continue
+
+        started_dt = _parse_iso_datetime(job.get("started_at") or job.get("created_at"))
+        if not started_dt:
+            continue
+        elapsed_seconds = max(0, int(now_ts - started_dt.timestamp()))
+        if elapsed_seconds < retry_after_seconds:
+            continue
+
+        retry_attempts = _safe_int(job.get("callback_submit_retries"), 0)
+        if retry_attempts >= max_submit_retries:
+            continue
+
+        queue_row = get_generation_task_status(job_id) or {}
+        payload_json = str(queue_row.get("payload_json") or "{}").strip() or "{}"
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        try:
+            enqueue_generation_task(job_id=job_id, kind="video", user_id=int(job.get("user_id") or queue_row.get("user_id") or 0), payload=payload)
+            _set_video_job(
+                job_id,
+                status="queued",
+                started_at=None,
+                finished_at=None,
+                error=None,
+                upstream_submit_state="callback_retry_requeued",
+                callback_submit_retries=retry_attempts + 1,
+                callback_retry_at=now_bj_iso(),
+            )
+            logger.warning(
+                "[VideoJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s",
+                job_id,
+                callback_ticket,
+                elapsed_seconds,
+                retry_attempts + 1,
+                max_submit_retries,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[VideoJob] callback compensation requeue failed | job_id=%s callback_ticket=%s error=%s",
+                job_id,
+                callback_ticket,
+                exc,
+            )
+
+
+def _callback_compensation_thread_main() -> None:
+    while True:
+        try:
+            _run_callback_compensation_once()
+        except Exception:
+            logger.exception("[CallbackCompensation] worker loop failed")
+        interval_seconds = _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600)
+        time.sleep(interval_seconds)
+
+
+def _start_callback_compensation_worker() -> None:
+    global _CALLBACK_COMPENSATION_STARTED
+    if _CALLBACK_COMPENSATION_STARTED:
+        return
+    with _CALLBACK_COMPENSATION_LOCK:
+        if _CALLBACK_COMPENSATION_STARTED:
+            return
+        thread = threading.Thread(
+            target=_callback_compensation_thread_main,
+            daemon=True,
+            name="generation-callback-compensation",
+        )
+        thread.start()
+        _CALLBACK_COMPENSATION_STARTED = True
+        logger.info("[CallbackCompensation] worker started")
 
 
 def _prune_generation_job_pool_cache_locked(now_ts: float) -> None:
@@ -28760,6 +28985,8 @@ async def _run_generate_video(
             video_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
             video_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
+        if _is_pure_callback_mode_enabled() and provider_callback_ticket and provider_callback_url:
+            video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
             and resolved_video_model in {"kling-3.0/video", "kling3", "kling-3.0", "kling-3-0"}
@@ -28893,6 +29120,30 @@ async def _run_generate_video(
             req.model,
             _sanitize_generation_runtime_config_for_log(runtime_llm_config),
         )
+
+        pending_callback_mode = bool(isinstance(result, dict) and result.get("pending_callback"))
+        if pending_callback_mode:
+            if reservation_tx_id is not None:
+                if _is_token_billing:
+                    settle_details = {
+                        "output_tokens": int(max(1, _estimated_tokens or 0)),
+                        "total_tokens": int(max(1, _estimated_tokens or 0)),
+                        "status": "SETTLED",
+                        "billing_mode": "ESTIMATE_CALLBACK_PENDING",
+                        "token_source": "estimate_callback_pending",
+                    }
+                else:
+                    settle_details = {
+                        "duration": req.duration,
+                        "duration_seconds": req.duration,
+                        "status": "SETTLED",
+                        "billing_mode": "CALLBACK_PENDING",
+                    }
+                billing_service.settle_reservation(db, reservation_tx_id, settle_details)
+                reservation_tx = None
+                reservation_tx_id = None
+            return result
+
         if "error" in result:
              detail = _format_generation_failure_detail(result, "Video generation failed")
              
@@ -29178,6 +29429,23 @@ async def _run_generate_video_job(
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
+        if isinstance(result, dict) and result.get("pending_callback"):
+            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            provider_task_id = str(
+                (metadata or {}).get("task_id")
+                or (metadata or {}).get("taskId")
+                or result.get("provider_task_id")
+                or ""
+            ).strip()
+            update_fields: Dict[str, Any] = {
+                "status": "running",
+                "error": None,
+                "upstream_submit_state": "callback_pending",
+            }
+            if provider_task_id:
+                update_fields["provider_task_id"] = provider_task_id
+            _set_video_job(job_id, **update_fields)
+            return
         _set_video_job(
             job_id,
             status="succeeded",
@@ -34285,6 +34553,14 @@ async def stream_analyze_scene_endpoint(request: AnalyzeSceneRequest, current_us
 class QueueConfigBase(BaseModel):
     queue_threads: int
     callback_threads: int
+    pure_callback_mode_auto: bool = True
+    pure_callback_mode: bool = False
+    callback_loss_retry_enabled: bool = True
+    callback_loss_retry_after_seconds: int = 1800
+    callback_loss_max_submit_retries: int = 1
+    callback_compensation_scan_enabled: bool = True
+    callback_compensation_scan_interval_seconds: int = 60
+    callback_compensation_scan_batch_size: int = 20
 
 @router.get("/admin/queue/config", response_model=QueueConfigBase)
 async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
@@ -34297,12 +34573,13 @@ async def admin_update_queue_config(config: QueueConfigBase, current_user: User 
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
+    payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
     with open(QUEUE_CONFIG_FILE, "w") as f:
-        json.dump(config.dict(), f)
+        json.dump(payload, f)
     
     # Reload locally and let user know it applies on restart
     global _q_conf
-    _q_conf = config.dict()
+    _q_conf = dict(payload)
     return config
     
 

@@ -58,7 +58,9 @@ services:
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
       - key: WEB_CONCURRENCY
-        value: "1"
+        value: "2"
+      - key: RUN_GENERATION_QUEUE_WORKER_ON_START
+        value: "0"
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -135,6 +137,86 @@ services:
       name: uploads
       mountPath: /opt/render/project/src/backend/uploads
       sizeGB: 1
+
+  # Generation Queue Worker Service
+  - type: worker
+    name: aistory-generation-worker
+    env: python
+    region: oregon
+    buildCommand: |
+      cd backend
+      pip install --no-cache-dir -r requirements.txt
+    startCommand: |
+      cd backend
+      echo "[boot] generation worker starting"
+      export RUN_DB_BOOTSTRAP_ON_START=0
+      export RUN_GENERATION_QUEUE_WORKER_ON_START=1
+      python -m app.generation_worker
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: RUN_DB_BOOTSTRAP_ON_START
+        value: "0"
+      - key: RUN_GENERATION_QUEUE_WORKER_ON_START
+        value: "1"
+      - key: GENERATION_QUEUE_WORKER_THREADS
+        value: "2"
+      - key: GUNICORN_TIMEOUT
+        value: "600"
+      - key: GUNICORN_GRACEFUL_TIMEOUT
+        value: "660"
+      - key: GUNICORN_KEEPALIVE
+        value: "15"
+      - key: GUNICORN_MAX_REQUESTS
+        value: "300"
+      - key: GUNICORN_MAX_REQUESTS_JITTER
+        value: "50"
+      - key: RUNTIME_DIAG_LOG_ENABLED
+        value: "1"
+      - key: RUNTIME_DIAG_LOG_INTERVAL_SECONDS
+        value: "30"
+      - key: RUNTIME_DIAG_HIGH_WATERMARK_MB
+        value: "900"
+      - key: RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS
+        value: "60"
+      - key: RUNTIME_DIAG_STORE_SAMPLE_ITEMS
+        value: "48"
+      - key: RUNTIME_DIAG_TRACEMALLOC_ENABLED
+        value: "0"
+      - key: RUNTIME_DIAG_TRACEMALLOC_FRAMES
+        value: "15"
+      - key: RUNTIME_DIAG_TRACEMALLOC_TOP
+        value: "8"
+      - key: IMAGE_JOB_MAX_ITEMS
+        value: "200"
+      - key: VIDEO_JOB_MAX_ITEMS
+        value: "200"
+      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "300"
+      - key: GENERATION_CALLBACK_MAX_BYTES
+        value: "16384"
+      - key: GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS
+        value: "600"
+      - key: GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS
+        value: "1200"
+      - key: WEBHOOK_REPLAY_MAX_ITEMS
+        value: "2000"
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "10"
+      - key: DB_POOL_TIMEOUT
+        value: "30"
+      - key: DB_POOL_RECYCLE
+        value: "270"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aistory-db
+          property: connectionString
 
   # Frontend Service
   - type: web

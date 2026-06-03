@@ -6,7 +6,18 @@ import { confirmUiMessage, notifyUiMessage } from '../lib/uiMessage';
 export default function QueueAdmin() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [config, setConfig] = useState({ queue_threads: 20, callback_threads: 20 });
+  const [config, setConfig] = useState({
+    queue_threads: 20,
+    callback_threads: 20,
+    pure_callback_mode_auto: true,
+    pure_callback_mode: false,
+    callback_loss_retry_enabled: true,
+    callback_loss_retry_after_seconds: 1800,
+    callback_loss_max_submit_retries: 1,
+    callback_compensation_scan_enabled: true,
+    callback_compensation_scan_interval_seconds: 60,
+    callback_compensation_scan_batch_size: 20,
+  });
   const [savingConfig, setSavingConfig] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [systemApis, setSystemApis] = useState([]);
@@ -56,7 +67,15 @@ export default function QueueAdmin() {
     try {
       await updateAdminQueueConfig({
         queue_threads: Number(config.queue_threads),
-        callback_threads: Number(config.callback_threads)
+        callback_threads: Number(config.callback_threads),
+        pure_callback_mode_auto: Boolean(config.pure_callback_mode_auto),
+        pure_callback_mode: Boolean(config.pure_callback_mode),
+        callback_loss_retry_enabled: Boolean(config.callback_loss_retry_enabled),
+        callback_loss_retry_after_seconds: Number(config.callback_loss_retry_after_seconds),
+        callback_loss_max_submit_retries: Number(config.callback_loss_max_submit_retries),
+        callback_compensation_scan_enabled: Boolean(config.callback_compensation_scan_enabled),
+        callback_compensation_scan_interval_seconds: Number(config.callback_compensation_scan_interval_seconds),
+        callback_compensation_scan_batch_size: Number(config.callback_compensation_scan_batch_size),
       });
       notifyUiMessage('Configuration saved. Some changes require a backend restart to fully apply.', 'success');
     } catch (e) {
@@ -103,7 +122,7 @@ export default function QueueAdmin() {
 
       <div className="bg-[#111114] p-5 rounded-xl border border-white/10">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">Global Thread Config</h3>
-        <div className="flex items-end gap-6">
+        <div className="flex items-end gap-6 flex-wrap">
           <div className="space-y-1 flex-1 max-w-[200px]">
             <label className="text-sm text-gray-400">Queue Worker Threads</label>
             <input type="number" min="1" value={config.queue_threads} onChange={e => setConfig({...config, queue_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
@@ -113,6 +132,50 @@ export default function QueueAdmin() {
             <label className="text-sm text-gray-400">Callback Threads</label>
             <input type="number" min="1" value={config.callback_threads} onChange={e => setConfig({...config, callback_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
             <div className="text-xs text-gray-500">Default: 20</div>
+          </div>
+          <div className="space-y-1 flex-1 min-w-[260px]">
+            <label className="text-sm text-gray-400 block">Video Completion Mode</label>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-200 mb-1">
+              <input type="checkbox" checked={Boolean(config.pure_callback_mode_auto)} onChange={e => setConfig({...config, pure_callback_mode_auto: e.target.checked})} />
+              Auto switch by runtime (public deploy on, local off)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-200">
+              <input type="checkbox" disabled={Boolean(config.pure_callback_mode_auto)} checked={Boolean(config.pure_callback_mode)} onChange={e => setConfig({...config, pure_callback_mode: e.target.checked})} />
+              Pure Callback Mode (submit then wait callback)
+            </label>
+            <div className="text-xs text-gray-500">Auto enabled: deploy env uses pure callback, local keeps original polling mode.</div>
+          </div>
+          <div className="space-y-1 flex-1 min-w-[260px]">
+            <label className="text-sm text-gray-400 block">Callback Loss Retry</label>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-200">
+              <input type="checkbox" checked={Boolean(config.callback_loss_retry_enabled)} onChange={e => setConfig({...config, callback_loss_retry_enabled: e.target.checked})} />
+              Requeue stale jobs when callback missing
+            </label>
+            <div className="text-xs text-gray-500">Retry submit when callback not received in time.</div>
+          </div>
+          <div className="space-y-1 flex-1 max-w-[220px]">
+            <label className="text-sm text-gray-400">Retry After Seconds</label>
+            <input type="number" min="60" value={config.callback_loss_retry_after_seconds} onChange={e => setConfig({...config, callback_loss_retry_after_seconds: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+          </div>
+          <div className="space-y-1 flex-1 max-w-[220px]">
+            <label className="text-sm text-gray-400">Max Submit Retries</label>
+            <input type="number" min="0" max="5" value={config.callback_loss_max_submit_retries} onChange={e => setConfig({...config, callback_loss_max_submit_retries: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+          </div>
+          <div className="space-y-1 flex-1 min-w-[260px]">
+            <label className="text-sm text-gray-400 block">Compensation Scan</label>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-200">
+              <input type="checkbox" checked={Boolean(config.callback_compensation_scan_enabled)} onChange={e => setConfig({...config, callback_compensation_scan_enabled: e.target.checked})} />
+              Enable periodic callback reconciliation
+            </label>
+            <div className="text-xs text-gray-500">Scan running jobs and reconcile callback states.</div>
+          </div>
+          <div className="space-y-1 flex-1 max-w-[220px]">
+            <label className="text-sm text-gray-400">Scan Interval Seconds</label>
+            <input type="number" min="10" value={config.callback_compensation_scan_interval_seconds} onChange={e => setConfig({...config, callback_compensation_scan_interval_seconds: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+          </div>
+          <div className="space-y-1 flex-1 max-w-[220px]">
+            <label className="text-sm text-gray-400">Scan Batch Size</label>
+            <input type="number" min="1" max="200" value={config.callback_compensation_scan_batch_size} onChange={e => setConfig({...config, callback_compensation_scan_batch_size: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
           </div>
           <button onClick={handleSaveConfig} disabled={savingConfig} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded font-medium transition-colors">
             {savingConfig ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
@@ -137,6 +200,7 @@ export default function QueueAdmin() {
             ) : tasks.map(task => {
               const payload = task.payload || {};
               const prompt = payload.prompt || payload.video_prompt || payload.image_prompt || '';
+              const diag = task.callback_diag || {};
               return (
               <tr key={task.job_id} onClick={() => setSelectedTask(task)} className="hover:bg-white/5 transition-colors cursor-pointer">
                 <td className="p-4 max-w-[200px] align-top">
@@ -152,6 +216,21 @@ export default function QueueAdmin() {
                      <PlayCircle size={14} />}
                     {(task.status || '').toUpperCase()}
                   </span>
+                  {diag.upstream_submit_state && (
+                    <div className="mt-2 text-[11px] text-cyan-300">
+                      Upstream: {diag.upstream_submit_state}
+                    </div>
+                  )}
+                  {Number(diag.callback_submit_retries || 0) > 0 && (
+                    <div className="mt-1 text-[11px] text-amber-300">
+                      Callback retry: {Number(diag.callback_submit_retries || 0)}
+                    </div>
+                  )}
+                  {diag.provider_task_id && (
+                    <div className="mt-1 text-[11px] text-gray-400 truncate" title={diag.provider_task_id}>
+                      Provider task: {String(diag.provider_task_id).slice(0, 24)}...
+                    </div>
+                  )}
                   {task.error && (
                     <div className="mt-2 text-xs text-red-400 overflow-hidden text-ellipsis" style={{display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical'}} title={task.error}>
                       <span className="font-bold text-red-500">Error:</span> {task.error}
@@ -220,6 +299,26 @@ export default function QueueAdmin() {
                   </div>
                 )}
               </div>
+
+              {/* Callback Compensation Diagnostics */}
+              {!!selectedTask?.callback_diag && (
+                <div className="bg-black/20 p-4 rounded-lg border border-white/5 space-y-2">
+                  <div className="text-sm font-semibold text-cyan-300">Callback Diagnostics</div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 text-xs text-gray-300">
+                    <div><span className="text-gray-500">Job Status:</span> {selectedTask.callback_diag.job_status || '-'}</div>
+                    <div><span className="text-gray-500">Upstream Submit State:</span> {selectedTask.callback_diag.upstream_submit_state || '-'}</div>
+                    <div><span className="text-gray-500">Provider Task ID:</span> {selectedTask.callback_diag.provider_task_id || '-'}</div>
+                    <div><span className="text-gray-500">Callback Ticket:</span> {selectedTask.callback_diag.provider_callback_ticket || '-'}</div>
+                    <div><span className="text-gray-500">Callback Submit Retries:</span> {Number(selectedTask.callback_diag.callback_submit_retries || 0)}</div>
+                    <div><span className="text-gray-500">Callback Retry At:</span> {selectedTask.callback_diag.callback_retry_at || '-'}</div>
+                    <div><span className="text-gray-500">Started At:</span> {selectedTask.callback_diag.started_at || '-'}</div>
+                    <div><span className="text-gray-500">Finished At:</span> {selectedTask.callback_diag.finished_at || '-'}</div>
+                  </div>
+                  {selectedTask.callback_diag.error && (
+                    <div className="text-xs text-red-300"><span className="text-red-500 font-semibold">Diag Error:</span> {selectedTask.callback_diag.error}</div>
+                  )}
+                </div>
+              )}
 
               {/* Timestamps */}
               <div className="bg-black/20 p-4 rounded-lg border border-white/5 space-y-3">
