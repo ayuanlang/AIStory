@@ -2655,6 +2655,33 @@ def _extract_job_result_url(result: Any) -> str:
             return ""
         return value
 
+    if isinstance(result, str):
+        # Some providers embed result payload as JSON string (e.g. resultJson).
+        text = str(result or "").strip()
+        if not text:
+            return ""
+        value = _normalize_candidate_url(text)
+        if value:
+            return value
+        if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                return _extract_job_result_url(parsed)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        nested_url = _extract_job_result_url(item)
+                        if nested_url:
+                            return nested_url
+                    else:
+                        parsed_value = _normalize_candidate_url(item)
+                        if parsed_value:
+                            return parsed_value
+        return ""
+
     if not isinstance(result, dict):
         return ""
 
@@ -2738,6 +2765,18 @@ def _extract_job_result_url(result: Any) -> str:
     nested_output = result.get("output")
     if isinstance(nested_output, dict):
         nested_url = _extract_job_result_url(nested_output)
+        if nested_url:
+            return nested_url
+
+    nested_response = result.get("response")
+    if isinstance(nested_response, dict):
+        nested_url = _extract_job_result_url(nested_response)
+        if nested_url:
+            return nested_url
+
+    for json_key in ("resultJson", "result_json", "responseJson", "response_json"):
+        nested_json = result.get(json_key)
+        nested_url = _extract_job_result_url(nested_json)
         if nested_url:
             return nested_url
 

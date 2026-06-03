@@ -12317,6 +12317,120 @@ class MediaGenerationService:
                 else:
                     os.environ["KIE_VEO_IMAGE_MAX_BYTES"] = original_env
 
+        def _is_kie_resource_download_error(value: Any) -> bool:
+            text = str(value or "").strip().lower()
+            if not text:
+                return False
+            return (
+                ("resource download failed" in text)
+                or ("download failed" in text and "image_url" in text)
+                or ("invalidparameter" in text and "image_url" in text)
+            )
+
+        def _rehost_kie_submit_input_urls(payload_obj: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+            candidate = copy.deepcopy(payload_obj or {})
+            changed = False
+
+            def _upload_one_url(raw_url: Any, tag: str) -> Optional[str]:
+                url_text = str(raw_url or "").strip()
+                if not url_text.startswith(("http://", "https://")):
+                    return None
+                from urllib.parse import urlparse
+                guessed_ext = os.path.splitext(urlparse(url_text).path or "")[1] or ""
+                safe_ext = guessed_ext if guessed_ext and len(guessed_ext) <= 8 else ""
+                return self._upload_kie_file_url(
+                    url_text,
+                    api_key=api_key,
+                    file_name=f"kie-retry-{tag}-{uuid.uuid4().hex[:10]}{safe_ext}",
+                    upload_path="market-inputs",
+                )
+
+            def _replace_single(container: Dict[str, Any], key: str) -> None:
+                nonlocal changed
+                if not isinstance(container, dict):
+                    return
+                raw_value = container.get(key)
+                hosted = _upload_one_url(raw_value, key)
+                if hosted:
+                    container[key] = hosted
+                    changed = True
+
+            def _replace_list(container: Dict[str, Any], key: str) -> None:
+                nonlocal changed
+                if not isinstance(container, dict):
+                    return
+                raw_value = container.get(key)
+                if not isinstance(raw_value, list):
+                    return
+                replaced: List[Any] = []
+                item_changed = False
+                for idx, item in enumerate(raw_value):
+                    hosted = _upload_one_url(item, f"{key}-{idx + 1}")
+                    if hosted:
+                        replaced.append(hosted)
+                        item_changed = True
+                    else:
+                        replaced.append(item)
+                if item_changed:
+                    container[key] = replaced
+                    changed = True
+
+            payload_input = candidate.get("input") if isinstance(candidate.get("input"), dict) else {}
+
+            for key in ("image_url", "last_frame_url", "first_frame_url", "end_frame_url"):
+                _replace_single(payload_input, key)
+
+            for key in ("image_urls", "input_urls", "reference_image_urls"):
+                _replace_list(payload_input, key)
+
+            # Veo-style payload occasionally uses top-level imageUrls.
+            _replace_list(candidate, "imageUrls")
+
+            if isinstance(candidate.get("input"), dict):
+                candidate["input"] = payload_input
+            return candidate, changed
+
+        async def _retry_kie_on_resource_download_failure(
+            current_resp: requests.Response,
+            current_payload: Dict[str, Any],
+            current_data: Optional[Dict[str, Any]] = None,
+        ) -> Tuple[requests.Response, Dict[str, Any], Optional[Dict[str, Any]]]:
+            if gen_type not in {"image", "video"}:
+                return current_resp, current_payload, current_data
+
+            detail_text = ""
+            if isinstance(current_data, dict):
+                detail_text = str(current_data.get("msg") or current_data.get("message") or "").strip()
+            if not detail_text:
+                detail_text = str(getattr(current_resp, "text", "") or "").strip()
+
+            if not _is_kie_resource_download_error(detail_text):
+                return current_resp, current_payload, current_data
+
+            retry_payload, changed = await asyncio.to_thread(_rehost_kie_submit_input_urls, current_payload)
+            if not changed:
+                return current_resp, current_payload, current_data
+
+            logger.warning(
+                "KIE submission retry with file-url-upload fallback | model=%s gen_type=%s reason=%s",
+                submitted_model,
+                gen_type,
+                detail_text[:300],
+            )
+
+            try:
+                retry_resp = await asyncio.to_thread(_post_submit, retry_payload)
+            except Exception:
+                return current_resp, current_payload, current_data
+
+            retry_data = None
+            if retry_resp.status_code == 200:
+                try:
+                    retry_data = retry_resp.json()
+                except Exception:
+                    retry_data = None
+            return retry_resp, retry_payload, retry_data
+
         try:
             try:
                 resp = await asyncio.to_thread(_post_submit, submit_payload)
@@ -12355,17 +12469,32 @@ class MediaGenerationService:
                     continue
 
         if resp.status_code != 200:
-            return {
-                "error": f"KIE submission failed {resp.status_code}",
-                "details": _kie_response_details(resp),
-                "submit_failed": True,
-                "runtime_model": submitted_model,
-            }
-
-        try:
-            data = resp.json()
-        except Exception:
-            return {"error": "Invalid KIE response", "details": resp.text[:1000], "submit_failed": True}
+            resp, submit_payload, _ = await _retry_kie_on_resource_download_failure(resp, submit_payload, None)
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    pass
+                else:
+                    return {
+                        "error": "Invalid KIE response",
+                        "details": resp.text[:1000],
+                        "submit_failed": True,
+                    }
+            else:
+                return {
+                    "error": f"KIE submission failed {resp.status_code}",
+                    "details": _kie_response_details(resp),
+                    "submit_failed": True,
+                    "runtime_model": submitted_model,
+                }
+        if 'data' not in locals():
+            try:
+                data = resp.json()
+            except Exception:
+                return {"error": "Invalid KIE response", "details": resp.text[:1000], "submit_failed": True}
 
         if use_veo_api:
             code_preview = data.get("code")
@@ -12465,18 +12594,29 @@ class MediaGenerationService:
 
         code = data.get("code")
         if code not in (None, 200, "200"):
-            details_payload: Any = {
-                "status_code": int(getattr(resp, "status_code", 0) or 0),
-                "code": code,
-                "message": data.get("msg") or data.get("message"),
-                "response_json": data,
-            }
-            return {
-                "error": f"KIE submission failed code={code}",
-                "details": details_payload,
-                "submit_failed": True,
-                "runtime_model": submitted_model,
-            }
+            resp2, payload2, data2 = await _retry_kie_on_resource_download_failure(resp, submit_payload, data if isinstance(data, dict) else None)
+            if resp2 is not resp or payload2 is not submit_payload:
+                resp = resp2
+                submit_payload = payload2
+                if isinstance(data2, dict):
+                    data = data2
+                    code = data.get("code")
+
+            if code in (None, 200, "200"):
+                pass
+            else:
+                details_payload: Any = {
+                    "status_code": int(getattr(resp, "status_code", 0) or 0),
+                    "code": code,
+                    "message": data.get("msg") or data.get("message"),
+                    "response_json": data,
+                }
+                return {
+                    "error": f"KIE submission failed code={code}",
+                    "details": details_payload,
+                    "submit_failed": True,
+                    "runtime_model": submitted_model,
+                }
 
         data_block = data.get("data") or {}
         task_id = (
