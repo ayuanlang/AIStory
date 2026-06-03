@@ -29899,15 +29899,56 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
 
     import json
     try:
+        def _log_chunked_message(prefix: str, text: str, chunk_size: int = 4000) -> None:
+            stable_text = str(text or "")
+            if not stable_text:
+                logger.info("%s <empty>", prefix)
+                return
+            safe_chunk_size = max(512, int(chunk_size or 4000))
+            total_len = len(stable_text)
+            total_parts = (total_len + safe_chunk_size - 1) // safe_chunk_size
+            for idx in range(total_parts):
+                start = idx * safe_chunk_size
+                end = min(total_len, (idx + 1) * safe_chunk_size)
+                logger.info(
+                    "%s part=%s/%s chars=%s-%s %s",
+                    prefix,
+                    idx + 1,
+                    total_parts,
+                    start + 1,
+                    end,
+                    stable_text[start:end],
+                )
+
         dump_str = json.dumps(payload, ensure_ascii=False)
         client_host = getattr(getattr(request, "client", None), "host", "Unknown")
-        
+        callback_headers = {
+            key: value
+            for key, value in request.headers.items()
+            if str(key or "").lower() in {
+                "content-type",
+                "content-length",
+                "x-kie-signature",
+                "x-kie-timestamp",
+                "x-signature",
+                "x-timestamp",
+                "x-forwarded-for",
+                "user-agent",
+            }
+        }
+        body_bytes = await request.body()
+
         logger.info("=" * 60)
-        logger.info(f"🔔 [WEBHOOK CALLBACK RECEIVED] [{client_host}] Ticket: {stable_ticket}")
-        if len(dump_str) > 2000:
-            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str[:2000]}...(truncated)")
-        else:
-            logger.info(f"🔔 [WEBHOOK PAYLOAD] {dump_str}")
+        logger.info("🔔 [WEBHOOK CALLBACK RECEIVED] [%s] Ticket: %s", client_host, stable_ticket)
+        logger.info(
+            "🔔 [WEBHOOK META] content_type=%s content_length=%s body_bytes=%s top_keys=%s",
+            str(request.headers.get("content-type") or "").strip() or None,
+            str(request.headers.get("content-length") or "").strip() or None,
+            len(body_bytes or b""),
+            list(payload.keys()) if isinstance(payload, dict) else None,
+        )
+        logger.info("🔔 [WEBHOOK HEADERS] %s", json.dumps(callback_headers, ensure_ascii=False))
+        _log_chunked_message("🔔 [WEBHOOK PAYLOAD FULL]", dump_str)
         logger.info("=" * 60)
     except Exception as e:
         logger.error(f"Failed to log webhook payload: {e}")
