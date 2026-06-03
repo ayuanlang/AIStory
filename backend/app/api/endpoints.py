@@ -2574,6 +2574,18 @@ def _extract_job_result_url(result: Any) -> str:
         if nested_url:
             return nested_url
 
+    nested_content = result.get("content")
+    if isinstance(nested_content, dict):
+        nested_url = _extract_job_result_url(nested_content)
+        if nested_url:
+            return nested_url
+
+    nested_output = result.get("output")
+    if isinstance(nested_output, dict):
+        nested_url = _extract_job_result_url(nested_output)
+        if nested_url:
+            return nested_url
+
     nested = result.get("result")
     if isinstance(nested, dict):
         return _extract_job_result_url(nested)
@@ -18302,16 +18314,21 @@ class EntityCloneWithLLMRequest(BaseModel):
 def _extract_first_json_payload(text: str):
     import json
     text = str(text or "")
-    
-    # Attempt 1: Try json5 if available
-    has_json5 = False
+
+    # Attempt 1: Parse entire text via json5 (if available) first.
     json5_obj = _loads_json5_if_available(text)
     if isinstance(json5_obj, (dict, list)):
         return json5_obj
-    if json5_obj is not None:
-        has_json5 = True
 
-    # Attempt 2: Extract substring from first {/[ to last }/]
+    # Attempt 2: Parse entire text with strict json.
+    try:
+        whole_obj = json.loads(text)
+        if isinstance(whole_obj, (dict, list)):
+            return whole_obj
+    except Exception:
+        pass
+
+    # Attempt 3: Extract from first opening bracket to last closing bracket.
     first_idx = -1
     last_idx = -1
     for i, ch in enumerate(text):
@@ -18327,19 +18344,15 @@ def _extract_first_json_payload(text: str):
     if first_idx >= 0 and last_idx >= 0 and first_idx < last_idx:
         sub_text = text[first_idx:last_idx + 1]
         try:
-            if has_json5:
-                res = _loads_json5_if_available(sub_text)
-            has_json5 = False
-            json5_obj = _loads_json5_if_available(text)
-            if isinstance(json5_obj, (dict, list)):
-                return json5_obj
-            if json5_obj is not None:
-                has_json5 = True
-            obj, _ = decoder.raw_decode(text[idx:])
-            if isinstance(obj, (dict, list)):
-                return obj
+            parsed = _loads_json5_if_available(sub_text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+            parsed = json.loads(sub_text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
         except Exception:
-                        res = _loads_json5_if_available(sub_text)
+            pass
+
     return None
 
 
