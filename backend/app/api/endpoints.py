@@ -1332,14 +1332,7 @@ def _normalize_webhook_signature_header(raw_signature: Any) -> str:
 def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> None:
     global _UNSIGNED_WEBHOOK_WARNING_EMITTED
     secret = str(getattr(settings, "KIE_WEBHOOK_HMAC_KEY", "") or settings.WEBHOOK_HMAC_KEY or "").strip()
-    if not secret:
-        if settings.WEBHOOK_HMAC_ALLOW_UNSIGNED:
-            if not _UNSIGNED_WEBHOOK_WARNING_EMITTED:
-                logger.warning("[WebhookVerify] WEBHOOK_HMAC_KEY missing; accepting unsigned callback")
-                _UNSIGNED_WEBHOOK_WARNING_EMITTED = True
-            return
-        raise HTTPException(status_code=503, detail="Webhook signature key not configured")
-
+    
     timestamp_raw = ""
     for header_name in ("x-webhook-timestamp", "x-kie-timestamp", "x-timestamp"):
         candidate = str(request.headers.get(header_name) or "").strip()
@@ -1353,10 +1346,19 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
         if candidate:
             received_signature = candidate
             break
+
+    # KIE does not provide webhook signature headers. Bypass.
     if not timestamp_raw or not received_signature:
         logger.warning("[WebhookVerify] Missing webhook signature headers for payload. Bypassing check for KIE compatibility.")
-        # We don't raise HTTPException so that it can pass without webhook signature for KIE which doesn't send it.
         return
+
+    if not secret:
+        if settings.WEBHOOK_HMAC_ALLOW_UNSIGNED:
+            if not _UNSIGNED_WEBHOOK_WARNING_EMITTED:
+                logger.warning("[WebhookVerify] WEBHOOK_HMAC_KEY missing; accepting unsigned callback")
+                _UNSIGNED_WEBHOOK_WARNING_EMITTED = True
+            return
+        raise HTTPException(status_code=503, detail="Webhook signature key not configured")
 
 
     try:

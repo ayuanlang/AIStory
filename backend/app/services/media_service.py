@@ -11314,6 +11314,14 @@ class MediaGenerationService:
             else:
                 payload_input["image_urls"] = resolved_refs
                 payload_input["image_url"] = resolved_refs[0]
+                
+            # For multimodal LLM wrappers (like GPT-image family) that rely on the prompt text 
+            # to map characters to reference images, replace #1, #2 placeholders with the actual URLs.
+            current_prompt_text = str(payload_input.get("prompt") or "")
+            if "#1" in current_prompt_text:
+                for idx, ref_url in enumerate(resolved_refs):
+                    current_prompt_text = re.sub(rf"#{idx + 1}\b", ref_url, current_prompt_text)
+                payload_input["prompt"] = current_prompt_text
 
         if is_sora2_i2v_model:
             sora_refs = payload_input.get("image_urls")
