@@ -3373,10 +3373,13 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     result = _build_result_from_provider_callback(callback_payload)
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
+    logger.info("[DEBUG-CB] job_id=%s callback_payload=%s", job_id, repr(callback_payload))
+    logger.info("[DEBUG-CB] result=%s current_result_url=%s callback_result_url=%s", repr(result), current_result_url, callback_result_url)
     callback_status_raw = str(callback_payload.get("status") or "").strip() or _extract_callback_status(callback_payload)
     normalized_status = _normalize_generation_status(callback_status_raw)
     if not normalized_status and callback_result_url:
         normalized_status = "succeeded"
+    logger.info("[DEBUG-CB] callback_status_raw=%s normalized_status=%s", callback_status_raw, normalized_status)
 
     current_status = _normalize_generation_status(job.get("status"))
     current_error = str(job.get("error") or "").strip()
