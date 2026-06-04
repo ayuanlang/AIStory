@@ -637,6 +637,10 @@ GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATI
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
 GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}
 GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK = threading.Lock()
+IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS = max(30, int(os.getenv("IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS", "600") or 600))
+IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS", "8000") or 8000))
+IMAGE_CALLBACK_PERSIST_INFLIGHT: Dict[str, float] = {}
+IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK = threading.Lock()
 GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES = max(200, int(os.getenv("GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES", "2000") or 2000))
 GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS = max(1, int(os.getenv("GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS", "8") or 8))
 WEBHOOK_REPLAY_MAX_ITEMS = max(500, int(os.getenv("WEBHOOK_REPLAY_MAX_ITEMS", "6000")))
@@ -3044,11 +3048,6 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
 
-
-        if normalized_meta is None:
-            normalized_meta = {}
-        normalized_meta["idempotency_key"] = job_id
-
         finalized_result = dict(result)
         if normalized_url:
             finalized_result["url"] = normalized_url
@@ -3129,17 +3128,28 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     if normalized_status == "succeeded" and (not current_has_stable_result or "result" in updates):
         candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
         if candidate_result:
-            effective_job = dict(job)
-            effective_job.update(updates)
-            persisted_result = _finalize_image_job_result_persistence(job_id, effective_job, dict(candidate_result))
-            persisted_result_url = _extract_job_result_url(persisted_result)
-            effective_current_result = updates.get("result") if "result" in updates else job.get("result")
-            effective_current_result_url = _extract_job_result_url(effective_current_result)
-            if persisted_result_url and (
-                persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
-            ):
-                updates["result"] = persisted_result
-                callback_result_url = persisted_result_url
+            if _mark_image_callback_persist_inflight(job_id):
+                try:
+                    effective_job = dict(job)
+                    effective_job.update(updates)
+                    persisted_result = _finalize_image_job_result_persistence(job_id, effective_job, dict(candidate_result))
+                    persisted_result_url = _extract_job_result_url(persisted_result)
+                    effective_current_result = updates.get("result") if "result" in updates else job.get("result")
+                    effective_current_result_url = _extract_job_result_url(effective_current_result)
+                    if persisted_result_url and (
+                        persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
+                    ):
+                        updates["result"] = persisted_result
+                        callback_result_url = persisted_result_url
+                finally:
+                    _clear_image_callback_persist_inflight(job_id)
+            else:
+                logger.info(
+                    "[ImageJob] skip duplicate callback persistence while in-flight | job_id=%s callback_ticket=%s",
+                    job_id,
+                    callback_ticket,
+                )
+                return job
         if current_error:
             updates["error"] = None
     elif normalized_status in {"failed", "canceled"}:
@@ -3622,6 +3632,45 @@ def _clear_generation_callback_inflight(ticket: str) -> None:
         return
     with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
         GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(stable_ticket, None)
+
+
+def _mark_image_callback_persist_inflight(job_id: str) -> bool:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return False
+
+    now_ts = time.time()
+    with IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        stale = [
+            key
+            for key, ts in IMAGE_CALLBACK_PERSIST_INFLIGHT.items()
+            if (now_ts - float(ts or 0.0)) > IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS
+        ]
+        for key in stale:
+            IMAGE_CALLBACK_PERSIST_INFLIGHT.pop(key, None)
+
+        if len(IMAGE_CALLBACK_PERSIST_INFLIGHT) > IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS:
+            ordered = sorted(
+                IMAGE_CALLBACK_PERSIST_INFLIGHT.items(),
+                key=lambda item: float(item[1] or 0.0),
+            )
+            overflow = len(IMAGE_CALLBACK_PERSIST_INFLIGHT) - IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS
+            for key, _ in ordered[:overflow]:
+                IMAGE_CALLBACK_PERSIST_INFLIGHT.pop(key, None)
+
+        if stable_job_id in IMAGE_CALLBACK_PERSIST_INFLIGHT:
+            return False
+
+        IMAGE_CALLBACK_PERSIST_INFLIGHT[stable_job_id] = now_ts
+    return True
+
+
+def _clear_image_callback_persist_inflight(job_id: str) -> None:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return
+    with IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        IMAGE_CALLBACK_PERSIST_INFLIGHT.pop(stable_job_id, None)
 
 
 async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any]) -> None:

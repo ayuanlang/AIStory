@@ -587,7 +587,10 @@ class OSSStorageService:
             if getattr(pool, "default_storage_class", None):
                 st_class = str(pool.default_storage_class)
                 provider_nm = str(getattr(pool, "provider", "")).lower()
-                if provider_nm == "backblaze" and st_class == "STANDARD_IA":
+                if self._is_qiniu_provider(pool):
+                    # Qiniu S3-compatible endpoint may reject StorageClass values from AWS semantics.
+                    pass
+                elif provider_nm == "backblaze" and st_class == "STANDARD_IA":
                     pass
                 else:
                     extra["StorageClass"] = st_class
