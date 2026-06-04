@@ -12065,6 +12065,12 @@ class MediaGenerationService:
             omni_input: Dict[str, Any] = {
                 "prompt": str(payload_input.get("prompt") or "").strip(),
             }
+
+            omni_aspect_ratio_raw = str(payload_input.get("aspect_ratio") or normalized_ar or "").strip().lower()
+            # Pass through exactly supported values for gemini-omni-video.
+            omni_aspect_ratio = "9:16" if omni_aspect_ratio_raw == "9:16" else "16:9"
+            omni_input["aspect_ratio"] = omni_aspect_ratio
+
             if isinstance(payload_input.get("image_urls"), list):
                 image_urls = [str(item or "").strip() for item in payload_input.get("image_urls") if str(item or "").strip()]
                 if image_urls:
@@ -12185,6 +12191,13 @@ class MediaGenerationService:
             # KIE gemini-omni-video does not accept generic runtime resolution enums.
             if is_gemini_omni_video_model:
                 payload_input_obj.pop("resolution", None)
+                final_ar = str(payload_input_obj.get("aspect_ratio") or "").strip().lower()
+                if final_ar == "9:16":
+                    payload_input_obj["aspect_ratio"] = "9:16"
+                elif final_ar == "16:9":
+                    payload_input_obj["aspect_ratio"] = "16:9"
+                else:
+                    payload_input_obj["aspect_ratio"] = "16:9"
 
             payload["input"] = payload_input_obj
 
