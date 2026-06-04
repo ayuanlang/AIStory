@@ -29936,6 +29936,19 @@ async def _run_generate_video_job(
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
         if isinstance(result, dict) and result.get("pending_callback"):
+            with VIDEO_JOB_LOCK:
+                current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+            current_status = _normalize_generation_status(current_job.get("status"))
+            current_result_url = _extract_job_result_url(current_job.get("result"))
+            if current_status == "succeeded" and current_result_url:
+                logger.info(
+                    "[VideoJob] pending-callback downgrade skipped after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
+                    job_id,
+                    _extract_job_provider_task_id(current_job) or None,
+                    current_result_url,
+                )
+                return
+
             metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             provider_task_id = str(
                 (metadata or {}).get("task_id")
