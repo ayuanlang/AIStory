@@ -641,6 +641,10 @@ IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS = max(30, int(os.getenv("IMAGE_CALLB
 IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS", "8000") or 8000))
 IMAGE_CALLBACK_PERSIST_INFLIGHT: Dict[str, float] = {}
 IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK = threading.Lock()
+VIDEO_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS = max(30, int(os.getenv("VIDEO_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS", "600") or 600))
+VIDEO_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("VIDEO_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS", "8000") or 8000))
+VIDEO_CALLBACK_PERSIST_INFLIGHT: Dict[str, float] = {}
+VIDEO_CALLBACK_PERSIST_INFLIGHT_LOCK = threading.Lock()
 GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES = max(200, int(os.getenv("GENERATION_CALLBACK_JOB_FILE_SCAN_MAX_FILES", "2000") or 2000))
 GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS = max(1, int(os.getenv("GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS", "8") or 8))
 WEBHOOK_REPLAY_MAX_ITEMS = max(500, int(os.getenv("WEBHOOK_REPLAY_MAX_ITEMS", "6000")))
@@ -1253,6 +1257,22 @@ def _should_log_callback_no_match(kind: str, callback_ticket: str) -> bool:
             for key, _ in ordered[:overflow]:
                 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.pop(key, None)
 
+        previous_seen = float(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.get(stable_key) or 0.0)
+        if previous_seen and (now_ts - previous_seen) < GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS:
+            return False
+
+        GENERATION_CALLBACK_NO_MATCH_LOG_CACHE[stable_key] = now_ts
+        return True
+
+
+def _should_log_callback_missing_ticket(job_id: str) -> bool:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return False
+
+    now_ts = time.time()
+    stable_key = f"missing-ticket:{stable_job_id}"
+    with GENERATION_CALLBACK_NO_MATCH_LOG_LOCK:
         previous_seen = float(GENERATION_CALLBACK_NO_MATCH_LOG_CACHE.get(stable_key) or 0.0)
         if previous_seen and (now_ts - previous_seen) < GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS:
             return False
@@ -3400,28 +3420,29 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
     if not callback_ticket:
-        logger.info("[DEBUG-CB] job_id=%s has no callback_ticket recorded", job_id)
+        if _should_log_callback_missing_ticket(job_id):
+            logger.info("[DEBUG-CB] job_id=%s has no callback_ticket recorded", job_id)
         return job
     callback_payload = _get_generation_callback_payload(callback_ticket)
     if not callback_payload:
-        logger.info("[DEBUG-CB] job_id=%s callback_payload not found for ticket=%s", job_id, callback_ticket)
+        logger.debug("[DEBUG-CB] job_id=%s callback_payload not found for ticket=%s", job_id, callback_ticket)
         return job
 
     callback_task_id = _extract_callback_task_id(callback_payload)
     if provider_task_id and callback_task_id and callback_task_id != provider_task_id:
-        logger.info("[DEBUG-CB] job_id=%s task_id mismatch! provider_task_id=%s callback_task_id=%s", job_id, provider_task_id, callback_task_id)
+        logger.debug("[DEBUG-CB] job_id=%s task_id mismatch! provider_task_id=%s callback_task_id=%s", job_id, provider_task_id, callback_task_id)
         return job
 
     result = _build_result_from_provider_callback(callback_payload)
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
-    logger.info("[DEBUG-CB] job_id=%s callback_payload=%s", job_id, repr(callback_payload))
-    logger.info("[DEBUG-CB] result=%s current_result_url=%s callback_result_url=%s", repr(result), current_result_url, callback_result_url)
+    logger.debug("[DEBUG-CB] job_id=%s callback_payload=%s", job_id, repr(callback_payload))
+    logger.debug("[DEBUG-CB] result=%s current_result_url=%s callback_result_url=%s", repr(result), current_result_url, callback_result_url)
     callback_status_raw = str(callback_payload.get("status") or "").strip() or _extract_callback_status(callback_payload)
     normalized_status = _normalize_generation_status(callback_status_raw)
     if not normalized_status and callback_result_url:
         normalized_status = "succeeded"
-    logger.info("[DEBUG-CB] callback_status_raw=%s normalized_status=%s", callback_status_raw, normalized_status)
+    logger.debug("[DEBUG-CB] callback_status_raw=%s normalized_status=%s", callback_status_raw, normalized_status)
 
     current_status = _normalize_generation_status(job.get("status"))
     current_error = str(job.get("error") or "").strip()
@@ -3448,12 +3469,27 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     if normalized_status == "succeeded":
         candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
         if candidate_result:
-            effective_job = dict(job)
-            effective_job.update(updates)
-            persisted_result = _finalize_video_job_result_persistence(job_id, effective_job, dict(candidate_result))
-            persisted_result_url = _extract_job_result_url(persisted_result)
-            if persisted_result_url:
-                updates["result"] = persisted_result
+            if _mark_video_callback_persist_inflight(job_id):
+                try:
+                    effective_job = dict(job)
+                    effective_job.update(updates)
+                    persisted_result = _finalize_video_job_result_persistence(job_id, effective_job, dict(candidate_result))
+                    persisted_result_url = _extract_job_result_url(persisted_result)
+                    effective_current_result = updates.get("result") if "result" in updates else job.get("result")
+                    effective_current_result_url = _extract_job_result_url(effective_current_result)
+                    if persisted_result_url and (
+                        persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
+                    ):
+                        updates["result"] = persisted_result
+                        callback_result_url = persisted_result_url
+                finally:
+                    _clear_video_callback_persist_inflight(job_id)
+            else:
+                logger.info(
+                    "[VideoJob] skip duplicate callback persistence while in-flight | job_id=%s callback_ticket=%s",
+                    job_id,
+                    callback_ticket,
+                )
 
         if current_error:
             updates["error"] = None
@@ -3587,29 +3623,23 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
     if not stable_ticket:
         return
 
-    logger.info("[DEBUG-CB-FINALIZE] Starting _finalize_video_jobs_from_provider_callback for %s", stable_ticket)
     matched_jobs = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
     if not matched_jobs:
         if _should_log_callback_no_match("video", stable_ticket):
             logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
         return
 
-    logger.info("[DEBUG-CB-FINALIZE] Found %d matched jobs for %s", len(matched_jobs), stable_ticket)
     for job_id, job in matched_jobs:
-        logger.info("[DEBUG-CB-FINALIZE] Processing job_id=%s", job_id)
         previous_status = _normalize_generation_status(job.get("status"))
         previous_result_url = _extract_job_result_url(job.get("result"))
         updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
 
-        logger.info("[DEBUG-CB-FINALIZE] job_id=%s previous_status=%s updated_status=%s previous_result_url=%s updated_result_url=%s", job_id, previous_status, updated_status, previous_result_url, updated_result_url)
         if updated_status == previous_status and updated_result_url == previous_result_url:
-            logger.info("[DEBUG-CB-FINALIZE] job_id=%s No state changes detected. Skipping dispatch.", job_id)
             continue
 
         callback_url = _resolve_callback_url_from_payload(updated_job)
-        logger.info("[DEBUG-CB-FINALIZE] job_id=%s dispatching generation callback to %s", job_id, callback_url)
         if not callback_url:
             continue
         await _dispatch_generation_callback("video", callback_url, updated_job)
@@ -3693,6 +3723,45 @@ def _clear_image_callback_persist_inflight(job_id: str) -> None:
         return
     with IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK:
         IMAGE_CALLBACK_PERSIST_INFLIGHT.pop(stable_job_id, None)
+
+
+def _mark_video_callback_persist_inflight(job_id: str) -> bool:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return False
+
+    now_ts = time.time()
+    with VIDEO_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        stale_keys = [
+            key
+            for key, ts in VIDEO_CALLBACK_PERSIST_INFLIGHT.items()
+            if (now_ts - float(ts or 0.0)) > VIDEO_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS
+        ]
+        for key in stale_keys:
+            VIDEO_CALLBACK_PERSIST_INFLIGHT.pop(key, None)
+
+        if len(VIDEO_CALLBACK_PERSIST_INFLIGHT) > VIDEO_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS:
+            ordered = sorted(
+                VIDEO_CALLBACK_PERSIST_INFLIGHT.items(),
+                key=lambda item: float(item[1] or 0.0),
+            )
+            overflow = len(VIDEO_CALLBACK_PERSIST_INFLIGHT) - VIDEO_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS
+            for key, _ in ordered[:overflow]:
+                VIDEO_CALLBACK_PERSIST_INFLIGHT.pop(key, None)
+
+        if stable_job_id in VIDEO_CALLBACK_PERSIST_INFLIGHT:
+            return False
+
+        VIDEO_CALLBACK_PERSIST_INFLIGHT[stable_job_id] = now_ts
+    return True
+
+
+def _clear_video_callback_persist_inflight(job_id: str) -> None:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return
+    with VIDEO_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        VIDEO_CALLBACK_PERSIST_INFLIGHT.pop(stable_job_id, None)
 
 
 async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any]) -> None:
@@ -21284,6 +21353,12 @@ async def proxy_asset(url: str, request: Request):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Invalid URL scheme")
 
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").strip().lower()
+    bypass_env_proxy = host == "qn.woola.fun" or host.endswith(".clouddn.com") or host.endswith(".qiniucs.com") or host.endswith(".qiniu.com")
+
     forward_headers: Dict[str, str] = {}
     for header_name in ("range", "if-none-match", "if-modified-since"):
         header_value = request.headers.get(header_name)
@@ -21295,15 +21370,33 @@ async def proxy_asset(url: str, request: Request):
     timeout = (10, 90)
     last_error: Optional[Exception] = None
 
-    for attempt in range(1, 4):
-        try:
-            upstream = await asyncio.to_thread(
-                requests.get,
+    def _fetch_upstream() -> requests.Response:
+        if not bypass_env_proxy:
+            return requests.get(
                 url,
                 headers=forward_headers,
                 timeout=timeout,
                 allow_redirects=True,
                 stream=False,
+            )
+
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            return session.get(
+                url,
+                headers=forward_headers,
+                timeout=timeout,
+                allow_redirects=True,
+                stream=False,
+            )
+        finally:
+            session.close()
+
+    for attempt in range(1, 4):
+        try:
+            upstream = await asyncio.to_thread(
+                _fetch_upstream,
             )
 
             status_code = int(upstream.status_code or 502)
