@@ -12179,7 +12179,12 @@ class MediaGenerationService:
                 payload_input_obj["multi_shots"] = False
 
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
-                payload_input_obj["resolution"] = "480p"
+                if not is_gemini_omni_video_model:
+                    payload_input_obj["resolution"] = "480p"
+
+            # KIE gemini-omni-video does not accept generic runtime resolution enums.
+            if is_gemini_omni_video_model:
+                payload_input_obj.pop("resolution", None)
 
             payload["input"] = payload_input_obj
 
@@ -12412,24 +12417,33 @@ class MediaGenerationService:
                 ("resource download failed" in text)
                 or ("download failed" in text and "image_url" in text)
                 or ("invalidparameter" in text and "image_url" in text)
+                or ("file type not supported" in text)
             )
 
         def _rehost_kie_submit_input_urls(payload_obj: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
             candidate = copy.deepcopy(payload_obj or {})
             changed = False
 
-            def _upload_one_url(raw_url: Any, tag: str) -> Optional[str]:
-                url_text = str(raw_url or "").strip()
-                if not url_text.startswith(("http://", "https://")):
+            def _upload_one_ref(raw_value: Any, tag: str) -> Optional[str]:
+                value_text = str(raw_value or "").strip()
+                if not value_text:
                     return None
-                from urllib.parse import urlparse
-                guessed_ext = os.path.splitext(urlparse(url_text).path or "")[1] or ""
-                safe_ext = guessed_ext if guessed_ext and len(guessed_ext) <= 8 else ""
-                return self._upload_kie_file_url(
-                    url_text,
+                if not value_text.startswith(("http://", "https://", "data:")):
+                    return None
+
+                # Convert uncommon/unsupported data-uri image mime types to JPEG before re-upload.
+                if value_text.startswith("data:image/"):
+                    mime = self._extract_data_uri_mime(value_text)
+                    if not any(token in mime for token in ("jpeg", "jpg", "png", "webp")):
+                        normalized_candidate = self._normalize_data_uri_image_for_kie(value_text, target_format="JPEG")
+                        if normalized_candidate:
+                            value_text = normalized_candidate
+
+                return self._upload_kie_ref_to_hosted_url(
+                    value_text,
                     api_key=api_key,
-                    file_name=f"kie-retry-{tag}-{uuid.uuid4().hex[:10]}{safe_ext}",
                     upload_path="market-inputs",
+                    file_name_prefix=f"kie-retry-{tag}",
                 )
 
             def _replace_single(container: Dict[str, Any], key: str) -> None:
@@ -12437,7 +12451,7 @@ class MediaGenerationService:
                 if not isinstance(container, dict):
                     return
                 raw_value = container.get(key)
-                hosted = _upload_one_url(raw_value, key)
+                hosted = _upload_one_ref(raw_value, key)
                 if hosted:
                     container[key] = hosted
                     changed = True
@@ -12452,7 +12466,7 @@ class MediaGenerationService:
                 replaced: List[Any] = []
                 item_changed = False
                 for idx, item in enumerate(raw_value):
-                    hosted = _upload_one_url(item, f"{key}-{idx + 1}")
+                    hosted = _upload_one_ref(item, f"{key}-{idx + 1}")
                     if hosted:
                         replaced.append(hosted)
                         item_changed = True
@@ -12462,6 +12476,31 @@ class MediaGenerationService:
                     container[key] = replaced
                     changed = True
 
+            def _replace_video_list(container: Dict[str, Any], key: str = "video_list") -> None:
+                nonlocal changed
+                if not isinstance(container, dict):
+                    return
+                raw_value = container.get(key)
+                if not isinstance(raw_value, list):
+                    return
+
+                replaced_list: List[Any] = []
+                item_changed = False
+                for idx, item in enumerate(raw_value):
+                    if not isinstance(item, dict):
+                        replaced_list.append(item)
+                        continue
+                    patched_item = dict(item)
+                    hosted = _upload_one_ref(item.get("url"), f"{key}-{idx + 1}")
+                    if hosted:
+                        patched_item["url"] = hosted
+                        item_changed = True
+                    replaced_list.append(patched_item)
+
+                if item_changed:
+                    container[key] = replaced_list
+                    changed = True
+
             payload_input = candidate.get("input") if isinstance(candidate.get("input"), dict) else {}
 
             for key in ("image_url", "last_frame_url", "first_frame_url", "end_frame_url"):
@@ -12469,6 +12508,11 @@ class MediaGenerationService:
 
             for key in ("image_urls", "input_urls", "reference_image_urls"):
                 _replace_list(payload_input, key)
+
+            for key in ("reference_video_urls", "video_urls"):
+                _replace_list(payload_input, key)
+
+            _replace_video_list(payload_input, "video_list")
 
             # Veo-style payload occasionally uses top-level imageUrls.
             _replace_list(candidate, "imageUrls")
