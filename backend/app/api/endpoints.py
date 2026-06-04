@@ -23878,6 +23878,8 @@ class VideoGenerationRequest(BaseModel):
     ref_image_url: Optional[Union[str, List[str]]] = None
     ref_video_urls: Optional[List[str]] = None
     image_urls: Optional[List[str]] = None
+    audio_ids: Optional[List[str]] = None
+    video_list: Optional[List[Dict[str, Any]]] = None
     last_frame_url: Optional[str] = None
     duration: Optional[float] = 5.0
     aspect_ratio: Optional[str] = None
@@ -24197,6 +24199,32 @@ def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional
         image_urls = _limit_string_list_input(req.image_urls, None)
         if image_urls:
             options["image_urls"] = image_urls
+
+    if isinstance(req.audio_ids, list):
+        audio_ids = _limit_string_list_input(req.audio_ids, None)
+        if audio_ids:
+            options["audio_ids"] = audio_ids
+
+    if isinstance(req.video_list, list):
+        normalized_video_list: List[Dict[str, Any]] = []
+        for item in req.video_list:
+            if not isinstance(item, dict):
+                continue
+            video_url = str(item.get("url") or "").strip()
+            if not video_url:
+                continue
+            normalized_item: Dict[str, Any] = {"url": video_url}
+            for key in ("start", "end", "ends"):
+                raw_val = item.get(key)
+                if raw_val is None or str(raw_val).strip() == "":
+                    continue
+                try:
+                    normalized_item[key] = int(float(raw_val))
+                except Exception:
+                    normalized_item[key] = raw_val
+            normalized_video_list.append(normalized_item)
+        if normalized_video_list:
+            options["video_list"] = normalized_video_list
 
     if isinstance(req.ref_video_urls, list):
         ref_video_urls = _limit_string_list_input(req.ref_video_urls, None)

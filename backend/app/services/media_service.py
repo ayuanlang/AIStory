@@ -10654,6 +10654,7 @@ class MediaGenerationService:
             "wan-flash-i2v": "wan/2-6-flash-image-to-video",
             "wan-flash-v2v": "wan/2-6-flash-video-to-video",
             "grok-imagine-video": "grok-imagine/text-to-video",
+            "gemini-omni-video": "gemini-omni-video",
         }
         if gen_type in {"video", "image"}:
             remapped_model = model_alias.get(str(model or "").strip().lower())
@@ -10757,6 +10758,7 @@ class MediaGenerationService:
         is_kling_3_video = bool(gen_type == "video" and ("kling-3.0" in model_lower or model_lower == "kling3"))
         is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
         is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
+        is_gemini_omni_video_model = bool(gen_type == "video" and model_lower == "gemini-omni-video")
         # KIE market video endpoints require duration as string for compatibility across models.
         duration_string_required_model = bool(gen_type == "video")
 
@@ -11213,6 +11215,39 @@ class MediaGenerationService:
         if gen_type == "audio":
             payload_input.pop("duration", None)
 
+        if is_gemini_omni_video_model:
+            omni_audio_ids = tool_conf.get("audio_ids")
+            if omni_audio_ids is None:
+                omni_audio_ids = tool_conf.get("audioIds")
+            if isinstance(omni_audio_ids, list):
+                normalized_audio_ids = [str(item or "").strip() for item in omni_audio_ids if str(item or "").strip()]
+                if normalized_audio_ids:
+                    payload_input["audio_ids"] = normalized_audio_ids
+
+            omni_video_list = tool_conf.get("video_list")
+            if omni_video_list is None:
+                omni_video_list = tool_conf.get("videoList")
+            if isinstance(omni_video_list, list):
+                normalized_video_list: List[Dict[str, Any]] = []
+                for item in omni_video_list:
+                    if not isinstance(item, dict):
+                        continue
+                    video_url = str(item.get("url") or "").strip()
+                    if not video_url:
+                        continue
+                    normalized_item: Dict[str, Any] = {"url": video_url}
+                    for key in ("start", "end", "ends"):
+                        raw_val = item.get(key)
+                        if raw_val is None or str(raw_val).strip() == "":
+                            continue
+                        try:
+                            normalized_item[key] = int(float(raw_val))
+                        except Exception:
+                            normalized_item[key] = raw_val
+                    normalized_video_list.append(normalized_item)
+                if normalized_video_list:
+                    payload_input["video_list"] = normalized_video_list
+
         resolved_refs: List[str] = []
         if ref_image:
             ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
@@ -11322,6 +11357,9 @@ class MediaGenerationService:
                 for idx, ref_url in enumerate(resolved_refs):
                     current_prompt_text = re.sub(rf"#{idx + 1}\b", ref_url, current_prompt_text)
                 payload_input["prompt"] = current_prompt_text
+
+        if is_gemini_omni_video_model and isinstance(payload_input.get("image_urls"), list):
+            payload_input.pop("image_url", None)
 
         if is_sora2_i2v_model:
             sora_refs = payload_input.get("image_urls")
@@ -12021,6 +12059,47 @@ class MediaGenerationService:
                 len(kling_input.get("multi_prompt") or []),
                 len(kling_input.get("kling_elements") or []),
                 kling_input.get("sound"),
+                bool(payload.get("callBackUrl")),
+            )
+        elif is_gemini_omni_video_model:
+            omni_input: Dict[str, Any] = {
+                "prompt": str(payload_input.get("prompt") or "").strip(),
+            }
+            if isinstance(payload_input.get("image_urls"), list):
+                image_urls = [str(item or "").strip() for item in payload_input.get("image_urls") if str(item or "").strip()]
+                if image_urls:
+                    omni_input["image_urls"] = image_urls
+            if isinstance(payload_input.get("audio_ids"), list):
+                audio_ids = [str(item or "").strip() for item in payload_input.get("audio_ids") if str(item or "").strip()]
+                if audio_ids:
+                    omni_input["audio_ids"] = audio_ids
+            if isinstance(payload_input.get("video_list"), list) and payload_input.get("video_list"):
+                omni_input["video_list"] = payload_input.get("video_list")
+
+            omni_duration_raw = payload_input.get("duration")
+            if omni_duration_raw is None:
+                omni_duration_raw = duration
+            try:
+                omni_duration_num = int(float(omni_duration_raw))
+            except Exception:
+                omni_duration_num = 4
+            omni_input["duration"] = str(max(1, omni_duration_num))
+
+            payload = {
+                "model": "gemini-omni-video",
+                "input": omni_input,
+            }
+            if callback_url and callback_url != "-1":
+                payload["callBackUrl"] = callback_url
+
+            logger.info(
+                "KIE Gemini Omni Video submit payload | endpoint=%s model=%s duration=%s image_count=%s audio_count=%s video_count=%s callback_enabled=%s",
+                submit_url,
+                payload.get("model"),
+                omni_input.get("duration"),
+                len(omni_input.get("image_urls") or []),
+                len(omni_input.get("audio_ids") or []),
+                len(omni_input.get("video_list") or []),
                 bool(payload.get("callBackUrl")),
             )
         else:

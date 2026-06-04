@@ -1865,6 +1865,7 @@ def init_system_api_settings(db):
         _kie_item("Kie Sora2 Pro Storyboard", "Video", "sora-2-pro-storyboard", "text-to-video,image-to-video"),
         _kie_item("Kie Sora2 Characters", "Video", "sora-2-characters", "text-to-video,image-to-video"),
         _kie_item("Kie Sora2 Characters Pro", "Video", "sora-2-characters-pro", "text-to-video,image-to-video"),
+        _kie_item("Kie Gemini Omni Video", "Video", "gemini-omni-video", "text-to-video,image-to-video,video-to-video,audio-to-video"),
         _kie_item("Kie Grok Imagine T2V (Canonical)", "Video", "grok-imagine/text-to-video", "text-to-video"),
         _kie_item("Kie Grok Imagine I2V (Canonical)", "Video", "grok-imagine/image-to-video", "image-to-video"),
         _kie_item("Kie Topaz Video Upscale", "Video", "topaz/video-upscale", "video-to-video"),
