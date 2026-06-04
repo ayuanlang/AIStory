@@ -1180,8 +1180,30 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
             candidate = _first_status(block if isinstance(block, dict) else {}, f"data.{block_key}")
             if candidate:
                 return candidate
+
+    # Some providers serialize nested payload blocks as JSON strings.
+    for json_like_key in ("eventData", "data", "resultJson", "responseJson", "payload", "param"):
+        raw_block = payload.get(json_like_key)
+        if not isinstance(raw_block, str):
+            continue
+        text = raw_block.strip()
+        if not text or text[0] not in "[{":
+            continue
+        try:
+            parsed_block = json.loads(text)
+        except Exception:
+            continue
+        if isinstance(parsed_block, dict):
+            candidate = _first_status(parsed_block, f"{json_like_key}<json>")
+            if candidate:
+                return candidate
+            nested_data = parsed_block.get("data")
+            if isinstance(nested_data, dict):
+                candidate = _first_status(nested_data, f"{json_like_key}<json>.data")
+                if candidate:
+                    return candidate
                 
-    logger.info("[DEBUG-CB-STATUS] Could not extract status from payload")
+    logger.debug("[DEBUG-CB-STATUS] Could not extract status from payload")
     return ""
 
 
