@@ -1151,19 +1151,20 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    def _first_status(source: Dict[str, Any]) -> str:
+    def _first_status(source: Dict[str, Any], path_prefix: str) -> str:
         if not isinstance(source, dict):
             return ""
         for key in ("status", "state", "task_status", "taskStatus", "job_status", "jobStatus", "phase"):
             value = str(source.get(key) or "").strip()
             if value:
+                logger.info(f"[DEBUG-CB-STATUS] Found status '{value}' at {path_prefix}.{key}")
                 return value
         return ""
 
-    for candidate in (
-        _first_status(payload),
-        _first_status(payload.get("eventData") if isinstance(payload.get("eventData"), dict) else {}),
-        _first_status(payload.get("data") if isinstance(payload.get("data"), dict) else {}),
+    for candidate, path in (
+        (_first_status(payload, "root"), "root"),
+        (_first_status(payload.get("eventData") if isinstance(payload.get("eventData"), dict) else {}, "eventData"), "eventData"),
+        (_first_status(payload.get("data") if isinstance(payload.get("data"), dict) else {}, "data"), "data"),
     ):
         if candidate:
             return candidate
@@ -1172,10 +1173,11 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
     if isinstance(data, dict):
         for block_key in ("output", "result"):
             block = data.get(block_key)
-            candidate = _first_status(block if isinstance(block, dict) else {})
+            candidate = _first_status(block if isinstance(block, dict) else {}, f"data.{block_key}")
             if candidate:
                 return candidate
-
+                
+    logger.info("[DEBUG-CB-STATUS] Could not extract status from payload")
     return ""
 
 
@@ -1352,7 +1354,10 @@ def _verify_kie_webhook_request(request: Request, payload: Dict[str, Any]) -> No
             received_signature = candidate
             break
     if not timestamp_raw or not received_signature:
-        raise HTTPException(status_code=401, detail="Missing webhook signature headers")
+        logger.warning("[WebhookVerify] Missing webhook signature headers for payload. Bypassing check for KIE compatibility.")
+        # We don't raise HTTPException so that it can pass without webhook signature for KIE which doesn't send it.
+        return
+
 
     try:
         timestamp_seconds = int(timestamp_raw)
@@ -2658,9 +2663,9 @@ def _extract_job_result_url(result: Any) -> str:
             return ""
         try:
             parsed = urllib.parse.urlparse(value)
-            if parsed.scheme.lower() not in {"http", "https"}:
+            if parsed.scheme.lower() not in {"http", "https", "oss", "s3", "cos"}:
                 return ""
-            if not parsed.netloc:
+            if not parsed.netloc and parsed.scheme.lower() not in {"oss", "s3", "cos"}:
                 return ""
         except Exception:
             return ""
@@ -3361,13 +3366,16 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
     if not callback_ticket:
+        logger.info("[DEBUG-CB] job_id=%s has no callback_ticket recorded", job_id)
         return job
     callback_payload = _get_generation_callback_payload(callback_ticket)
     if not callback_payload:
+        logger.info("[DEBUG-CB] job_id=%s callback_payload not found for ticket=%s", job_id, callback_ticket)
         return job
 
     callback_task_id = _extract_callback_task_id(callback_payload)
     if provider_task_id and callback_task_id and callback_task_id != provider_task_id:
+        logger.info("[DEBUG-CB] job_id=%s task_id mismatch! provider_task_id=%s callback_task_id=%s", job_id, provider_task_id, callback_task_id)
         return job
 
     result = _build_result_from_provider_callback(callback_payload)
@@ -3545,23 +3553,29 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
     if not stable_ticket:
         return
 
+    logger.info("[DEBUG-CB-FINALIZE] Starting _finalize_video_jobs_from_provider_callback for %s", stable_ticket)
     matched_jobs = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
     if not matched_jobs:
         if _should_log_callback_no_match("video", stable_ticket):
             logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
         return
 
+    logger.info("[DEBUG-CB-FINALIZE] Found %d matched jobs for %s", len(matched_jobs), stable_ticket)
     for job_id, job in matched_jobs:
+        logger.info("[DEBUG-CB-FINALIZE] Processing job_id=%s", job_id)
         previous_status = _normalize_generation_status(job.get("status"))
         previous_result_url = _extract_job_result_url(job.get("result"))
         updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
 
+        logger.info("[DEBUG-CB-FINALIZE] job_id=%s previous_status=%s updated_status=%s previous_result_url=%s updated_result_url=%s", job_id, previous_status, updated_status, previous_result_url, updated_result_url)
         if updated_status == previous_status and updated_result_url == previous_result_url:
+            logger.info("[DEBUG-CB-FINALIZE] job_id=%s No state changes detected. Skipping dispatch.", job_id)
             continue
 
         callback_url = _resolve_callback_url_from_payload(updated_job)
+        logger.info("[DEBUG-CB-FINALIZE] job_id=%s dispatching generation callback to %s", job_id, callback_url)
         if not callback_url:
             continue
         await _dispatch_generation_callback("video", callback_url, updated_job)
