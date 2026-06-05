@@ -316,7 +316,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
     const [selectedAsset, setSelectedAsset] = useState(null); // Detail/Preview Mode
     const [showHistoricalProjectAssets, setShowHistoricalProjectAssets] = useState(true);
 
-    const [episodeFilter, setEpisodeFilter] = useState(() => (episodeId ? 'current' : 'all'));
+    const [episodeFilter, setEpisodeFilter] = useState('all');
     const [assetTypeFilter, setAssetTypeFilter] = useState('all');
     const [secondaryFilterKind, setSecondaryFilterKind] = useState('all'); // all | entity | shot
     const [secondaryFilterValue, setSecondaryFilterValue] = useState('');
@@ -670,7 +670,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (isOpen) {
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(true);
-             setEpisodeFilter(episodeId ? 'current' : 'all');
+             setEpisodeFilter('all');
              setAssetTypeFilter(preferredAssetType);
              let nextSecondaryKind = 'all';
              const preferredKind = String(context?.defaultSecondaryKind || '').trim().toLowerCase();
@@ -1142,7 +1142,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             const urlKey = String(asset?.url || '').trim();
             const normalizedUrlKey = urlKey ? urlKey.replace(/[?#].*$/, '').trim().toLowerCase() : '';
             const nameKey = String(asset?.name || meta?.asset_name || meta?.display_name || '').trim();
-            const compositeKey = normalizedUrlKey || idKey || `${urlKey}::${nameKey}`;
+            // Keep distinct persisted rows first; only fall back to URL-based dedup when id is missing.
+            const compositeKey = idKey || normalizedUrlKey || `${urlKey}::${nameKey}`;
             if (!compositeKey) return;
             if (!dedupMap.has(compositeKey)) {
                 dedupMap.set(compositeKey, asset);
@@ -1252,6 +1253,26 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 }
         setLoading(true);
         try {
+            const fetchAssetsPaged = async (params = {}) => {
+                const pageSize = 200;
+                const maxPages = 30;
+                const merged = [];
+
+                for (let page = 0; page < maxPages; page += 1) {
+                    const pageRows = await fetchAssets({
+                        ...params,
+                        skip: page * pageSize,
+                        limit: pageSize,
+                    });
+                    const rows = Array.isArray(pageRows) ? pageRows : [];
+                    if (!rows.length) break;
+                    merged.push(...rows);
+                    if (rows.length < pageSize) break;
+                }
+
+                return merged;
+            };
+
             const baseParams = {};
             if (projectId) {
                 baseParams.project_id = projectId;
@@ -1270,7 +1291,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
             const shouldFilterReferencedOnly = Boolean(projectId) && !showHistoricalProjectAssets;
             const [scopedData, refsPayload] = await Promise.all([
-                fetchAssets(scopedParams),
+                fetchAssetsPaged(scopedParams),
                 shouldFilterReferencedOnly ? fetchUnreferencedAssetIds({ project_id: projectId, episode_id: episodeId || undefined }) : Promise.resolve(null)
             ]);
 

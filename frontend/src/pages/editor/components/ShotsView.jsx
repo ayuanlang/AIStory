@@ -9016,7 +9016,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.start_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.start_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
-                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             storageKey="ref_image_urls"
                                             strictPromptOnly={true}
                                             onFindPrevFrame={() => {
@@ -9230,7 +9230,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={shotPromptDisplayLang === 'cn' ? (() => { try { return JSON.parse(editingShot.technical_notes || '{}')?.end_frame_cn || ''; } catch(e) { return ''; } })() : (editingShot.end_frame || '')}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
-                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             storageKey="end_ref_image_urls"
                                             strictPromptOnly={true}
                                         />
@@ -10493,7 +10493,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -10607,7 +10607,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="end_ref_image_urls" strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -10819,7 +10819,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
