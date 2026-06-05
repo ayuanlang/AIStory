@@ -29376,6 +29376,8 @@ async def _run_generate_video(
         elif isinstance(req.keyframes, list) and max_keyframes is not None:
             normalized_keyframes = [str(item).strip() for item in req.keyframes if str(item).strip()]
             req.keyframes = normalized_keyframes[:max_keyframes] if max_keyframes > 0 else []
+        if normalized_ref_mode == "keyframes_entity_refs" and isinstance(req.keyframes, list):
+            req.keyframes = _limit_keyframes_for_video_mode(req.keyframes, normalized_ref_mode)
         normalized_ref_mode = str(ref_normalization_info.get("normalized_mode") or normalized_ref_mode or "")
         logger.info(
             "[GenerateVideo] ref mode normalization | shot_id=%s shot_number=%s ref_mode=%s supports_last_frame=%s fallback_to_refs=%s start_before=%s start_after=%s last_before=%s last_after=%s provider=%s model=%s",
@@ -29399,6 +29401,10 @@ async def _run_generate_video(
             has_explicit_visual_refs = True
         elif isinstance(req.ref_video_urls, list) and any(str(x).strip() for x in req.ref_video_urls):
             has_explicit_visual_refs = True
+
+        effective_keyframes = _limit_keyframes_for_video_mode(req.keyframes, normalized_ref_mode)
+        if normalized_ref_mode == "keyframes_entity_refs" and effective_keyframes:
+            req.keyframes = effective_keyframes
 
         auto_entity_refs: List[str] = []
         if is_reference_image_mode and resolved_project_id:
@@ -29470,8 +29476,8 @@ async def _run_generate_video(
         elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
             flat_refs.append(req.ref_image_url.strip())
 
-        if isinstance(req.keyframes, list):
-            flat_refs.extend([str(x).strip() for x in req.keyframes if str(x).strip()])
+        if isinstance(effective_keyframes, list):
+            flat_refs.extend([str(x).strip() for x in effective_keyframes if str(x).strip()])
 
         if isinstance(req.last_frame_url, str) and req.last_frame_url.strip():
             flat_refs.append(req.last_frame_url.strip())
@@ -29485,7 +29491,7 @@ async def _run_generate_video(
             normalized_ref_mode or "<empty>",
             len(req.ref_image_url) if isinstance(req.ref_image_url, list) else (1 if str(req.ref_image_url or "").strip() else 0),
             bool(str(req.last_frame_url or "").strip()),
-            len(req.keyframes or []) if isinstance(req.keyframes, list) else 0,
+            len(effective_keyframes or []) if isinstance(effective_keyframes, list) else 0,
             len(flat_refs),
         )
         logger.info(
@@ -29503,7 +29509,7 @@ async def _run_generate_video(
             flat_refs,
             req.ref_image_url,
             req.last_frame_url,
-            req.keyframes,
+            effective_keyframes,
             req.ref_video_urls,
             entity_lookup=entity_lookup if is_reference_image_mode else None,
             use_prev_video=getattr(req, "use_prev_video", False),
@@ -32315,6 +32321,14 @@ def _normalize_video_request_refs(
     return normalized_ref_image_url, end_ref, info
 
 
+def _limit_keyframes_for_video_mode(keyframes: Optional[List[str]], ref_mode: Any) -> List[str]:
+    normalized_mode = _normalize_video_ref_mode(ref_mode)
+    normalized_keyframes = _dedupe_media_ref_urls(keyframes if isinstance(keyframes, list) else [])
+    if normalized_mode == "keyframes_entity_refs":
+        return normalized_keyframes[:1]
+    return normalized_keyframes
+
+
 def _collect_video_prompt_entity_refs(
     prompt_candidates: List[str],
     entity_lookup: Dict[str, Dict[str, Any]],
@@ -32365,12 +32379,12 @@ def _prepend_keyframe_story_progression_instruction(prompt: Any, keyframe_ref_co
     if keyframe_ref_count <= 0:
         return base_prompt
 
-    ref_labels = [f"参考@Image{idx}" for idx in range(1, keyframe_ref_count + 1)]
+    ref_label = "参考@Image1"
     normalized_language = str(language or "en").strip().lower()
     if normalized_language.startswith("zh") or normalized_language.startswith("cn"):
-        prefix = f"{'，'.join(ref_labels)}的情节走向进行视频生成。"
+        prefix = f"{ref_label} 的画面顺序生成视频。"
     else:
-        prefix = f"Generate the video by following the story progression in {', '.join(ref_labels)}."
+        prefix = f"Generate the video following the frame order of {ref_label}."
 
     if not base_prompt:
         return prefix
@@ -32814,9 +32828,8 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                     refs.append(start_frame_url)
 
                 if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
-                    keyframes = tech.get("keyframes")
-                    if isinstance(keyframes, list):
-                        refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+                    keyframes = _limit_keyframes_for_video_mode(tech.get("keyframes"), shot_mode)
+                    refs.extend(keyframes)
 
                 if shot_mode == "start_end" and end_frame_url:
                     explicit_last_frame_url = end_frame_url
@@ -32848,12 +32861,10 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
 
         keyframe_priority_refs: List[str] = []
         if video_mode == "keyframes_entity_refs":
-            keyframe_priority_refs = _dedupe_media_ref_urls([
-                str(x).strip() for x in (tech.get("keyframes") or []) if str(x).strip()
-            ])
+            keyframe_priority_refs = _limit_keyframes_for_video_mode(tech.get("keyframes"), video_mode)
             if keyframe_priority_refs:
                 ordered_video_refs = [
-                    *[ref for ref in keyframe_priority_refs if ref in ordered_video_refs],
+                    *keyframe_priority_refs,
                     *[ref for ref in ordered_video_refs if ref not in keyframe_priority_refs],
                 ]
 
@@ -32881,7 +32892,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             entity_lookup=entity_lookup,
         )
         if video_mode == "keyframes_entity_refs":
-            keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+            keyframe_ref_count = 1 if keyframe_priority_refs else 0
             video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -32899,7 +32910,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 entity_lookup=entity_lookup,
             )
             if video_mode == "keyframes_entity_refs":
-                keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                keyframe_ref_count = 1 if keyframe_priority_refs else 0
                 video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
             tech["video_prompt_cn"] = video_prompt_cn
             item_db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})
@@ -33562,9 +33573,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                     refs.append(str(shot.image_url).strip())
 
                                 if shot_mode in {"entity_refs", "keyframes_entity_refs"}:
-                                    keyframes = tech.get("keyframes")
-                                    if isinstance(keyframes, list):
-                                        refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+                                    keyframes = _limit_keyframes_for_video_mode(tech.get("keyframes"), shot_mode)
+                                    refs.extend(keyframes)
 
                                 if shot_mode == "start_end" and end_frame_url:
                                     explicit_last_frame_url = end_frame_url
@@ -33596,12 +33606,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
 
                         keyframe_priority_refs: List[str] = []
                         if video_mode == "keyframes_entity_refs":
-                            keyframe_priority_refs = _dedupe_media_ref_urls([
-                                str(x).strip() for x in (tech.get("keyframes") or []) if str(x).strip()
-                            ])
+                            keyframe_priority_refs = _limit_keyframes_for_video_mode(tech.get("keyframes"), video_mode)
                             if keyframe_priority_refs:
                                 ordered_video_refs = [
-                                    *[ref for ref in keyframe_priority_refs if ref in ordered_video_refs],
+                                    *keyframe_priority_refs,
                                     *[ref for ref in ordered_video_refs if ref not in keyframe_priority_refs],
                                 ]
 
@@ -33615,7 +33623,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                         )
                         if video_mode == "keyframes_entity_refs":
-                            keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                            keyframe_ref_count = 1 if keyframe_priority_refs else 0
                             video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
 
                         video_prompt_cn_raw = str(tech.get("video_prompt_cn") or "").strip()
@@ -33633,7 +33641,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                             )
                             if video_mode == "keyframes_entity_refs":
-                                keyframe_ref_count = min(len([ref for ref in keyframe_priority_refs if ref in ordered_video_refs]), len(ordered_video_refs))
+                                keyframe_ref_count = 1 if keyframe_priority_refs else 0
                                 video_prompt_cn = _prepend_keyframe_story_progression_instruction(video_prompt_cn, keyframe_ref_count, language="zh")
                             tech["video_prompt_cn"] = video_prompt_cn
                             db.query(type(shot)).filter(type(shot).id == shot.id).update({"technical_notes": json.dumps(tech, ensure_ascii=False)})

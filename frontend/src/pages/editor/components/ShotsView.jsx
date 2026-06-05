@@ -161,16 +161,16 @@ const MULTI_PANEL_PRESET_OPTIONS = [
 
 const MULTI_PANEL_PRESET_FALLBACKS = {
     '4panel': {
-        cn: '生成一张 2x2 排布、包含 4 个连续画面的多画格叙事图。四格需保持同一主体、服装、场景与镜头语言连续，展示该镜头的关键动作推进；不要添加标题、对白气泡、说明文字或无关装饰。',
-        en: 'Generate a 2x2 multi-panel narrative image with 4 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, showing the key action progression for this shot. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+        cn: '生成一张 2x2 排布、包含 4 个连续画面的多画格叙事图。四格需保持同一主体、服装、场景与镜头语言连续，展示该镜头的关键动作推进。画面顺序必须明确为从左到右、从上到下（1→2→3→4），并在每一格上方清晰标注对应阿拉伯数字（1、2、3、4）。必须严格按照提示词给出的时序与运镜逻辑推进，不得跳时、倒序、并行错序或随意改写镜头运动方向。除这些数字外，不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 2x2 multi-panel narrative image with 4 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, showing the key action progression for this shot. The panel order must be explicit in reading order (left-to-right, top-to-bottom: 1->2->3->4), and place a clear Arabic numeral above each panel (1, 2, 3, 4). You must strictly follow the prompt\'s timeline and camera-movement logic, with no time skips, reversed order, parallel mis-ordering, or arbitrary changes to camera direction. Do not add titles, speech bubbles, captions, or unrelated decorations beyond these numeric labels.',
     },
     '6panel': {
-        cn: '生成一张 3x2 排布、包含 6 个连续画面的多画格叙事图。六格需保持同一主体、服装、场景与镜头语言连续，清晰展示该镜头从起势、动作发展到收束的过程；不要添加标题、对白气泡、说明文字或无关装饰。',
-        en: 'Generate a 3x2 multi-panel narrative image with 6 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, clearly showing the shot progression from setup to action development to resolution. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+        cn: '生成一张 3x2 排布、包含 6 个连续画面的多画格叙事图。六格需保持同一主体、服装、场景与镜头语言连续，清晰展示该镜头从起势、动作发展到收束的过程。画面顺序必须明确为从左到右、从上到下（1→2→3→4→5→6），并在每一格上方清晰标注对应阿拉伯数字（1、2、3、4、5、6）。必须严格按照提示词给出的时序与运镜逻辑推进，不得跳时、倒序、并行错序或随意改写镜头运动方向。除这些数字外，不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 3x2 multi-panel narrative image with 6 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, clearly showing the shot progression from setup to action development to resolution. The panel order must be explicit in reading order (left-to-right, top-to-bottom: 1->2->3->4->5->6), and place a clear Arabic numeral above each panel (1, 2, 3, 4, 5, 6). You must strictly follow the prompt\'s timeline and camera-movement logic, with no time skips, reversed order, parallel mis-ordering, or arbitrary changes to camera direction. Do not add titles, speech bubbles, captions, or unrelated decorations beyond these numeric labels.',
     },
     '9panel': {
-        cn: '生成一张 3x3 排布、包含 9 个连续画面的多画格叙事图。九格需保持同一主体、服装、场景与镜头语言连续，完整展示该镜头的节奏、动作变化与情绪推进；不要添加标题、对白气泡、说明文字或无关装饰。',
-        en: 'Generate a 3x3 multi-panel narrative image with 9 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, fully showing the shot rhythm, action changes, and emotional progression. Do not add titles, speech bubbles, captions, or unrelated decorations.',
+        cn: '生成一张 3x3 排布、包含 9 个连续画面的多画格叙事图。九格需保持同一主体、服装、场景与镜头语言连续，完整展示该镜头的节奏、动作变化与情绪推进。画面顺序必须明确为从左到右、从上到下（1→2→3→4→5→6→7→8→9），并在每一格上方清晰标注对应阿拉伯数字（1、2、3、4、5、6、7、8、9）。必须严格按照提示词给出的时序与运镜逻辑推进，不得跳时、倒序、并行错序或随意改写镜头运动方向。除这些数字外，不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 3x3 multi-panel narrative image with 9 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, fully showing the shot rhythm, action changes, and emotional progression. The panel order must be explicit in reading order (left-to-right, top-to-bottom: 1->2->3->4->5->6->7->8->9), and place a clear Arabic numeral above each panel (1, 2, 3, 4, 5, 6, 7, 8, 9). You must strictly follow the prompt\'s timeline and camera-movement logic, with no time skips, reversed order, parallel mis-ordering, or arbitrary changes to camera direction. Do not add titles, speech bubbles, captions, or unrelated decorations beyond these numeric labels.',
     },
 };
 
@@ -5919,8 +5919,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const durationValue = Number(stableShot?.duration || 0);
         const effectiveDuration = Number.isFinite(durationValue) && durationValue > 0 ? durationValue : panelCount;
         const autoPromptBase = String(basePrompt || '').trim() || (promptLanguage === 'en' ? 'Keyframe split from multi-panel preset' : '从多画格预设自动拆分的关键帧');
-        const nextList = [];
-        const nextCnMap = {};
+        const nextList = [{
+            id: Date.now(),
+            time: '0.0s',
+            prompt: autoPromptBase,
+            url: stableCompositeUrl,
+        }];
+        const nextCnMap = promptLanguage === 'cn' ? { '0.0s': autoPromptBase } : {};
 
         for (let index = 0; index < panelCount; index += 1) {
             const blob = await cropGeneratedGridPanelToBlob({
@@ -5963,7 +5968,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             nextList.push({
-                id: Date.now() + index,
+                id: Date.now() + index + 1,
                 time: timeKey,
                 prompt: autoPrompt,
                 url: uploadedUrl,
@@ -7041,8 +7046,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             const apiKeyframes = Array.isArray(keyframes) ? keyframes.filter(Boolean) : [];
             const resolvedUniqueRefs = await Promise.all(uniqueRefs.map(resolveBlobUrlIfAny));
+            const keyframeRequestUrls = effectiveVideoMode === 'keyframes_entity_refs'
+                ? apiKeyframes.slice(0, 1)
+                : apiKeyframes;
             const resolvedKeyframeRefs = effectiveVideoMode === 'keyframes_entity_refs'
-                ? normalizeMediaRefList(await Promise.all((Array.isArray(apiKeyframes) ? apiKeyframes : []).map(resolveBlobUrlIfAny)))
+                ? normalizeMediaRefList(await Promise.all((Array.isArray(keyframeRequestUrls) ? keyframeRequestUrls : []).map(resolveBlobUrlIfAny)))
                 : [];
             const prioritizedResolvedRefs = effectiveVideoMode === 'keyframes_entity_refs'
                 ? [
@@ -7060,7 +7068,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             apiLastFrameUrl = null;
 
             const isManualVideoMode = Array.isArray(tech.video_ref_image_urls) && tech.video_ref_image_urls.length > 0;
-            if (isManualVideoMode) {
+            if (effectiveVideoMode === 'keyframes_entity_refs') {
+                apiRefImageUrl = imageRefs.length > 0 ? imageRefs[0] : null;
+            } else if (isManualVideoMode) {
                 apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
             } else {
                 const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
@@ -7101,19 +7111,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
             let finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
-
-            if (effectiveVideoMode === 'keyframes_entity_refs' && resolvedKeyframeRefs.length > 0) {
-                const keyframeRefLabels = resolvedKeyframeRefs
-                    .map((url) => imageRefs.findIndex((imageUrl) => imageUrl === url))
-                    .filter((index) => index >= 0)
-                    .map((index) => `参考@Image${index + 1}`);
-                if (keyframeRefLabels.length > 0) {
-                    const keyframeLead = resolvedPromptSubmitLang === 'cn'
-                        ? `${keyframeRefLabels.join('，')}的情节走向进行视频生成。`
-                        : `Generate the video by following the story progression in ${keyframeRefLabels.join(', ')}. `;
-                    finalPrompt = `${keyframeLead}${finalPrompt}`;
-                }
-            }
 
             if (effectiveVideoMode === 'entity_refs_start_end') {
                 const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
@@ -7164,7 +7161,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     on_job_status: (status, data) => {
                         setVideoStatuses(prev => ({ ...prev, [targetShotId]: String(data?.status || status).toLowerCase() }));
                     },
-                }, apiKeyframes);
+                }, keyframeRequestUrls);
                 onLog?.(t('视频请求已发起', 'Video request dispatched'), 'info');
             } catch (videoDispatchError) {
                 onLog?.(`${t('视频请求发起失败', 'Video request dispatch failed')}: ${videoDispatchError?.message || 'unknown error'}`, 'error');
