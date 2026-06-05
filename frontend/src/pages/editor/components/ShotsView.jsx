@@ -8136,6 +8136,66 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         await startShotBatchByMode('videos');
     };
 
+    const handleBatchScaleDuration = async () => {
+        if (!shots || shots.length === 0) {
+            onLog?.(t('无可用镜头', 'No shots available'), 'warning');
+            return;
+        }
+
+        const scaleStr = await promptUiMessage(
+            t('请输入时长缩放比例 (例如 1.5, 对当前列表中所有镜头生效)：', 'Enter duration scale factor (e.g. 1.5, applies to all listed shots):'),
+            { defaultValue: '1.0' }
+        );
+        if (scaleStr === null) return;
+        
+        const scale = parseFloat(scaleStr);
+        if (isNaN(scale) || scale <= 0) {
+            onLog?.(t('缩放比例无效', 'Invalid scale factor'), 'error');
+            return;
+        }
+
+        const updates = [];
+        for (const shot of shots) {
+            const currentDurStr = shot.duration;
+            const d = parseFloat(currentDurStr) || 5; 
+            let newD = Math.round(d * scale);
+            if (newD < 4) newD = 4;
+            if (newD > 15) newD = 15;
+            
+            if (newD !== d || !currentDurStr) {
+                updates.push({ id: shot.id, duration: newD.toString() });
+            }
+        }
+
+        if (updates.length === 0) {
+            onLog?.(t('没有需要更新时长的镜头', 'No shots need duration update'), 'info');
+            return;
+        }
+
+        if (!await confirmUiMessage(t(
+            `确定要将当前列表上的 ${shots.length} 个镜头时长按 ${scale} 倍缩放吗？结果会限制在 4 到 15 秒并取整。\n(实际受影响的镜头有 ${updates.length} 个)`, 
+            `Are you sure you want to scale the duration of ${shots.length} listed shots by ${scale}x? Limits are 4 to 15s rounded to int.\n(${updates.length} shots will actually be modified)`
+        ))) {
+            return;
+        }
+
+        setIsShotBatchStarting(true);
+        let successCount = 0;
+        try {
+            for (let i = 0; i < updates.length; i++) {
+                const upd = updates[i];
+                await onUpdateShot(upd.id, { duration: upd.duration });
+                successCount++;
+            }
+            onLog?.(t(`批量更新时长完成，共更新 ${successCount} 个镜头`, `Batch duration update complete. ${successCount} shots updated.`), 'success');
+        } catch (err) {
+            console.error(err);
+            onLog?.(t(`批量更新时长遇到错误，已更新 ${successCount} 个镜头`, `Batch update error. ${successCount} shots updated.`), 'error');
+        } finally {
+            setIsShotBatchStarting(false);
+        }
+    };
+
     const sceneCodeById = useMemo(() => {
         const map = {};
         (scenes || []).forEach((scene) => {
@@ -8446,6 +8506,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         >
                                                             <Film className="w-3 h-3 text-muted-foreground"/>
                                                             {t('视频', 'Video')}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchScaleDuration(); }}
+                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2 border-t border-white/10"
+                                                            title={t('对当前列表中的所有镜头等比缩放时长', 'Proportionally scale the duration of all shots in the current list')}
+                                                        >
+                                                            <Timer className="w-3 h-3 text-muted-foreground"/>
+                                                            {t('缩放时长', 'Scale Duration')}
                                                         </button>
                                                     </div>
                                                 </>
@@ -9434,7 +9502,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`}
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
-                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true }}
+                                            pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}

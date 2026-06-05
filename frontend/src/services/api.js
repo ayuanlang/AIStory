@@ -3043,15 +3043,23 @@ export const deleteSetting = async (id) => {
     return response.data;
 }
 
-export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null) => {
+export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null, options = {}) => {
     try {
         let finalApiId = systemApiId;
         if (!finalApiId && functionName) {
             finalApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
         }
         let url = `/entities/${entityId}/analyze`;
+        const params = new URLSearchParams();
         if (finalApiId) {
-            url += `?system_api_id=${finalApiId}`;
+            params.append('system_api_id', finalApiId);
+        }
+        if (options.background) {
+            params.append('bg', 'true');
+        }
+        const qs = params.toString();
+        if (qs) {
+            url += `?${qs}`;
         }
         const response = await api.post(url);
         return response.data;

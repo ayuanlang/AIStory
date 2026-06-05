@@ -462,6 +462,8 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return 'all';
     }, [context?.type, contextDesiredAssetType, contextFrameType]);
 
+    const preferredAssetType = useMemo(() => inferPreferredAssetType(), [inferPreferredAssetType]);
+
     const resolveAssetEpisodeId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
         const raw = meta?.episode_id ?? asset?.episode_id;
@@ -669,7 +671,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
              setSelectedAsset(null); // Reset detail view on open
              setShowHistoricalProjectAssets(true);
              setEpisodeFilter(episodeId ? 'current' : 'all');
-             setAssetTypeFilter('all');
+             setAssetTypeFilter(preferredAssetType);
              let nextSecondaryKind = 'all';
              const preferredKind = String(context?.defaultSecondaryKind || '').trim().toLowerCase();
              if (contextDisableShotFilter && preferredKind !== 'all') {
@@ -695,7 +697,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
              setSelectedAssetId('');
              setSelectedMulti(new Set());
         }
-    }, [context?.defaultSecondaryKind, context?.defaultSubCategory, contextDisableShotFilter, contextEntityId, contextShotId, episodeId, isOpen, secondaryKindChoices]);
+    }, [context?.defaultSecondaryKind, context?.defaultSubCategory, contextDisableShotFilter, contextEntityId, contextShotId, episodeId, isOpen, preferredAssetType, secondaryKindChoices]);
 
     useEffect(() => {
         if (!contextDisableShotFilter) return;
@@ -769,9 +771,10 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
 
         if (assetTypeFilter !== 'all') {
             filtered = filtered.filter((asset) => {
-                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-                const stableType = String(asset?.type || meta?.type || '').trim().toLowerCase();
-                return stableType === assetTypeFilter;
+                const videoLike = isAssetVideoLike(asset);
+                if (assetTypeFilter === 'video') return videoLike;
+                if (assetTypeFilter === 'image') return !videoLike;
+                return true;
             });
         }
 
@@ -783,7 +786,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             console.log('[素材选择][levelOneAssets]', filtered);
         }
         return filtered;
-    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, logAssetPickerDebug, resolveAssetEpisodeId, summarizeAssetsForDebug]);
+    }, [allCleanData, assetTypeFilter, episodeFilter, episodeId, isAssetVideoLike, logAssetPickerDebug, resolveAssetEpisodeId, summarizeAssetsForDebug]);
 
     const secondaryEntityOptions = useMemo(() => {
         const grouped = new Map();
@@ -1417,6 +1420,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                 setSelectedAssetId('');
                             }}
                             className="bg-[#151515] border border-white/10 rounded text-xs px-2 py-1 text-white outline-none focus:border-primary/50"
+                            disabled={contextLockAssetType && preferredAssetType !== 'all'}
                         >
                             <option value="all">{t('全部类型', 'All Types')}</option>
                             <option value="image">{t('图片', 'Image')}</option>

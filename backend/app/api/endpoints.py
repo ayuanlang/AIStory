@@ -34383,8 +34383,47 @@ async def analyze_asset_image(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+from fastapi import BackgroundTasks
+
 @router.post("/entities/{entity_id}/analyze")
 async def analyze_entity_image(
+    entity_id: int,
+    background_tasks: BackgroundTasks,
+    system_api_id: Optional[int] = Query(None),
+    feature_name: Optional[str] = Query(None),
+    bg: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Analyzes an entity (subject) image using Vision model and updates its attributes based on visual content.
+    Returns the updated entity data.
+    """
+    if not bg:
+        return await _execute_analyze_entity_image(entity_id, system_api_id, feature_name, db, current_user)
+        
+    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+        
+    # verify access
+    project = _require_project_access(db, entity.project_id, current_user)
+
+    if not entity.image_url:
+        raise HTTPException(status_code=400, detail="Entity has no image to analyze.")
+
+    async def bg_task(u: User):
+        from app.db.session import SessionLocal
+        with SessionLocal() as bg_db:
+            try:
+                await _execute_analyze_entity_image(entity_id, system_api_id, feature_name, bg_db, u)
+            except Exception as e:
+                logger.error(f"BG Analyze task failed for entity {entity_id}: {e}")
+
+    background_tasks.add_task(bg_task, current_user)
+    return entity
+
+async def _execute_analyze_entity_image(
     entity_id: int,
     system_api_id: Optional[int] = Query(None),
     feature_name: Optional[str] = Query(None),

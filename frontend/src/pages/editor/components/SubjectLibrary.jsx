@@ -2322,15 +2322,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
         
         setIsAnalyzingEntity(true);
-        if (onLog) onLog(`Analyzing image for subject ${entity.name}...`, "process");
+        if (onLog) onLog(`Analyzing image for subject ${entity.name} in background...`, "process");
         
         try {
-            const updated = await analyzeEntityImage(entity.id, 'script_analysis');
+            const updated = await analyzeEntityImage(entity.id, 'script_analysis', null, { background: true });
             setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
             setAllEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
-            if (onLog) onLog("Subject updated from analysis.", "success");
+            if (onLog) onLog("Subject analysis started in background.", "success");
             return updated;
         } catch (e) {
             console.error(e);
@@ -4300,7 +4300,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             if (options?.skipAnalyze !== true) {
-                const analyzedEntity = await handleAnalyzeEntity(updatedEntity);
+                const analyzedEntity = await analyzeEntityImage(updatedEntity.id, 'script_analysis', null, { background: true });
                 return analyzedEntity || updatedEntity;
             }
 
