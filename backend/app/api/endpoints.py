@@ -1159,20 +1159,27 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
 
-    def _first_status(source: Dict[str, Any], path_prefix: str) -> str:
+    def _first_status(source: Dict[str, Any], path_prefix: str, log_matches: bool = True) -> str:
         if not isinstance(source, dict):
             return ""
         for key in ("status", "state", "task_status", "taskStatus", "job_status", "jobStatus", "phase"):
             value = str(source.get(key) or "").strip()
             if value:
-                logger.info(f"[DEBUG-CB-STATUS] Found status '{value}' at {path_prefix}.{key}")
+                if log_matches:
+                    logger.info(f"[DEBUG-CB-STATUS] Found status '{value}' at {path_prefix}.{key}")
                 return value
         return ""
 
+    # Check exactly root.status first without triggering nested matches yet, 
+    # to prioritize authoritative top-level success/running over nested failure indicators.
+    root_val = _first_status(payload, "root", log_matches=True)
+    if root_val and root_val.lower() in {"success", "succeeded", "completed", "done", "running", "queued", "pending", "in_progress", "in-progress", "storing_asset"}:
+        return root_val
+
     for candidate, path in (
-        (_first_status(payload, "root"), "root"),
-        (_first_status(payload.get("eventData") if isinstance(payload.get("eventData"), dict) else {}, "eventData"), "eventData"),
-        (_first_status(payload.get("data") if isinstance(payload.get("data"), dict) else {}, "data"), "data"),
+        (root_val, "root"),
+        (_first_status(payload.get("eventData") if isinstance(payload.get("eventData"), dict) else {}, "eventData", log_matches=True), "eventData"),
+        (_first_status(payload.get("data") if isinstance(payload.get("data"), dict) else {}, "data", log_matches=True), "data"),
     ):
         if candidate:
             return candidate
@@ -1181,7 +1188,7 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
     if isinstance(data, dict):
         for block_key in ("output", "result"):
             block = data.get(block_key)
-            candidate = _first_status(block if isinstance(block, dict) else {}, f"data.{block_key}")
+            candidate = _first_status(block if isinstance(block, dict) else {}, f"data.{block_key}", log_matches=True)
             if candidate:
                 return candidate
 
@@ -1198,12 +1205,12 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
         except Exception:
             continue
         if isinstance(parsed_block, dict):
-            candidate = _first_status(parsed_block, f"{json_like_key}<json>")
+            candidate = _first_status(parsed_block, f"{json_like_key}<json>", log_matches=True)
             if candidate:
                 return candidate
             nested_data = parsed_block.get("data")
             if isinstance(nested_data, dict):
-                candidate = _first_status(nested_data, f"{json_like_key}<json>.data")
+                candidate = _first_status(nested_data, f"{json_like_key}<json>.data", log_matches=True)
                 if candidate:
                     return candidate
                 
