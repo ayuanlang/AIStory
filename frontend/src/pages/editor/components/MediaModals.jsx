@@ -1651,12 +1651,22 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                                 const selectedItems = contextAllowMultiSelect
                                     ? filteredAssets.filter((asset) => selectedMulti.has(String(asset.id)))
                                     : [];
-                                if (contextAllowMultiSelect && selectedItems.length > 0) {
+                                const orderedSelectedItems = (() => {
+                                    if (!contextAllowMultiSelect || selectedItems.length <= 1) return selectedItems;
+                                    const allVideo = selectedItems.every((asset) => isAssetVideoLike(asset));
+                                    if (!allVideo) return selectedItems;
+                                    return [...selectedItems].sort((left, right) => {
+                                        const leftName = String(resolveAssetDisplayName(left) || '').trim();
+                                        const rightName = String(resolveAssetDisplayName(right) || '').trim();
+                                        return leftName.localeCompare(rightName, undefined, { numeric: true, sensitivity: 'base' });
+                                    });
+                                })();
+                                if (contextAllowMultiSelect && orderedSelectedItems.length > 0) {
                                     if (projectId) {
-                                        await Promise.all(selectedItems.map((asset) => handleMarkAssetCurrent(asset).catch(() => null)));
+                                        await Promise.all(orderedSelectedItems.map((asset) => handleMarkAssetCurrent(asset).catch(() => null)));
                                     }
-                                    const first = selectedItems[0];
-                                    onSelect(first?.url, first?.type, selectedItems);
+                                    const first = orderedSelectedItems[0];
+                                    onSelect(first?.url, first?.type, orderedSelectedItems);
                                     return;
                                 }
                                 if (!selectedAsset) return;
