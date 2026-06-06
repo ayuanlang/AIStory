@@ -433,6 +433,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [entityRefAudioPrompt, setEntityRefAudioPrompt] = useState('');
     const [isGeneratingEntityRefAudio, setIsGeneratingEntityRefAudio] = useState(false);
     const [entityRefAudioPromptByEntity, setEntityRefAudioPromptByEntity] = useState({});
+    const [entityRefAudioProfileByEntity, setEntityRefAudioProfileByEntity] = useState({});
+    const [entityRefAudioTone, setEntityRefAudioTone] = useState('');
+    const [entityRefAudioPace, setEntityRefAudioPace] = useState('');
+    const [entityRefAudioEmotion, setEntityRefAudioEmotion] = useState('');
     const [entityRefAudioFunctionByTab, setEntityRefAudioFunctionByTab] = useState({
         video: 'generate_entity_reference_audio_video',
         audio: 'generate_entity_reference_audio_audio',
@@ -440,20 +444,74 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [advancedInstruction, setAdvancedInstruction] = useState('');
     const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
 
-    const buildDefaultEntityRefAudioPrompt = useCallback((entityGender) => {
-        const normalizedGender = String(entityGender || '').trim().toLowerCase();
+    const ENTITY_REF_AUDIO_TONE_OPTIONS = useMemo(() => ([
+        { value: '中高音（清晰明亮）', label: t('中高音（清晰明亮）', 'Mid-high (clear and bright)') },
+        { value: '中音（自然平衡）', label: t('中音（自然平衡）', 'Mid (natural and balanced)') },
+        { value: '中低音（沉稳克制）', label: t('中低音（沉稳克制）', 'Mid-low (calm and restrained)') },
+    ]), [t]);
+
+    const ENTITY_REF_AUDIO_PACE_OPTIONS = useMemo(() => ([
+        { value: '慢速（0.85x）', label: t('慢速（0.85x）', 'Slow (0.85x)') },
+        { value: '中速偏慢（0.9x）', label: t('中速偏慢（0.9x）', 'Medium-slow (0.9x)') },
+        { value: '中速（1.0x）', label: t('中速（1.0x）', 'Medium (1.0x)') },
+    ]), [t]);
+
+    const ENTITY_REF_AUDIO_EMOTION_OPTIONS = useMemo(() => ([
+        { value: '克制、安抚、轻微紧张', label: t('克制、安抚、轻微紧张', 'Restrained, reassuring, slightly tense') },
+        { value: '温柔、坚定、可信赖', label: t('温柔、坚定、可信赖', 'Warm, steady, trustworthy') },
+        { value: '冷静、果断、低压感', label: t('冷静、果断、低压感', 'Calm, decisive, low-pressure') },
+    ]), [t]);
+
+    const resolveDefaultEntityRefAudioProfile = useCallback((entity) => {
+        const normalizedGender = String(entity?.gender || '').trim().toLowerCase();
         const isMale = ['male', 'man', 'boy', 'masculine', 'm', '男', '男性'].some((token) => normalizedGender.includes(token));
-        if (isMale) {
-            return t(
-                '请用沉稳而清晰的男声念出：夜色渐深，他轻轻推开门，低声说“别怕，我在这里”。',
-                'Read in a calm and clear male voice: As night falls, he gently pushes the door open and whispers, "Do not be afraid, I am here."'
-            );
-        }
+        return {
+            tone: isMale ? '中低音（沉稳克制）' : '中高音（清晰明亮）',
+            pace: '中速偏慢（0.9x）',
+            emotion: '克制、安抚、轻微紧张',
+        };
+    }, []);
+
+    const buildDefaultEntityRefAudioPrompt = useCallback((entity, profileOverrides = null) => {
+        const normalizedGender = String(entity?.gender || '').trim().toLowerCase();
+        const isMale = ['male', 'man', 'boy', 'masculine', 'm', '男', '男性'].some((token) => normalizedGender.includes(token));
+        const genderCn = isMale ? '男' : '女';
+        const genderEn = isMale ? 'male' : 'female';
+
+        const defaultProfile = resolveDefaultEntityRefAudioProfile(entity);
+        const activeProfile = {
+            tone: String(profileOverrides?.tone || '').trim() || defaultProfile.tone,
+            pace: String(profileOverrides?.pace || '').trim() || defaultProfile.pace,
+            emotion: String(profileOverrides?.emotion || '').trim() || defaultProfile.emotion,
+        };
+
+        const ageRaw = String(entity?.age || entity?.age_group || entity?.ageRange || '').trim();
+        const ageCn = ageRaw || (isMale ? '28岁' : '25岁');
+        const ageEn = ageRaw || (isMale ? '28 years old' : '25 years old');
+
+        const identityRaw = String(entity?.role || entity?.archetype || entity?.type || '').trim();
+        const identityCn = identityRaw || (isMale ? '守夜人' : '巡夜人');
+        const identityEn = identityRaw || (isMale ? 'night watchman' : 'night patrol officer');
+
+        const pitchCn = activeProfile.tone;
+        const pitchEn = activeProfile.tone;
+        const paceCn = activeProfile.pace;
+        const paceEn = activeProfile.pace;
+        const emotionCn = activeProfile.emotion;
+        const emotionEn = activeProfile.emotion;
+        const sampleTextCn = isMale
+            ? '夜色渐深，他把门向里关上，压低声音说：“别怕，我在这里。”'
+            : '夜色渐深，她把门向里关上，压低声音说：“别怕，我在这里。”';
+        const sampleTextEn = isMale
+            ? 'As night falls, he closes the door inward and says in a low voice: "Do not be afraid, I am here."'
+            : 'As night falls, she closes the door inward and says in a low voice: "Do not be afraid, I am here."';
+
         return t(
-            '请用温柔而清晰的女声念出：夜色渐深，她轻轻推开门，低声说“别怕，我在这里”。',
-            'Read in a warm and clear female voice: As night falls, she gently pushes the door open and whispers, "Do not be afraid, I am here."'
+            `【配音设定】\n- 性别：${genderCn}\n- 年龄：${ageCn}\n- 身份：${identityCn}\n- 音调：${pitchCn}\n- 语速：中速偏慢（约0.9x）\n- 情绪：克制、安抚、带轻微紧张\n- 断句与重音：在“别怕”和“我在这里”前各停顿0.2秒并轻微重读\n- 发音：咬字清晰，口气自然，不夸张\n\n【示例台词】\n${sampleTextCn}`,
+            `【配音设定】\n- 性别：${genderCn}\n- 年龄：${ageCn}\n- 身份：${identityCn}\n- 音调：${pitchCn}\n- 语速：${paceCn}\n- 情绪：${emotionCn}\n- 断句与重音：在“别怕”和“我在这里”前各停顿0.2秒并轻微重读\n- 发音：咬字清晰，口气自然，不夸张\n\n【示例台词】\n${sampleTextCn}`,
+            `[Voice Direction]\n- Gender: ${genderEn}\n- Age: ${ageEn}\n- Identity: ${identityEn}\n- Pitch: ${pitchEn}\n- Pace: ${paceEn}\n- Emotion: ${emotionEn}\n- Pauses and emphasis: pause 0.2s before "Do not be afraid" and "I am here", with gentle emphasis\n- Pronunciation: clear articulation, natural delivery, no exaggeration\n\n[Sample Line]\n${sampleTextEn}`
         );
-    }, [t]);
+    }, [resolveDefaultEntityRefAudioProfile, t]);
 
     const ENTITY_REF_AUDIO_FUNCTION_OPTIONS = useMemo(() => ([
         { value: 'generate_entity_reference_audio_video', label: t('视频页路由', 'Video-tab Route') },
@@ -469,6 +527,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const entityRefAudioFunctionStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.entityRefAudioFunctionByTab.${pid}` : 'aistory.entityRefAudioFunctionByTab.global';
+    }, [projectId]);
+
+    const entityRefAudioProfileStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.entityRefAudioProfileByEntity.${pid}` : 'aistory.entityRefAudioProfileByEntity.global';
     }, [projectId]);
 
     useEffect(() => {
@@ -494,6 +557,30 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
         } catch {}
     }, [entityRefAudioPromptByEntity, entityRefAudioPromptStorageKey]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(entityRefAudioProfileStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setEntityRefAudioProfileByEntity(parsed);
+            }
+        } catch {}
+    }, [entityRefAudioProfileStorageKey]);
+
+    useEffect(() => {
+        try {
+            const cleaned = Object.fromEntries(
+                Object.entries(entityRefAudioProfileByEntity || {}).filter(([k, v]) => String(k || '').trim() && v && typeof v === 'object')
+            );
+            if (Object.keys(cleaned).length === 0) {
+                localStorage.removeItem(entityRefAudioProfileStorageKey);
+            } else {
+                localStorage.setItem(entityRefAudioProfileStorageKey, JSON.stringify(cleaned));
+            }
+        } catch {}
+    }, [entityRefAudioProfileByEntity, entityRefAudioProfileStorageKey]);
 
     useEffect(() => {
         try {
@@ -523,11 +610,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const currentEntityKey = String(viewingEntity?.id || '').trim();
         if (!currentEntityKey) {
             setEntityRefAudioPrompt('');
+            setEntityRefAudioTone('');
+            setEntityRefAudioPace('');
+            setEntityRefAudioEmotion('');
             return;
         }
+        const defaultProfile = resolveDefaultEntityRefAudioProfile(viewingEntity);
+        const savedProfile = entityRefAudioProfileByEntity?.[currentEntityKey] || {};
+        const activeProfile = {
+            tone: String(savedProfile?.tone || '').trim() || defaultProfile.tone,
+            pace: String(savedProfile?.pace || '').trim() || defaultProfile.pace,
+            emotion: String(savedProfile?.emotion || '').trim() || defaultProfile.emotion,
+        };
+        setEntityRefAudioTone(activeProfile.tone);
+        setEntityRefAudioPace(activeProfile.pace);
+        setEntityRefAudioEmotion(activeProfile.emotion);
         const saved = String(entityRefAudioPromptByEntity?.[currentEntityKey] || '').trim();
-        setEntityRefAudioPrompt(saved || buildDefaultEntityRefAudioPrompt(viewingEntity?.gender));
-    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioPromptByEntity, viewingEntity?.gender, viewingEntity?.id]);
+        setEntityRefAudioPrompt(saved || buildDefaultEntityRefAudioPrompt(viewingEntity, activeProfile));
+    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioProfileByEntity, entityRefAudioPromptByEntity, resolveDefaultEntityRefAudioProfile, viewingEntity]);
     
     // Analyzing state mapping (entityId -> timestamp)
     const subjectAnalyzingStorageKey = useMemo(() => {
@@ -3228,6 +3328,39 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setEntityMediaRefUploading(false);
         }
     }, [ENTITY_MEDIA_REF_CONFIG, handleFieldUpdate, t]);
+
+    const persistEntityRefAudioPrompt = useCallback((nextPrompt) => {
+        const stablePrompt = String(nextPrompt || '');
+        setEntityRefAudioPrompt(stablePrompt);
+        const currentEntityKey = String(viewingEntity?.id || '').trim();
+        if (!currentEntityKey) return;
+        setEntityRefAudioPromptByEntity((prev) => ({ ...prev, [currentEntityKey]: stablePrompt }));
+    }, [viewingEntity?.id]);
+
+    const persistEntityRefAudioProfile = useCallback((nextProfile) => {
+        const currentEntityKey = String(viewingEntity?.id || '').trim();
+        if (!currentEntityKey) return;
+        setEntityRefAudioProfileByEntity((prev) => ({
+            ...prev,
+            [currentEntityKey]: {
+                tone: String(nextProfile?.tone || '').trim(),
+                pace: String(nextProfile?.pace || '').trim(),
+                emotion: String(nextProfile?.emotion || '').trim(),
+            },
+        }));
+    }, [viewingEntity?.id]);
+
+    const handleRegenerateEntityRefAudioPrompt = useCallback(() => {
+        const nextProfile = {
+            tone: String(entityRefAudioTone || '').trim(),
+            pace: String(entityRefAudioPace || '').trim(),
+            emotion: String(entityRefAudioEmotion || '').trim(),
+        };
+        persistEntityRefAudioProfile(nextProfile);
+        const nextPrompt = buildDefaultEntityRefAudioPrompt(viewingEntity, nextProfile);
+        persistEntityRefAudioPrompt(nextPrompt);
+        showSubjectNotification(t('已按当前配音要素重建参考文案。', 'Reference prompt rebuilt from current dubbing parameters.'), 'success');
+    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioEmotion, entityRefAudioPace, entityRefAudioTone, persistEntityRefAudioProfile, persistEntityRefAudioPrompt, showSubjectNotification, t, viewingEntity]);
 
     const extractGeneratedAudioUrl = useCallback((payload) => {
         const visited = new Set();
@@ -6251,17 +6384,71 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             </div>
                                                             <textarea
                                                                 value={entityRefAudioPrompt}
-                                                                onChange={(e) => {
-                                                                    const nextPrompt = e.target.value;
-                                                                    setEntityRefAudioPrompt(nextPrompt);
-                                                                    const currentEntityKey = String(viewingEntity?.id || '').trim();
-                                                                    if (!currentEntityKey) return;
-                                                                    setEntityRefAudioPromptByEntity((prev) => ({ ...prev, [currentEntityKey]: nextPrompt }));
-                                                                }}
+                                                                onChange={(e) => persistEntityRefAudioPrompt(e.target.value)}
                                                                 placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
                                                                 className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
                                                             />
-                                                            <div className="flex justify-end">
+                                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                                <select
+                                                                    value={entityRefAudioTone}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioTone(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: next,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_TONE_OPTIONS.map((opt) => (
+                                                                        <option key={`video-tone-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <select
+                                                                    value={entityRefAudioPace}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioPace(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: next,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_PACE_OPTIONS.map((opt) => (
+                                                                        <option key={`video-pace-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <select
+                                                                    value={entityRefAudioEmotion}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioEmotion(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: next,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_EMOTION_OPTIONS.map((opt) => (
+                                                                        <option key={`video-emotion-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                            <div className="flex justify-end gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRegenerateEntityRefAudioPrompt()}
+                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
+                                                                >
+                                                                    {t('按参数重建文案', 'Rebuild Prompt by Params')}
+                                                                </button>
                                                                 <button
                                                                     type="button"
                                                                     disabled={isGeneratingEntityRefAudio}
@@ -6380,17 +6567,71 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             </div>
                                                             <textarea
                                                                 value={entityRefAudioPrompt}
-                                                                onChange={(e) => {
-                                                                    const nextPrompt = e.target.value;
-                                                                    setEntityRefAudioPrompt(nextPrompt);
-                                                                    const currentEntityKey = String(viewingEntity?.id || '').trim();
-                                                                    if (!currentEntityKey) return;
-                                                                    setEntityRefAudioPromptByEntity((prev) => ({ ...prev, [currentEntityKey]: nextPrompt }));
-                                                                }}
+                                                                onChange={(e) => persistEntityRefAudioPrompt(e.target.value)}
                                                                 placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
                                                                 className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
                                                             />
-                                                            <div className="flex justify-end">
+                                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                                <select
+                                                                    value={entityRefAudioTone}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioTone(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: next,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_TONE_OPTIONS.map((opt) => (
+                                                                        <option key={`audio-tone-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <select
+                                                                    value={entityRefAudioPace}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioPace(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: next,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_PACE_OPTIONS.map((opt) => (
+                                                                        <option key={`audio-pace-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <select
+                                                                    value={entityRefAudioEmotion}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim();
+                                                                        setEntityRefAudioEmotion(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: next,
+                                                                        });
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_EMOTION_OPTIONS.map((opt) => (
+                                                                        <option key={`audio-emotion-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+                                                            <div className="flex justify-end gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRegenerateEntityRefAudioPrompt()}
+                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
+                                                                >
+                                                                    {t('按参数重建文案', 'Rebuild Prompt by Params')}
+                                                                </button>
                                                                 <button
                                                                     type="button"
                                                                     disabled={isGeneratingEntityRefAudio}

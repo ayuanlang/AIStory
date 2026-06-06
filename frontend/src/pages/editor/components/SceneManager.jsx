@@ -318,9 +318,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     }
     
     // --- GLOBAL INJECTION FOR ALL MODES (E.g. Prev Shot Video, Global Context) ---
-    if (additionalAutoRefs && additionalAutoRefs.length > 0) {
+    // Respect manual video ref overrides and explicit deletions.
+    const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
+    const shouldInjectAdditionalAutoRefs = !(isVideoRefManager && isVideoManualOverride);
+    if (shouldInjectAdditionalAutoRefs && additionalAutoRefs && additionalAutoRefs.length > 0) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
             const ref = additionalAutoRefs[i];
+            if (!ref || deletedRefSet.has(ref)) continue;
             if (!activeRefs.includes(ref)) {
                 activeRefs.unshift(ref);
             }
