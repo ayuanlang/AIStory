@@ -3656,6 +3656,8 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
 
     matched_jobs = _find_video_jobs_by_provider_callback_ticket(stable_ticket)
     if not matched_jobs:
+        if _finalize_video_shot_callback_without_job(stable_ticket):
+            return
         if _should_log_callback_no_match("video", stable_ticket):
             logger.info("[VideoJob] provider callback received with no matching video job | callback_ticket=%s", stable_ticket)
         return
@@ -3674,6 +3676,90 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         if not callback_url:
             continue
         await _dispatch_generation_callback("video", callback_url, updated_job)
+
+
+def _finalize_video_shot_callback_without_job(callback_ticket: str) -> bool:
+    """Finalize callback persistence for synchronous shot-level video tickets (video-shot-<shot_id>)."""
+    stable_ticket = str(callback_ticket or "").strip()
+    match = re.fullmatch(r"video-shot-(\d+)", stable_ticket)
+    if not match:
+        return False
+
+    shot_id = int(match.group(1))
+    callback_payload = _get_generation_callback_payload(stable_ticket)
+    if not callback_payload:
+        return False
+
+    result = _build_result_from_provider_callback(callback_payload)
+    result_url = _extract_job_result_url(result or {})
+    callback_status_raw = str(callback_payload.get("status") or "").strip() or _extract_callback_status(callback_payload)
+    normalized_status = _normalize_generation_status(callback_status_raw)
+    if not normalized_status and result_url:
+        normalized_status = "succeeded"
+
+    if normalized_status != "succeeded" or not result_url:
+        return False
+
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == int(shot_id)).first()
+        if not shot:
+            logger.warning("[VideoShotCallback] shot not found | callback_ticket=%s shot_id=%s", stable_ticket, shot_id)
+            return False
+
+        project_id = _asset_optional_int(getattr(shot, "project_id", None))
+        episode_id = _asset_optional_int(getattr(shot, "episode_id", None))
+        if not episode_id and getattr(shot, "scene_id", None):
+            scene = db.query(Scene).filter(Scene.id == int(shot.scene_id)).first()
+            if scene:
+                episode_id = _asset_optional_int(getattr(scene, "episode_id", None))
+        if not project_id and episode_id:
+            episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+            if episode:
+                project_id = _asset_optional_int(getattr(episode, "project_id", None))
+
+        user_id = 0
+        if project_id:
+            project_row = db.query(Project).filter(Project.id == int(project_id)).first()
+            if project_row:
+                user_id = int(getattr(project_row, "owner_id", 0) or 0)
+
+        if user_id <= 0:
+            logger.warning(
+                "[VideoShotCallback] project owner missing, cannot finalize asset registration | callback_ticket=%s shot_id=%s project_id=%s",
+                stable_ticket,
+                shot_id,
+                project_id,
+            )
+            return False
+
+        pseudo_job = {
+            "user_id": int(user_id),
+            "shot_id": int(shot_id),
+            "project_id": int(project_id) if project_id else None,
+            "episode_id": int(episode_id) if episode_id else None,
+            "shot_number": getattr(shot, "shot_id", None),
+            "shot_name": getattr(shot, "shot_name", None),
+            "asset_type": "video",
+            "provider_callback_ticket": stable_ticket,
+        }
+
+        persisted = _finalize_video_job_result_persistence(stable_ticket, pseudo_job, result)
+        persisted_url = _extract_job_result_url(persisted or {})
+        if persisted_url:
+            logger.info(
+                "[VideoShotCallback] finalized without job record | callback_ticket=%s shot_id=%s persisted_url=%s",
+                stable_ticket,
+                shot_id,
+                persisted_url,
+            )
+            return True
+        return False
+    except Exception as exc:
+        logger.warning("[VideoShotCallback] finalize failed | callback_ticket=%s shot_id=%s err=%s", stable_ticket, shot_id, exc)
+        return False
+    finally:
+        db.close()
 
 
 def _apply_no_store_headers(response: Response) -> None:
