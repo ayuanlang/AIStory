@@ -1466,6 +1466,33 @@ const Editor = ({
         if (effectiveImportType === 'auto' || effectiveImportType === 'json') {
             importDiagnostics.subjectIndexTableRows = getSubjectIndexTableRowCount(text);
 
+            const normalizeImportTargetType = (value) => {
+                const key = String(value || '').trim().toLowerCase();
+                if (!key) return '';
+                if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) return 'characters';
+                if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) return 'props';
+                if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(key)) return 'environments';
+                if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) return key === 'covers' ? 'covers' : 'posters';
+                return key;
+            };
+            const targetTypeFilters = Array.isArray(importOptions?.targetEntityTypes)
+                ? Array.from(new Set(importOptions.targetEntityTypes.map(normalizeImportTargetType).filter(Boolean)))
+                : null;
+            const filterSubjectsByTargetTypes = (payload) => {
+                if (!payload || typeof payload !== 'object' || !targetTypeFilters || targetTypeFilters.length === 0) {
+                    return payload;
+                }
+                const filtered = { characters: [], props: [], environments: [], posters: [], covers: [] };
+                if (targetTypeFilters.includes('characters')) filtered.characters = Array.isArray(payload.characters) ? payload.characters : [];
+                if (targetTypeFilters.includes('props')) filtered.props = Array.isArray(payload.props) ? payload.props : [];
+                if (targetTypeFilters.includes('environments')) filtered.environments = Array.isArray(payload.environments) ? payload.environments : [];
+                if (targetTypeFilters.includes('posters') || targetTypeFilters.includes('covers')) {
+                    filtered.posters = Array.isArray(payload.posters) ? payload.posters : [];
+                    filtered.covers = Array.isArray(payload.covers) ? payload.covers : [];
+                }
+                return filtered;
+            };
+
             const globalInfoPayload = getGlobalInfoPayloadFromJsonText(text);
             if (globalInfoPayload?.global_info) {
                 jsonBlocks.push(globalInfoPayload);
@@ -1473,7 +1500,7 @@ const Editor = ({
 
             // Prefer backend-provided subjects_json (clean, pre-parsed) over
             // re-parsing raw LLM markdown with heuristic regex extractors.
-            const backendSubjectsJson = importOptions?.subjectsJson || null;
+            const backendSubjectsJson = filterSubjectsByTargetTypes(importOptions?.subjectsJson || null);
             const hasBackendSubjects = backendSubjectsJson
                 && typeof backendSubjectsJson === 'object'
                 && (
@@ -1491,13 +1518,14 @@ const Editor = ({
             } else {
                 const mergedEntities = getMergedEntitiesPayloadFromText(text);
                 if (mergedEntities?.payload) {
-                    jsonBlocks.push(mergedEntities.payload);
+                    const filteredMergedPayload = filterSubjectsByTargetTypes(mergedEntities.payload);
+                    jsonBlocks.push(filteredMergedPayload);
                     importDiagnostics.entitiesPayloadSource = mergedEntities.source || 'merged';
                     if (String(importDiagnostics.entitiesPayloadSource).includes('subject_index_fallback')) {
                         importDiagnostics.subjectIndexExtracted =
-                            (Array.isArray(mergedEntities.payload.characters) ? mergedEntities.payload.characters.length : 0)
-                            + (Array.isArray(mergedEntities.payload.props) ? mergedEntities.payload.props.length : 0)
-                            + (Array.isArray(mergedEntities.payload.environments) ? mergedEntities.payload.environments.length : 0);
+                            (Array.isArray(filteredMergedPayload.characters) ? filteredMergedPayload.characters.length : 0)
+                            + (Array.isArray(filteredMergedPayload.props) ? filteredMergedPayload.props.length : 0)
+                            + (Array.isArray(filteredMergedPayload.environments) ? filteredMergedPayload.environments.length : 0);
                         addLog('Entities payload merged with Subject Index fallback for missing types.', 'warning');
                     }
                 }
@@ -1578,14 +1606,23 @@ const Editor = ({
 
         let changesMade = false;
         let reloadRequired = false;
+        const canonicalSubjectType = (value) => {
+            const lc = String(value || '').trim().toLowerCase();
+            if (!lc) return '';
+            if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(lc)) return 'character';
+            if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(lc)) return 'prop';
+            if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(lc)) return 'environment';
+            if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(lc)) return 'poster';
+            return lc;
+        };
         const existingEntities = (id
             ? await fetchEntities(id).catch(() => [])
             : []);
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
-        const normalizeEntityKey = (type, name) => normalizeEntityToken(name);
+        const normalizeEntityKey = (type, name) => `${canonicalSubjectType(type) || 'unknown'}:${normalizeEntityToken(name)}`;
         const existingEntityMap = new Map();
         for (const e of (existingEntities || [])) {
-            const t = String(e?.type || '').trim().toLowerCase();
+            const t = canonicalSubjectType(e?.type);
             if (!t) continue;
             const name = String(e?.name || '').trim();
             const nameEn = String(e?.name_en || '').trim();
@@ -2625,10 +2662,9 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                         activeEpisodeId ? fetchScenes(activeEpisodeId).catch(() => []) : Promise.resolve([]),
                     ]);
                     const dbEntities = Array.isArray(dbEntitiesRaw) ? dbEntitiesRaw : [];
-                    const normalizeType = (value) => String(value || '').trim().toLowerCase();
-                    const dbCharacterCount = dbEntities.filter((item) => normalizeType(item?.type) === 'character').length;
-                    const dbPropCount = dbEntities.filter((item) => normalizeType(item?.type) === 'prop').length;
-                    const dbEnvironmentCount = dbEntities.filter((item) => normalizeType(item?.type) === 'environment').length;
+                    const dbCharacterCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'character').length;
+                    const dbPropCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'prop').length;
+                    const dbEnvironmentCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'environment').length;
                     dbPersistedCounts = {
                         scenes: {
                             currentEpisode: Array.isArray(dbScenesRaw) ? dbScenesRaw.length : 0,
@@ -2655,10 +2691,10 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     const dbInsertedEntities = dbEntities.filter((item) => createdEntityIdSet.has(String(item?.id)));
                     const dbInsertedScenes = (Array.isArray(dbScenesRaw) ? dbScenesRaw : []).filter((item) => createdSceneIdSet.has(String(item?.id)));
 
-                    const dbInsertedCharacterCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'character').length;
-                    const dbInsertedPropCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'prop').length;
-                    const dbInsertedEnvironmentCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'environment').length;
-                    const dbInsertedPosterCount = dbInsertedEntities.filter((item) => normalizeType(item?.type) === 'poster').length;
+                    const dbInsertedCharacterCount = dbInsertedEntities.filter((item) => canonicalSubjectType(item?.type) === 'character').length;
+                    const dbInsertedPropCount = dbInsertedEntities.filter((item) => canonicalSubjectType(item?.type) === 'prop').length;
+                    const dbInsertedEnvironmentCount = dbInsertedEntities.filter((item) => canonicalSubjectType(item?.type) === 'environment').length;
+                    const dbInsertedPosterCount = dbInsertedEntities.filter((item) => canonicalSubjectType(item?.type) === 'poster').length;
 
                     dbRunInsertedCounts = {
                         scenes: {
@@ -2677,7 +2713,11 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                         'info'
                     );
                     addLog(
-                        `[DB Verify This Run] created_scenes=${dbRunInsertedCounts.scenes.created}, created_entities=${dbRunInsertedCounts.entities.total} (character=${dbRunInsertedCounts.entities.character}, prop=${dbRunInsertedCounts.entities.prop}, environment=${dbRunInsertedCounts.entities.environment}, poster=${dbRunInsertedCounts.entities.poster})`,
+                        `[DB Verify This Run] created_scenes=${dbRunInsertedCounts.scenes.created}, created_entities(new_only)=${dbRunInsertedCounts.entities.total} (character=${dbRunInsertedCounts.entities.character}, prop=${dbRunInsertedCounts.entities.prop}, environment=${dbRunInsertedCounts.entities.environment}, poster=${dbRunInsertedCounts.entities.poster})`,
+                        'info'
+                    );
+                    addLog(
+                        `[DB Verify This Run] reused_entities(skipped_existing)=${Array.isArray(skippedSubjectItems) ? skippedSubjectItems.length : 0}`,
                         'info'
                     );
                 }

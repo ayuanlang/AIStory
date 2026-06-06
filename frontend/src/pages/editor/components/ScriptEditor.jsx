@@ -230,6 +230,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 /^\s*\{\s*"project_visual_backfill"\s*:/im,
                 /^\s*(?:(?:##|###)\s*(?:-1\)|Scenes?|场景列表))/im,
                 /^\s*(?:###?\s*(?:-1\)\s*类型研判|Scenes|场景列表))/im,
+                /^\s*(?:###?\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|Scene\s*Arrangement|场景分析结果|场景表)\b/im,
                 /^###?\s*(?:(?:第二|第一)部分)?\s*(?:Adapted\s*Script|参考改编|修改(?:后?)的剧本)/im
             ];
 
@@ -321,6 +322,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             hasStructuredSubjectIndex,
         };
     }, []);
+
+    const extractPureSubjectIndexText = useCallback((rawText) => {
+        const source = String(rawText || '').trim();
+        if (!source) return '';
+
+        const sections = extractAnalysisSections(source);
+        if (sections?.hasStructuredSubjectIndex && String(sections.subjectIndexText || '').trim()) {
+            return String(sections.subjectIndexText || '').trim();
+        }
+
+        const fallbackSceneStart = source.search(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|Scene\s*Arrangement|场景分析结果|场景表|场景列表|###?\s*-1\)\s*类型研判)\b/i);
+        if (fallbackSceneStart > 0) {
+            return source.slice(0, fallbackSceneStart).trim();
+        }
+
+        return source;
+    }, [extractAnalysisSections]);
 
     const isSplitStage1Prompt = useCallback((promptText) => {
         const text = String(promptText || '');
@@ -482,7 +500,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const extractedSections = extractAnalysisSections(authoritativeSubjectText);
             const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
             const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-            const extractedText = persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '');
+            const extractedText = extractPureSubjectIndexText(
+                persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '')
+            );
             const extractedAdaptationText = persistedAdaptationText || (
                 /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)
                     ? String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim()
@@ -496,7 +516,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAdaptationText(extractedAdaptationText);
             }
         }
-    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id, adaptationText, extractAnalysisSections, subjectIndexText]);
+    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id, adaptationText, extractAnalysisSections, extractPureSubjectIndexText, subjectIndexText]);
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
@@ -3232,7 +3252,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const analysisSections = extractAnalysisSections(resolvedAnalysisRawText);
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-        const rawStage2_1Text = explicitSubjectIndex || persistedSubjectIndex || '';
+        const rawStage2_1Text = extractPureSubjectIndexText(explicitSubjectIndex || persistedSubjectIndex || '');
 
         let parsedSubjectIndexText = rawStage2_1Text;
         let parsedSceneArrangementText = '';
@@ -3248,11 +3268,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        const stage2SubjectIndexText = String(
+        const stage2SubjectIndexText = extractPureSubjectIndexText(String(
             parsedSubjectIndexText
             || (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
             || ''
-        ).trim();
+        ).trim());
 
         let stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
         if (parsedSceneArrangementText) {
@@ -3387,7 +3407,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             },
         };
-    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, normalizeLlmMarkdownTable, project?.global_info, rawContent]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, normalizeLlmMarkdownTable, project?.global_info, rawContent]);
 
     const parseStageOutputsObject = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -3849,17 +3869,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? String(extractStage1AdaptedScriptBody(nextContent) || '').trim()
                     : '';
 
-                updatePayload.ai_scene_analysis_subject_index = subjectIndexValue;
+                const normalizedSubjectIndexValue = extractPureSubjectIndexText(subjectIndexValue);
+                updatePayload.ai_scene_analysis_subject_index = normalizedSubjectIndexValue;
                 updatePayload.ai_scene_analysis_adaptation = adaptationValue;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: nextContent,
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     stage1RawText: options?.stage1RawText || '',
                     stage2RawText: options?.stage2RawText || '',
-                    stage2_1Text: options?.stage2_1Text !== undefined ? options.stage2_1Text : (latestStage2_1TextRef.current || subjectIndexValue),
+                    stage2_1Text: options?.stage2_1Text !== undefined ? extractPureSubjectIndexText(options.stage2_1Text) : extractPureSubjectIndexText(latestStage2_1TextRef.current || normalizedSubjectIndexValue),
                 }), null, 2);
 
-                onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${subjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
+                onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
             } else if (resultField === 'ai_entity_design_result') {
                 latestAssetRawTextRef.current = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
@@ -3870,8 +3891,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
             } else if (resultField === 'ai_scene_analysis_subject_index') {
-                latestStage2_1TextRef.current = nextContent;
-                updatePayload[resultField] = nextContent;
+                const normalizedSubjectIndexValue = extractPureSubjectIndexText(nextContent);
+                latestStage2_1TextRef.current = normalizedSubjectIndexValue;
+                updatePayload[resultField] = normalizedSubjectIndexValue;
+                updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
+                    analysisRawText: latestAnalysisRawTextRef.current || activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
+                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    stage2_1Text: normalizedSubjectIndexValue,
+                }), null, 2);
+
+                onLog?.(`[Analysis Writeback] field=ai_stage_outputs source=${logSource} bundle_len=${String(updatePayload.ai_stage_outputs || '').length}`, 'info');
             } else {
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
             }
@@ -4175,7 +4204,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const authoritativeSubjectText = explicitText || llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || '';
                 const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
                 const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-                let subjectIndexText = options.explicitSubjectIndexText || persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : "");
+                let subjectIndexText = extractPureSubjectIndexText(options.explicitSubjectIndexText || persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? (extractedSections.subjectIndexText || "") : ""));
                 let adaptationBodyText = String(adaptationText || activeEpisode?.ai_scene_analysis_adaptation || '').trim();
                 if (!adaptationBodyText && /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)) {
                     adaptationBodyText = String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim();
@@ -4193,9 +4222,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Retry may receive a manually edited Subject Index block without the original Stage 2 wrapper.
             if (!subjectIndexText.trim() && explicitText) {
                 const explicitSections = extractAnalysisSections(explicitText);
-                subjectIndexText = explicitSections?.hasStructuredSubjectIndex
+                subjectIndexText = extractPureSubjectIndexText(explicitSections?.hasStructuredSubjectIndex
                     ? String(explicitSections.subjectIndexText || '').trim()
-                    : '';
+                    : '');
             }
         } else if (extractedSections.hasStructuredSubjectIndex) {
             onLog?.(`[Stage 2 Asset Index] Extracted asset index (length: ${subjectIndexText.length})`);
@@ -4205,11 +4234,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Persist authoritative Stage 2 outputs so Stage 3 uses the optimized script and asset index as inputs.
-        if (subjectIndexText.trim() || adaptationBodyText.trim()) {
-              if (subjectIndexText.trim()) setSubjectIndexText(subjectIndexText);
+          if (subjectIndexText.trim() || adaptationBodyText.trim()) {
+              if (subjectIndexText.trim()) setSubjectIndexText(extractPureSubjectIndexText(subjectIndexText));
               if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
               const updatePayload = {};
-              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = subjectIndexText.trim();
+              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = extractPureSubjectIndexText(subjectIndexText).trim();
               if (adaptationBodyText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationBodyText.trim();
               
               try {
@@ -4245,7 +4274,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
 
-        let targetFilters = options.targetEntityTypes;
+        const normalizeTargetEntityTypeKey = (value) => {
+            const key = String(value || '').trim().toLowerCase();
+            if (!key) return '';
+            if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) return 'characters';
+            if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) return 'props';
+            if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(key)) return 'environments';
+            if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) return key === 'covers' ? 'covers' : 'posters';
+            return key;
+        };
+
+        let targetFilters = Array.isArray(options.targetEntityTypes)
+            ? Array.from(new Set(options.targetEntityTypes.map(normalizeTargetEntityTypeKey).filter(Boolean)))
+            : null;
 
 
         if (targetFilters && (targetFilters.includes('posters') || targetFilters.includes('covers')) && !targetFilters.includes('environments')) {
@@ -4299,12 +4340,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }))
             );
 
-            let finalSubjectIndexText = subjectIndexText;
-            // Hotfix: Ensure any trailing Scenes markdown that accidentally leaked into the Subject Index gets cleanly removed
-            const scenesOftMatch = finalSubjectIndexText.match(/(?:^|\n)\s*(?:###?\s*(?:-1\)\s*类型研判|Scenes|场景列表))/i);
-            if (scenesOftMatch && scenesOftMatch.index >= 0) {
-                finalSubjectIndexText = finalSubjectIndexText.slice(0, scenesOftMatch.index).trim();
-            }
+            let finalSubjectIndexText = extractPureSubjectIndexText(subjectIndexText);
             
             const designProjectContextSection = buildStage1ProjectContextSection()
                 .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
@@ -4343,7 +4379,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
             }
 
-            onLog?.('[Stage 3 Asset Design] Launching 3 parallel asset-design LLM calls...');
+            onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
 
             const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
                 || Number(localStorage.getItem('func_api_script_analysis') || 0)
@@ -4527,14 +4563,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
                     // Automatically import the generated subjects
-                        const sceneImportReport = await importSubjectsJsonWithDedupe(canonicalAssetDesignText, {
+                        const importSubjectsPayload = (() => {
+                            if (!Array.isArray(targetFilters) || targetFilters.length === 0) {
+                                return mergedBackendSubjectsJson;
+                            }
+                            const picked = { characters: [], environments: [], props: [], posters: [], covers: [] };
+                            if (targetFilters.includes('characters')) picked.characters = Array.isArray(mergedBackendSubjectsJson?.characters) ? mergedBackendSubjectsJson.characters : [];
+                            if (targetFilters.includes('environments')) picked.environments = Array.isArray(mergedBackendSubjectsJson?.environments) ? mergedBackendSubjectsJson.environments : [];
+                            if (targetFilters.includes('props')) picked.props = Array.isArray(mergedBackendSubjectsJson?.props) ? mergedBackendSubjectsJson.props : [];
+                            if (targetFilters.includes('posters') || targetFilters.includes('covers')) {
+                                picked.posters = Array.isArray(mergedBackendSubjectsJson?.posters) ? mergedBackendSubjectsJson.posters : [];
+                                picked.covers = Array.isArray(mergedBackendSubjectsJson?.covers) ? mergedBackendSubjectsJson.covers : [];
+                            }
+                            return picked;
+                        })();
+
+                        if (Array.isArray(targetFilters) && targetFilters.length > 0) {
+                            onLog?.(`[Stage 3 Asset Design] Partial import mode: only importing target types (${targetFilters.join(', ')}).`, 'info');
+                        }
+
+                        const sceneImportReport = await importSubjectsJsonWithDedupe(JSON.stringify(importSubjectsPayload, null, 2), {
                             reason: 'phase2-entity-design-recovery',
-                            subjectsJson: mergedBackendSubjectsJson || null,
+                                subjectsJson: importSubjectsPayload || null,
                             importOptions: {
                                 onLog,
                                 projectId,
                                 episodeId: activeEpisode?.id,
-                                subjectsJson: mergedBackendSubjectsJson || null,
+                                targetEntityTypes: targetFilters || undefined,
+                                    subjectsJson: importSubjectsPayload || null,
                                 suppressAlerts: true,
                             },
                         });
@@ -4573,7 +4629,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery, adaptationText,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
-        project
+        project, extractPureSubjectIndexText
     ]);
 
     
@@ -8367,7 +8423,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )}
         <div className="flex flex-col gap-4 flex-none max-h-[60vh] mt-4 border-t border-white/10 pt-4 px-6 pb-6 overflow-y-auto custom-scrollbar">
         {/* Stage 1 Panel */}
-        <div className="flex-none overflow-hidden h-[300px]">
+        <div className="flex-none min-h-[300px]">
             <LLMResultPanel
                 title={t('第一阶段：剧本修改说明 / 优化后剧本 / 全局风格', 'Stage 1: Script Notes / Optimized Script / Global Style')}
                 t={t}
@@ -8385,7 +8441,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             />
         </div>
         {/* Stage 3 Panel */}
-        <div className="flex-none overflow-hidden h-[300px]">
+        <div className="flex-none min-h-[300px]">
             <LLMResultPanel
                 title={t('第三阶段：资产设计', 'Stage 3: Asset Design')}
                 t={t}
