@@ -100,9 +100,11 @@ Output format (Markdown):
 ## -1) 类型研判与参考执行（必须先写）
 - Primary Type（主类型）: ...
 - Secondary Type（可选）: ...
-- Benchmark Pattern Set（抽象参考模式）:
+- Benchmark Pattern Set（桥段借鉴与凝聚）:
   - Hollywood / International Narrative Pattern: ...
-- Script Execution Rules（本集脚本执行规则）: ...
+  - 必须明确写出本集重点借鉴的优质桥段类型/母题，并说明如何“凝聚重组”为适配本集冲突的执行单元（不得生搬硬套，需结合角色目标、空间条件与AI生成约束进行本土化改写）。
+- Script Execution Rules（本集脚本执行规则）: 基于上述类型研判与桥段借鉴策略，列出本集可执行规则。
+  - 必须明确包含：借鉴桥段在本集中的落点（出现于哪一场/哪一节拍）、触发条件、升级方式与回收方式，确保“借鉴”真正服务剧情推进与悬念构建。
 
 ## Scenes (场景列表)
 对于每个场景，使用以下格式：
