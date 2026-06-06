@@ -428,8 +428,106 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     };
 
     const [viewingEntityTab, setViewingEntityTab] = useState('generate');
+    const [entityMediaRefTab, setEntityMediaRefTab] = useState('video');
+    const [entityMediaRefUploading, setEntityMediaRefUploading] = useState(false);
+    const [entityRefAudioPrompt, setEntityRefAudioPrompt] = useState('');
+    const [isGeneratingEntityRefAudio, setIsGeneratingEntityRefAudio] = useState(false);
+    const [entityRefAudioPromptByEntity, setEntityRefAudioPromptByEntity] = useState({});
+    const [entityRefAudioFunctionByTab, setEntityRefAudioFunctionByTab] = useState({
+        video: 'generate_entity_reference_audio_video',
+        audio: 'generate_entity_reference_audio_audio',
+    });
     const [advancedInstruction, setAdvancedInstruction] = useState('');
     const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
+
+    const buildDefaultEntityRefAudioPrompt = useCallback((entityGender) => {
+        const normalizedGender = String(entityGender || '').trim().toLowerCase();
+        const isMale = ['male', 'man', 'boy', 'masculine', 'm', '男', '男性'].some((token) => normalizedGender.includes(token));
+        if (isMale) {
+            return t(
+                '请用沉稳而清晰的男声念出：夜色渐深，他轻轻推开门，低声说“别怕，我在这里”。',
+                'Read in a calm and clear male voice: As night falls, he gently pushes the door open and whispers, "Do not be afraid, I am here."'
+            );
+        }
+        return t(
+            '请用温柔而清晰的女声念出：夜色渐深，她轻轻推开门，低声说“别怕，我在这里”。',
+            'Read in a warm and clear female voice: As night falls, she gently pushes the door open and whispers, "Do not be afraid, I am here."'
+        );
+    }, [t]);
+
+    const ENTITY_REF_AUDIO_FUNCTION_OPTIONS = useMemo(() => ([
+        { value: 'generate_entity_reference_audio_video', label: t('视频页路由', 'Video-tab Route') },
+        { value: 'generate_entity_reference_audio_audio', label: t('音频页路由', 'Audio-tab Route') },
+        { value: 'generate_entity_reference_audio', label: t('兼容路由', 'Legacy Route') },
+    ]), [t]);
+
+    const entityRefAudioPromptStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.entityRefAudioPromptByEntity.${pid}` : 'aistory.entityRefAudioPromptByEntity.global';
+    }, [projectId]);
+
+    const entityRefAudioFunctionStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.entityRefAudioFunctionByTab.${pid}` : 'aistory.entityRefAudioFunctionByTab.global';
+    }, [projectId]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(entityRefAudioPromptStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setEntityRefAudioPromptByEntity(parsed);
+            }
+        } catch {}
+    }, [entityRefAudioPromptStorageKey]);
+
+    useEffect(() => {
+        try {
+            const cleaned = Object.fromEntries(
+                Object.entries(entityRefAudioPromptByEntity || {}).filter(([k, v]) => String(k || '').trim() && String(v || '').trim())
+            );
+            if (Object.keys(cleaned).length === 0) {
+                localStorage.removeItem(entityRefAudioPromptStorageKey);
+            } else {
+                localStorage.setItem(entityRefAudioPromptStorageKey, JSON.stringify(cleaned));
+            }
+        } catch {}
+    }, [entityRefAudioPromptByEntity, entityRefAudioPromptStorageKey]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(entityRefAudioFunctionStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setEntityRefAudioFunctionByTab((prev) => ({
+                    ...prev,
+                    ...(String(parsed.video || '').trim() ? { video: String(parsed.video).trim() } : {}),
+                    ...(String(parsed.audio || '').trim() ? { audio: String(parsed.audio).trim() } : {}),
+                }));
+            }
+        } catch {}
+    }, [entityRefAudioFunctionStorageKey]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(entityRefAudioFunctionStorageKey, JSON.stringify({
+                video: String(entityRefAudioFunctionByTab?.video || 'generate_entity_reference_audio_video').trim(),
+                audio: String(entityRefAudioFunctionByTab?.audio || 'generate_entity_reference_audio_audio').trim(),
+            }));
+        } catch {}
+    }, [entityRefAudioFunctionByTab, entityRefAudioFunctionStorageKey]);
+
+    useEffect(() => {
+        const currentEntityKey = String(viewingEntity?.id || '').trim();
+        if (!currentEntityKey) {
+            setEntityRefAudioPrompt('');
+            return;
+        }
+        const saved = String(entityRefAudioPromptByEntity?.[currentEntityKey] || '').trim();
+        setEntityRefAudioPrompt(saved || buildDefaultEntityRefAudioPrompt(viewingEntity?.gender));
+    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioPromptByEntity, viewingEntity?.gender, viewingEntity?.id]);
     
     // Analyzing state mapping (entityId -> timestamp)
     const subjectAnalyzingStorageKey = useMemo(() => {
@@ -3051,7 +3149,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             name_en: '',
             role: '',
             archetype: '',
-            gender: ''
+            gender: '',
+            video_url: '',
+            audio_url: '',
         });
     };
 
@@ -3073,6 +3173,127 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             updateEntity(updated.id, { [field]: value }).catch(console.error);
         }
     };
+
+    const ENTITY_MEDIA_REF_CONFIG = useMemo(() => ({
+        video: {
+            field: 'video_url',
+            accept: 'video/*',
+            desiredAssetType: 'video',
+            label: t('视频参考', 'Video Ref'),
+            empty: t('暂无视频参考', 'No video reference yet'),
+            placeholder: t('粘贴视频链接...', 'Paste video URL...'),
+        },
+        audio: {
+            field: 'audio_url',
+            accept: 'audio/*',
+            desiredAssetType: 'audio',
+            label: t('音频参考', 'Audio Ref'),
+            empty: t('暂无音频参考', 'No audio reference yet'),
+            placeholder: t('粘贴音频链接...', 'Paste audio URL...'),
+        },
+    }), [t]);
+
+    const handlePickEntityMediaRefFromLibrary = useCallback((kind) => {
+        const cfg = ENTITY_MEDIA_REF_CONFIG[kind];
+        if (!cfg) return;
+        openMediaPicker((url) => {
+            const stable = String(url || '').trim();
+            if (!stable) return;
+            handleFieldUpdate(cfg.field, stable);
+        }, {
+            entityId: viewingEntity?.id,
+            desiredAssetType: cfg.desiredAssetType,
+            lockAssetType: false,
+            allowMultiSelect: false,
+            disableShotFilter: true,
+            defaultSecondaryKind: 'entity',
+        });
+    }, [ENTITY_MEDIA_REF_CONFIG, handleFieldUpdate, openMediaPicker, viewingEntity?.id]);
+
+    const handleUploadEntityMediaRef = useCallback(async (kind, file) => {
+        if (!file) return;
+        const cfg = ENTITY_MEDIA_REF_CONFIG[kind];
+        if (!cfg) return;
+        setEntityMediaRefUploading(true);
+        try {
+            const asset = await uploadAsset(file);
+            const stable = String(asset?.url || '').trim();
+            if (stable) {
+                handleFieldUpdate(cfg.field, stable);
+            }
+        } catch (e) {
+            console.error(e);
+            alert(t('上传参考文件失败', 'Failed to upload reference file'));
+        } finally {
+            setEntityMediaRefUploading(false);
+        }
+    }, [ENTITY_MEDIA_REF_CONFIG, handleFieldUpdate, t]);
+
+    const extractGeneratedAudioUrl = useCallback((payload) => {
+        const visited = new Set();
+        const queue = [payload];
+        const directKeys = ['url', 'audio_url', 'audioUrl', 'result_url', 'resultUrl', 'voice_url', 'file_url', 'fileUrl'];
+
+        while (queue.length > 0) {
+            const current = queue.shift();
+            if (!current || typeof current !== 'object') continue;
+            if (visited.has(current)) continue;
+            visited.add(current);
+
+            for (const key of directKeys) {
+                const candidate = String(current?.[key] || '').trim();
+                if (candidate) return candidate;
+            }
+
+            const candidateList = Array.isArray(current?.urls) ? current.urls : [];
+            for (const item of candidateList) {
+                const candidate = String(item || '').trim();
+                if (candidate) return candidate;
+            }
+
+            const nestedKeys = ['data', 'result', 'output', 'metadata', 'raw', 'payload'];
+            for (const key of nestedKeys) {
+                const next = current?.[key];
+                if (next && typeof next === 'object') queue.push(next);
+            }
+        }
+        return '';
+    }, []);
+
+    const handleGenerateEntityReferenceAudio = useCallback(async (sourceTab = 'audio') => {
+        const stablePrompt = String(entityRefAudioPrompt || '').trim();
+        if (!stablePrompt) {
+            alert(t('请先输入参考音频文案。', 'Please enter reference audio text first.'));
+            return;
+        }
+
+        const stableTab = sourceTab === 'video' ? 'video' : 'audio';
+        const functionName = String(entityRefAudioFunctionByTab?.[stableTab] || '').trim() || (stableTab === 'video' ? 'generate_entity_reference_audio_video' : 'generate_entity_reference_audio_audio');
+        const selectedSystemApiId = Number(localStorage.getItem(`func_api_${functionName}`) || 0) || null;
+
+        setIsGeneratingEntityRefAudio(true);
+        try {
+            const result = await generateVoice(stablePrompt, null, null, {
+                function_name: functionName,
+                ...(selectedSystemApiId ? { system_api_id: selectedSystemApiId } : {}),
+                ...(projectId ? { project_id: projectId } : {}),
+            });
+
+            const nextAudioUrl = extractGeneratedAudioUrl(result);
+            if (!nextAudioUrl) {
+                throw new Error(t('返回结果中未找到音频链接', 'No audio URL found in response'));
+            }
+
+            handleFieldUpdate('audio_url', nextAudioUrl);
+            showSubjectNotification(t('参考音频生成成功，已自动回填。', 'Reference audio generated and saved to audio URL.'), 'success');
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            showSubjectNotification(`${t('参考音频生成失败：', 'Reference audio generation failed: ')}${detail}`, 'error');
+        } finally {
+            setIsGeneratingEntityRefAudio(false);
+        }
+    }, [entityRefAudioFunctionByTab, entityRefAudioPrompt, extractGeneratedAudioUrl, handleFieldUpdate, projectId, showSubjectNotification, t]);
 
     // Helper: Commit Create (Save manually)
     const handleCommitCreate = async () => {
@@ -5050,13 +5271,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </select>
                         </div>
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
-                            <button
-                                onClick={openAiEntityCreateModal}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 transition-colors whitespace-nowrap"
-                                title={t('按 subjects index + entity_design 自动新增实体', 'Add entities via subjects index + entity_design')}
-                            >
-                                <span className="whitespace-nowrap">{t('新增资产', 'Add Asset')}</span>
-                            </button>
                              <button 
                                 onClick={handleBatchGenerateEntities}
                                 disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
@@ -5087,6 +5301,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 title={t('删除全部主体资产', 'Delete All Subjects')}
                             >
                                 <Trash2 size={16} />
+                            </button>
+                            <button
+                                onClick={openAiEntityCreateModal}
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 transition-colors flex items-center justify-center"
+                                title={t('按 subjects index + entity_design 自动新增实体', 'Add entities via subjects index + entity_design')}
+                                aria-label={t('新增资产', 'Add Asset')}
+                            >
+                                <Plus size={16} />
                             </button>
                         </div>
                     </div>
@@ -5256,11 +5478,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                                 />
+                            ) : entity.video_url ? (
+                                <video
+                                    src={getSafeMediaUrl(getFullUrl(entity.video_url))}
+                                    className="absolute inset-0 object-contain w-full h-full"
+                                    preload="metadata"
+                                    muted
+                                    playsInline
+                                />
                             ) : (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 px-4 text-center">
                                     <Users className="text-white/20" size={48} />
                                     <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/55">{t('未绑定图片', 'No Linked Image')}</div>
                                     <div className="text-[10px] text-white/35">{t('可重新选择或生成主体图', 'Select or generate a subject image')}</div>
+                                </div>
+                            )}
+                            {/* video / audio badge */}
+                            {(entity.video_url || entity.audio_url) && (
+                                <div className="absolute top-2 left-2 z-20 flex gap-1">
+                                    {entity.video_url && !entity.image_url && (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-blue-500/80 text-white px-1.5 py-0.5 text-[10px] font-bold" title={entity.video_url}>
+                                            <Video size={10} /> {t('视频', 'Video')}
+                                        </span>
+                                    )}
+                                    {entity.audio_url && (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-purple-500/80 text-white px-1.5 py-0.5 text-[10px] font-bold" title={entity.audio_url}>
+                                            🎵 {t('音频', 'Audio')}
+                                        </span>
+                                    )}
                                 </div>
                             )}
                             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent z-10 pointer-events-none"></div>
@@ -5478,7 +5723,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 </div>
 
                                 <div className="flex border-b border-white/10 bg-black/20">
-                                    {['info', 'generate', 'advanced'].map(tab => (
+                                    {['info', 'video', 'audio', 'generate', 'advanced'].map(tab => (
                                         <button
                                             key={tab}
                                             onClick={() => setViewingEntityTab(tab)}
@@ -5488,7 +5733,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 : 'border-transparent text-muted-foreground hover:text-white hover:bg-white/5'
                                             }`}
                                         >
-                                            {tab === 'info' ? t('主体信息', 'Info') : tab === 'generate' ? t('设计资产', 'Generate Asset') : t('修改资产', 'Modify Asset')}
+                                            {tab === 'info'
+                                                ? t('主体信息', 'Info')
+                                                : tab === 'video'
+                                                    ? t('视频', 'Video')
+                                                    : tab === 'audio'
+                                                        ? t('音频', 'Audio')
+                                                        : tab === 'generate'
+                                                            ? t('设计资产', 'Generate Asset')
+                                                            : t('修改资产', 'Modify Asset')}
                                         </button>
                                     ))}
                                 </div>
@@ -5785,6 +6038,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                              </div>
                                          </div>
                                     </div>
+
                                     {/* Create Mode Actions */}
                                     {viewingEntity.id === 'new' && (
                                         <div className="mt-8 pt-4 border-t border-white/10 flex justify-end gap-3 sticky bottom-0 bg-[#1e1e1e] pb-2 z-10">
@@ -5805,8 +6059,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                                     {/* Attributes Display - Show ALL fields except the ones already shown above */
                                     (() => {
-                                        const hiddenFields = ['id', 'project_id', 'image_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
+                                        const hiddenFields = ['id', 'project_id', 'image_url', 'video_url', 'audio_url', 'created_at', 'updated_at', 'name', 'name_en', 'description', 
                                             'author_id', 'role', 'archetype', 'gender', 'appearance_cn', 'clothing', 'generation_prompt_cn', 'generation_prompt_en', 'visual_dependencies', 'type', 'project', 'dependency_strategy', 'action_characteristics', 'anchor_description', 'custom_attributes'];
+                                        hiddenFields.push('reference_image_urls', 'reference_video_urls', 'reference_audio_urls');
                                         
                                         // Flatten custom_attributes into the view if they exist
                                         let mergedSource = { ...viewingEntity };
@@ -5893,7 +6148,267 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         );
                                     })()}
                                         </div>
-                                    )}                                    {viewingEntityTab === 'generate' && (
+                                    )}
+
+                                    {viewingEntityTab === 'video' && (
+                                        <div className="space-y-4">
+                                            {(() => {
+                                                const cfg = ENTITY_MEDIA_REF_CONFIG.video;
+                                                const currentVal = String(viewingEntity?.[cfg.field] || '').trim();
+                                                return (
+                                                    <div className="bg-black/20 p-3 rounded-lg border border-white/5 space-y-3">
+                                                        <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('视频参考', 'Video Reference')}</h4>
+                                                        {currentVal ? (
+                                                            <>
+                                                                <video
+                                                                    src={getSafeMediaUrl(getFullUrl(currentVal))}
+                                                                    controls
+                                                                    className="w-full rounded bg-black/40 max-h-56"
+                                                                    preload="metadata"
+                                                                />
+                                                                <div className="flex items-center gap-2">
+                                                                    <a
+                                                                        href={getFullUrl(currentVal)}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="flex-1 text-[10px] text-white/60 truncate hover:text-white"
+                                                                        title={currentVal}
+                                                                    >
+                                                                        {currentVal}
+                                                                    </a>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleFieldUpdate(cfg.field, null)}
+                                                                        className="px-2 py-1 rounded text-[10px] font-bold bg-red-500/15 hover:bg-red-500/25 text-red-100 flex-shrink-0"
+                                                                    >
+                                                                        {t('清除', 'Clear')}
+                                                                    </button>
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="text-xs text-muted-foreground">{cfg.empty}</div>
+                                                        )}
+                                                        <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-white/5">
+                                                            <input
+                                                                key="video-ref-input"
+                                                                type="text"
+                                                                defaultValue=""
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key !== 'Enter') return;
+                                                                    e.preventDefault();
+                                                                    const v = e.currentTarget.value.trim();
+                                                                    if (v) handleFieldUpdate(cfg.field, v);
+                                                                    e.currentTarget.value = '';
+                                                                }}
+                                                                placeholder={cfg.placeholder}
+                                                                className="flex-1 min-w-[160px] bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handlePickEntityMediaRefFromLibrary('video')}
+                                                                className="px-2 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white inline-flex items-center gap-1"
+                                                            >
+                                                                <FolderOpen size={12} /> {t('素材库', 'Library')}
+                                                            </button>
+                                                            <label className="px-2 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white inline-flex items-center gap-1 cursor-pointer">
+                                                                <Upload size={12} /> {entityMediaRefUploading ? t('上传中...', 'Uploading...') : t('上传', 'Upload')}
+                                                                <input
+                                                                    type="file"
+                                                                    accept={cfg.accept}
+                                                                    className="hidden"
+                                                                    disabled={entityMediaRefUploading}
+                                                                    onChange={(e) => {
+                                                                        const file = e.target.files?.[0] || null;
+                                                                        if (file) void handleUploadEntityMediaRef('video', file);
+                                                                        e.target.value = '';
+                                                                    }}
+                                                                />
+                                                            </label>
+                                                        </div>
+                                                        <div className="space-y-2 pt-2 border-t border-white/5">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="text-[10px] font-bold uppercase text-muted-foreground">
+                                                                    {t('参考音频生成', 'Reference Audio Generation')}
+                                                                </div>
+                                                                <select
+                                                                    value={entityRefAudioFunctionByTab.video || 'generate_entity_reference_audio_video'}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim() || 'generate_entity_reference_audio_video';
+                                                                        setEntityRefAudioFunctionByTab((prev) => ({ ...prev, video: next }));
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
+                                                                    title={t('选择视频页生成参考音频所用路由', 'Select function route for video-tab reference audio generation')}
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_FUNCTION_OPTIONS.map((opt) => (
+                                                                        <option key={`video-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <FunctionApiSelector
+                                                                    functionName={entityRefAudioFunctionByTab.video || 'generate_entity_reference_audio_video'}
+                                                                    configs={functionApiConfigs}
+                                                                    label={t('功能API: ', 'Function API: ')}
+                                                                />
+                                                            </div>
+                                                            <textarea
+                                                                value={entityRefAudioPrompt}
+                                                                onChange={(e) => {
+                                                                    const nextPrompt = e.target.value;
+                                                                    setEntityRefAudioPrompt(nextPrompt);
+                                                                    const currentEntityKey = String(viewingEntity?.id || '').trim();
+                                                                    if (!currentEntityKey) return;
+                                                                    setEntityRefAudioPromptByEntity((prev) => ({ ...prev, [currentEntityKey]: nextPrompt }));
+                                                                }}
+                                                                placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
+                                                                className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
+                                                            />
+                                                            <div className="flex justify-end">
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={isGeneratingEntityRefAudio}
+                                                                    onClick={() => void handleGenerateEntityReferenceAudio('video')}
+                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-primary text-black hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                                                >
+                                                                    {isGeneratingEntityRefAudio ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                                                    {isGeneratingEntityRefAudio ? t('生成中...', 'Generating...') : t('生成参考音频', 'Generate Reference Audio')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+
+                                    {viewingEntityTab === 'audio' && (
+                                        <div className="space-y-4">
+                                            {(() => {
+                                                const cfg = ENTITY_MEDIA_REF_CONFIG.audio;
+                                                const currentVal = String(viewingEntity?.[cfg.field] || '').trim();
+                                                return (
+                                                    <div className="bg-black/20 p-3 rounded-lg border border-white/5 space-y-3">
+                                                        <h4 className="text-[10px] font-bold uppercase text-muted-foreground">{t('音频参考', 'Audio Reference')}</h4>
+                                                        {currentVal ? (
+                                                            <>
+                                                                <SafeAudio
+                                                                    src={currentVal}
+                                                                    controls
+                                                                    className="w-full"
+                                                                    fallback={<div className="text-xs text-muted-foreground">{t('音频预览不可用', 'Audio preview unavailable')}</div>}
+                                                                />
+                                                                <div className="flex items-center gap-2">
+                                                                    <a
+                                                                        href={getFullUrl(currentVal)}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="flex-1 text-[10px] text-white/60 truncate hover:text-white"
+                                                                        title={currentVal}
+                                                                    >
+                                                                        {currentVal}
+                                                                    </a>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleFieldUpdate(cfg.field, null)}
+                                                                        className="px-2 py-1 rounded text-[10px] font-bold bg-red-500/15 hover:bg-red-500/25 text-red-100 flex-shrink-0"
+                                                                    >
+                                                                        {t('清除', 'Clear')}
+                                                                    </button>
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="text-xs text-muted-foreground">{cfg.empty}</div>
+                                                        )}
+                                                        <div className="flex flex-wrap gap-2 items-center pt-1 border-t border-white/5">
+                                                            <input
+                                                                key="audio-ref-input"
+                                                                type="text"
+                                                                defaultValue=""
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key !== 'Enter') return;
+                                                                    e.preventDefault();
+                                                                    const v = e.currentTarget.value.trim();
+                                                                    if (v) handleFieldUpdate(cfg.field, v);
+                                                                    e.currentTarget.value = '';
+                                                                }}
+                                                                placeholder={cfg.placeholder}
+                                                                className="flex-1 min-w-[160px] bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white focus:border-primary/50 outline-none"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handlePickEntityMediaRefFromLibrary('audio')}
+                                                                className="px-2 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white inline-flex items-center gap-1"
+                                                            >
+                                                                <FolderOpen size={12} /> {t('素材库', 'Library')}
+                                                            </button>
+                                                            <label className="px-2 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white inline-flex items-center gap-1 cursor-pointer">
+                                                                <Upload size={12} /> {entityMediaRefUploading ? t('上传中...', 'Uploading...') : t('上传', 'Upload')}
+                                                                <input
+                                                                    type="file"
+                                                                    accept={cfg.accept}
+                                                                    className="hidden"
+                                                                    disabled={entityMediaRefUploading}
+                                                                    onChange={(e) => {
+                                                                        const file = e.target.files?.[0] || null;
+                                                                        if (file) void handleUploadEntityMediaRef('audio', file);
+                                                                        e.target.value = '';
+                                                                    }}
+                                                                />
+                                                            </label>
+                                                        </div>
+                                                        <div className="space-y-2 pt-2 border-t border-white/5">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="text-[10px] font-bold uppercase text-muted-foreground">
+                                                                    {t('参考音频生成', 'Reference Audio Generation')}
+                                                                </div>
+                                                                <select
+                                                                    value={entityRefAudioFunctionByTab.audio || 'generate_entity_reference_audio_audio'}
+                                                                    onChange={(e) => {
+                                                                        const next = String(e.target.value || '').trim() || 'generate_entity_reference_audio_audio';
+                                                                        setEntityRefAudioFunctionByTab((prev) => ({ ...prev, audio: next }));
+                                                                    }}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
+                                                                    title={t('选择音频页生成参考音频所用路由', 'Select function route for audio-tab reference audio generation')}
+                                                                >
+                                                                    {ENTITY_REF_AUDIO_FUNCTION_OPTIONS.map((opt) => (
+                                                                        <option key={`audio-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <FunctionApiSelector
+                                                                    functionName={entityRefAudioFunctionByTab.audio || 'generate_entity_reference_audio_audio'}
+                                                                    configs={functionApiConfigs}
+                                                                    label={t('功能API: ', 'Function API: ')}
+                                                                />
+                                                            </div>
+                                                            <textarea
+                                                                value={entityRefAudioPrompt}
+                                                                onChange={(e) => {
+                                                                    const nextPrompt = e.target.value;
+                                                                    setEntityRefAudioPrompt(nextPrompt);
+                                                                    const currentEntityKey = String(viewingEntity?.id || '').trim();
+                                                                    if (!currentEntityKey) return;
+                                                                    setEntityRefAudioPromptByEntity((prev) => ({ ...prev, [currentEntityKey]: nextPrompt }));
+                                                                }}
+                                                                placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
+                                                                className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
+                                                            />
+                                                            <div className="flex justify-end">
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={isGeneratingEntityRefAudio}
+                                                                    onClick={() => void handleGenerateEntityReferenceAudio('audio')}
+                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-primary text-black hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                                                >
+                                                                    {isGeneratingEntityRefAudio ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                                                                    {isGeneratingEntityRefAudio ? t('生成中...', 'Generating...') : t('生成参考音频', 'Generate Reference Audio')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+
+                                    {viewingEntityTab === 'generate' && (
                                         <div className="space-y-6">
                                             {/* Technical / Prompt */}
                                             <div className="space-y-2">
@@ -6381,26 +6896,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     >
                                         <Trash2 size={16} /> Delete
                                     </button>
-                                    <button 
-                                        onClick={() => {
-                                            if (viewingEntityTab === 'generate') {
+                                    {viewingEntityTab === 'generate' && (
+                                        <button 
+                                            onClick={() => {
                                                 handleGenerate(viewingEntity, null, getEntityPromptByLang(viewingEntity, effectivePromptSubmitLang));
-                                            } else {
-                                                setViewingEntity(null);
-                                                setRefImage(null);
-                                                handleOpenImageModal(viewingEntity, 'generate');
-                                            }
-                                        }}
-                                        disabled={viewingEntityImageLocked || (viewingEntityTab === 'generate' && generating)}
-                                        className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? (
-                                            <RefreshCw className="animate-spin" size={16} />
-                                        ) : (
-                                            <Wand2 size={16} />
-                                        )}
-                                        {((viewingEntityTab === 'generate' && generating) || viewingEntityImageLocked) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
-                                    </button>
+                                            }}
+                                            disabled={viewingEntityImageLocked || generating}
+                                            className="px-4 py-2 bg-primary hover:bg-primary/90 text-black rounded-md text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {(generating || viewingEntityImageLocked) ? (
+                                                <RefreshCw className="animate-spin" size={16} />
+                                            ) : (
+                                                <Wand2 size={16} />
+                                            )}
+                                            {(generating || viewingEntityImageLocked) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </motion.div>

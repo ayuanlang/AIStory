@@ -1202,6 +1202,201 @@ class MediaGenerationService:
             return raw
         return None
 
+    def _parse_resolution_pair(self, value: Any) -> Optional[Tuple[int, int]]:
+        text = str(value or "").strip().lower().replace(" ", "")
+        if not text or "x" not in text:
+            return None
+        left, right = text.split("x", 1)
+        if not left.isdigit() or not right.isdigit():
+            return None
+        width = int(left)
+        height = int(right)
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+
+    def _is_valid_grsai_gpt_image_2_vip_size(self, width: int, height: int) -> bool:
+        # Constraint source: Grsai gpt-image-2-vip custom pixel rule.
+        if width <= 0 or height <= 0:
+            return False
+        if max(width, height) > 3840:
+            return False
+        if width % 16 != 0 or height % 16 != 0:
+            return False
+
+        short_edge = min(width, height)
+        long_edge = max(width, height)
+        if short_edge <= 0:
+            return False
+        if float(long_edge) / float(short_edge) > 3.0:
+            return False
+
+        total_pixels = width * height
+        if total_pixels < 655360 or total_pixels > 8294400:
+            return False
+        return True
+
+    def _parse_ratio_float(self, ratio_text: Any) -> Optional[float]:
+        text = str(ratio_text or "").strip().lower()
+        if not text or ":" not in text:
+            return None
+        left, right = text.split(":", 1)
+        try:
+            left_val = float(left)
+            right_val = float(right)
+        except Exception:
+            return None
+        if left_val <= 0 or right_val <= 0:
+            return None
+        return float(left_val) / float(right_val)
+
+    def _pick_nearest_ratio_key(self, target_ratio: float, ratio_keys: List[str], default_key: str = "1:1") -> str:
+        if target_ratio <= 0:
+            return default_key
+
+        best_key = default_key
+        best_distance = None
+        for ratio_key in ratio_keys:
+            ratio_value = self._parse_ratio_float(ratio_key)
+            if not ratio_value or ratio_value <= 0:
+                continue
+            # Use log distance so portrait/landscape comparisons are scale-symmetric.
+            distance = abs(math.log(target_ratio) - math.log(ratio_value))
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_key = ratio_key
+        return best_key
+
+    def _resolve_grsai_gpt_image_2_size(
+        self,
+        model: Any,
+        aspect_ratio: Any,
+        explicit_size: Any,
+        width: Any,
+        height: Any,
+    ) -> Tuple[str, bool]:
+        model_key = str(model or "").strip().lower().replace("/", "-").replace("_", "-")
+        is_vip = "gpt-image-2-vip" in model_key
+
+        ratio_text = str(aspect_ratio or "").strip().lower()
+        if ratio_text in {"adaptive", "auto"}:
+            ratio_text = "auto"
+
+        non_vip_ratio_map = {
+            "1:1": "1024x1024",
+            "16:9": "1672x941",
+            "9:16": "941x1672",
+            "4:3": "1443x1090",
+            "3:4": "1090x1443",
+            "3:2": "1536x1024",
+            "2:3": "1024x1536",
+            "5:4": "1408x1120",
+            "4:5": "1120x1408",
+            "21:9": "1920x832",
+            "9:21": "832x1920",
+            "1:2": "896x1792",
+            "2:1": "1792x896",
+        }
+
+        vip_presets_by_tier = {
+            "1k": {
+                "1:1": "1024x1024",
+                "16:9": "1280x720",
+                "9:16": "720x1280",
+                "4:3": "1152x864",
+                "3:4": "864x1152",
+                "3:2": "1536x1024",
+                "2:3": "1024x1536",
+                "5:4": "1120x896",
+                "4:5": "896x1120",
+                "21:9": "1456x624",
+                "9:21": "624x1456",
+                "1:3": "688x2048",
+                "3:1": "2048x688",
+                "2:1": "1536x768",
+                "1:2": "768x1536",
+            },
+            "2k": {
+                "1:1": "2048x2048",
+                "16:9": "2048x1152",
+                "9:16": "1152x2048",
+                "4:3": "2304x1728",
+                "3:4": "1728x2304",
+                "3:2": "2048x1360",
+                "2:3": "1360x2048",
+                "5:4": "2240x1792",
+                "4:5": "1792x2240",
+                "21:9": "2912x1248",
+                "9:21": "1248x2912",
+                "1:3": "1280x3840",
+                "3:1": "3840x1280",
+                "2:1": "3072x1536",
+                "1:2": "1536x3072",
+            },
+            "4k": {
+                "1:1": "2880x2880",
+                "16:9": "3840x2160",
+                "9:16": "2160x3840",
+                "4:3": "3264x2448",
+                "3:4": "2448x3264",
+                "3:2": "3504x2336",
+                "2:3": "2336x3504",
+                "5:4": "3200x2560",
+                "4:5": "2560x3200",
+                "21:9": "3840x1648",
+                "9:21": "1648x3840",
+                "3:1": "3840x1280",
+                "2:1": "3840x1920",
+                "1:2": "1920x3840",
+            },
+        }
+
+        explicit_pair = self._parse_resolution_pair(explicit_size)
+        if explicit_pair:
+            logger.info(
+                "Grsai gpt-image-2 size follows aspect_ratio | explicit_size_ignored=%sx%s model=%s",
+                explicit_pair[0],
+                explicit_pair[1],
+                model,
+            )
+
+        if is_vip:
+            # User preference: vip defaults to 4k preset, but preserve original framing.
+            ratio_key = ratio_text if ratio_text and ratio_text != "auto" else ""
+            tier_map = vip_presets_by_tier["4k"]
+            if ratio_key not in tier_map:
+                ratio_hint = self._parse_ratio_float(ratio_key)
+                if ratio_hint:
+                    ratio_key = self._pick_nearest_ratio_key(ratio_hint, list(tier_map.keys()), default_key="1:1")
+                else:
+                    ratio_key = "1:1"
+                logger.warning(
+                    "Grsai gpt-image-2-vip ratio unsupported | requested=%s selected_nearest_ratio=%s",
+                    str(ratio_text or ""),
+                    ratio_key,
+                )
+            return tier_map[ratio_key], True
+
+        ratio_hint = None
+        if ratio_text and ratio_text != "auto":
+            ratio_hint = self._parse_ratio_float(ratio_text)
+
+        if ratio_hint:
+            nearest_ratio = self._pick_nearest_ratio_key(ratio_hint, list(non_vip_ratio_map.keys()), default_key="1:1")
+            return non_vip_ratio_map.get(nearest_ratio, "1024x1024"), True
+
+        if ratio_text and ratio_text != "auto" and ratio_text in non_vip_ratio_map:
+            return non_vip_ratio_map[ratio_text], True
+
+        if ratio_text and ratio_text not in {"", "auto"}:
+            logger.warning(
+                "Grsai gpt-image-2 ratio unsupported | requested=%s fallback_ratio=1:1",
+                ratio_text,
+            )
+
+        # User preference: non-vip defaults to 2k preset.
+        return "2048x2048", True
+
     def _resolve_openai_compatible_image_size(
         self,
         model: Any,
@@ -5374,6 +5569,8 @@ class MediaGenerationService:
         if gen_type == "image":
             endpoint = raw_endpoint.rstrip("/") if raw_endpoint and "/draw/" in raw_endpoint else f"{base_url}/v1/draw/completions"
             is_banana = model and model.startswith("nano-banana")
+            model_key = str(model or "").strip().lower().replace("/", "-").replace("_", "-")
+            is_gpt_image_2_family = "gpt-image-2" in model_key
             if not raw_endpoint and is_banana:
                 endpoint = f"{base_url}/v1/draw/nano-banana"
             
@@ -5458,19 +5655,33 @@ class MediaGenerationService:
             # Resolution Logic
             w = tool_conf.get("width")
             h = tool_conf.get("height")
+            explicit_size_raw = tool_conf.get("size")
+            explicit_size = explicit_size_raw or tool_conf.get("imageSize") or tool_conf.get("image_size")
             
-            if w and h:
-                res_str = f"{w}x{h}"
-            elif aspect_ratio:
-                 # Minimal mapping for Grsai (Assuming it supports standard sizes or 1024 based aspect)
-                 if aspect_ratio == "16:9": res_str = "2560x1440"
-                 elif aspect_ratio == "9:16": res_str = "720x1280"
-                 elif aspect_ratio == "4:3": res_str = "1024x768"
-                 elif aspect_ratio == "3:4": res_str = "768x1024"
-                 elif aspect_ratio == "21:9": res_str = "1536x640" 
-                 else: res_str = "2560x1440"
+            if is_gpt_image_2_family:
+                res_str, remove_aspect_ratio = self._resolve_grsai_gpt_image_2_size(
+                    final_model,
+                    normalized_ar,
+                    explicit_size,
+                    w,
+                    h,
+                )
+                if remove_aspect_ratio:
+                    payload.pop("aspectRatio", None)
+                base_metadata["submit_size"] = res_str
             else:
-                 res_str = "2560x1440"
+                if aspect_ratio:
+                     # Generic fallback mapping for non-gpt-image Grsai image models.
+                     if aspect_ratio == "16:9": res_str = "2560x1440"
+                     elif aspect_ratio == "9:16": res_str = "720x1280"
+                     elif aspect_ratio == "4:3": res_str = "1024x768"
+                     elif aspect_ratio == "3:4": res_str = "768x1024"
+                     elif aspect_ratio == "21:9": res_str = "1536x640" 
+                     else: res_str = "2560x1440"
+                elif w and h:
+                    res_str = f"{w}x{h}"
+                else:
+                     res_str = "2560x1440"
 
             normalized_image_size = self._normalize_image_size_value(
                 image_size or tool_conf.get("image_size") or tool_conf.get("imageSize")
@@ -10655,6 +10866,8 @@ class MediaGenerationService:
             "wan-flash-v2v": "wan/2-6-flash-video-to-video",
             "grok-imagine-video": "grok-imagine/text-to-video",
             "gemini-omni-video": "gemini-omni-video",
+            "topaz-video-upscale": "topaz/video-upscale",
+            "topaz/video-upscale": "topaz/video-upscale",
         }
         if gen_type in {"video", "image"}:
             remapped_model = model_alias.get(str(model or "").strip().lower())
@@ -11120,6 +11333,36 @@ class MediaGenerationService:
                 else:
                     payload_input.pop("image_size", None)
         elif gen_type == "video":
+            is_topaz_video_upscale = bool(str(model_lower or "").strip() == "topaz/video-upscale")
+            if is_topaz_video_upscale:
+                source_video_url = str(
+                    tool_conf.get("video_url")
+                    or tool_conf.get("source_video_url")
+                    or ""
+                ).strip()
+                if not source_video_url:
+                    ref_videos_raw = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
+                    if isinstance(ref_videos_raw, list):
+                        for item in ref_videos_raw:
+                            text = str(item or "").strip()
+                            if text:
+                                source_video_url = text
+                                break
+
+                if not source_video_url:
+                    return {
+                        "error": "KIE submission validation failed",
+                        "details": "topaz/video-upscale requires input.video_url",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
+
+                upscale_factor = str(tool_conf.get("upscale_factor") or "2").strip() or "2"
+                payload_input = {
+                    "video_url": source_video_url,
+                    "upscale_factor": upscale_factor,
+                }
+
             duration_value = 5
             try:
                 duration_value = int(float(duration if duration is not None else 5))

@@ -378,6 +378,8 @@ class Entity(Base):
     dependency_strategy = Column(JSON, default={})
 
     image_url = Column(String, nullable=True)
+    video_url = Column(String, nullable=True)
+    audio_url = Column(String, nullable=True)
     generation_prompt_en = Column(Text, nullable=True)
     generation_prompt_cn = Column(Text, nullable=True)
     anchor_description = Column(Text, nullable=True)

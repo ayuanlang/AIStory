@@ -7,8 +7,8 @@ import importlib
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
     config = {
-        "queue_threads": 4,
-        "callback_threads": 20,
+        "queue_threads": 10,
+        "callback_threads": 10,
         "pure_callback_mode_auto": True,
         "pure_callback_mode": False,
         "callback_loss_retry_enabled": True,
@@ -16,7 +16,7 @@ def _load_queue_config():
         "callback_loss_max_submit_retries": 1,
         "callback_compensation_scan_enabled": True,
         "callback_compensation_scan_interval_seconds": 60,
-        "callback_compensation_scan_batch_size": 20,
+        "callback_compensation_scan_batch_size": 10,
     }
     if os.path.exists(QUEUE_CONFIG_FILE):
         try:
@@ -334,6 +334,117 @@ def admin_cancel_all_queued(current_user: "User" = Depends(get_current_user)):
     count = cancel_generation_tasks(reason="Cleared queued by Admin")
     return {"status": "ok", "canceled_count": count}
 
+
+@router.get("/admin/queue/stats")
+def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
+    if not getattr(current_user, "is_superuser", False):
+        raise HTTPException(status_code=403, detail="Superuser required")
+
+    from app.services.generation_task_queue import get_generation_queue_runtime_stats
+
+    runtime_stats = get_generation_queue_runtime_stats()
+
+    with GENERATION_CALLBACK_LOCK:
+        _prune_generation_callback_locked()
+        callback_store_count = len(GENERATION_CALLBACK_STORE)
+
+    with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
+        callback_async_inflight = len(GENERATION_CALLBACK_ASYNC_INFLIGHT)
+    with IMAGE_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        image_callback_persist_inflight = len(IMAGE_CALLBACK_PERSIST_INFLIGHT)
+    with VIDEO_CALLBACK_PERSIST_INFLIGHT_LOCK:
+        video_callback_persist_inflight = len(VIDEO_CALLBACK_PERSIST_INFLIGHT)
+
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        image_jobs = [dict(job or {}) for job in IMAGE_JOB_STORE.values()]
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        video_jobs = [dict(job or {}) for job in VIDEO_JOB_STORE.values()]
+
+    active_statuses = {"queued", "running", "processing", "pending", "storing_asset"}
+    callback_pending_count = 0
+    callback_waiting_count = 0
+    callback_retrying_count = 0
+    callback_timeout_failed_count = 0
+    compensation_candidate_count = 0
+    active_polling_like_count = 0
+
+    pure_callback_mode_auto = _queue_cfg_bool("pure_callback_mode_auto", True)
+    pure_callback_mode_manual = _queue_cfg_bool("pure_callback_mode", False)
+    pure_callback_mode_startup_public_deploy = bool(
+        str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+        or str(os.getenv("RENDER") or "").strip()
+        or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+        or str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+        or str(os.getenv("VERCEL_URL") or "").strip()
+    )
+    pure_callback_mode_effective = bool(_is_pure_callback_mode_enabled())
+
+    for job in image_jobs + video_jobs:
+        status = _normalize_generation_status(job.get("status"))
+        callback_ticket = _extract_job_provider_callback_ticket(job)
+        upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
+        retry_count = _safe_int(job.get("callback_submit_retries"), 0)
+        has_retry_at = bool(str(job.get("callback_retry_at") or "").strip())
+        is_timeout_failed = bool(
+            status == "failed"
+            and "timed out" in str(job.get("error") or "").strip().lower()
+        )
+
+        if status in active_statuses and callback_ticket:
+            callback_pending_count += 1
+        if callback_ticket and ("callback_pending" in upstream_state):
+            callback_waiting_count += 1
+        if retry_count > 0 or has_retry_at:
+            callback_retrying_count += 1
+        if is_timeout_failed and callback_ticket:
+            callback_timeout_failed_count += 1
+        if callback_ticket and (status in {"queued", "running"} or is_timeout_failed):
+            compensation_candidate_count += 1
+
+        if status in active_statuses and (not pure_callback_mode_effective):
+            active_polling_like_count += 1
+
+    retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
+    retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
+    max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
+
+    return {
+        "runtime": runtime_stats,
+        "callback": {
+            "store_count": callback_store_count,
+            "async_inflight": callback_async_inflight,
+            "image_persist_inflight": image_callback_persist_inflight,
+            "video_persist_inflight": video_callback_persist_inflight,
+            "requested_threads": int(_q_conf.get("callback_threads", 10) or 10),
+            "effective_threads": int(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY),
+            "pending_jobs": callback_pending_count,
+            "waiting_finalize_jobs": callback_waiting_count,
+        },
+        "polling": {
+            "pure_callback_mode_effective": pure_callback_mode_effective,
+            "pure_callback_mode_auto": bool(pure_callback_mode_auto),
+            "pure_callback_mode_manual": bool(pure_callback_mode_manual),
+            "startup_public_deploy_detected": bool(pure_callback_mode_startup_public_deploy),
+            "startup_mode": "auto_public" if pure_callback_mode_auto and pure_callback_mode_startup_public_deploy else ("auto_local" if pure_callback_mode_auto else ("manual_on" if pure_callback_mode_manual else "manual_off")),
+            "active_polling_like_jobs": active_polling_like_count,
+            "queue_poll_seconds": float(runtime_stats.get("workers", {}).get("queue_poll_seconds") or 0.0),
+        },
+        "callback_loss_retry": {
+            "enabled": retry_enabled,
+            "retry_after_seconds": retry_after_seconds,
+            "max_submit_retries": max_submit_retries,
+            "retrying_jobs": callback_retrying_count,
+            "timeout_failed_jobs": callback_timeout_failed_count,
+            "compensation_candidate_jobs": compensation_candidate_count,
+            "scan_enabled": _queue_cfg_bool("callback_compensation_scan_enabled", True),
+            "scan_interval_seconds": _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600),
+            "scan_batch_size": _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200),
+            "worker_started": bool(_CALLBACK_COMPENSATION_STARTED),
+        },
+    }
+
 media_service = MediaGenerationService()
 logger = logging.getLogger("api_logger")
 
@@ -631,7 +742,7 @@ _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
 _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _CALLBACK_FINALIZE_CAP = max(1, min(10, _PER_PROCESS_POOL_BUDGET // 4))
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 20)), _CALLBACK_FINALIZE_CAP))
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 10)), _CALLBACK_FINALIZE_CAP))
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -652,10 +763,10 @@ WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 _UNSIGNED_WEBHOOK_WARNING_EMITTED = False
 
-if int(_q_conf.get("callback_threads", 20)) > GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY:
+if int(_q_conf.get("callback_threads", 10)) > GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY:
     logger.warning(
         "generation callback finalize concurrency capped | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
-        int(_q_conf.get("callback_threads", 20)),
+        int(_q_conf.get("callback_threads", 10)),
         GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY,
         _POOL_CAPACITY,
         _WEB_CONCURRENCY,
@@ -763,14 +874,13 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_image_job(
+        return await _run_generate_image_job(
             job_id,
             int(user_id),
             req_payload,
             provider_callback_ticket=provider_callback_ticket,
             provider_callback_url=provider_callback_url,
         )
-        return
     if safe_kind == "video":
         provider_callback_ticket = f"video-job-{job_id}"
         provider_callback_url = ""
@@ -778,14 +888,13 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        await _run_generate_video_job(
+        return await _run_generate_video_job(
             job_id,
             int(user_id),
             req_payload,
             provider_callback_ticket=provider_callback_ticket,
             provider_callback_url=provider_callback_url,
         )
-        return
     raise ValueError(f"Unsupported generation queue task kind: {kind}")
 
 
@@ -809,7 +918,7 @@ def _run_callback_compensation_once() -> None:
     if not _queue_cfg_bool("callback_compensation_scan_enabled", True):
         return
 
-    safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 20, minimum=1, maximum=200)
+    safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
     retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
     retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
     timeout_retry_after_seconds = min(retry_after_seconds, 120)
@@ -838,7 +947,7 @@ def _run_callback_compensation_once() -> None:
     if not candidates:
         return
 
-    from app.services.generation_task_queue import enqueue_generation_task, get_generation_task_status
+    from app.services.generation_task_queue import get_generation_task_status, requeue_generation_task
 
     for job_id, job in candidates:
         callback_ticket = _extract_job_provider_callback_ticket(job)
@@ -887,7 +996,7 @@ def _run_callback_compensation_once() -> None:
             payload = {}
 
         try:
-            enqueue_generation_task(job_id=job_id, kind="video", user_id=int(job.get("user_id") or queue_row.get("user_id") or 0), payload=payload)
+            requeue_generation_task(job_id, reason=None)
             _set_video_job(
                 job_id,
                 status="queued",
@@ -1166,7 +1275,7 @@ def _extract_callback_status(payload: Dict[str, Any]) -> str:
             value = str(source.get(key) or "").strip()
             if value:
                 if log_matches:
-                    logger.info(f"[DEBUG-CB-STATUS] Found status '{value}' at {path_prefix}.{key}")
+                    logger.debug(f"[DEBUG-CB-STATUS] Found status '{value}' at {path_prefix}.{key}")
                 return value
         return ""
 
@@ -3327,6 +3436,8 @@ def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
 
 
 async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> None:
+    from app.services.generation_task_queue import mark_generation_task_status_external
+
     stable_ticket = str(callback_ticket or "").strip()
     if not stable_ticket:
         return
@@ -3343,6 +3454,13 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         updated_job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
+
+        if updated_status in {"succeeded", "completed", "done"}:
+            mark_generation_task_status_external(job_id, status="completed", error=None)
+        elif updated_status in {"failed", "error"}:
+            mark_generation_task_status_external(job_id, status="failed", error=str(updated_job.get("error") or "callback finalized failed") or None)
+        elif updated_status in {"canceled", "cancelled"}:
+            mark_generation_task_status_external(job_id, status="canceled", error=str(updated_job.get("error") or "Cancelled") or None)
 
         if updated_status == previous_status and updated_result_url == previous_result_url:
             continue
@@ -3650,6 +3768,8 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
 
 
 async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> None:
+    from app.services.generation_task_queue import mark_generation_task_status_external
+
     stable_ticket = str(callback_ticket or "").strip()
     if not stable_ticket:
         return
@@ -3668,6 +3788,13 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
+
+        if updated_status in {"succeeded", "completed", "done"}:
+            mark_generation_task_status_external(job_id, status="completed", error=None)
+        elif updated_status in {"failed", "error"}:
+            mark_generation_task_status_external(job_id, status="failed", error=str(updated_job.get("error") or "callback finalized failed") or None)
+        elif updated_status in {"canceled", "cancelled"}:
+            mark_generation_task_status_external(job_id, status="canceled", error=str(updated_job.get("error") or "Cancelled") or None)
 
         if updated_status == previous_status and updated_result_url == previous_result_url:
             continue
@@ -18504,6 +18631,8 @@ class EntityCreate(BaseModel):
     description: str
     episode_id: Optional[int] = None
     image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    audio_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
     generation_prompt_cn: Optional[str] = None
     anchor_description: Optional[str] = None
@@ -18534,6 +18663,8 @@ class EntityOut(BaseModel):
     type: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str]
+    video_url: Optional[str] = None
+    audio_url: Optional[str] = None
     generation_prompt_en: Optional[str]
     generation_prompt_cn: Optional[str]
     anchor_description: Optional[str]
@@ -18732,6 +18863,8 @@ def create_entity(
     if existing_entity:
         existing_entity.description = entity.description or existing_entity.description
         existing_entity.image_url = entity.image_url or existing_entity.image_url
+        existing_entity.video_url = entity.video_url or existing_entity.video_url
+        existing_entity.audio_url = entity.audio_url or existing_entity.audio_url
         existing_entity.generation_prompt_en = entity.generation_prompt_en or existing_entity.generation_prompt_en
         existing_entity.generation_prompt_cn = entity.generation_prompt_cn or existing_entity.generation_prompt_cn
         existing_entity.anchor_description = entity.anchor_description or existing_entity.anchor_description
@@ -18774,6 +18907,8 @@ def create_entity(
         type=entity.type,
         description=entity.description,
         image_url=entity.image_url,
+        video_url=entity.video_url,
+        audio_url=entity.audio_url,
         generation_prompt_en=entity.generation_prompt_en,
         generation_prompt_cn=entity.generation_prompt_cn,
         anchor_description=entity.anchor_description,
@@ -19109,6 +19244,8 @@ async def clone_entity_with_llm(
         type=source.type,
         description=_pick_text(generated.get("description"), source.description),
         image_url=source.image_url,
+        video_url=source.video_url,
+        audio_url=source.audio_url,
         generation_prompt_en=candidate_prompt_en,
         generation_prompt_cn=candidate_prompt_cn,
         anchor_description=_pick_text(generated.get("anchor_description"), source.anchor_description),
@@ -19137,6 +19274,8 @@ class EntityUpdate(BaseModel):
     description: Optional[str] = None
     episode_id: Optional[int] = None
     image_url: Optional[str] = None
+    video_url: Optional[str] = None
+    audio_url: Optional[str] = None
     generation_prompt_en: Optional[str] = None
     generation_prompt_cn: Optional[str] = None
     anchor_description: Optional[str] = None
@@ -24087,6 +24226,9 @@ class VideoGenerationRequest(BaseModel):
     callback_url: Optional[str] = None
     callbackUrl: Optional[str] = None
     callBackUrl: Optional[str] = None
+    video_url: Optional[str] = None
+    source_video_url: Optional[str] = None
+    upscale_factor: Optional[Union[str, int]] = None
     seed: Optional[int] = None
     use_prev_video: Optional[bool] = False
 
@@ -24414,6 +24556,18 @@ def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional
         ref_video_urls = _limit_string_list_input(req.ref_video_urls, None)
         if ref_video_urls:
             options["reference_video_urls"] = ref_video_urls
+
+    source_video_url = str(
+        req.video_url
+        or req.source_video_url
+        or ""
+    ).strip()
+    if source_video_url:
+        options["video_url"] = source_video_url
+
+    upscale_factor_text = str(req.upscale_factor or "").strip()
+    if upscale_factor_text:
+        options["upscale_factor"] = upscale_factor_text
 
     normalized_mode = str(mode if mode is not None else (req.mode or "")).strip().lower()
     if normalized_mode:
@@ -26525,6 +26679,7 @@ async def _run_generate_image(
     job_id: Optional[str] = None,
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
+    force_pure_callback_mode: bool = False,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -26651,6 +26806,36 @@ async def _run_generate_image(
             if w <= 0 or h <= 0:
                 return (None, None)
             return (w, h)
+
+        def _infer_ratio_from_dims(width_value: Any, height_value: Any) -> Optional[str]:
+            try:
+                w = int(width_value)
+                h = int(height_value)
+            except Exception:
+                return None
+            if w <= 0 or h <= 0:
+                return None
+
+            target_ratio = float(w) / float(h)
+            ratio_candidates = [
+                "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3",
+                "5:4", "4:5", "21:9", "9:21", "2:1", "1:2", "3:1", "1:3",
+            ]
+            best_ratio = None
+            best_distance = None
+            for candidate in ratio_candidates:
+                pair = _parse_aspect_ratio_pair(candidate)
+                if not pair:
+                    continue
+                rw, rh = pair
+                if rw <= 0 or rh <= 0:
+                    continue
+                candidate_ratio = float(rw) / float(rh)
+                distance = abs(math.log(target_ratio) - math.log(candidate_ratio))
+                if best_distance is None or distance < best_distance:
+                    best_distance = distance
+                    best_ratio = candidate
+            return best_ratio
 
         def _get_asset_image_ratio_config_local() -> Dict[str, str]:
             default_cfg = {
@@ -26788,6 +26973,35 @@ async def _run_generate_image(
         except: width = None if is_keyframe_generation else 720
         try: height = int(height) if height else (None if is_keyframe_generation else 1080)
         except: height = None if is_keyframe_generation else 1080
+
+        # Keep ratio consistent with resolved dimensions when they exist.
+        # This avoids stale/default aspect_ratio (for example subject default 16:9)
+        # overriding portrait project resolutions such as 1440x2560.
+        if not is_keyframe_generation and not is_subject_generation and width and height:
+            inferred_ratio = _infer_ratio_from_dims(width, height)
+            if inferred_ratio:
+                current_ratio_pair = _parse_aspect_ratio_pair(aspect_ratio) if aspect_ratio else None
+                ratio_mismatch = False
+                if not current_ratio_pair:
+                    ratio_mismatch = True
+                else:
+                    try:
+                        current_ratio_value = float(current_ratio_pair[0]) / float(current_ratio_pair[1])
+                        target_ratio_value = float(width) / float(height)
+                        ratio_mismatch = abs(math.log(current_ratio_value) - math.log(target_ratio_value)) > 0.08
+                    except Exception:
+                        ratio_mismatch = True
+
+                if ratio_mismatch:
+                    logger.warning(
+                        "[GenerateImage] Aspect ratio corrected by dimensions | project_id=%s old_ratio=%s width=%s height=%s new_ratio=%s",
+                        resolved_project_id,
+                        aspect_ratio,
+                        width,
+                        height,
+                        inferred_ratio,
+                    )
+                    aspect_ratio = inferred_ratio
 
         if not image_size and not is_keyframe_generation:
             max_side = max(width or 0, height or 0)
@@ -27052,6 +27266,8 @@ async def _run_generate_image(
             image_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
             image_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
+        if force_pure_callback_mode and provider_callback_ticket and provider_callback_url:
+            image_provider_options["_pure_callback_mode"] = True
         image_provider_options["_request_user_id"] = int(current_user.id)
         if _build_generation_filename_base(req, db):
             image_provider_options["_request_filename_base"] = _build_generation_filename_base(req, db)
@@ -27644,7 +27860,9 @@ async def _run_generate_image_job(
     req_payload: Dict[str, Any],
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
-) -> None:
+) -> Dict[str, Any]:
+    from app.services.generation_task_queue import mark_generation_task_status_external
+
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
@@ -27671,7 +27889,8 @@ async def _run_generate_image_job(
                 finished_at=now_bj_iso(),
                 error="User not found",
             )
-            return
+            mark_generation_task_status_external(job_id, status="failed", error="User not found")
+            return {"defer_completion": False}
         user_principal = _snapshot_user_principal(user)
 
         req_obj = GenerationRequest(**req_payload)
@@ -27693,9 +27912,31 @@ async def _run_generate_image_job(
                 job_id=job_id,
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
+                force_pure_callback_mode=True,
             ),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )
+        if isinstance(result, dict) and result.get("pending_callback"):
+            with IMAGE_JOB_LOCK:
+                current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
+            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            provider_task_id = str(
+                (metadata or {}).get("task_id")
+                or (metadata or {}).get("taskId")
+                or result.get("provider_task_id")
+                or ""
+            ).strip()
+            update_fields: Dict[str, Any] = {
+                "status": "running",
+                "error": None,
+                "upstream_submit_state": "callback_pending",
+            }
+            if provider_task_id:
+                update_fields["provider_task_id"] = provider_task_id
+            _set_image_job(job_id, **update_fields)
+            mark_generation_task_status_external(job_id, status="running", error=None)
+            return {"defer_completion": True}
+
         with IMAGE_JOB_LOCK:
             _current_image_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
         _status_to_set = "storing_asset" if _current_image_job.get("status") == "storing_asset" else "succeeded"
@@ -27707,6 +27948,8 @@ async def _run_generate_image_job(
             result=result,
             error=None,
         )
+        mark_generation_task_status_external(job_id, status="completed", error=None)
+        return {"defer_completion": False}
     except asyncio.TimeoutError:
         with IMAGE_JOB_LOCK:
             current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
@@ -27742,6 +27985,8 @@ async def _run_generate_image_job(
             finished_at=now_bj_iso(),
             error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s",
         )
+        mark_generation_task_status_external(job_id, status="failed", error=f"image job timed out after {IMAGE_JOB_MAX_RUNNING_SECONDS}s")
+        return {"defer_completion": False}
     except asyncio.CancelledError:
         with IMAGE_JOB_LOCK:
             current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
@@ -27777,6 +28022,7 @@ async def _run_generate_image_job(
             finished_at=now_bj_iso(),
             error="Cancelled by user",
         )
+        mark_generation_task_status_external(job_id, status="canceled", error="Cancelled by user")
         raise
     except HTTPException as e:
         with IMAGE_JOB_LOCK:
@@ -27806,13 +28052,16 @@ async def _run_generate_image_job(
                 provider_callback_ticket or None,
                 str(e.detail),
             )
-            return
+            mark_generation_task_status_external(job_id, status="running", error=None)
+            return {"defer_completion": True}
         _set_image_job(
             job_id,
             status="failed",
             finished_at=now_bj_iso(),
             error=str(e.detail),
         )
+        mark_generation_task_status_external(job_id, status="failed", error=str(e.detail))
+        return {"defer_completion": False}
     except Exception as e:
         with IMAGE_JOB_LOCK:
             current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})
@@ -27832,6 +28081,8 @@ async def _run_generate_image_job(
             finished_at=now_bj_iso(),
             error=str(e),
         )
+        mark_generation_task_status_external(job_id, status="failed", error=str(e))
+        return {"defer_completion": False}
     finally:
         with IMAGE_JOB_LOCK:
             snapshot = dict(IMAGE_JOB_STORE.get(job_id) or {})
@@ -29056,6 +29307,7 @@ async def _run_generate_video(
     db: Session,
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
+    force_pure_callback_mode: bool = False,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -29796,7 +30048,7 @@ async def _run_generate_video(
             video_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
             video_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
-        if _is_pure_callback_mode_enabled() and provider_callback_ticket and provider_callback_url:
+        if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
             resolved_video_provider == "kie"
@@ -30243,7 +30495,9 @@ async def _run_generate_video_job(
     req_payload: Dict[str, Any],
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
-):
+)-> Dict[str, Any]:
+    from app.services.generation_task_queue import mark_generation_task_status_external
+
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
@@ -30257,7 +30511,8 @@ async def _run_generate_video_job(
                 finished_at=now_bj_iso(),
                 error="User not found",
             )
-            return
+            mark_generation_task_status_external(job_id, status="failed", error="User not found")
+            return {"defer_completion": False}
         user_principal = _snapshot_user_principal(user)
 
         req_obj = VideoGenerationRequest(**req_payload)
@@ -30278,6 +30533,7 @@ async def _run_generate_video_job(
                 db,
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
+                force_pure_callback_mode=True,
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
@@ -30310,7 +30566,8 @@ async def _run_generate_video_job(
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
             _set_video_job(job_id, **update_fields)
-            return
+            mark_generation_task_status_external(job_id, status="running", error=None)
+            return {"defer_completion": True}
         _set_video_job(
             job_id,
             status="succeeded",
@@ -30318,6 +30575,8 @@ async def _run_generate_video_job(
             result=result,
             error=None,
         )
+        mark_generation_task_status_external(job_id, status="completed", error=None)
+        return {"defer_completion": False}
     except asyncio.TimeoutError:
         with VIDEO_JOB_LOCK:
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -30337,6 +30596,8 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
         )
+        mark_generation_task_status_external(job_id, status="failed", error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s")
+        return {"defer_completion": False}
     except asyncio.CancelledError:
         with VIDEO_JOB_LOCK:
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -30356,6 +30617,7 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error="Cancelled by user",
         )
+        mark_generation_task_status_external(job_id, status="canceled", error="Cancelled by user")
         raise
     except HTTPException as e:
         with VIDEO_JOB_LOCK:
@@ -30385,7 +30647,8 @@ async def _run_generate_video_job(
                 provider_callback_ticket or None,
                 str(e.detail),
             )
-            return
+            mark_generation_task_status_external(job_id, status="running", error=None)
+            return {"defer_completion": True}
         logger.warning(
             "[VideoJob] failed | job_id=%s user_id=%s detail=%s",
             job_id,
@@ -30398,6 +30661,8 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e.detail),
         )
+        mark_generation_task_status_external(job_id, status="failed", error=str(e.detail))
+        return {"defer_completion": False}
     except Exception as e:
         with VIDEO_JOB_LOCK:
             current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -30422,7 +30687,8 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e),
         )
-        return JSONResponse(status_code=500, content={"detail": str(e), "job_id": job_id})
+        mark_generation_task_status_external(job_id, status="failed", error=str(e))
+        return {"defer_completion": False}
     finally:
         with VIDEO_JOB_LOCK:
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
@@ -35554,7 +35820,7 @@ class QueueConfigBase(BaseModel):
     callback_loss_max_submit_retries: int = 1
     callback_compensation_scan_enabled: bool = True
     callback_compensation_scan_interval_seconds: int = 60
-    callback_compensation_scan_batch_size: int = 20
+    callback_compensation_scan_batch_size: int = 10
 
 @router.get("/admin/queue/config", response_model=QueueConfigBase)
 async def admin_get_queue_config(current_user: User = Depends(get_current_user)):

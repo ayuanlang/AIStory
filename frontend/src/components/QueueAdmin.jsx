@@ -1,14 +1,14 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { RefreshCw, Trash2, StopCircle, Clock, PlayCircle, Loader2, Save, X } from 'lucide-react';
-import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
+import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, getAdminQueueStats, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
 import { confirmUiMessage, notifyUiMessage } from '../lib/uiMessage';
 
 export default function QueueAdmin() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [config, setConfig] = useState({
-    queue_threads: 20,
-    callback_threads: 20,
+    queue_threads: 10,
+    callback_threads: 10,
     pure_callback_mode_auto: true,
     pure_callback_mode: false,
     callback_loss_retry_enabled: true,
@@ -16,11 +16,12 @@ export default function QueueAdmin() {
     callback_loss_max_submit_retries: 1,
     callback_compensation_scan_enabled: true,
     callback_compensation_scan_interval_seconds: 60,
-    callback_compensation_scan_batch_size: 20,
+    callback_compensation_scan_batch_size: 10,
   });
   const [savingConfig, setSavingConfig] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [systemApis, setSystemApis] = useState([]);
+  const [queueStats, setQueueStats] = useState(null);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -48,11 +49,53 @@ export default function QueueAdmin() {
     } catch(e) {}
   };
 
+  const fetchStats = async () => {
+    try {
+      const stats = await getAdminQueueStats();
+      setQueueStats(stats || null);
+    } catch(e) {}
+  };
+
+  const formatDuration = (seconds) => {
+    const safe = Number(seconds || 0);
+    if (!safe || safe < 1) return '0s';
+    const h = Math.floor(safe / 3600);
+    const m = Math.floor((safe % 3600) / 60);
+    const s = Math.floor(safe % 60);
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([fetchTasks(), fetchStats()]);
+  };
+
+  const resolvePureCallbackRuntime = () => {
+    const polling = queueStats?.polling || {};
+    const effective = Boolean(polling.pure_callback_mode_effective);
+    const startupMode = String(polling.startup_mode || '').trim();
+    let source = '未知';
+    if (startupMode === 'auto_public') source = '自动模式(公网部署)';
+    else if (startupMode === 'auto_local') source = '自动模式(本地/非公网)';
+    else if (startupMode === 'manual_on') source = '手动模式(开启)';
+    else if (startupMode === 'manual_off') source = '手动模式(关闭)';
+    return {
+      effective,
+      source,
+      text: effective ? '当前运行: 纯回调模式' : '当前运行: 轮询模式',
+    };
+  };
+
   useEffect(() => {
     fetchTasks();
+    fetchStats();
     fetchConfig();
     fetchSystemApis();
-    const timer = setInterval(fetchTasks, 30000);
+    const timer = setInterval(() => {
+      fetchTasks();
+      fetchStats();
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -103,6 +146,8 @@ export default function QueueAdmin() {
     }
   };
 
+  const pureCallbackRuntime = resolvePureCallbackRuntime();
+
   return (
     <div className="p-6 max-w-7xl mx-auto text-white space-y-6">
       <div className="flex items-center justify-between">
@@ -114,9 +159,59 @@ export default function QueueAdmin() {
           <button onClick={handleCancelAll} className="flex items-center gap-2 px-4 py-2 bg-red-600/20 text-red-500 rounded-lg hover:bg-red-600/40 transition-colors">
             <StopCircle size={18} /> Cancel All Queued
           </button>
-          <button onClick={fetchTasks} className="flex items-center gap-2 px-4 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors">
+          <button onClick={refreshAll} className="flex items-center gap-2 px-4 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors">
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
+          <div className="text-xs text-gray-400">任务队列</div>
+          <div className="text-2xl font-bold text-blue-300">{queueStats?.runtime?.queue?.active_count ?? 0}</div>
+          <div className="text-xs text-gray-500">活动任务(queued + running)</div>
+          <div className="text-xs text-gray-300">Queued: {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | Running: {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
+          <div className="text-xs text-gray-300">最近1小时完成: {queueStats?.runtime?.queue?.finished_last_hour ?? 0}</div>
+          <div className="text-xs text-amber-300">最老排队等待: {formatDuration(queueStats?.runtime?.queue?.queued_oldest_wait_seconds)}</div>
+        </div>
+
+        <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
+          <div className="text-xs text-gray-400">工作进程</div>
+          <div className="text-2xl font-bold text-emerald-300">{queueStats?.runtime?.workers?.active_running_workers ?? 0}</div>
+          <div className="text-xs text-gray-500">当前活跃 worker 数</div>
+          <div className="text-xs text-gray-300">配置线程: {queueStats?.runtime?.workers?.configured_threads ?? 0}</div>
+          <div className="text-xs text-gray-300">线程: {queueStats?.runtime?.workers?.effective_threads ?? 0} / 请求 {queueStats?.runtime?.workers?.requested_threads ?? 0}</div>
+          {queueStats?.runtime?.workers?.restart_required_for_thread_change ? (
+            <div className="text-xs text-amber-300">检测到线程配置已变化，需重启后端以应用</div>
+          ) : (
+            <div className="text-xs text-gray-500">线程配置与当前运行态一致</div>
+          )}
+          <div className="text-xs text-gray-300">心跳异常任务: {queueStats?.runtime?.workers?.stale_running_tasks ?? 0}</div>
+          <div className="text-xs text-amber-300">最久运行: {formatDuration(queueStats?.runtime?.workers?.oldest_running_seconds)}</div>
+        </div>
+
+        <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
+          <div className="text-xs text-gray-400">回调队列</div>
+          <div className="text-2xl font-bold text-cyan-300">{queueStats?.callback?.pending_jobs ?? 0}</div>
+          <div className="text-xs text-gray-500">待回调/待落库任务</div>
+          <div className="text-xs text-gray-300">回调缓存: {queueStats?.callback?.store_count ?? 0}</div>
+          <div className="text-xs text-gray-300">Async Inflight: {queueStats?.callback?.async_inflight ?? 0}</div>
+          <div className="text-xs text-gray-300">Persist Inflight(I/V): {queueStats?.callback?.image_persist_inflight ?? 0} / {queueStats?.callback?.video_persist_inflight ?? 0}</div>
+          <div className="text-xs text-gray-300">回调并发: {queueStats?.callback?.effective_threads ?? 0} / 请求 {queueStats?.callback?.requested_threads ?? 0}</div>
+        </div>
+
+        <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
+          <div className="text-xs text-gray-400">轮询与回调失败补偿</div>
+          <div className="text-2xl font-bold text-orange-300">{queueStats?.callback_loss_retry?.retrying_jobs ?? 0}</div>
+          <div className="text-xs text-gray-500">补偿重试中的任务</div>
+          <div className="text-xs text-gray-300">轮询模式活跃任务: {queueStats?.polling?.active_polling_like_jobs ?? 0}</div>
+          <div className="text-xs text-gray-300">纯回调模式生效: {queueStats?.polling?.pure_callback_mode_effective ? '是' : '否'}</div>
+          <div className="text-xs text-gray-300">启动模式: {queueStats?.polling?.startup_mode || '-'}</div>
+          <div className="text-xs text-gray-300">自动模式配置: {queueStats?.polling?.pure_callback_mode_auto ? '开' : '关'} | 手动模式配置: {queueStats?.polling?.pure_callback_mode_manual ? '开' : '关'}</div>
+          <div className="text-xs text-gray-300">启动环境判定(public deploy): {queueStats?.polling?.startup_public_deploy_detected ? '是' : '否'}</div>
+          <div className="text-xs text-gray-300">超时失败任务: {queueStats?.callback_loss_retry?.timeout_failed_jobs ?? 0}</div>
+          <div className="text-xs text-gray-300">补偿候选任务: {queueStats?.callback_loss_retry?.compensation_candidate_jobs ?? 0}</div>
+          <div className="text-xs text-gray-300">补偿线程: {queueStats?.callback_loss_retry?.worker_started ? '运行中' : '未启动'}</div>
         </div>
       </div>
 
@@ -126,12 +221,12 @@ export default function QueueAdmin() {
           <div className="space-y-1 flex-1 max-w-[200px]">
             <label className="text-sm text-gray-400">Queue Worker Threads</label>
             <input type="number" min="1" value={config.queue_threads} onChange={e => setConfig({...config, queue_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-            <div className="text-xs text-gray-500">Default: 20</div>
+            <div className="text-xs text-gray-500">Default: 10</div>
           </div>
           <div className="space-y-1 flex-1 max-w-[200px]">
             <label className="text-sm text-gray-400">Callback Threads</label>
             <input type="number" min="1" value={config.callback_threads} onChange={e => setConfig({...config, callback_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-            <div className="text-xs text-gray-500">Default: 20</div>
+            <div className="text-xs text-gray-500">Default: 10</div>
           </div>
           <div className="space-y-1 flex-1 min-w-[260px]">
             <label className="text-sm text-gray-400 block">Video Completion Mode</label>
@@ -143,6 +238,12 @@ export default function QueueAdmin() {
               <input type="checkbox" disabled={Boolean(config.pure_callback_mode_auto)} checked={Boolean(config.pure_callback_mode)} onChange={e => setConfig({...config, pure_callback_mode: e.target.checked})} />
               Pure Callback Mode (submit then wait callback)
             </label>
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <span className={`px-2 py-0.5 rounded-full border ${pureCallbackRuntime.effective ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10' : 'text-amber-300 border-amber-500/40 bg-amber-500/10'}`}>
+                {pureCallbackRuntime.text}
+              </span>
+              <span className="text-gray-400">来源: {pureCallbackRuntime.source}</span>
+            </div>
             <div className="text-xs text-gray-500">Auto enabled: deploy env uses pure callback, local keeps original polling mode.</div>
           </div>
           <div className="space-y-1 flex-1 min-w-[260px]">

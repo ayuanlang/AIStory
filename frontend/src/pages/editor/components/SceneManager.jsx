@@ -163,6 +163,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     const isVideoRefManager = storageKey === 'video_ref_image_urls';
     const resolvedVideoMode = resolveUnifiedVideoMode(tech);
     const isVideoManualOverride = isVideoRefManager && tech.video_ref_image_urls_manual === true;
+    const isVideoRefUrl = (url) => /\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$/i.test(String(url || '').trim());
 
     const getEntityMatches = () => collectMatchedEntitiesFromPrompt({
         promptText,
@@ -383,6 +384,47 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         onUpdate({ technical_notes: JSON.stringify(newTech) });
     };
 
+    const handleReplace = (currentUrl, nextUrl) => {
+        if (useSequenceLogic || !currentUrl || !nextUrl || currentUrl === nextUrl) return;
+
+        const replacedRefs = activeRefs.map((url) => (url === currentUrl ? nextUrl : url)).filter(Boolean);
+        const dedupedRefs = [...new Set(replacedRefs)];
+        const userEditedKey = `${storageKey}_user_edited`;
+        let deleted = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
+        if (!deleted.includes(currentUrl)) {
+            deleted = [...deleted, currentUrl];
+        }
+        deleted = deleted.filter((url) => url !== nextUrl);
+
+        const newTech = {
+            ...tech,
+            [storageKey]: dedupedRefs,
+            deleted_ref_urls: deleted,
+            [userEditedKey]: true,
+        };
+        if (isVideoRefManager) {
+            newTech.video_ref_image_urls_manual = true;
+        }
+        onUpdate({ technical_notes: JSON.stringify(newTech) });
+        if (selectedImage === currentUrl) {
+            setSelectedImage(nextUrl);
+        }
+    };
+
+    const handleOpenReplacePicker = (currentUrl) => {
+        if (!onPickMedia || !currentUrl) return;
+        onPickMedia((pickedUrl, _type, selectedItems) => {
+            const nextUrl = selectedItems?.[0]?.url || pickedUrl;
+            handleReplace(currentUrl, nextUrl);
+        }, {
+            ...pickContext,
+            shotId: shot?.id,
+            desiredAssetType: 'video',
+            lockAssetType: true,
+            allowMultiSelect: false,
+        });
+    };
+
     const getEntityInfo = (url) => {
         return entities.find(e => e.image_url === url);
     };
@@ -455,12 +497,22 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                             {/* Actions */}
                             <div className="pt-4 mt-auto border-t border-white/10 flex flex-col gap-2">
                                 {activeRefs.includes(selectedImage) ? (
-                                    <button 
-                                        onClick={() => { handleRemove(selectedImage); setSelectedImage(null); }}
-                                        className="w-full py-2 bg-red-500/10 text-red-400 border border-red-500/30 rounded flex items-center justify-center gap-2 hover:bg-red-500/20 text-sm font-medium"
-                                    >
-                                        <Trash2 size={16} /> Remove Reference
-                                    </button>
+                                    <>
+                                        {!useSequenceLogic && onPickMedia && isVideoRefUrl(selectedImage) && (
+                                            <button
+                                                onClick={() => handleOpenReplacePicker(selectedImage)}
+                                                className="w-full py-2 bg-sky-500/10 text-sky-300 border border-sky-500/30 rounded flex items-center justify-center gap-2 hover:bg-sky-500/20 text-sm font-medium"
+                                            >
+                                                <Upload size={16} /> {t('替换视频', 'Replace Video')}
+                                            </button>
+                                        )}
+                                        <button 
+                                            onClick={() => { handleRemove(selectedImage); setSelectedImage(null); }}
+                                            className="w-full py-2 bg-red-500/10 text-red-400 border border-red-500/30 rounded flex items-center justify-center gap-2 hover:bg-red-500/20 text-sm font-medium"
+                                        >
+                                            <Trash2 size={16} /> Remove Reference
+                                        </button>
+                                    </>
                                 ) : (
                                      <button 
                                         onClick={() => { handleAdd(selectedImage); }} // Update status, keep modal open to show it's active now
@@ -512,7 +564,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                     {/* 1. Active Refs (Selected) */}
                     {activeRefs.map((url, idx) => (
                         <div key={url + idx} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
-                            {(url.split('?')[0].toLowerCase().endsWith('.mp4') || url.split('?')[0].toLowerCase().endsWith('.webm')) ? (
+                            {isVideoRefUrl(url) ? (
                                 <LazyHoverVideo
                                     src={url}
                                     className="w-full h-full flex items-center justify-center"
@@ -527,12 +579,27 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 <SafeImage src={url} className="w-full h-full object-contain object-center" alt="ref" />
                             )}
                             {!useSequenceLogic && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); handleRemove(url); }}
-                                    className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110 z-10"
-                                >
-                                    <X className="w-3 h-3"/>
-                                </button>
+                                <>
+                                    {onPickMedia && isVideoRefUrl(url) && (
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenReplacePicker(url);
+                                            }}
+                                            className="absolute top-1 left-1 bg-sky-500/90 text-white px-1.5 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-sky-500 z-10 text-[10px] font-medium flex items-center gap-1"
+                                            title={t('替换当前视频参考', 'Replace this video reference')}
+                                        >
+                                            <Upload className="w-3 h-3"/>
+                                            <span>{t('替换', 'Replace')}</span>
+                                        </button>
+                                    )}
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); handleRemove(url); }}
+                                        className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:scale-110 z-10"
+                                    >
+                                        <X className="w-3 h-3"/>
+                                    </button>
+                                </>
                             )}
                         </div>
                     ))}

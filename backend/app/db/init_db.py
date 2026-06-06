@@ -1604,13 +1604,20 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         try:
             inspector = inspect(engine)
             existing_entity_columns = [c['name'] for c in inspector.get_columns('entities')]
+            entity_cols_to_add = []
             if 'generation_prompt_cn' not in existing_entity_columns:
+                entity_cols_to_add.append(('generation_prompt_cn', 'TEXT'))
+            if 'video_url' not in existing_entity_columns:
+                entity_cols_to_add.append(('video_url', 'TEXT'))
+            if 'audio_url' not in existing_entity_columns:
+                entity_cols_to_add.append(('audio_url', 'TEXT'))
+            for col_name, col_type in entity_cols_to_add:
                 with engine.begin() as conn:
                     if engine.dialect.name == 'postgresql':
-                        conn.execute(text("ALTER TABLE entities ADD COLUMN IF NOT EXISTS generation_prompt_cn TEXT"))
+                        conn.execute(text(f"ALTER TABLE entities ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
                     else:
-                        conn.execute(text("ALTER TABLE entities ADD COLUMN generation_prompt_cn TEXT"))
-                logger.info("Ensured entities.generation_prompt_cn exists")
+                        conn.execute(text(f"ALTER TABLE entities ADD COLUMN {col_name} {col_type}"))
+                logger.info(f"Ensured entities.{col_name} exists")
         except Exception as e:
             logger.error(f"Failed to migrate entities table: {e}")
 

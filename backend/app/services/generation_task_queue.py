@@ -6,7 +6,7 @@ import contextlib
 
 QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
 def _load_queue_config():
-    config = {"queue_threads": 4, "callback_threads": 20}
+    config = {"queue_threads": 10, "callback_threads": 10}
     if os.path.exists(QUEUE_CONFIG_FILE):
         try:
             with open(QUEUE_CONFIG_FILE, "r") as f:
@@ -393,6 +393,118 @@ def list_generation_tasks(limit: int = 100, offset: int = 0) -> List[Dict[str, A
         db.close()
 
 
+def get_generation_queue_runtime_stats() -> Dict[str, Any]:
+    _ensure_queue_table_ready()
+    now = time.time()
+    stale_heartbeat_cutoff = now - max(60.0, _QUEUE_RECLAIM_SECONDS / 2.0)
+    live_cfg = _load_queue_config()
+    configured_threads = max(
+        1,
+        int((live_cfg or {}).get("queue_threads", _DEFAULT_WORKER_THREADS) or _DEFAULT_WORKER_THREADS),
+    )
+    db = SessionLocal()
+    try:
+        status_rows = db.execute(
+            text(
+                """
+                SELECT status, COUNT(*) AS cnt
+                FROM generation_task_queue
+                GROUP BY status
+                """
+            )
+        ).mappings().all()
+        kind_rows = db.execute(
+            text(
+                """
+                SELECT kind, COUNT(*) AS cnt
+                FROM generation_task_queue
+                GROUP BY kind
+                """
+            )
+        ).mappings().all()
+        running_rows = db.execute(
+            text(
+                """
+                SELECT worker_id, started_at, last_heartbeat
+                FROM generation_task_queue
+                WHERE status = 'running'
+                """
+            )
+        ).mappings().all()
+        queued_oldest_row = db.execute(
+            text(
+                """
+                SELECT MIN(created_at) AS oldest_created_at
+                FROM generation_task_queue
+                WHERE status = 'queued'
+                """
+            )
+        ).mappings().first()
+        recent_completed_row = db.execute(
+            text(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM generation_task_queue
+                WHERE finished_at IS NOT NULL
+                  AND finished_at >= :cutoff
+                  AND status IN ('completed', 'failed', 'canceled')
+                """
+            ),
+            {"cutoff": now - 3600.0},
+        ).mappings().first()
+
+        status_counts: Dict[str, int] = {}
+        for row in status_rows:
+            key = str(row.get("status") or "unknown").strip().lower() or "unknown"
+            status_counts[key] = int(row.get("cnt") or 0)
+
+        kind_counts: Dict[str, int] = {}
+        for row in kind_rows:
+            key = str(row.get("kind") or "unknown").strip().lower() or "unknown"
+            kind_counts[key] = int(row.get("cnt") or 0)
+
+        active_workers = set()
+        stale_running = 0
+        oldest_running_seconds = 0
+        for row in running_rows:
+            worker_id = str(row.get("worker_id") or "").strip()
+            if worker_id:
+                active_workers.add(worker_id)
+            last_heartbeat = float(row.get("last_heartbeat") or 0.0)
+            started_at = float(row.get("started_at") or 0.0)
+            if last_heartbeat and last_heartbeat < stale_heartbeat_cutoff:
+                stale_running += 1
+            if started_at:
+                oldest_running_seconds = max(oldest_running_seconds, int(max(0.0, now - started_at)))
+
+        queued_oldest_created_at = float((queued_oldest_row or {}).get("oldest_created_at") or 0.0)
+        queued_oldest_wait_seconds = int(max(0.0, now - queued_oldest_created_at)) if queued_oldest_created_at else 0
+
+        return {
+            "queue": {
+                "status_counts": status_counts,
+                "kind_counts": kind_counts,
+                "active_count": int(status_counts.get("queued", 0) + status_counts.get("running", 0)),
+                "queued_oldest_wait_seconds": queued_oldest_wait_seconds,
+                "finished_last_hour": int((recent_completed_row or {}).get("cnt") or 0),
+            },
+            "workers": {
+                "configured_threads": int(configured_threads),
+                "requested_threads": int(_REQUESTED_WORKER_THREADS),
+                "effective_threads": int(_QUEUE_WORKER_THREADS),
+                "thread_cap": int(_WORKER_THREAD_CAP),
+                "restart_required_for_thread_change": bool(configured_threads != int(_REQUESTED_WORKER_THREADS)),
+                "active_running_workers": len(active_workers),
+                "stale_running_tasks": int(stale_running),
+                "oldest_running_seconds": int(oldest_running_seconds),
+                "queue_poll_seconds": float(_QUEUE_POLL_SECONDS),
+                "queue_reclaim_seconds": float(_QUEUE_RECLAIM_SECONDS),
+            },
+        }
+    finally:
+        db.close()
+
+
 def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Dict[str, Any]) -> str:
     _ensure_queue_table_ready()
     now = time.time()
@@ -421,6 +533,78 @@ def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Di
     finally:
         db.close()
     return str(job_id)
+
+
+def mark_generation_task_status_external(
+    job_id: str,
+    *,
+    status: str,
+    error: Optional[str] = None,
+    preserve_canceled: bool = True,
+) -> bool:
+    _ensure_queue_table_ready()
+    now = time.time()
+    normalized_status = str(status or "").strip().lower() or "running"
+    terminal_statuses = {"completed", "failed", "canceled", "cancelled"}
+    is_terminal = normalized_status in terminal_statuses
+    where_sql = "WHERE job_id = :job_id"
+    if preserve_canceled:
+        where_sql += " AND status <> 'canceled'"
+
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET status = :status,
+                    finished_at = :finished_at,
+                    last_heartbeat = :last_heartbeat,
+                    error = :error
+                """
+                + where_sql
+            ),
+            {
+                "job_id": str(job_id),
+                "status": normalized_status,
+                "finished_at": now if is_terminal else None,
+                "last_heartbeat": now,
+                "error": str(error) if error else None,
+            },
+        )
+        db.commit()
+        return int(result.rowcount or 0) > 0
+    finally:
+        db.close()
+
+
+def requeue_generation_task(job_id: str, *, reason: Optional[str] = None) -> bool:
+    _ensure_queue_table_ready()
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET status = 'queued',
+                    worker_id = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    last_heartbeat = NULL,
+                    error = :error
+                WHERE job_id = :job_id
+                  AND status <> 'canceled'
+                """
+            ),
+            {
+                "job_id": str(job_id),
+                "error": str(reason) if reason else None,
+            },
+        )
+        db.commit()
+        return int(result.rowcount or 0) > 0
+    finally:
+        db.close()
 
 
 def get_generation_task_status(job_id: str) -> Optional[Dict[str, Any]]:
@@ -720,18 +904,28 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
             heartbeat_stop = asyncio.Event()
             heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
+            processor_result: Any = None
             result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
             try:
                 if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
-                    await asyncio.wait_for(result, timeout=3600.0)
+                    processor_result = await asyncio.wait_for(result, timeout=3600.0)
                 elif asyncio.isfuture(result):
-                    await asyncio.wait_for(result, timeout=3600.0)
+                    processor_result = await asyncio.wait_for(result, timeout=3600.0)
+                else:
+                    processor_result = result
             except (asyncio.TimeoutError, TimeoutError):
                 logger.warning("generation queue task timed out (exceeded 60 minutes) | job_id=%s", (task or {}).get("job_id"))
                 job_id = str(task.get("job_id") or "")
                 await asyncio.to_thread(_finish_task, job_id, status="failed", error="Task execution exceeded 60 minutes. Timed out.", only_if_running=True)
                 continue
-            finalized = await asyncio.to_thread(_finish_task, task["job_id"], status="completed")
+            defer_completion = bool(
+                isinstance(processor_result, dict)
+                and bool(processor_result.get("defer_completion"))
+            )
+            if defer_completion:
+                await asyncio.to_thread(_touch_task_heartbeat, str(task.get("job_id") or ""), worker_name)
+                continue
+            finalized = await asyncio.to_thread(_finish_task, task["job_id"], status="completed", only_if_running=True)
             if not finalized:
                 latest = await asyncio.to_thread(get_generation_task_status, str(task.get("job_id") or "")) or {}
                 logger.info(
@@ -790,7 +984,14 @@ def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str,
             if not task:
                 _QUEUE_STOP_EVENT.wait(_QUEUE_POLL_SECONDS)
                 continue
-            processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
+            processor_result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
+            defer_completion = bool(
+                isinstance(processor_result, dict)
+                and bool(processor_result.get("defer_completion"))
+            )
+            if defer_completion:
+                _touch_task_heartbeat(str(task.get("job_id") or ""), worker_name)
+                continue
             finalized = _finish_task(task["job_id"], status="completed", only_if_running=True)
             if not finalized:
                 latest = get_generation_task_status(str(task.get("job_id") or "")) or {}

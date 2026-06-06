@@ -2016,7 +2016,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             open: true,
             status: 'running',
             missing: normalizedMissing,
-            message: t('检测到 Subject 缺失，正在自动补全...', 'Missing subjects detected. Auto-recovering...'),
+            message: t('自动提取资产缺失时增加责成卡片', 'Add an action card when auto-extracted assets are missing.'),
             details: '',
         });
 

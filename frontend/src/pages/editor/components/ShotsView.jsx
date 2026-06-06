@@ -7479,6 +7479,177 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const probeVideoUrlReachable = useCallback(async (rawUrl, timeoutMs = 12000) => {
+        const normalized = String(rawUrl || '').trim();
+        if (!normalized) {
+            return { ok: false, reason: 'empty' };
+        }
+
+        const candidateUrl = getFullUrl(normalized);
+        return await new Promise((resolve) => {
+            let settled = false;
+            const video = document.createElement('video');
+            video.preload = 'metadata';
+            video.muted = true;
+            video.playsInline = true;
+
+            const finish = (ok, reason = '') => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                video.onloadedmetadata = null;
+                video.oncanplay = null;
+                video.onerror = null;
+                try {
+                    video.removeAttribute('src');
+                    video.load();
+                } catch (_) {
+                    // noop
+                }
+                resolve({ ok, reason, checkedUrl: candidateUrl });
+            };
+
+            const timer = setTimeout(() => finish(false, 'timeout'), Math.max(1000, Number(timeoutMs) || 12000));
+            video.onloadedmetadata = () => finish(true, 'loadedmetadata');
+            video.oncanplay = () => finish(true, 'canplay');
+            video.onerror = () => finish(false, 'error');
+
+            try {
+                video.src = candidateUrl;
+                video.load();
+            } catch (_) {
+                finish(false, 'exception');
+            }
+        });
+    }, []);
+
+    const handleUpscaleCurrentVideo = async () => {
+        if (!editingShot) return;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
+        const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
+        if (targetGeneratingState.start || targetGeneratingState.end || targetGeneratingState.video) return;
+
+        const currentVideoUrl = String(shotSnapshot.video_url || '').trim();
+        if (!currentVideoUrl) {
+            showNotification(t('当前镜头没有可提升质量的视频。', 'No video found for this shot to upscale.'), 'warning');
+            return;
+        }
+
+        const sourceProbe = await probeVideoUrlReachable(currentVideoUrl);
+        if (!sourceProbe?.ok) {
+            const msg = t(
+                '当前视频链接不可访问，请先刷新链接或重新生成后再提质。',
+                'Current video URL is not reachable. Refresh the URL or regenerate video before upscaling.'
+            );
+            onLog?.(`${msg} (${sourceProbe?.reason || 'unreachable'})`, 'warning');
+            showNotification(msg, 'warning');
+            return;
+        }
+
+        setShotGeneratingState(targetShotId, 'video', true);
+        setVideoStatuses((prev) => ({ ...prev, [targetShotId]: 'upscaling' }));
+
+        let createdVideoJobId = '';
+        let keepRunningUi = false;
+
+        try {
+            const upscaleTask = generateVideo(
+                t('基于当前视频进行2x超分提升', 'Upscale current video with 2x quality boost'),
+                'kie',
+                null,
+                [currentVideoUrl],
+                null,
+                5,
+                {
+                    function_name: 'generate_videos',
+                    project_id: projectId,
+                    shot_id: targetShotId,
+                    shot_number: shotSnapshot.shot_id,
+                    shot_name: shotSnapshot.shot_name,
+                    asset_type: 'video',
+                    model: 'topaz/video-upscale',
+                    mode: 'upscale',
+                    video_url: currentVideoUrl,
+                    source_video_url: currentVideoUrl,
+                    upscale_factor: '2',
+                    on_job_created: (jobId) => {
+                        createdVideoJobId = String(jobId || '').trim();
+                        setPendingVideoJob(targetShotId, jobId);
+                        setShotGeneratingState(targetShotId, 'video', true);
+                    },
+                    on_job_status: (status, data) => {
+                        setVideoStatuses((prev) => ({ ...prev, [targetShotId]: String(data?.status || status || 'upscaling').toLowerCase() }));
+                    },
+                },
+                []
+            );
+
+            const settled = await Promise.allSettled([upscaleTask]);
+            if (settled[0].status === 'fulfilled' && settled[0].value && settled[0].value.url) {
+                const res = settled[0].value;
+                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
+
+                clearPendingVideoJob(targetShotId);
+                const newData = { video_url: res.url };
+
+                setEditingShot((prev) => {
+                    if (!prev || prev.id !== targetShotId) return prev;
+                    return { ...prev, ...newData };
+                });
+
+                try {
+                    await onUpdateShot(targetShotId, newData);
+                } catch (updateErr) {
+                    console.error('Failed to save upscaled video to backend:', updateErr);
+                }
+
+                onLog?.(t('视频清晰度提升完成并已回填。', 'Video upscale completed and backfilled.'), 'success');
+                showNotification(t('视频清晰度提升完成', 'Video upscale completed'), 'success');
+                refreshShotAssetsMeta();
+                setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
+            }
+
+            if (settled[0].status === 'rejected') {
+                const e = settled[0].reason;
+                if (isClientInterruptionError(e)) {
+                    const recovered = await tryRecoverShotMediaAfterInterruption({ shotId: targetShotId, mediaKey: 'video' });
+                    if (recovered || createdVideoJobId) {
+                        keepRunningUi = true;
+                    } else {
+                        clearPendingVideoJob(targetShotId);
+                        onLog?.(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                        showNotification(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                    }
+                } else {
+                    clearPendingVideoJob(targetShotId);
+                    onLog?.(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                    showNotification(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                }
+            }
+        } catch (e) {
+            if (isClientInterruptionError(e)) {
+                const recovered = await tryRecoverShotMediaAfterInterruption({ shotId: targetShotId, mediaKey: 'video' });
+                if (recovered || createdVideoJobId) {
+                    keepRunningUi = true;
+                } else {
+                    clearPendingVideoJob(targetShotId);
+                    onLog?.(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                    showNotification(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                }
+            } else {
+                clearPendingVideoJob(targetShotId);
+                onLog?.(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+                showNotification(`${t('视频提质失败', 'Video upscale failed')}: ${e?.message || 'unknown error'}`, 'error');
+            }
+        } finally {
+            if (!keepRunningUi) {
+                setShotGeneratingState(targetShotId, 'video', false);
+                setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
+            }
+        }
+    };
+
     const handleForceStopShotVideo = useCallback(async (shotId) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return;
@@ -9500,6 +9671,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     </div>
                                                     <span className={isDraftMode ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('草稿', 'Draft')}</span>
                                                 </label>
+
+                                                <button
+                                                    onClick={handleUpscaleCurrentVideo}
+                                                    disabled={currentShotGenerating || !String(editingShot?.video_url || '').trim()}
+                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                                                    title={t('基于当前视频调用 KIE Topaz 进行2x提质并回填', 'Use current video to run KIE Topaz 2x upscale and backfill')}
+                                                >
+                                                    <Sparkles className="w-3 h-3" />
+                                                    {t('提升质量', 'Upscale')}
+                                                </button>
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
                                                     <input 
