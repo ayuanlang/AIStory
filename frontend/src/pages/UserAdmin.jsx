@@ -4335,7 +4335,7 @@ const UserAdmin = () => {
             }
 
             const confirmClearTables = await confirmUiMessage(
-                '将先删除并重建以下表数据后再导入：system_api_settings、system_api_billing_rules、provider_key_pool、smtp_system_configs、wechat_pay_configs、system_task_default_apis。是否继续？',
+                '将先删除并重建以下表数据后再导入：system_api_settings、system_api_billing_rules、provider_key_pool、smtp_system_configs、wechat_pay_configs、function_api_configs、system_task_default_apis。是否继续？',
                 {
                     title: '确认清空原表数据',
                     confirmText: '确认清空并导入',
@@ -5217,7 +5217,7 @@ const UserAdmin = () => {
                                     <Database className="text-primary" /> {t('研发/部署配置同步', 'Dev/Deploy Config Sync')}
                                 </h2>
                                 <p className="text-sm text-gray-300">
-                                    {t('导出将打包 system api、供应商密钥池、计费规则、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, provider key pools, billing rules, SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
+                                    {t('导出将打包 system api、功能 API 映射、供应商密钥池、计费规则、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, function API mappings, provider key pools, billing rules, SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
                                 </p>
                             </div>
 

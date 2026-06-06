@@ -8743,6 +8743,39 @@ def export_system_config_sync_bundle_for_manage(
             skipped_reason="missing table wechat_pay_configs",
         )
 
+    function_api_configs_payload: List[Dict[str, Any]] = []
+    if _db_has_table(db, "function_api_configs"):
+        function_api_rows = db.query(FunctionAPIConfig).order_by(FunctionAPIConfig.function_name.asc(), FunctionAPIConfig.id.asc()).all()
+        function_api_configs_payload = [
+            {
+                "function_name": row.function_name,
+                "api_settings": row.api_settings if isinstance(row.api_settings, list) else [],
+                "created_at": getattr(row, "created_at", None),
+                "updated_at": getattr(row, "updated_at", None),
+            }
+            for row in function_api_rows
+        ]
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="function_api_configs",
+            operation="export_rows",
+            status="ok",
+            detail="Exported function API config rows",
+            exported_rows=len(function_api_configs_payload),
+        )
+    else:
+        logger.warning("Skip sync export function API configs: table function_api_configs not found")
+        _append_sync_process_record(
+            process_records,
+            direction="export",
+            table="function_api_configs",
+            operation="export_rows",
+            status="skipped",
+            detail="Skipped export because table is missing",
+            skipped_reason="missing table function_api_configs",
+        )
+
     task_default_payload: List[Dict[str, Any]] = []
     task_default_export_source = "system_task_default_apis"
     if HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis"):
@@ -8856,6 +8889,7 @@ def export_system_config_sync_bundle_for_manage(
         "provider_key_pools": provider_key_pools_payload,
         "smtp_configs": smtp_payload,
         "wechat_pay_configs": wechat_payload,
+        "function_api_configs": function_api_configs_payload,
         "task_default_apis": task_default_payload,
     }
     exported_row_counts = {
@@ -8865,6 +8899,7 @@ def export_system_config_sync_bundle_for_manage(
         "provider_key_pool": len(provider_key_pools_payload),
         "smtp_system_configs": len(smtp_payload),
         "wechat_pay_configs": len(wechat_payload),
+        "function_api_configs": len(function_api_configs_payload),
         "system_task_default_apis": len(task_default_payload),
     }
     _append_sync_process_record(
@@ -8887,6 +8922,7 @@ def export_system_config_sync_bundle_for_manage(
             "provider_key_pools": len(data["provider_key_pools"]),
             "smtp_configs": len(data["smtp_configs"]),
             "wechat_pay_configs": len(data["wechat_pay_configs"]),
+            "function_api_configs": len(data["function_api_configs"]),
             "task_default_apis": len(data["task_default_apis"]),
             "excluded_deprecated_system_apis": excluded_deprecated_system_apis,
             "exported_row_counts": exported_row_counts,
@@ -8913,6 +8949,8 @@ def import_system_config_sync_bundle_for_manage(
     provider_key_pools = data.get("provider_key_pools") if isinstance(data.get("provider_key_pools"), list) else []
     smtp_configs = data.get("smtp_configs") if isinstance(data.get("smtp_configs"), list) else []
     wechat_pay_configs = data.get("wechat_pay_configs") if isinstance(data.get("wechat_pay_configs"), list) else []
+    function_api_configs_present = isinstance(data.get("function_api_configs"), list)
+    function_api_configs = data.get("function_api_configs") if function_api_configs_present else []
     task_default_apis = data.get("task_default_apis") if isinstance(data.get("task_default_apis"), list) else []
     kie_standard_values_ignored = len(data.get("kie_standard_values") or []) if isinstance(data.get("kie_standard_values"), list) else 0
     kie_standard_mappings_ignored = len(data.get("kie_standard_mappings") or []) if isinstance(data.get("kie_standard_mappings"), list) else 0
@@ -8937,6 +8975,7 @@ def import_system_config_sync_bundle_for_manage(
         has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
         has_smtp_table = _db_has_table(db, "smtp_system_configs")
         has_wechat_table = _db_has_table(db, "wechat_pay_configs")
+        has_function_api_configs_table = _db_has_table(db, "function_api_configs")
         has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
         rebuilt_tables: Dict[str, bool] = {}
         cleared_rows: Dict[str, int] = {}
@@ -8975,6 +9014,7 @@ def import_system_config_sync_bundle_for_manage(
             has_provider_key_pool_table = _db_has_table(db, "provider_key_pool")
             has_smtp_table = _db_has_table(db, "smtp_system_configs")
             has_wechat_table = _db_has_table(db, "wechat_pay_configs")
+            has_function_api_configs_table = _db_has_table(db, "function_api_configs")
             has_task_default_table = HAS_TASK_DEFAULT_SYSTEM_API_MODEL and _db_has_table(db, "system_task_default_apis")
 
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
@@ -9346,6 +9386,48 @@ def import_system_config_sync_bundle_for_manage(
                     created=0,
                 )
 
+            function_api_created = 0
+            if function_api_configs_present:
+                if has_function_api_configs_table:
+                    db.query(FunctionAPIConfig).delete()
+                    for raw_conf in function_api_configs:
+                        if not isinstance(raw_conf, dict):
+                            continue
+                        function_name = str(raw_conf.get("function_name") or "").strip()
+                        if not function_name:
+                            continue
+                        new_conf = FunctionAPIConfig(
+                            function_name=function_name,
+                            api_settings=raw_conf.get("api_settings") if isinstance(raw_conf.get("api_settings"), list) else [],
+                        )
+                        if raw_conf.get("created_at") is not None:
+                            new_conf.created_at = str(raw_conf.get("created_at"))
+                        if raw_conf.get("updated_at") is not None:
+                            new_conf.updated_at = str(raw_conf.get("updated_at"))
+                        db.add(new_conf)
+                        function_api_created += 1
+                    _append_sync_process_record(
+                        process_records,
+                        direction="import",
+                        table="function_api_configs",
+                        operation="import_rows",
+                        status="ok",
+                        detail="Imported function API config rows",
+                        input_rows=len(function_api_configs),
+                        created=function_api_created,
+                    )
+                else:
+                    logger.warning("Skip function API configs import: table function_api_configs not found")
+                    _append_sync_process_record(
+                        process_records,
+                        direction="import",
+                        table="function_api_configs",
+                        operation="import_rows",
+                        status="skipped",
+                        detail="Skipped import because table is missing",
+                        input_rows=len(function_api_configs),
+                        skipped_reason="missing table function_api_configs",
+                    )
             resolved_task_default_targets: Dict[str, int] = {}
             for raw_default in task_default_apis:
                 if not isinstance(raw_default, dict):
@@ -9442,6 +9524,11 @@ def import_system_config_sync_bundle_for_manage(
                 "created": wechat_created,
                 "skipped": 0 if has_wechat_table else len(wechat_pay_configs),
                 "skipped_reason": None if has_wechat_table else "missing table wechat_pay_configs",
+            },
+            "function_api_configs": {
+                "created": function_api_created,
+                "skipped": 0 if has_function_api_configs_table else len(function_api_configs),
+                "skipped_reason": None if has_function_api_configs_table else "missing table function_api_configs",
             },
             "task_default_apis": {
                 "created_or_updated": default_created,

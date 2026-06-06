@@ -1,7 +1,8 @@
 
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Save, GripVertical, Download, Upload } from 'lucide-react';
-import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig } from '../services/api';
+import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage } from '../services/api';
+import { confirmUiMessage } from '../lib/uiMessage';
 
 
 const FUNCTION_LABELS = {
@@ -148,16 +149,26 @@ export default function FunctionApiConfigTab() {
         }
     };
 
-    const handleExport = () => {
+    const handleExport = async () => {
+        try {
+            const payload = await exportSystemConfigSyncBundleManage();
+            const dataStr = JSON.stringify(payload, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const exportFileDefaultName = 'system_config_sync_bundle.json';
 
-        const dataStr = JSON.stringify(configs, null, 2);
-        const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-        const exportFileDefaultName = 'function_api_configs.json';
-        
-        const linkElement = document.createElement('a');
-        linkElement.setAttribute('href', dataUri);
-        linkElement.setAttribute('download', exportFileDefaultName);
-        linkElement.click();
+            const linkElement = document.createElement('a');
+            linkElement.setAttribute('href', url);
+            linkElement.setAttribute('download', exportFileDefaultName);
+            document.body.appendChild(linkElement);
+            linkElement.click();
+            document.body.removeChild(linkElement);
+            URL.revokeObjectURL(url);
+            alert('已导出配置同步包，包含功能 API 配置在内的统一配置数据。');
+        } catch (error) {
+            console.error('Failed to export sync bundle', error);
+            alert('导出失败');
+        }
     };
 
     const handleImportClick = () => {
@@ -165,27 +176,37 @@ export default function FunctionApiConfigTab() {
     };
 
     const handleImportFileChange = async (e) => {
-        const file = e.target.files[0];
+        const file = e.target.files?.[0];
 
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-            try {
-
-                const json = JSON.parse(event.target.result);
-                // Upload each function config
-                for (const funcName of Object.keys(json)) {
-                    await updateFunctionApiConfig(funcName, { api_settings: json[funcName] });
-                }
-                setConfigs(json);
-                alert("导入成功！");
-            } catch (error) {
-                console.error("Error parsing JSON file:", error);
-                alert("导入的文件格式不正确或保存失败！");
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const data = parsed?.data;
+            if (!data || typeof data !== 'object') {
+                alert('导入的文件格式不正确：缺少 data 字段。');
+                return;
             }
-        };
-        reader.readAsText(file);
+
+            const confirmed = await confirmUiMessage(
+                '此操作会将当前环境的配置与同步包内容对齐，并同步覆盖功能 API 映射。是否继续？'
+            );
+            if (!confirmed) {
+                return;
+            }
+
+            await importSystemConfigSyncBundleManage({
+                data,
+                replace_all: true,
+                confirm_clear_existing: true,
+            });
+            await fetchData();
+            alert('导入成功！');
+        } catch (error) {
+            console.error('Error parsing JSON file:', error);
+            alert('导入的文件格式不正确或保存失败！');
+        }
         e.target.value = null; // Reset input
 
     };
@@ -219,14 +240,14 @@ export default function FunctionApiConfigTab() {
                             className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2"
                         >
                             <Download size={16} />
-                            导出配置
+                            导出同步包
                         </button>
                         <button
                             onClick={handleImportClick}
                             className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2"
                         >
                             <Upload size={16} />
-                            导入配置
+                            导入同步包
                             <input
                                 type="file"
                                 ref={fileInputRef}
@@ -238,7 +259,7 @@ export default function FunctionApiConfigTab() {
                     </div>
                 </div>
                 <p className="text-gray-400 text-sm mb-4">
-                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设 定优先级）。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
+                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设 定优先级）。<br/>导入/导出会走统一配置同步包，包含功能 API 映射在内的全部同步配置。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
                 </p>
 
                 <div className="bg-[#111114] border border-white/10 rounded-xl p-4 md:p-6 mb-6">
