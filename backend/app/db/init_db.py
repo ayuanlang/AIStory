@@ -422,6 +422,76 @@ def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None
                 logger.warning("Entity unique index migration failed (non-fatal): %s | err=%s", ddl, exc)
 
 
+def _ensure_assets_normalized_url_unique_index(*, is_postgres: bool) -> None:
+    """Backfill assets.url_normalized and enforce uniqueness for same material under same context."""
+    if not is_postgres and engine.dialect.name != "sqlite":
+        logger.info("Skip assets normalized url index migration for dialect=%s", engine.dialect.name)
+        return
+
+    if is_postgres:
+        backfill_sql = (
+            "UPDATE assets "
+            "SET url_normalized = lower(split_part(coalesce(url, ''), '?', 1)) "
+            "WHERE coalesce(url_normalized, '') = '' AND coalesce(url, '') <> ''"
+        )
+        dedup_sql = (
+            "DELETE FROM assets a "
+            "USING assets b "
+            "WHERE a.id < b.id "
+            "AND a.user_id = b.user_id "
+            "AND lower(coalesce(a.type, '')) = lower(coalesce(b.type, '')) "
+            "AND coalesce(a.project_id, -1) = coalesce(b.project_id, -1) "
+            "AND coalesce(a.episode_id, -1) = coalesce(b.episode_id, -1) "
+            "AND coalesce(a.url_normalized, '') = coalesce(b.url_normalized, '') "
+            "AND coalesce(a.url_normalized, '') <> ''"
+        )
+        create_index_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_user_type_scope_url_norm "
+            "ON assets (user_id, lower(type), coalesce(project_id, -1), coalesce(episode_id, -1), url_normalized) "
+            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> ''"
+        )
+    else:
+        backfill_sql = (
+            "UPDATE assets "
+            "SET url_normalized = lower("
+            "CASE WHEN instr(coalesce(url, ''), '?') > 0 "
+            "THEN substr(coalesce(url, ''), 1, instr(coalesce(url, ''), '?') - 1) "
+            "ELSE coalesce(url, '') END" 
+            ") "
+            "WHERE coalesce(url_normalized, '') = '' AND coalesce(url, '') <> ''"
+        )
+        dedup_sql = (
+            "DELETE FROM assets "
+            "WHERE id NOT IN ("
+            "  SELECT max(id) FROM assets "
+            "  WHERE coalesce(url_normalized, '') <> '' "
+            "  GROUP BY user_id, lower(coalesce(type, '')), coalesce(project_id, -1), coalesce(episode_id, -1), coalesce(url_normalized, '')"
+            ") "
+            "AND coalesce(url_normalized, '') <> ''"
+        )
+        create_index_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_user_type_scope_url_norm "
+            "ON assets (user_id, lower(type), ifnull(project_id, -1), ifnull(episode_id, -1), url_normalized) "
+            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> ''"
+        )
+
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(backfill_sql))
+        except Exception as exc:
+            logger.warning("Assets url_normalized backfill failed (non-fatal): %s", exc)
+
+        try:
+            conn.execute(text(dedup_sql))
+        except Exception as exc:
+            logger.warning("Assets dedup before unique index failed (non-fatal): %s", exc)
+
+        try:
+            conn.execute(text(create_index_sql))
+        except Exception as exc:
+            logger.warning("Assets unique index migration failed (non-fatal): %s", exc)
+
+
 def _should_manage_api_settings_on_init() -> bool:
     """
     Whether init/deploy flow is allowed to mutate API settings data records.
@@ -769,6 +839,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             _ensure_entities_episode_scoped_unique_indexes(is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure entity scoped unique indexes: {e}")
+
+        try:
+            _ensure_assets_normalized_url_unique_index(is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure assets normalized url unique index: {e}")
 
         try:
             if hasattr(models, "UserGroup"):

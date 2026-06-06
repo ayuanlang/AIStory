@@ -398,6 +398,7 @@ class Asset(Base):
     
     type = Column(String) # image, video
     url = Column(String)
+    url_normalized = Column(String, index=True, nullable=True)
     filename = Column(String, nullable=True)
     meta_info = Column(JSON, default={}) # width, height, size, duration, format
     remark = Column(Text, nullable=True)

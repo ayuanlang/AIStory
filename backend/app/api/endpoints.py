@@ -3388,6 +3388,25 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
             if value is not None and value != "":
                 req_context[key] = value
 
+        if not str(req_context.get("asset_type") or "").strip():
+            req_context["asset_type"] = "video"
+
+        # Backfill project/episode context from shot when missing, so registration does not early-return.
+        if not req_context.get("project_id") and req_context.get("shot_id"):
+            try:
+                shot_row = db.query(Shot).filter(Shot.id == int(req_context.get("shot_id"))).first()
+                if shot_row:
+                    if getattr(shot_row, "project_id", None):
+                        req_context["project_id"] = int(shot_row.project_id)
+                    if getattr(shot_row, "episode_id", None):
+                        req_context["episode_id"] = int(shot_row.episode_id)
+                    if getattr(shot_row, "shot_id", None) and not req_context.get("shot_number"):
+                        req_context["shot_number"] = shot_row.shot_id
+                    if getattr(shot_row, "shot_name", None) and not req_context.get("shot_name"):
+                        req_context["shot_name"] = shot_row.shot_name
+            except Exception:
+                pass
+
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         
         normalized_url, normalized_meta = _persist_remote_image_result(current_user, raw_url, metadata)
@@ -3402,8 +3421,13 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
-        # Try to bind if relevant and not ephemeral
+        # Register + bind if relevant and not ephemeral
         if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+            try:
+                _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
+            except Exception as reg_exc:
+                logger.warning(f"[_finalize_video_job_result_persistence] _register_asset_helper failed: {reg_exc}")
+
             try:
                 _bind_generated_media_to_shot(
                     db,
@@ -20972,6 +20996,43 @@ def _sync_asset_denormalized_fields(asset: Optional[Asset]) -> Optional[Asset]:
     return asset
 
 
+def _resolve_asset_response_type(asset: Optional[Asset], meta: Optional[Dict[str, Any]] = None) -> str:
+    if asset is None:
+        return "image"
+
+    stable_meta = _asset_meta_dict(meta if meta is not None else getattr(asset, "meta_info", None))
+    raw_type = str(getattr(asset, "type", "") or "").strip().lower()
+
+    meta_type = str(stable_meta.get("type") or "").strip().lower()
+    frame_type = str(stable_meta.get("frame_type") or stable_meta.get("asset_type") or "").strip().lower()
+    mime_type = str(
+        stable_meta.get("mime_type")
+        or stable_meta.get("content_type")
+        or stable_meta.get("stored_from_remote_url_content_type")
+        or ""
+    ).strip().lower()
+    filename = str(getattr(asset, "filename", "") or stable_meta.get("filename") or "").strip().lower()
+    url = str(getattr(asset, "url", "") or "").strip().lower()
+
+    def _looks_like_video(value: str) -> bool:
+        return bool(re.search(r"\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$", str(value or "").strip().lower()))
+
+    if raw_type == "video":
+        return "video"
+    if meta_type == "video":
+        return "video"
+    if "video" in frame_type:
+        return "video"
+    if mime_type.startswith("video/"):
+        return "video"
+    if _looks_like_video(filename):
+        return "video"
+    if _looks_like_video(url):
+        return "video"
+
+    return raw_type or "image"
+
+
 def _infer_legacy_shot_asset_meta(
     db: Session,
     asset: Optional[Asset],
@@ -21496,7 +21557,37 @@ def get_assets(
 
     query = db.query(Asset).filter(Asset.user_id.in_(visible_owner_ids))
     if type:
-        query = query.filter(Asset.type == type)
+        normalized_type = str(type or "").strip().lower()
+        if normalized_type == "video":
+            meta_text = func.lower(cast(Asset.meta_info, String))
+            url_text = func.lower(func.coalesce(Asset.url, ""))
+            filename_text = func.lower(func.coalesce(Asset.filename, ""))
+            video_ext_like = or_(
+                url_text.like("%.mp4%"),
+                url_text.like("%.mov%"),
+                url_text.like("%.mkv%"),
+                url_text.like("%.webm%"),
+                url_text.like("%.avi%"),
+                url_text.like("%.m4v%"),
+                filename_text.like("%.mp4%"),
+                filename_text.like("%.mov%"),
+                filename_text.like("%.mkv%"),
+                filename_text.like("%.webm%"),
+                filename_text.like("%.avi%"),
+                filename_text.like("%.m4v%"),
+            )
+            query = query.filter(
+                or_(
+                    func.lower(func.coalesce(Asset.type, "")) == "video",
+                    meta_text.like('%"type": "video"%'),
+                    meta_text.like('%"asset_type": "video"%'),
+                    meta_text.like('%"frame_type": "video"%'),
+                    meta_text.like("%video/%"),
+                    video_ext_like,
+                )
+            )
+        else:
+            query = query.filter(func.lower(func.coalesce(Asset.type, "")) == normalized_type)
     
     # Ideally use database-side JSON filtering if supported (e.g., Postgres)
     # Since we are likely using SQLite or generic, we might need to filter manually or use cast
@@ -21875,7 +21966,7 @@ def get_assets(
 
         results.append({
             "id": a.id,
-            "type": a.type,
+            "type": _resolve_asset_response_type(a, meta),
             "url": oss_storage_service.refresh_url(a.url) if oss_storage_service.is_enabled(db) else a.url,
             "filename": a.filename,
             "project_id": getattr(a, 'project_id', None),
@@ -25114,6 +25205,21 @@ def _normalize_asset_idempotency_key(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_asset_url_for_dedup(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        if str(parsed.scheme or "").lower() in {"http", "https"}:
+            # Ignore volatile signed-query parameters when deduplicating assets.
+            cleaned = parsed._replace(query="", fragment="")
+            return urllib.parse.urlunparse(cleaned).strip().lower()
+    except Exception:
+        pass
+    return raw.lower()
+
+
 def _asset_meta_matches_registration_context(asset_meta: Any, expected_meta: Any) -> bool:
     asset_meta = _asset_meta_dict(asset_meta)
     expected_meta = _asset_meta_dict(expected_meta)
@@ -25130,6 +25236,10 @@ def _asset_meta_matches_registration_context(asset_meta: Any, expected_meta: Any
     for key in compare_keys:
         expected_value = str(expected_meta.get(key) or "").strip()
         if not expected_value:
+            continue
+        if key == "source_asset_url":
+            if _normalize_asset_url_for_dedup(asset_meta.get(key)) != _normalize_asset_url_for_dedup(expected_value):
+                return False
             continue
         if str(asset_meta.get(key) or "").strip() != expected_value:
             return False
@@ -25164,6 +25274,23 @@ def _find_existing_asset_for_registration(
     normalized_url = str(url or "").strip()
     if not normalized_url:
         return None
+    normalized_compare_url = _normalize_asset_url_for_dedup(normalized_url)
+
+    if normalized_compare_url:
+        try:
+            normalized_candidates = (
+                db.query(Asset)
+                .filter(Asset.user_id == user_id, Asset.url_normalized == normalized_compare_url)
+                .order_by(Asset.id.desc())
+                .limit(120)
+                .all()
+            )
+            for candidate in normalized_candidates:
+                if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
+                    return candidate
+        except Exception:
+            # Backward-compatible fallback for old schemas before url_normalized exists.
+            pass
 
     url_candidates = (
         db.query(Asset)
@@ -25176,6 +25303,22 @@ def _find_existing_asset_for_registration(
         for candidate in url_candidates:
             if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
                 return candidate
+
+    # Fallback dedupe for signed URLs where only query token differs.
+    if normalized_compare_url:
+        recent_candidates = (
+            db.query(Asset)
+            .filter(Asset.user_id == user_id)
+            .order_by(Asset.id.desc())
+            .limit(600)
+            .all()
+        )
+        for candidate in recent_candidates:
+            if _normalize_asset_url_for_dedup(getattr(candidate, "url", None)) != normalized_compare_url:
+                continue
+            if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
+                return candidate
+
     return None
 
 
@@ -25262,8 +25405,34 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         if isinstance(obj, dict): return obj.get(key)
         return getattr(obj, key, None)
 
-    project_id = get_attr(req, "project_id")
-    if not project_id: return
+    project_id = _asset_optional_int(get_attr(req, "project_id"))
+    episode_id_hint = _asset_optional_int(get_attr(req, "episode_id"))
+    shot_id_hint = _asset_optional_int(get_attr(req, "shot_id"))
+
+    if not project_id and shot_id_hint:
+        try:
+            shot_row = db.query(Shot).filter(Shot.id == int(shot_id_hint)).first()
+            if shot_row:
+                project_id = _asset_optional_int(getattr(shot_row, "project_id", None))
+                if not episode_id_hint:
+                    episode_id_hint = _asset_optional_int(getattr(shot_row, "episode_id", None))
+                if not episode_id_hint and getattr(shot_row, "scene_id", None):
+                    scene_row = db.query(Scene).filter(Scene.id == int(shot_row.scene_id)).first()
+                    if scene_row:
+                        episode_id_hint = _asset_optional_int(getattr(scene_row, "episode_id", None))
+        except Exception:
+            pass
+
+    if not project_id and episode_id_hint:
+        try:
+            episode_row = db.query(Episode).filter(Episode.id == int(episode_id_hint)).first()
+            if episode_row:
+                project_id = _asset_optional_int(getattr(episode_row, "project_id", None))
+        except Exception:
+            pass
+
+    if not project_id:
+        return
 
     try:
         # Determine paths
@@ -25287,6 +25456,11 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
         for field in ["shot_number", "shot_id", "project_id", "episode_id", "asset_type", "entity_id", "entity_name", "subject_name", "subject_type", "entity_type", "source_asset_url", "idempotency_key"]:
             val = get_attr(req, field)
             if val: meta[field] = val
+
+        if not meta.get("project_id") and project_id:
+            meta["project_id"] = int(project_id)
+        if not meta.get("episode_id") and episode_id_hint:
+            meta["episode_id"] = int(episode_id_hint)
 
         # Map reference URLs to source_asset_url for asset dependency tracking
         if not meta.get("source_asset_url"):
@@ -25503,6 +25677,9 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 meta_info=meta,
             )
             if existing_asset:
+                normalized_existing_url = _normalize_asset_url_for_dedup(getattr(existing_asset, "url", None))
+                if normalized_existing_url and str(getattr(existing_asset, "url_normalized", "") or "").strip() != normalized_existing_url:
+                    existing_asset.url_normalized = normalized_existing_url
                 _sync_asset_denormalized_fields(existing_asset)
                 if existing_asset.project_id:
                     _mark_asset_as_current_project_asset(db, existing_asset)
@@ -25528,6 +25705,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 user_id=user_id,
                 type=("image" if is_image_inferred else ("audio" if is_audio_inferred else "video")),
                 url=url,
+                url_normalized=_normalize_asset_url_for_dedup(url),
                 filename=fname,
                 project_id=_asset_optional_int(meta.get("project_id")),
                 episode_id=_asset_optional_int(meta.get("episode_id")),
@@ -29735,7 +29913,48 @@ async def _run_generate_video(
             media_type="video",
         )
 
-        # Register Asset - For videos, wait until finalize persistence OR callback
+        # Register asset + bind shot for direct-success providers (callback mode handles this in finalize path).
+        if result.get("url"):
+            temp_url = str(result.get("url") or "").strip()
+            if temp_url:
+                if temp_url.startswith("http"):
+                    norm_url, norm_meta = await asyncio.to_thread(
+                        _persist_remote_image_result,
+                        current_user,
+                        temp_url,
+                        result.get("metadata"),
+                    )
+                    final_url = norm_url if (norm_url and norm_url != temp_url) else temp_url
+                    final_meta = dict(norm_meta if norm_meta is not None else (result.get("metadata") or {}))
+
+                    if norm_url and norm_url != temp_url:
+                        result["url"] = norm_url
+                        result["metadata"] = final_meta
+
+                    if final_url and not _is_ephemeral_provider_media_url(final_url):
+                        await asyncio.to_thread(_register_asset_helper, db, current_user.id, final_url, req, final_meta)
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_shot,
+                            db,
+                            current_user,
+                            req,
+                            final_url,
+                            True,
+                            final_meta,
+                        )
+                else:
+                    if not _is_ephemeral_provider_media_url(temp_url):
+                        final_meta_sync = dict(result.get("metadata") or {})
+                        await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, final_meta_sync)
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_shot,
+                            db,
+                            current_user,
+                            req,
+                            temp_url,
+                            False,
+                            final_meta_sync,
+                        )
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
@@ -32670,7 +32889,7 @@ def _append_video_api_ref_mapping(
             vid_tag = "@Video 1"
             vid_tag_nospace = "@Video1"
             if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                updated_text = f"延长{vid_tag_nospace}，一镜到底运镜。\n\n{updated_text.strip()}"
+                updated_text = f"延长{vid_tag_nospace}，一镜到底，要参考视频的角色站位建置运镜。\n\n{updated_text.strip()}"
         
         added_videos = False
         for idx in range(1, len(reference_video_urls) + 1):
