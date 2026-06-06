@@ -528,8 +528,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [playlistIndex, setPlaylistIndex] = useState(0);
     const playlistVideoRef = useRef(null);
 
-    const _getInMemorySortedShots = () => {
-        return [...(shots || [])].sort((a, b) => {
+    const sortShotsForContinuation = useCallback((sourceShots) => {
+        return [...(Array.isArray(sourceShots) ? sourceShots : [])].sort((a, b) => {
             const ep = String(activeEpisode?.episode_number || activeEpisode?.id || '').trim();
             // Try to find scene code format from scenes if needed, or fallback.
             const scA = String(a?.scene_code || a?.scene_id || '').trim();
@@ -540,23 +540,57 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const keyB = `${ep}_${scB}_${shB}`;
             return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
         });
-    };
+    }, [activeEpisode?.episode_number, activeEpisode?.id]);
+
+    const _getInMemorySortedShots = () => sortShotsForContinuation(shots || []);
+
+    const findPrevContinuationShot = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return null;
+
+        const merged = new Map();
+        (Array.isArray(allEpisodeShotsRef.current) ? allEpisodeShotsRef.current : []).forEach((shot) => {
+            const id = String(shot?.id || '').trim();
+            if (!id) return;
+            merged.set(id, shot);
+        });
+        (Array.isArray(shots) ? shots : []).forEach((shot) => {
+            const id = String(shot?.id || '').trim();
+            if (!id) return;
+            merged.set(id, shot);
+        });
+        if (editingShot?.id) {
+            merged.set(String(editingShot.id), editingShot);
+        }
+
+        const sortedAllShots = sortShotsForContinuation(Array.from(merged.values()));
+        const currentIdx = sortedAllShots.findIndex((shot) => String(shot?.id || '').trim() === stableShotId);
+        if (currentIdx <= 0) return null;
+        return sortedAllShots[currentIdx - 1] || null;
+    }, [shots, editingShot, sortShotsForContinuation]);
+
+    const resolvePrevContinuationVideoRefs = useCallback((shotId) => {
+        if (!usePrevVideo) return [];
+        const prevShot = findPrevContinuationShot(shotId);
+        const prevVideoUrl = String(prevShot?.video_url || '').trim();
+        return prevVideoUrl ? [prevVideoUrl] : [];
+    }, [usePrevVideo, findPrevContinuationShot]);
 
     const handleToggleUsePrevVideo = (checked, targetShotId = null) => {
         if (checked) {
-            const sortedArray = _getInMemorySortedShots();
-            let currentIdx = -1;
+            let stableTargetShotId = '';
             if (targetShotId) {
-                currentIdx = sortedArray.findIndex(s => String(s.id) === String(targetShotId));
+                stableTargetShotId = String(targetShotId);
             } else if (editingShot) {
-                currentIdx = sortedArray.findIndex(s => String(s.id) === String(editingShot.id));
+                stableTargetShotId = String(editingShot.id);
             }
 
-            if (currentIdx === 0) {
-                notifyUiMessage(t('这是第一镜，暂时无法使用上镜续写。', 'This is the first shot, so previous-shot continuation is unavailable.'), 'warning');
-                return;
-            } else if (currentIdx > 0) {
-                const prevShot = sortedArray[currentIdx - 1];
+            if (stableTargetShotId) {
+                const prevShot = findPrevContinuationShot(stableTargetShotId);
+                if (!prevShot) {
+                    notifyUiMessage(t('这是第一镜，且未找到上一场景的可续写镜头。', 'This is the first shot and no previous-scene shot is available for continuation.'), 'warning');
+                    return;
+                }
                 if (!prevShot?.video_url) {
                     notifyUiMessage(t('上一镜头还没有可用于续写的视频内容。', 'The previous shot does not have video content available for continuation yet.'), 'warning');
                     return;
@@ -564,8 +598,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             } else if (selectedShotIds.length > 0) {
                 let valid = false;
                 for (const sid of selectedShotIds) {
-                    const idx = shots.findIndex(s => String(s.id) === String(sid));
-                    if (idx > 0 && shots[idx - 1]?.video_url) {
+                    const prevShot = findPrevContinuationShot(sid);
+                    if (prevShot?.video_url) {
                         valid = true;
                         break;
                     }
@@ -574,7 +608,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     notifyUiMessage(t('选中的分镜里没有可用于上镜续写的视频内容。', 'None of the selected shots have previous video content available for continuation.'), 'warning');
                     return;
                 }
-            } else if (shots.length > 0 && currentIdx === -1) {
+              } else if (shots.length > 0 && !stableTargetShotId) {
                  // Global context without selected shots
                  notifyUiMessage(t('请先选择或编辑一个分镜！', 'Please select or edit a shot first!'), 'warning');
                  // Let it pass or block? We can just let it check but warn.
@@ -615,6 +649,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
     const shotsRef = useRef([]);
+    const allEpisodeShotsRef = useRef([]);
     const editingShotRef = useRef(null);
     const jointDiptychApplyInFlightRef = useRef(new Map());
     const appliedJointDiptychResultsRef = useRef(new Map());
@@ -4227,6 +4262,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 scene_code: normalizedSceneCode || undefined,
                 shot_id: normalizedShotId || undefined,
             });
+            allEpisodeShotsRef.current = Array.isArray(allShots) ? allShots : [];
 
             let filtered = selectedSceneId === 'all'
                 ? allShots
@@ -4271,6 +4307,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     useEffect(() => {
         setHasShotInitialLoadCompleted(false);
+        allEpisodeShotsRef.current = [];
     }, [activeEpisode?.id]);
 
     useEffect(() => {
@@ -7193,14 +7230,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             
             if (usePrevVideo) {
-                const sortedArray = _getInMemorySortedShots();
-                const currentIdx = sortedArray.findIndex(s => String(s.id) === String(targetShotId));
-                if (currentIdx > 0) {
-                    const prevShot = sortedArray[currentIdx - 1];
-                    const prevVideoUrl = prevShot?.video_url;
-                    if (prevVideoUrl && !uniqueRefs.includes(prevVideoUrl)) {
-                        uniqueRefs.push(prevVideoUrl);
-                    }
+                const prevShot = findPrevContinuationShot(targetShotId);
+                const prevVideoUrl = prevShot?.video_url;
+                if (prevVideoUrl && !uniqueRefs.includes(prevVideoUrl)) {
+                    uniqueRefs.push(prevVideoUrl);
                 }
             }
 
@@ -9882,7 +9915,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             uiLang={uiLang}
                                             onPickMedia={openMediaPicker}
                                             pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
-                                            additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []}
+                                            additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
                                         />
@@ -11211,7 +11244,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={usePrevVideo ? [(_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) > 0 ? _getInMemorySortedShots()[_getInMemorySortedShots().findIndex(s => String(s.id) === String(editingShot?.id)) - 1] : null)?.video_url].filter(Boolean) : []} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>
