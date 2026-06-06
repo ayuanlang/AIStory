@@ -7233,6 +7233,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 || tech.video_ref_image_urls_user_edited === true
             );
             const shouldAutoUsePrevVideo = Boolean(usePrevVideo && !hasManualVideoRefOverride);
+            const shouldInjectContinuationPrompt = Boolean(usePrevVideo);
 
             
             if (shouldAutoUsePrevVideo) {
@@ -7389,7 +7390,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     project_id: projectId,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
-                    use_prev_video: shouldAutoUsePrevVideo,
+                    use_prev_video: shouldInjectContinuationPrompt,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
@@ -8923,14 +8924,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             <Film className="w-3 h-3 text-muted-foreground"/>
                                                             {t('视频', 'Video')}
                                                         </button>
-                                                        <button
-                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchScaleDuration(); }}
-                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2 border-t border-white/10"
-                                                            title={t('对当前列表中的所有镜头等比缩放时长', 'Proportionally scale the duration of all shots in the current list')}
-                                                        >
-                                                            <Timer className="w-3 h-3 text-muted-foreground"/>
-                                                            {t('缩放时长', 'Scale Duration')}
-                                                        </button>
                                                     </div>
                                                 </>
                                             )}
@@ -8954,7 +8947,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             </div>
                         </div>
 
-                        {/* Group 5: Checkboxes */}
+                                                {/* Group 5: Tools */}
+                        <div className="flex items-center bg-black/40 border border-white/10 rounded-lg p-1">
+                            <button
+                                onClick={handleBatchScaleDuration}
+                                className="px-3 py-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 rounded text-xs transition-colors flex items-center gap-1.5"
+                                title={t('对当前列表中的所有镜头等比缩放时长', 'Proportionally scale the duration of all shots in the current list')}
+                            >
+                                <Timer className="w-3.5 h-3.5" />
+                                {t('缩放时长', 'Scale Duration')}
+                            </button>
+                        </div>
+
+                        {/* Group 6: Checkboxes */}
                         <div className="flex items-center gap-4 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 h-[34px]">
                             <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后视频生成的分辨率强制下降到480p（忽略项目配置）', 'Force video resolution to 480p, ignoring project info')}>
                                 <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${isDraftMode ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>

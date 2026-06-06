@@ -6,6 +6,7 @@ import threading
 from moviepy import VideoFileClip, concatenate_videoclips
 from app.core.config import settings
 from app.core.mp4_faststart import optimize_mp4_faststart
+from app.services.oss_storage_service import oss_storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ _MONTAGE_MAX_TOTAL_SECONDS = max(30.0, float(os.getenv("MONTAGE_MAX_TOTAL_SECOND
 _MONTAGE_RENDER_SLOTS = threading.BoundedSemaphore(_MONTAGE_MAX_CONCURRENT)
 
 import requests
-def create_montage(project_id: int, items: list) -> str:
+def create_montage(project_id: int, items: list, user_id: int = 0) -> str:
     """
     Stitches clips together.
     items: List of dicts with keys: url, speed, trim_start, trim_end
@@ -159,6 +160,25 @@ def create_montage(project_id: int, items: list) -> str:
         final_clip.close()
         for clip in clips:
             clip.close()
+            
+        # Upload to OSS
+        try:
+            uploaded = oss_storage_service.upload_file(
+                output_path,
+                user_id=user_id,
+                filename=output_filename,
+                content_type="video/mp4",
+                category="montage"
+            )
+            if uploaded and uploaded.get("public_url"):
+                try:
+                    os.remove(output_path)
+                    logger.info(f"Montage uploaded to OSS, local file removed: {output_path}")
+                except Exception as ex:
+                    logger.warning(f"Failed to remove local montage file {output_path}: {ex}")
+                return uploaded["public_url"]
+        except Exception as oss_err:
+            logger.error(f"Failed to upload montage to OSS: {oss_err}")
             
         # Return URL
         return f"/uploads/{output_filename}"

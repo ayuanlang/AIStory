@@ -861,7 +861,7 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
         if not isinstance(items_payload, list) or not items_payload:
             raise ValueError("Montage task missing items")
         try:
-            url = create_montage(project_id, items_payload)
+            url = create_montage(project_id, items_payload, user_id=current_user.id if 'current_user' in locals() else user_id)
         except Exception as exc:
             _set_task_status(job_id, status="failed", error=str(exc), error_code=500)
             raise
@@ -34655,7 +34655,7 @@ async def generate_montage(
             )
             return {"task_id": task_id, "async": True}
 
-        url = create_montage(project_id, items_payload)
+        url = create_montage(project_id, items_payload, user_id=current_user.id if 'current_user' in locals() else user_id)
         return {"url": url}
     except Exception as e:
         logger.error(f"Montage failed: {str(e)}")
