@@ -3452,6 +3452,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const meta = getAssetMeta(asset);
         const source = String(pickAssetMetaValue(meta, ['source']) || '').trim().toLowerCase();
 
+        const stableType = String(
+            asset?.type
+            || pickAssetMetaValue(meta, ['asset_type', 'assetType', 'frame_type', 'frameType', 'content_type', 'contentType'])
+            || meta?.mime_type
+            || meta?.content_type
+            || ''
+        ).trim().toLowerCase();
+        const url = String(asset?.url || '').trim().toLowerCase();
+        if (
+            stableType === 'video'
+            || stableType.startsWith('video/')
+            || String(meta?.asset_type || meta?.frame_type || '').trim().toLowerCase().includes('video')
+            || String(meta?.mime_type || meta?.content_type || '').trim().toLowerCase().startsWith('video/')
+            || /\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$/i.test(url)
+        ) {
+            return 'video';
+        }
+
         if (isExplicitShotAsset(asset)) return '';
 
         const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
@@ -3499,6 +3517,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (normalized === 'character') return t('角色素材', 'Character Assets');
         if (normalized === 'prop') return t('道具素材', 'Prop Assets');
         if (normalized === 'environment') return t('环境素材', 'Environment Assets');
+        if (normalized === 'video') return t('视频素材', 'Video Assets');
         if (normalized === 'uploaded_asset') {
             return t('上传资产', 'Uploaded Asset');
         }
@@ -3609,8 +3628,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 label: getAssetImageTypeLabel(preferredAssetImageType),
             });
         }
+        const hasVideoAssets = Array.isArray(assets) && assets.some((asset) => getAssetImageType(asset) === 'video');
+        if (hasVideoAssets && !options.some((item) => item.value === 'video')) {
+            options.push({ value: 'video', label: getAssetImageTypeLabel('video') });
+        }
         return options;
-    }, [getAssetImageTypeLabel, preferredAssetImageType, t]);
+    }, [assets, getAssetImageType, getAssetImageTypeLabel, preferredAssetImageType, t]);
 
     const assetPickerDiagRef = useRef('');
     const assetLibraryContextResetRef = useRef('');

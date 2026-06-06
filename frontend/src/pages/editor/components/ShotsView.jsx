@@ -625,6 +625,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
+    const [videoKeyframeExtractCount, setVideoKeyframeExtractCount] = useState('4');
+    const [isExtractingVideoKeyframes, setIsExtractingVideoKeyframes] = useState(false);
     const generationStateStorageKey = useMemo(() => {
         if (!activeEpisode?.id) return '';
         return `aistory.shotGenerationState.${activeEpisode.id}`;
@@ -6599,147 +6601,351 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [clearPendingImageJob, clearPendingJointDiptychImageJob, editingShot?.id, getPendingImageJobPayload, isMissingJobError, onLog, releaseShotImageUiByShotId, releaseShotJointDiptychUiByShotId, setShotGeneratingState, syncShotMediaRuntimeState, t]);
 
-    const handleSetEndFrameFromVideoLastFrame = useCallback(async () => {
-        if (!editingShot?.id) return;
-        const targetShotId = editingShot.id;
-        const videoUrlRaw = String(editingShot.video_url || '').trim();
-        if (!videoUrlRaw) {
-            onLog?.(t('当前镜头没有视频，无法提取尾帧。', 'No shot video found to extract the last frame.'), 'warning');
-            return;
+    const captureFramesFromVideoAtTimes = useCallback(async (videoUrl, timesSec = []) => {
+        const sampledTimes = Array.isArray(timesSec)
+            ? timesSec
+                .map((item) => Number(item))
+                .filter((item) => Number.isFinite(item) && item >= 0)
+            : [];
+        if (sampledTimes.length === 0) {
+            throw new Error('no frame timestamps provided');
         }
 
-        const captureLastFrameBlob = (videoUrl) => new Promise((resolve, reject) => {
-            const video = document.createElement('video');
+        const video = document.createElement('video');
+        video.crossOrigin = 'anonymous';
+        video.preload = 'auto';
+        video.muted = true;
+        video.playsInline = true;
 
-            const cleanup = () => {
-                video.onloadedmetadata = null;
-                video.onseeked = null;
-                video.onerror = null;
-                video.src = '';
-            };
+        const cleanup = () => {
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            video.src = '';
+        };
 
-            const fail = (errorLike) => {
-                cleanup();
-                reject(errorLike instanceof Error ? errorLike : new Error(String(errorLike || 'capture failed')));
-            };
-
-            const capture = () => {
-                try {
-                    const width = Number(video.videoWidth || 0);
-                    const height = Number(video.videoHeight || 0);
-                    if (!width || !height) {
-                        fail(new Error('video resolution unavailable'));
-                        return;
-                    }
-
-                    const canvas = document.createElement('canvas');
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) {
-                        fail(new Error('canvas context unavailable'));
-                        return;
-                    }
-
-                    ctx.drawImage(video, 0, 0, width, height);
-                    canvas.toBlob((blob) => {
-                        cleanup();
-                        if (!blob) {
-                            reject(new Error('failed to encode frame image'));
-                            return;
-                        }
-                        resolve(blob);
-                    }, 'image/jpeg', 0.94);
-                } catch (e) {
-                    fail(e);
-                }
-            };
-
-            video.crossOrigin = 'anonymous';
-            video.preload = 'auto';
-            video.muted = true;
-            video.playsInline = true;
-            video.onerror = () => fail(new Error('video load error'));
-            video.onloadedmetadata = () => {
-                const duration = Number(video.duration || 0);
-                if (!Number.isFinite(duration) || duration <= 0) {
-                    capture();
-                    return;
-                }
-                const target = Math.max(0, duration - 0.05);
-                if (Math.abs((video.currentTime || 0) - target) < 0.01) {
-                    capture();
-                    return;
-                }
-                video.currentTime = target;
-            };
-            video.onseeked = capture;
+        const waitMetadata = () => new Promise((resolve, reject) => {
+            video.onloadedmetadata = () => resolve();
+            video.onerror = () => reject(new Error('video load error'));
             video.src = getFullUrl(videoUrl);
         });
 
-        setShotGeneratingState(targetShotId, 'end', true);
+        const waitSeek = (targetSec) => new Promise((resolve, reject) => {
+            const safeTarget = Math.max(0, Number(targetSec || 0));
+            const handleSeeked = () => {
+                video.onseeked = null;
+                video.onerror = null;
+                resolve();
+            };
+            const handleError = () => {
+                video.onseeked = null;
+                video.onerror = null;
+                reject(new Error('video seek error'));
+            };
+
+            if (Math.abs(Number(video.currentTime || 0) - safeTarget) < 0.01) {
+                resolve();
+                return;
+            }
+
+            video.onseeked = handleSeeked;
+            video.onerror = handleError;
+            video.currentTime = safeTarget;
+        });
+
+        const canvas = document.createElement('canvas');
+        let width = 0;
+        let height = 0;
         try {
-            const frameBlob = await captureLastFrameBlob(videoUrlRaw);
-            const frameFile = new File(
-                [frameBlob],
-                `shot_${targetShotId}_video_last_frame_${Date.now()}.jpg`,
-                { type: 'image/jpeg' }
-            );
-            const extractUploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
-                operation: 'video_last_frame',
-                shotId: targetShotId,
-                frameRole: 'end',
-                sourceUrl: videoUrlRaw,
+            await waitMetadata();
+            width = Number(video.videoWidth || 0);
+            height = Number(video.videoHeight || 0);
+            if (!width || !height) {
+                throw new Error('video resolution unavailable');
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                throw new Error('canvas context unavailable');
+            }
+
+            const results = [];
+            for (const ts of sampledTimes) {
+                await waitSeek(ts);
+                ctx.drawImage(video, 0, 0, width, height);
+                const blob = await new Promise((resolve, reject) => {
+                    canvas.toBlob((encodedBlob) => {
+                        if (!encodedBlob) {
+                            reject(new Error('failed to encode frame image'));
+                            return;
+                        }
+                        resolve(encodedBlob);
+                    }, 'image/jpeg', 0.94);
+                });
+                results.push({ time: ts, blob });
+            }
+
+            return {
+                duration: Number(video.duration || 0),
+                width,
+                height,
+                frames: results,
+            };
+        } finally {
+            cleanup();
+        }
+    }, []);
+
+    const handleExtractKeyframesFromVideo = useCallback(async () => {
+        if (!editingShot?.id) return;
+
+        const shotId = String(editingShot.id || '').trim();
+        const videoUrlRaw = String(editingShot.video_url || '').trim();
+        if (!videoUrlRaw) {
+            const warningMsg = t('当前镜头没有已生成视频，无法截取关键帧。', 'No generated video found for this shot, cannot extract keyframes.');
+            onLog?.(warningMsg, 'warning');
+            showNotification(warningMsg, 'warning');
+            return;
+        }
+
+        const frameCount = Number.parseInt(String(videoKeyframeExtractCount || '').trim(), 10);
+        if (!Number.isFinite(frameCount) || frameCount < 2) {
+            const warningMsg = t('截取帧数最少为 2。', 'Frame count must be at least 2.');
+            onLog?.(warningMsg, 'warning');
+            showNotification(warningMsg, 'warning');
+            return;
+        }
+
+        if (localKeyframes.length > 0) {
+            const shouldReplace = await confirmUiMessage(t(
+                `将用视频截取结果覆盖当前 ${localKeyframes.length} 条关键帧，是否继续？`,
+                `This will replace current ${localKeyframes.length} keyframes with extracted video frames. Continue?`
+            ));
+            if (!shouldReplace) return;
+        }
+
+        setIsExtractingVideoKeyframes(true);
+        try {
+            const probe = await captureFramesFromVideoAtTimes(videoUrlRaw, [0]);
+            const rawDuration = Number(probe?.duration || 0);
+            if (!Number.isFinite(rawDuration) || rawDuration <= 0) {
+                throw new Error(t('视频时长不可用', 'Video duration unavailable'));
+            }
+
+            const safeLastTime = Math.max(0, rawDuration - 0.05);
+            const firstSampleTime = safeLastTime > 0.12
+                ? Math.min(Math.max(0.08, rawDuration * 0.01), Math.max(0, safeLastTime - 0.04))
+                : 0;
+            const sampledTimes = Array.from({ length: frameCount }, (_, index) => {
+                if (index === 0) return firstSampleTime;
+                if (index === frameCount - 1) return safeLastTime;
+                return firstSampleTime + ((index / (frameCount - 1)) * (safeLastTime - firstSampleTime));
             });
 
-            const uploaded = await uploadAsset(frameFile, {
+            const captured = await captureFramesFromVideoAtTimes(videoUrlRaw, sampledTimes);
+            const capturedFrames = Array.isArray(captured.frames) ? captured.frames : [];
+            if (capturedFrames.length < 2) {
+                throw new Error(t('关键帧截取结果不足 2 帧', 'Extracted keyframes are fewer than 2'));
+            }
+
+            const startFrameItem = capturedFrames[0];
+            const endFrameItem = capturedFrames[capturedFrames.length - 1];
+            const keyframeSourceItems = capturedFrames.slice(1);
+            if (!startFrameItem?.blob || !endFrameItem?.blob || keyframeSourceItems.length === 0) {
+                throw new Error(t('关键帧截取结果不足，无法回填起始帧', 'Extraction result is insufficient to fill the start frame'));
+            }
+
+            const existingTech = getEditingShotTech();
+            const nextCnMap = {
+                ...((existingTech && typeof existingTech.keyframe_prompt_cn_map === 'object') ? existingTech.keyframe_prompt_cn_map : {}),
+            };
+
+            const startFrameTimeLabel = `${Math.max(0, Number(Number(startFrameItem?.time || 0).toFixed(2)))}s`;
+            const startFrameFile = new File(
+                [startFrameItem.blob],
+                `shot_${shotId}_video_start_frame_${Date.now()}.jpg`,
+                { type: 'image/jpeg' }
+            );
+            const startFrameUploadKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'video_keyframe_extract_start',
+                shotId,
+                frameRole: `start_frame_${startFrameTimeLabel}`,
+                sourceUrl: videoUrlRaw,
+            });
+            const startFrameUploaded = await uploadAsset(startFrameFile, {
                 project_id: projectId,
                 episode_id: activeEpisode?.id,
-                shot_id: targetShotId,
+                shot_id: shotId,
+                shot_number: editingShot.shot_id,
+                shot_name: editingShot.shot_name,
+                asset_type: 'start_frame',
+                source_asset_url: videoUrlRaw,
+                idempotency_key: startFrameUploadKey,
+                remark: 'Video extracted start frame',
+            });
+            if (startFrameUploaded?.id) {
+                try {
+                    await markAssetAsCurrentProjectAsset(startFrameUploaded.id);
+                } catch (error) {
+                    console.error('Failed to mark extracted start frame as project asset:', error);
+                }
+            }
+            const startFrameUrl = String(startFrameUploaded?.url || '').trim();
+            if (!startFrameUrl) {
+                throw new Error(t('起始帧上传后没有返回 URL', 'Uploaded start frame did not return a URL'));
+            }
+
+            const endFrameTimeLabel = `${Math.max(0, Number(Number(endFrameItem?.time || 0).toFixed(2)))}s`;
+            const endFrameFile = new File(
+                [endFrameItem.blob],
+                `shot_${shotId}_video_end_frame_${Date.now()}.jpg`,
+                { type: 'image/jpeg' }
+            );
+            const endFrameUploadKey = buildShotFrameAssetUploadIdempotencyKey({
+                operation: 'video_keyframe_extract_end',
+                shotId,
+                frameRole: `end_frame_${endFrameTimeLabel}`,
+                sourceUrl: videoUrlRaw,
+            });
+            const endFrameUploaded = await uploadAsset(endFrameFile, {
+                project_id: projectId,
+                episode_id: activeEpisode?.id,
+                shot_id: shotId,
                 shot_number: editingShot.shot_id,
                 shot_name: editingShot.shot_name,
                 asset_type: 'end_frame',
                 source_asset_url: videoUrlRaw,
-                idempotency_key: extractUploadIdempotencyKey,
+                idempotency_key: endFrameUploadKey,
+                remark: 'Video extracted end frame',
             });
-            
-            if (uploaded?.id) {
+            if (endFrameUploaded?.id) {
                 try {
-                    await markAssetAsCurrentProjectAsset(uploaded.id);
-                } catch (e) {
-                    console.error('Failed to mark extracted end frame as project asset:', e);
+                    await markAssetAsCurrentProjectAsset(endFrameUploaded.id);
+                } catch (error) {
+                    console.error('Failed to mark extracted end frame as project asset:', error);
                 }
             }
-
-            const extractedUrl = String(uploaded?.url || '').trim();
-            if (!extractedUrl) {
-                throw new Error('uploaded frame has no url');
+            const endFrameUrl = String(endFrameUploaded?.url || '').trim();
+            if (!endFrameUrl) {
+                throw new Error(t('结束帧上传后没有返回 URL', 'Uploaded end frame did not return a URL'));
             }
 
-            const tech = JSON.parse(editingShot.technical_notes || '{}');
-            tech.end_frame_url = extractedUrl;
-            tech.video_gen_mode = 'start_end';
-            const persistedShot = await persistEditingShotUpdates({ technical_notes: JSON.stringify(tech) });
-            const persistedEndFrameUrl = String(getShotEndFrameUrl(persistedShot || {}) || '').trim();
-            if (!persistedEndFrameUrl) {
-                throw new Error('end frame write did not persist');
+            setEditingShot((prev) => (prev && String(prev.id) === shotId ? { ...prev, image_url: startFrameUrl } : prev));
+            setShots((prevShots) => prevShots.map((shot) => (String(shot?.id || '') === shotId ? { ...shot, image_url: startFrameUrl } : shot)));
+
+            const nextList = [];
+            nextList.push({
+                id: Date.now(),
+                time: startFrameTimeLabel,
+                prompt: `${t('视频截取起始帧', 'Video extracted start frame')} #1`,
+                url: startFrameUrl,
+            });
+            for (let index = 0; index < keyframeSourceItems.length; index += 1) {
+                const item = keyframeSourceItems[index];
+                const currentTime = Number(item?.time || 0);
+                const frameBlob = item?.blob;
+                if (!frameBlob) continue;
+
+                const timeLabel = `${Math.max(0, Number(currentTime.toFixed(2)))}s`;
+                const promptLabel = `${t('视频截取关键帧', 'Video extracted keyframe')} #${index + 1}`;
+                const uploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
+                    operation: 'video_keyframe_extract',
+                    shotId,
+                    frameRole: `keyframe_${timeLabel}`,
+                    sourceUrl: videoUrlRaw,
+                });
+
+                const frameFile = new File(
+                    [frameBlob],
+                    `shot_${shotId}_video_keyframe_${index + 1}_${Date.now()}.jpg`,
+                    { type: 'image/jpeg' }
+                );
+
+                const uploaded = await uploadAsset(frameFile, {
+                    project_id: projectId,
+                    episode_id: activeEpisode?.id,
+                    shot_id: shotId,
+                    shot_number: `${editingShot.shot_id}_KF_${timeLabel}`,
+                    shot_name: editingShot.shot_name,
+                    asset_type: 'keyframe',
+                    source_asset_url: videoUrlRaw,
+                    idempotency_key: uploadIdempotencyKey,
+                    remark: `Video extracted keyframe ${index + 1}`,
+                });
+
+                if (uploaded?.id) {
+                    try {
+                        await markAssetAsCurrentProjectAsset(uploaded.id);
+                    } catch (error) {
+                        console.error('Failed to mark extracted keyframe as project asset:', error);
+                    }
+                }
+
+                const uploadedUrl = String(uploaded?.url || '').trim();
+                if (!uploadedUrl) {
+                    throw new Error(`uploaded keyframe ${index + 1} has no url`);
+                }
+
+                nextList.push({
+                    id: Date.now() + index,
+                    time: timeLabel,
+                    prompt: promptLabel,
+                    url: uploadedUrl,
+                });
+
+                if (!nextCnMap[timeLabel]) {
+                    nextCnMap[timeLabel] = promptLabel;
+                }
+
+                try {
+                    await new Promise((resolve) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(uploadedUrl);
+                            resolve();
+                        };
+                        img.onerror = resolve;
+                        img.src = getFullUrl(uploadedUrl);
+                    });
+                } catch (_) {}
             }
 
-            onLog?.(t('已从视频提取最后一帧并设置为结束帧。', 'Last video frame extracted and set as end frame.'), 'success');
-            showNotification(t('已设置结束帧', 'End frame set from video'), 'success');
-            
-            // Wait, we should also refresh the asset metadata view to show the new asset in the project library
-            if (typeof refreshShotAssetsMeta === 'function') {
-                refreshShotAssetsMeta();
-            }
+            setLocalKeyframes(nextList);
+            await reconstructKeyframes(nextList, { keyframe_prompt_cn_map: nextCnMap, end_frame_url: endFrameUrl });
+            await persistEditingShotUpdates({ image_url: startFrameUrl, start_frame: editingShot.start_frame || startFrameUrl });
+            refreshShotAssetsMeta();
+
+            const successMsg = t(
+                `已从视频均匀截取 ${capturedFrames.length} 帧（含首尾帧），并将首帧回填到起始帧、末帧回填到结束帧，同时回填到关键帧。`,
+                `Extracted ${capturedFrames.length} evenly spaced frames (including first and last), filled the first frame into the start frame, the last frame into the end frame, and also into keyframes.`
+            );
+            onLog?.(successMsg, 'success');
+            showNotification(successMsg, 'success');
         } catch (e) {
             const detail = getReadableErrorDetail(e);
-            onLog?.(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
-            showNotification(`${t('提取视频尾帧失败', 'Failed to extract video last frame')}: ${detail}`, 'error');
+            onLog?.(`${t('视频截取关键帧失败', 'Failed to extract keyframes from video')}: ${detail}`, 'error');
+            showNotification(`${t('视频截取关键帧失败', 'Failed to extract keyframes from video')}: ${detail}`, 'error');
         } finally {
-            setShotGeneratingState(targetShotId, 'end', false);
+            setIsExtractingVideoKeyframes(false);
         }
-    }, [editingShot, getReadableErrorDetail, getShotEndFrameUrl, onLog, persistEditingShotUpdates, projectId, setShotGeneratingState, t]);
+    }, [
+        activeEpisode?.id,
+        captureFramesFromVideoAtTimes,
+        confirmUiMessage,
+        editingShot,
+        getEditingShotTech,
+        getReadableErrorDetail,
+        localKeyframes.length,
+        onLog,
+        projectId,
+        persistEditingShotUpdates,
+        reconstructKeyframes,
+        refreshShotAssetsMeta,
+        t,
+        videoKeyframeExtractCount,
+    ]);
 
     const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
@@ -9078,14 +9284,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 >
                                                     <ImageIcon className="w-3 h-3"/> {t('设置', 'Set')}
                                                 </button>
-                                                <button
-                                                    onClick={handleSetEndFrameFromVideoLastFrame}
-                                                    disabled={!editingShot.video_url || currentShotGenerating}
-                                                    className={`text-[10px] px-2 py-0.5 rounded flex items-center gap-1 ${(!editingShot.video_url || currentShotGenerating) ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
-                                                    title={t('从当前视频提取最后一帧', 'Extract last frame from current video')}
-                                                >
-                                                    <Video className="w-3 h-3"/> {t('取视频尾帧', 'Last Frame')}
-                                                </button>
                                                 {currentGeneratingState.end && (
                                                     <button 
                                                         onClick={() => handleForceStopShotImage('end')}
@@ -9538,6 +9736,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         <div className="text-xs text-muted-foreground mt-1">{t('多画格图会自动拆分并直接回填到关键帧。', 'Multi-panel images are automatically split and filled back into keyframes.')}</div>
                                                     </div>
                                                     <div className="flex flex-wrap items-center gap-2">
+                                                        <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-2 py-1.5">
+                                                            <span className="text-[11px] text-white/80">{t('截取帧数', 'Frame Count')}</span>
+                                                            <input
+                                                                type="number"
+                                                                min={2}
+                                                                step={1}
+                                                                value={videoKeyframeExtractCount}
+                                                                onChange={(e) => setVideoKeyframeExtractCount(e.target.value)}
+                                                                className="w-16 h-7 rounded border border-white/10 bg-black/40 px-2 text-xs text-white outline-none focus:border-sky-400/60"
+                                                                title={t('按输入帧数均匀截取视频关键帧（至少 2）', 'Extract evenly spaced keyframes by frame count (minimum 2)')}
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleExtractKeyframesFromVideo}
+                                                                disabled={isExtractingVideoKeyframes}
+                                                                title={t('按视频时长均匀截取关键帧，包含首尾帧', 'Extract evenly spaced keyframes across duration, including first and last frames')}
+                                                                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isExtractingVideoKeyframes ? 'bg-sky-500/10 text-sky-200/50 cursor-wait' : 'bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'}`}
+                                                            >
+                                                                {isExtractingVideoKeyframes ? t('截取中...', 'Extracting...') : t('视频截取关键帧', 'Extract Keyframes')}
+                                                            </button>
+                                                        </div>
                                                         <select
                                                             value={multiPanelPresetKey}
                                                             onChange={async (e) => {
@@ -10546,14 +10765,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         busy: frameTrimModal.open && frameTrimModal.type === 'end' && frameTrimModal.saving,
                                                                         variant: 'secondary',
                                                                         title: t('裁去当前结束帧四周边缘并回填', 'Trim the current end frame edges and apply the result'),
-                                                                    })}
-                                                                    {renderDetailActionButton({
-                                                                        label: t('提取视频尾帧', 'Extract Video Last Frame'),
-                                                                        busyLabel: t('提取视频尾帧', 'Extract Video Last Frame'),
-                                                                        onClick: handleSetEndFrameFromVideoLastFrame,
-                                                                        disabled: !editingShot.video_url || currentShotGenerating,
-                                                                        variant: 'warning',
-                                                                        title: t('从当前视频提取最后一帧', 'Extract last frame from current video'),
                                                                     })}
                                                                 </div>
                                                                 <div className="space-y-3 rounded-lg border border-white/10 bg-black/20 p-4">

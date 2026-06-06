@@ -28,10 +28,19 @@ const shouldProxyExternalMediaUrl = (rawUrl) => {
     try {
         const parsed = new URL(stable);
         const host = String(parsed.hostname || '').trim().toLowerCase();
-        const isQiniuSignedHost = host === 'qn.woola.fun' || host.endsWith('.clouddn.com') || host.endsWith('.qiniucs.com');
-        // Browser direct access to B2 signed URLs is unstable in some regions/networks.
-        // Qiniu signed URLs may intermittently fail in browser direct HTTP/2 path; proxy is more stable.
-        return host.endsWith('backblazeb2.com') || isQiniuSignedHost;
+        const backendHost = (() => {
+            try {
+                return String(new URL(String(BASE_URL || ''), window.location.origin).hostname || '').trim().toLowerCase();
+            } catch {
+                return '';
+            }
+        })();
+        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+        if (!host || isLocalHost) return false;
+        if (backendHost && host === backendHost) return false;
+
+        // Any cross-origin media that fails direct browser access can fall back to the backend proxy.
+        return true;
     } catch {
         return false;
     }
