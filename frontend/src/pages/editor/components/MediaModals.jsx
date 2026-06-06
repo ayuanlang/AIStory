@@ -1383,13 +1383,92 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 shouldFilterReferencedOnly ? fetchUnreferencedAssetIds({ project_id: projectId, episode_id: episodeId || undefined }) : Promise.resolve(null)
             ]);
 
+            let data = Array.isArray(scopedData) ? [...scopedData] : [];
+            const normalizeUrlKey = (value) => String(value || '').trim().replace(/[?#].*$/, '').toLowerCase();
+            const buildAssetDedupKey = (asset) => {
+                const urlKey = normalizeUrlKey(asset?.url);
+                if (urlKey) return `url:${urlKey}`;
+                const idKey = String(asset?.id || '').trim();
+                if (idKey) return `id:${idKey}`;
+                return '';
+            };
+            const seenAssetKeys = new Set(data.map((asset) => buildAssetDedupKey(asset)).filter(Boolean));
+            const mergeUniqueAssets = (rows = []) => {
+                let added = 0;
+                (Array.isArray(rows) ? rows : []).forEach((row) => {
+                    const dedupKey = buildAssetDedupKey(row);
+                    if (!dedupKey || seenAssetKeys.has(dedupKey)) return;
+                    seenAssetKeys.add(dedupKey);
+                    data.push(row);
+                    added += 1;
+                });
+                return added;
+            };
+
+            // Fallback: if video picker opens but scoped query returns no video-like rows,
+            // fetch by shot_id directly to avoid dropping valid videos due project/episode scope mismatch.
+            const shouldTryShotVideoFallback = Boolean(contextShotId)
+                && (preferredAssetType === 'video' || contextFrameType.includes('video'));
+            const scopedHasVideoLike = data.some((asset) => isAssetVideoLike(asset));
+            if (shouldTryShotVideoFallback && !scopedHasVideoLike) {
+                const shotFallbackRows = await fetchAssetsPaged({
+                    shot_id: contextShotId,
+                    type: 'video',
+                    current_project_asset: 'all',
+                });
+                if (Array.isArray(shotFallbackRows) && shotFallbackRows.length > 0) {
+                    const added = mergeUniqueAssets(shotFallbackRows);
+                    logAssetPickerDebug('load:shot-video-fallback', {
+                        contextShotId,
+                        added,
+                        summary: summarizeAssetsForDebug(data),
+                    });
+                }
+            }
+
+            // Strong fallback: inject videos from current episode shots even when assets table registration is missing.
+            const shotVideoFallbackRows = (Array.isArray(availableShots) ? availableShots : [])
+                .map((shot, idx) => {
+                    const url = String(shot?.video_url || '').trim();
+                    if (!url) return null;
+                    const shotId = String(shot?.id || '').trim();
+                    const shotNumber = String(shot?.shot_id || '').trim();
+                    const shotName = String(shot?.shot_name || '').trim();
+                    const episodeValue = String(shot?.episode_id || episodeId || '').trim();
+                    return {
+                        id: `shot-video-fallback-${shotId || idx}`,
+                        type: 'video',
+                        url,
+                        name: shotName || (shotNumber ? `Shot ${shotNumber} Video` : 'Shot Video'),
+                        episode_id: episodeValue || undefined,
+                        meta_info: {
+                            source: 'shot_video_fallback',
+                            frame_type: 'video',
+                            asset_type: 'video',
+                            shot_id: shotId || undefined,
+                            shot_number: shotNumber || undefined,
+                            shot_name: shotName || undefined,
+                            episode_id: episodeValue || undefined,
+                        },
+                    };
+                })
+                .filter(Boolean);
+            if (shotVideoFallbackRows.length > 0) {
+                const added = mergeUniqueAssets(shotVideoFallbackRows);
+                if (added > 0) {
+                    logAssetPickerDebug('load:shot-video-url-fallback', {
+                        candidates: shotVideoFallbackRows.length,
+                        added,
+                        summary: summarizeAssetsForDebug(data),
+                    });
+                }
+            }
+
             logAssetPickerDebug('load:scoped-response', {
                 scopedParams,
                 shouldFilterReferencedOnly,
-                summary: summarizeAssetsForDebug(scopedData),
+                summary: summarizeAssetsForDebug(data),
             });
-
-            const data = scopedData;
 
             const referencedSet = new Set((refsPayload?.referenced_ids || []).map(id => String(id)));
             const hasReferencedHints = referencedSet.size > 0;
@@ -1434,7 +1513,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 setLoading(false);
             }
         }
-    }, [episodeFilter, episodeId, logAssetPickerDebug, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
+    }, [availableShots, contextFrameType, contextShotId, episodeFilter, episodeId, isAssetVideoLike, logAssetPickerDebug, preferredAssetType, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
 
     const handleMarkAssetCurrent = useCallback(async (asset) => {
         const assetId = Number(asset?.id || 0);
