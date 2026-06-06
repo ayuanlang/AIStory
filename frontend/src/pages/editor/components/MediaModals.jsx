@@ -498,6 +498,77 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         ).trim();
     }, [t]);
 
+    const collectUrlTokens = useCallback((value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return [];
+        const tokens = new Set();
+        const push = (part) => {
+            const text = String(part || '').trim().toLowerCase();
+            if (text) tokens.add(text);
+        };
+        push(raw);
+        const normalizedRaw = raw.split('#')[0].split('?')[0].trim();
+        push(normalizedRaw);
+        try {
+            const parsed = new URL(raw, 'https://dummy.local');
+            const path = decodeURIComponent(String(parsed.pathname || '').trim());
+            const normalizedPath = path.replace(/\\/g, '/').trim();
+            const trimmedPath = normalizedPath.replace(/^\/+/, '');
+            push(normalizedPath);
+            push(trimmedPath);
+            const parts = trimmedPath.split('/').filter(Boolean);
+            const fileName = parts.length ? parts[parts.length - 1] : '';
+            push(fileName);
+            if (parts.length >= 2) push(parts.slice(-2).join('/'));
+            if (parts.length >= 3) push(parts.slice(-3).join('/'));
+        } catch (error) {
+            // Best-effort tokenization for non-standard urls/paths.
+            const fallbackPath = normalizedRaw.replace(/\\/g, '/').replace(/^\/+/, '');
+            push(fallbackPath);
+            const parts = fallbackPath.split('/').filter(Boolean);
+            const fileName = parts.length ? parts[parts.length - 1] : '';
+            push(fileName);
+            if (parts.length >= 2) push(parts.slice(-2).join('/'));
+            if (parts.length >= 3) push(parts.slice(-3).join('/'));
+        }
+        return Array.from(tokens);
+    }, []);
+
+    const entityIdByImageToken = useMemo(() => {
+        const tokenMap = new Map();
+        (Array.isArray(entities) ? entities : []).forEach((entity) => {
+            const entityId = String(entity?.id || '').trim();
+            if (!entityId) return;
+
+            const customAttrs = (() => {
+                try {
+                    if (!entity?.custom_attributes) return {};
+                    if (typeof entity.custom_attributes === 'string') return JSON.parse(entity.custom_attributes || '{}') || {};
+                    if (typeof entity.custom_attributes === 'object') return entity.custom_attributes;
+                } catch (error) {
+                    return {};
+                }
+                return {};
+            })();
+
+            const imageCandidates = [
+                entity?.image_url,
+                entity?.imageUrl,
+                customAttrs?.image_url,
+                customAttrs?.imageUrl,
+                customAttrs?.origin_image_url,
+                customAttrs?.reused_image_url,
+            ].map((value) => String(value || '').trim()).filter(Boolean);
+
+            imageCandidates.forEach((urlText) => {
+                collectUrlTokens(urlText).forEach((token) => {
+                    if (!tokenMap.has(token)) tokenMap.set(token, entityId);
+                });
+            });
+        });
+        return tokenMap;
+    }, [collectUrlTokens, entities]);
+
     const resolveAssetEntityId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
         const directId = String(
@@ -537,8 +608,25 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             return candidateSet.has(name) || candidateSet.has(nameEn);
         });
 
-        return String(matched?.id || '').trim();
-    }, [entities]);
+        if (matched?.id) return String(matched.id || '').trim();
+
+        const urlCandidates = [
+            asset?.url,
+            asset?.source_asset_url,
+            meta?.url,
+            meta?.image_url,
+            meta?.source_asset_url,
+        ].map((value) => String(value || '').trim()).filter(Boolean);
+
+        for (const candidateUrl of urlCandidates) {
+            const matchedByUrl = collectUrlTokens(candidateUrl)
+                .map((token) => entityIdByImageToken.get(token))
+                .find(Boolean);
+            if (matchedByUrl) return String(matchedByUrl || '').trim();
+        }
+
+        return '';
+    }, [collectUrlTokens, entities, entityIdByImageToken]);
 
     const resolveAssetShotId = useCallback((asset) => {
         const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
