@@ -7094,8 +7094,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
-                finalAnalysisText = [String(analyzedText || '').trim(), stage2PhaseRawText].filter(Boolean).join('\n\n');
 
+                // Persist/import only the Stage 2.2 scenes markdown table to avoid
+                // accidentally treating Subject Index text as scene rows.
+                finalAnalysisText = String(stage2_2Text || '').trim();
                 importSourceText = finalAnalysisText;
                 phaseMarks.persistStartedAt = Date.now();
                 
