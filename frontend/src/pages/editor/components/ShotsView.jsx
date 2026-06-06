@@ -7228,8 +7228,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ? normalizeMediaRefList(tech.video_ref_image_urls)
                 : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
 
+            const hasManualVideoRefOverride = Boolean(
+                tech.video_ref_image_urls_manual === true
+                || tech.video_ref_image_urls_user_edited === true
+            );
+            const shouldAutoUsePrevVideo = Boolean(usePrevVideo && !hasManualVideoRefOverride);
+
             
-            if (usePrevVideo) {
+            if (shouldAutoUsePrevVideo) {
                 const prevShot = findPrevContinuationShot(targetShotId);
                 const prevVideoUrl = prevShot?.video_url;
                 if (prevVideoUrl && !uniqueRefs.includes(prevVideoUrl)) {
@@ -7383,7 +7389,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     project_id: projectId,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
-                    use_prev_video: usePrevVideo,
+                    use_prev_video: shouldAutoUsePrevVideo,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,
@@ -9708,11 +9714,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <button
                                                     onClick={handleUpscaleCurrentVideo}
                                                     disabled={currentShotGenerating || !String(editingShot?.video_url || '').trim()}
-                                                    className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
-                                                    title={t('基于当前视频调用 KIE Topaz 进行2x提质并回填', 'Use current video to run KIE Topaz 2x upscale and backfill')}
+                                                    className={`text-[10px] font-bold px-2 py-1 rounded flex items-center justify-center ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                                                    title="topaz 视频画质提升 upscale*2"
+                                                    aria-label="topaz 视频画质提升 upscale*2"
                                                 >
                                                     <Sparkles className="w-3 h-3" />
-                                                    {t('提升质量', 'Upscale')}
                                                 </button>
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
