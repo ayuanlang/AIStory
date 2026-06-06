@@ -34717,15 +34717,17 @@ async def analyze_entity_image(
     if not entity.image_url:
         raise HTTPException(status_code=400, detail="Entity has no image to analyze.")
 
-    async def bg_task(u: User):
+    async def bg_task(u_id: int):
         from app.db.session import SessionLocal
         with SessionLocal() as bg_db:
             try:
-                await _execute_analyze_entity_image(entity_id, system_api_id, feature_name, bg_db, u)
+                u = bg_db.query(User).filter(User.id == u_id).first()
+                if u:
+                    await _execute_analyze_entity_image(entity_id, system_api_id, feature_name, bg_db, u)
             except Exception as e:
                 logger.error(f"BG Analyze task failed for entity {entity_id}: {e}")
 
-    background_tasks.add_task(bg_task, current_user)
+    background_tasks.add_task(bg_task, current_user.id)
     return entity
 
 async def _execute_analyze_entity_image(
@@ -35021,7 +35023,8 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
     try:
         logger.info("Sending request to LLM...")
 
-        _release_db_connection(db, "analyze_entity_image_llm_call")
+        # Do NOT release DB connection here in background task, otherwise SQLAlchemy detaches models
+        # _release_db_connection(db, "analyze_entity_image_llm_call")
 
         if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
             est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
@@ -35361,16 +35364,43 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         # We no longer save the prompt as a separate asset file to avoid clutter.
         # The prompt is already saved in the entity.generation_prompt_en field.
 
+        db.commit()
         db.refresh(entity)
         return entity
 
     except HTTPException as e:
         logger.error(f"Entity Analysis failed with HTTPException: {str(e.detail)}", exc_info=True)
         _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e.detail))
+        try:
+            custom_attrs = entity.custom_attributes or {}
+            if isinstance(custom_attrs, str):
+                custom_attrs = json.loads(custom_attrs)
+            custom_attrs['analysis_result'] = {
+                "status": "error",
+                "message": str(e.detail)
+            }
+            entity.custom_attributes = dict(custom_attrs)
+            entity.image_url = None
+            db.commit()
+        except Exception:
+            db.rollback()
         raise
     except Exception as e:
         logger.error(f"Entity Analysis failed: {str(e)}", exc_info=True)
         _cancel_reservation_quietly(db, reservation_tx_id or reservation_tx, str(e))
+        try:
+            custom_attrs = entity.custom_attributes or {}
+            if isinstance(custom_attrs, str):
+                custom_attrs = json.loads(custom_attrs)
+            custom_attrs['analysis_result'] = {
+                "status": "error",
+                "message": str(e)
+            }
+            entity.custom_attributes = dict(custom_attrs)
+            entity.image_url = None
+            db.commit()
+        except Exception:
+            db.rollback()
         raise HTTPException(status_code=502, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/entities/{entity_id}/latest_analysis")

@@ -430,6 +430,125 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [viewingEntityTab, setViewingEntityTab] = useState('generate');
     const [advancedInstruction, setAdvancedInstruction] = useState('');
     const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
+    
+    // Analyzing state mapping (entityId -> timestamp)
+    const subjectAnalyzingStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.analyzingEntities.${pid}` : '';
+    }, [projectId]);
+    const [analyzingEntities, setAnalyzingEntities] = useState({});
+
+    useEffect(() => {
+        if (!subjectAnalyzingStorageKey) return;
+        try {
+            const raw = localStorage.getItem(subjectAnalyzingStorageKey);
+            if (raw) setAnalyzingEntities(JSON.parse(raw));
+        } catch { }
+    }, [subjectAnalyzingStorageKey]);
+
+    const persistAnalyzingEntities = useCallback((nextState) => {
+        setAnalyzingEntities(nextState);
+        if (!subjectAnalyzingStorageKey) return;
+        try {
+            if (Object.keys(nextState).length === 0) {
+                localStorage.removeItem(subjectAnalyzingStorageKey);
+            } else {
+                localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(nextState));
+            }
+        } catch { }
+    }, [subjectAnalyzingStorageKey]);
+
+    const analyzingEntitiesRef = useRef(analyzingEntities);
+    useEffect(() => {
+        analyzingEntitiesRef.current = analyzingEntities;
+    }, [analyzingEntities]);
+
+    const getEntityAnalysisTime = (entity) => {
+        try {
+            const attrs = entity?.custom_attributes ? (typeof entity.custom_attributes === 'string' ? JSON.parse(entity.custom_attributes) : entity.custom_attributes) : {};
+            if (attrs?.analysis_result?.status === 'error') {
+                return 'ERROR_' + (attrs?.analysis_result?.timestamp || Date.now()); // Ensure mismatch so it gets picked up
+            }
+            return attrs?.analysis_result?.timestamp || '';
+        } catch {
+            return '';
+        }
+    };
+
+    useEffect(() => {
+        const checkPoll = async () => {
+            const currentAnalyzing = analyzingEntitiesRef.current;
+            const analyzingIds = Object.keys(currentAnalyzing);
+            if (analyzingIds.length === 0) return;
+
+            try {
+                const latestEntities = await fetchEntities(projectId, { include_project_null_episode: true });
+                let changed = false;
+                const updatesToApply = [];
+                setAnalyzingEntities(prev => {
+                    const next = { ...prev };
+                    analyzingIds.forEach(id => {
+                        const latest = latestEntities.find(e => String(e.id) === id);
+                        const trackingData = next[id];
+                        if (!trackingData) return;
+
+                        const initialAnalysisTime = trackingData?.initialAnalysisTime;
+                        const startedAt = trackingData?.startedAt || Date.now();
+
+                        // If entity no longer exists, timeout 45s passed, or if analysis time changed
+                        if (!latest) {
+                            delete next[id];
+                            changed = true;
+                        } else if (getEntityAnalysisTime(latest) !== initialAnalysisTime) {
+                            delete next[id];
+                            changed = true;
+                            updatesToApply.push({ id, latest });
+                        } else if (Date.now() - startedAt > 300000) {
+                            // Timeout safety catch (5 minutes)
+                            delete next[id];
+                            changed = true;
+                            if (onLog) onLog(`Subject analysis timed out for ${latest.name}`, "warning");
+                        }
+                    });
+
+                    if (changed && subjectAnalyzingStorageKey) {
+                        try {
+                            if (Object.keys(next).length === 0) localStorage.removeItem(subjectAnalyzingStorageKey);
+                            else localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(next));
+                        } catch {}
+                    }
+                    return changed ? next : prev;
+                });
+                
+                updatesToApply.forEach(({ id, latest }) => {
+                    let isError = false;
+                    let errMsg = "Unknown error";
+                    try {
+                        const attrs = typeof latest.custom_attributes === 'string' ? JSON.parse(latest.custom_attributes) : (latest.custom_attributes || {});
+                        if (attrs?.analysis_result?.status === 'error') {
+                            isError = true;
+                            errMsg = attrs?.analysis_result?.message || errMsg;
+                        }
+                    } catch(e) {}
+                    
+                    setSelectedEntity(curr => String(curr?.id) === id ? latest : curr);
+                    setAllEntities(curr => curr.map(e => String(e.id) === id ? latest : e));
+                    setEntities(curr => curr.map(e => String(e.id) === id ? latest : e));
+                    setViewingEntity(curr => String(curr?.id) === id ? latest : curr);
+                    
+                    if (isError) {
+                        if (onLog) onLog(`Subject analysis failed for ${latest.name}: ${errMsg}`, "error");
+                        showSubjectNotification(`Subject analysis failed for ${latest.name}: ${errMsg}`, "error");
+                    } else {
+                        if (onLog) onLog(`Subject analysis completed in background: ${latest.name}`, "success");
+                    }
+                });
+            } catch (e) { console.error(e); }
+        };
+
+        const timer = setInterval(() => { void checkPoll(); }, 4000);
+        return () => clearInterval(timer);
+    }, [projectId, fetchEntities, subjectAnalyzingStorageKey, onLog]);
     const [isAdvancedLocalModifying, setIsAdvancedLocalModifying] = useState(false);
     const [isBatchGeneratingEntities, setIsBatchGeneratingEntities] = useState(false);
     const [isStoppingBatchGenerateEntities, setIsStoppingBatchGenerateEntities] = useState(false);
@@ -2325,7 +2444,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) onLog(`Analyzing image for subject ${entity.name} in background...`, "process");
         
         try {
+            persistAnalyzingEntities({ ...analyzingEntities, [String(entity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(entity) } });
             const updated = await analyzeEntityImage(entity.id, 'script_analysis', null, { background: true });
+            if (updated) {
+                persistAnalyzingEntities(prev => ({ ...prev, [String(entity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(updated) } }));
+            }
             setSelectedEntity(prev => (prev?.id === updated.id ? updated : prev));
             setViewingEntity(prev => (prev?.id === updated.id ? updated : prev));
             setEntities(prev => prev.map(e => String(e.id) === String(updated.id) ? updated : e));
@@ -4323,7 +4446,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
 
             if (options?.skipAnalyze !== true) {
+                persistAnalyzingEntities({ ...analyzingEntities, [String(updatedEntity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(updatedEntity) } });
                 const analyzedEntity = await analyzeEntityImage(updatedEntity.id, 'script_analysis', null, { background: true });
+                if (analyzedEntity) {
+                    persistAnalyzingEntities(prev => ({ ...prev, [String(updatedEntity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(analyzedEntity) } }));
+                }
                 return analyzedEntity || updatedEntity;
             }
 
@@ -5015,6 +5142,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
                         const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
                         const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
+                        const isAnalyzing = Boolean(analyzingEntities[String(entity.id)]);
                         let attrs = {};
                         try {
                             attrs = entity.custom_attributes
@@ -5055,6 +5183,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             : String(trackedJob?.status || '').toLowerCase() === 'queued'
                                                 ? t('排队中', 'Queued')
                                                 : t('生成中', 'Generating')}
+                                </div>
+                            )}
+                            {(!trackedJob && !isBatchPending && isAnalyzing) && (
+                                <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center">
+                                    <Loader2 className="animate-spin text-primary w-6 h-6 mb-1" />
+                                    <span className="text-primary/90 text-xs font-bold">{t('分析中...', 'Analyzing...')}</span>
                                 </div>
                             )}
                             {trackedJob && hasRunningSubjectImageJob && (
@@ -6475,7 +6609,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             }`}>
                                                 {uploadState === 'uploading' && t('正在上传...', 'Uploading...')}
                                                 {uploadState === 'analyzing' && t('正在分析...', 'Analyzing...')}
-                                                {uploadState === 'completed' && t('已分析完成', 'Analysis completed')}
+                                                {uploadState === 'completed' && t('已提交后台分析', 'Submitted to background analysis')}
                                                 {uploadState === 'idle' && t('点击或拖拽图片到此处', 'Click or drop image here')}
                                             </span>
                                         </div>
