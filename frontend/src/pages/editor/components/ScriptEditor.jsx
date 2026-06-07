@@ -1348,10 +1348,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const directResult = asText(result?.result);
         if (directResult) return directResult;
+        const directResultContent = asText(result?.result_content);
+        if (directResultContent) return directResultContent;
         const directAnalysis = asText(result?.analysis);
         if (directAnalysis) return directAnalysis;
         const directContent = asText(result?.content);
         if (directContent) return directContent;
+        const nestedDataResult = asText(result?.data?.result);
+        if (nestedDataResult) return nestedDataResult;
+        const nestedDataContent = asText(result?.data?.content);
+        if (nestedDataContent) return nestedDataContent;
         return asText(result);
     }, []);
 
@@ -2569,6 +2575,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handlePostCheckRerunAnalysis = async () => {
         setPendingSwitchAfterPostChecks(false);
         setPostAnalysisCheckModal({ open: false, status: 'idle', message: '', guidance: [] });
+        const hasSceneBeats = Boolean(getStageOutputContent('stage2', 'scene_markdown'));
+        if (hasSceneBeats) {
+            if (onLog) onLog('Post-check action: rerun scene-beats only (single route).', 'info');
+            await handleRerunSceneBeatsOnly();
+            return;
+        }
         if (onLog) onLog('Post-check action: rerun AI Script Analysis.', 'info');
         await handleAnalysisClick();
     };
@@ -2927,8 +2939,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (check.ok && check.warning && onLog) onLog(check.warning, 'warning');
             if (!check.ok && onLog) onLog(`Auto scene-table check skipped: ${check.reason}`, 'warning');
 
-            // Keep full analysis payload so entities JSON can be imported in the same run.
-            const importReport = await onImportText(analyzedText || '', 'auto', importOptions);
+            // Prefer importing the validated scene table only. This prevents
+            // Subject Index text from being misidentified as scene rows.
+            const importReport = check.ok
+                ? await onImportText(check.tableText || '', 'scene', importOptions)
+                : await onImportText(analyzedText || '', 'auto', importOptions);
             if (onLog) onLog('Auto-import finished.', 'success');
 
             const subjectsJson = importOptions?.subjectsJson || getAnalysisEntitiesPayloadFromJsonText(analyzedText || '');
@@ -4391,11 +4406,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             const phase2StartedAt = Date.now();
+            const phase2BatchTraceId = `phase2-assets-${activeEpisode?.id || 'noep'}-${phase2StartedAt}`;
+
+            const hasAnySubjects = (payload) => {
+                if (!payload || typeof payload !== 'object') return false;
+                return (
+                    (Array.isArray(payload.characters) && payload.characters.length > 0)
+                    || (Array.isArray(payload.props) && payload.props.length > 0)
+                    || (Array.isArray(payload.environments) && payload.environments.length > 0)
+                    || (Array.isArray(payload.posters) && payload.posters.length > 0)
+                    || (Array.isArray(payload.covers) && payload.covers.length > 0)
+                );
+            };
+
+            const buildSubtaskSubjectsPayload = (key, sourcePayload) => {
+                const input = (sourcePayload && typeof sourcePayload === 'object') ? sourcePayload : {};
+                const payload = { characters: [], environments: [], props: [], posters: [], covers: [] };
+                if (key === 'characters') {
+                    payload.characters = Array.isArray(input.characters) ? input.characters : [];
+                } else if (key === 'props') {
+                    payload.props = Array.isArray(input.props) ? input.props : [];
+                } else if (key === 'environments') {
+                    payload.environments = Array.isArray(input.environments) ? input.environments : [];
+                    payload.posters = Array.isArray(input.posters) ? input.posters : [];
+                    payload.covers = Array.isArray(input.covers) ? input.covers : [];
+                } else if (key === 'posters') {
+                    payload.posters = Array.isArray(input.posters) ? input.posters : [];
+                    payload.covers = Array.isArray(input.covers) ? input.covers : [];
+                } else {
+                    payload.characters = Array.isArray(input.characters) ? input.characters : [];
+                    payload.props = Array.isArray(input.props) ? input.props : [];
+                    payload.environments = Array.isArray(input.environments) ? input.environments : [];
+                    payload.posters = Array.isArray(input.posters) ? input.posters : [];
+                    payload.covers = Array.isArray(input.covers) ? input.covers : [];
+                }
+
+                if (Array.isArray(targetFilters) && targetFilters.length > 0) {
+                    const filtered = { characters: [], environments: [], props: [], posters: [], covers: [] };
+                    if (targetFilters.includes('characters')) filtered.characters = payload.characters;
+                    if (targetFilters.includes('props')) filtered.props = payload.props;
+                    if (targetFilters.includes('environments')) filtered.environments = payload.environments;
+                    if (targetFilters.includes('posters') || targetFilters.includes('covers')) {
+                        filtered.posters = payload.posters;
+                        filtered.covers = payload.covers;
+                    }
+                    return filtered;
+                }
+                return payload;
+            };
 
                         // Run them concurrently
             const results = await Promise.allSettled(
                 promptsData.map(async (pData, index) => {
                     const isPrimary = index === 0;
+                    const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}`;
+                    const subtaskImportSessionId = `import-${subtaskTraceId}`;
+                    onLog?.(`[Stage 3 Asset Design] Subtask submit key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'info');
 
                     let specificSubjectIndexText = finalSubjectIndexText;
                     
@@ -4449,11 +4515,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             selectedReuseSubjectAssets, 
                             {
                                 onTaskCreated: (taskId) => {
+                                    onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${taskId}`, 'info');
                                     if (isPrimary) {
                                         setActiveAnalysisTaskId(String(taskId || '').trim());
                                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: phase2StartedAt, phase: 2 });
                                     }
-                                }
+                                },
+                                analysisTraceId: subtaskTraceId,
                             }, 
                             projectId,
                             "script_analysis",
@@ -4461,13 +4529,69 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             `2_pass_generate_assets_${pData.key}`
                         ),
                         { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
-                    ).then(res => {
+                    ).then(async (res) => {
+                        const responseTraceId = String(res?.meta?.analysis_trace_id || res?.analysis_trace_id || '').trim();
+                        const aText = extractAnalysisTextFromResult(res);
+                        const bJson = (res?.subjects_json && typeof res.subjects_json === 'object')
+                            ? res.subjects_json
+                            : (aText ? (getAnalysisEntitiesPayloadFromJsonText(aText) || {}) : {});
+
                         assetsGenCompletedCount += 1;
                         setAnalysisFlowStatus({
                             phase: "assets_gen",
                             message: t(`✨ 第四阶段资产推演中 (${assetsGenCompletedCount}/${targetAssetsCount} 个并发任务已完成)...`, `Running Stage 4 asset design (${assetsGenCompletedCount}/${targetAssetsCount} completed)...`),
                         });
-                        return { key: pData.key, result: res };
+                        onLog?.(`[Stage 3 Asset Design] Subtask completed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}${responseTraceId ? ` response_trace_id=${responseTraceId}` : ''}`, 'info');
+
+                        const subtaskPayload = buildSubtaskSubjectsPayload(pData.key, bJson || {});
+                        let subtaskImportReport = null;
+                        let subtaskImportError = '';
+                        if (hasAnySubjects(subtaskPayload)) {
+                            const subtaskTargetTypes = (() => {
+                                if (pData.key === 'characters') return ['characters'];
+                                if (pData.key === 'props') return ['props'];
+                                if (pData.key === 'environments') return ['environments', 'posters', 'covers'];
+                                if (pData.key === 'posters') return ['posters', 'covers'];
+                                return undefined;
+                            })();
+
+                            try {
+                                subtaskImportReport = await importSubjectsJsonWithDedupe(
+                                    JSON.stringify(subtaskPayload, null, 2),
+                                    {
+                                        reason: `phase2-subtask-${pData.key || `slot${index + 1}`}`,
+                                        subjectsJson: subtaskPayload,
+                                        importOptions: {
+                                            onLog,
+                                            projectId,
+                                            episodeId: activeEpisode?.id,
+                                            importSessionId: subtaskImportSessionId,
+                                            targetEntityTypes: subtaskTargetTypes,
+                                            suppressAlerts: true,
+                                        },
+                                    }
+                                );
+                                const subCreated = subtaskImportReport?.createdSubjectItems?.length || 0;
+                                const subSkipped = subtaskImportReport?.skippedSubjectItems?.length || 0;
+                                onLog?.(`[Stage 3 Asset Design] Subtask import done key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} created=${subCreated} skipped=${subSkipped}`, 'success');
+                            } catch (subImportErr) {
+                                subtaskImportError = String(subImportErr?.message || subImportErr || 'unknown import error');
+                                onLog?.(`[Stage 3 Asset Design] Subtask import failed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}: ${subImportErr?.message || subImportErr}`, 'warning');
+                            }
+                        } else {
+                            onLog?.(`[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'warning');
+                        }
+
+                        return {
+                            key: pData.key,
+                            traceId: subtaskTraceId,
+                            importSessionId: subtaskImportSessionId,
+                            result: res,
+                            analysisText: aText,
+                            subjectsJson: bJson,
+                            subtaskImportReport,
+                            subtaskImportError,
+                        };
                     });
                 })
             );
@@ -4487,15 +4611,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             let rawTextParts = [];
             
-            for (let r of results) {
+            for (let idx = 0; idx < results.length; idx += 1) {
+                const r = results[idx];
                 if (r.status === 'fulfilled' && r.value.result) {
-                    const res = r.value.result;
-                    let bJson = res?.subjects_json;
-                    const aText = extractAnalysisTextFromResult(res);
-                    
-                    if (!bJson && aText) {
-                        bJson = getAnalysisEntitiesPayloadFromJsonText(aText) || {};
-                    }
+                    const bJson = r.value.subjectsJson || {};
+                    const aText = r.value.analysisText || '';
 
                                           if (bJson) {
                           if (r.value.key === 'characters' && bJson.characters) mergedBackendSubjectsJson.characters = bJson.characters;
@@ -4535,7 +4655,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }
                     }
                 } else if (r.status === 'rejected') {
-                    onLog?.(`[Stage 3 Asset Design] Warning: task ${promptsData[results.indexOf(r)].key} failed: ${r.reason}`, "warning");
+                    const failedKey = promptsData[idx]?.key || `slot${idx + 1}`;
+                    const failedTraceId = `${phase2BatchTraceId}-${failedKey}`;
+                    onLog?.(`[Stage 3 Asset Design] Warning: task ${failedKey} failed (trace_id=${failedTraceId}): ${r.reason}`, "warning");
                 }
             }
 
@@ -4562,55 +4684,63 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.(`[Stage 3 Asset Design] Warning: AI did not return a valid asset-design JSON block. Skipping import to prevent overwriting the Stage 2 asset index.`, "warning");
                     throw new Error("AI 引擎在整理出场名单时开小差了，未能返回标准数据表。请点击查阅原文检查，是否可以手动重新生成。");
                 } else {
-                    // Automatically import the generated subjects
-                        const importSubjectsPayload = (() => {
-                            if (!Array.isArray(targetFilters) || targetFilters.length === 0) {
-                                return mergedBackendSubjectsJson;
-                            }
-                            const picked = { characters: [], environments: [], props: [], posters: [], covers: [] };
-                            if (targetFilters.includes('characters')) picked.characters = Array.isArray(mergedBackendSubjectsJson?.characters) ? mergedBackendSubjectsJson.characters : [];
-                            if (targetFilters.includes('environments')) picked.environments = Array.isArray(mergedBackendSubjectsJson?.environments) ? mergedBackendSubjectsJson.environments : [];
-                            if (targetFilters.includes('props')) picked.props = Array.isArray(mergedBackendSubjectsJson?.props) ? mergedBackendSubjectsJson.props : [];
-                            if (targetFilters.includes('posters') || targetFilters.includes('covers')) {
-                                picked.posters = Array.isArray(mergedBackendSubjectsJson?.posters) ? mergedBackendSubjectsJson.posters : [];
-                                picked.covers = Array.isArray(mergedBackendSubjectsJson?.covers) ? mergedBackendSubjectsJson.covers : [];
-                            }
-                            return picked;
-                        })();
+                    const completedReports = results
+                        .filter((item) => item.status === 'fulfilled' && item.value && item.value.subtaskImportReport)
+                        .map((item) => item.value.subtaskImportReport);
 
-                        if (Array.isArray(targetFilters) && targetFilters.length > 0) {
-                            onLog?.(`[Stage 3 Asset Design] Partial import mode: only importing target types (${targetFilters.join(', ')}).`, 'info');
+                    const subtaskReports = results.map((item, idx) => {
+                        const fallbackKey = promptsData[idx]?.key || `slot${idx + 1}`;
+                        const fallbackTraceId = `${phase2BatchTraceId}-${fallbackKey}`;
+                        if (item.status === 'fulfilled' && item.value) {
+                            return {
+                                key: item.value.key || fallbackKey,
+                                traceId: item.value.traceId || fallbackTraceId,
+                                importSessionId: item.value.importSessionId || `import-${fallbackTraceId}`,
+                                status: item.value.subtaskImportError ? 'import_failed' : 'ok',
+                                created: Number(item.value.subtaskImportReport?.createdSubjectItems?.length || 0),
+                                skipped: Number(item.value.subtaskImportReport?.skippedSubjectItems?.length || 0),
+                                error: String(item.value.subtaskImportError || ''),
+                            };
                         }
+                        return {
+                            key: fallbackKey,
+                            traceId: fallbackTraceId,
+                            importSessionId: `import-${fallbackTraceId}`,
+                            status: 'llm_failed',
+                            created: 0,
+                            skipped: 0,
+                            error: String(item?.reason || ''),
+                        };
+                    });
 
-                        const sceneImportReport = await importSubjectsJsonWithDedupe(JSON.stringify(importSubjectsPayload, null, 2), {
-                            reason: 'phase2-entity-design-recovery',
-                                subjectsJson: importSubjectsPayload || null,
-                            importOptions: {
-                                onLog,
-                                projectId,
-                                episodeId: activeEpisode?.id,
-                                targetEntityTypes: targetFilters || undefined,
-                                    subjectsJson: importSubjectsPayload || null,
-                                suppressAlerts: true,
-                            },
-                        });
+                    const mergedCounts = completedReports.reduce((acc, report) => {
+                        acc.character += Number(report?.importedSubjectCounts?.character || 0);
+                        acc.prop += Number(report?.importedSubjectCounts?.prop || 0);
+                        acc.environment += Number(report?.importedSubjectCounts?.environment || 0);
+                        acc.poster += Number(report?.importedSubjectCounts?.poster || 0);
+                        return acc;
+                    }, { character: 0, prop: 0, environment: 0, poster: 0 });
 
-                    const createdLen = sceneImportReport?.createdSubjectItems?.length || sceneImportReport?.createdEntities?.length || 0;
-                    const matchedLen = sceneImportReport?.skippedSubjectItems?.length || sceneImportReport?.matchedEntities?.length || 0;
-                    onLog?.(`[Stage 3 Asset Design] Asset import completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                    const createdItems = completedReports.flatMap((report) => Array.isArray(report?.createdSubjectItems) ? report.createdSubjectItems : []);
+                    const skippedItems = completedReports.flatMap((report) => Array.isArray(report?.skippedSubjectItems) ? report.skippedSubjectItems : []);
+
+                    const createdLen = createdItems.length;
+                    const matchedLen = skippedItems.length;
+                    onLog?.(`[Stage 3 Asset Design] Independent subtask imports completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
 
                     return {
                         checkedSceneCount: importedSceneRows.length,
                         missingSceneCount: 0,
                         missingItemCount: createdLen + matchedLen,
                         supplementReport: {
-                            createdItems: sceneImportReport?.createdSubjectItems || [],
-                            skippedItems: sceneImportReport?.skippedSubjectItems || [],
-                            failedItems: [],
+                            createdItems,
+                            skippedItems,
+                            failedItems: subtaskReports
+                                .filter((x) => x.status !== 'ok')
+                                .map((x) => ({ key: x.key, traceId: x.traceId, importSessionId: x.importSessionId, reason: x.error || x.status })),
                         },
-                        importedSubjectCounts: sceneImportReport?.importedSubjectCounts,
-                        dbPersistedCounts: sceneImportReport?.dbPersistedCounts,
-                        dbRunInsertedCounts: sceneImportReport?.dbRunInsertedCounts,
+                        importedSubjectCounts: mergedCounts,
+                        subtaskReports,
                     };
                 }
             }
@@ -7574,7 +7704,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
             const stage2Text = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
-            const finalAnalysisText = [String(stage1SourceText || '').trim(), stage2Text].filter(Boolean).join('\n\n');
+            const finalAnalysisText = String(stage2_2Text || '').trim();
             
             const stage2Result = {
                 ...(stage2_1Result || {}),
@@ -7583,7 +7713,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 subjects_json: stage2_1Result?.subjects_json || stage2_2Result?.subjects_json,
             };
 
-            const analysisSections = extractAnalysisSections(finalAnalysisText);
+            const analysisSections = extractAnalysisSections(stage2Text);
             if (!analysisSections.hasStructuredSubjectIndex) {
                 throw new Error(SUBJECT_INDEX_PARSE_ERROR);
             }
@@ -7601,6 +7731,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 source: 'restart-stage2',
                 stage1RawText: stage1SourceText,
                 stage2RawText: stage2Text,
+                stage2_1Text: stage2_1Text || undefined,
             });
 
             importReport = await runAutoImportAndSwitchToScenes(finalAnalysisText, {
@@ -7663,6 +7794,339 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisRunInFlightRef.current = false;
         }
     };
+
+    const handleRerunSceneBeatsOnly = async () => {
+        if (!activeEpisode?.id || isAnalyzing) return;
+
+        const stage1SourceText = buildStage1RestartSourceText();
+        if (!stage1SourceText) {
+            alert(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'));
+            return;
+        }
+
+        const { adaptedScriptText, userInput: stage2UserInput } = buildStage2UserInputFromStage1(stage1SourceText, selectedReuseSubjectAssets);
+        if (!String(adaptedScriptText || '').trim()) {
+            alert(t('第一阶段产物里没有可用的改编剧本，无法仅重排场景。', 'No usable adapted script was found in Stage 1 outputs.'));
+            return;
+        }
+
+        const stage2_1Text = String(
+            getStageOutputContent('stage2', 'subject_index')
+            || activeEpisode?.ai_scene_analysis_subject_index
+            || ''
+        ).trim();
+        if (!stage2_1Text) {
+            alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
+            return;
+        }
+
+        const startedAt = Date.now();
+        let importReport = null;
+        let runtimeMeta = null;
+
+        setIsAnalyzing(true);
+        analysisRunInFlightRef.current = true;
+        analysisStopRequestedRef.current = false;
+        setAnalysisFlowStatus({
+            phase: 'scene_beats',
+            message: t('正在仅重排场景（单路 Stage 2.2）...', 'Rerunning scene beats only (single-route Stage 2.2)...'),
+        });
+
+        try {
+            const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
+            let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
+            let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`;
+
+            if (isSuperuser || isSuperuserRef.current) {
+                const confirmedStage2_2 = await new Promise((resolve, reject) => {
+                    const previous = superuserModalMutexRef.current;
+                    superuserModalMutexRef.current = previous.then(async () => {
+                        try {
+                            setAnalysisModalMode('stage2');
+                            setSystemPrompt(finalStage2_2Prompt);
+                            setUserPrompt(finalStage2_2UserInput);
+                            setShowAnalysisModal(true);
+                            if (onLog) onLog('Superuser scene-only Stage 2.2 submit: prompt preview opened before submission.', 'info');
+
+                            const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                            resolve(res);
+                        } catch (err) {
+                            reject(err);
+                        }
+                    }).catch(reject);
+                });
+
+                if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
+                    throw new Error('Superuser canceled scene-only Stage 2.2 prompt confirmation.');
+                }
+
+                finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
+                finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
+            }
+
+            const stage2_2ResultObj = await analyzeScene(
+                finalStage2_2UserInput,
+                finalStage2_2Prompt,
+                null,
+                null,
+                analysisAttentionNotes,
+                selectedReuseSubjectAssets,
+                {
+                    onTaskCreated: (taskId) => {
+                        setActiveAnalysisTaskId(String(taskId || '').trim());
+                        saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 3 });
+                    },
+                },
+                projectId,
+                'script_analysis_stage_2_2_beats'
+            );
+
+            const stage2_2Text = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
+            if (!String(stage2_2Text).trim() || !stage2_2Text.includes('|')) {
+                throw new Error('仅重排场景失败：未检测到有效场景/分镜表格产出，请重试。');
+            }
+
+            if (stage2_2ResultObj?.meta) {
+                runtimeMeta = extractAnalysisRuntimeMeta(stage2_2ResultObj.meta);
+                setAnalysisRuntimeMeta(runtimeMeta);
+            }
+
+            setLlmRawResultContent(stage2_2Text);
+            setLlmResultContent(normalizeLlmMarkdownTable(stage2_2Text));
+            lastLoadedAnalysisRef.current = stage2_2Text;
+
+            await persistLlmResultContent(stage2_2Text, 'ai_scene_analysis_result', {
+                source: 'restart-scene-beats-only',
+                stage1RawText: stage1SourceText,
+                stage2RawText: [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n'),
+                stage2_1Text: stage2_1Text || undefined,
+            });
+
+            importReport = await runAutoImportAndSwitchToScenes(stage2_2Text, {
+                switchToScenes: false,
+                importOptions: {
+                    autoSupplementSceneSubjects: false,
+                    suppressAlerts: true,
+                    subjectsJson: null,
+                },
+            });
+
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                status: 'completed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings: null,
+                importReport,
+                runtimeMeta,
+                warning: '',
+                error: '',
+            }));
+
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: t('场景编排已重排完成（仅场景单路）。', 'Scene beats rerun completed (scene-only single route).'),
+            });
+            onLog?.('Scene beats-only rerun completed successfully.', 'success');
+        } catch (error) {
+            const friendlyError = localizeAnalysisFailureMessage(error?.message || String(error));
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`),
+            });
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                status: 'failed',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                phaseTimings: null,
+                importReport,
+                runtimeMeta,
+                warning: '',
+                error: friendlyError,
+            }));
+            onLog?.(`Scene beats-only rerun failed: ${friendlyError}`, 'error');
+            alert(t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`));
+        } finally {
+            clearAnalysisTaskMarker(activeEpisode?.id);
+            setIsAnalyzing(false);
+            setActiveAnalysisTaskId('');
+            analysisStopRequestedRef.current = false;
+            analysisRunInFlightRef.current = false;
+        }
+    };
+
+    const handleRerunFailedAssetSubtasks = useCallback(async () => {
+        if (isAnalyzing || phase2GenerationInFlightRef.current) return;
+
+        const subtaskReports = Array.isArray(analysisUiReport?.importReport?.sceneSubjectPostImportReport?.subtaskReports)
+            ? analysisUiReport.importReport.sceneSubjectPostImportReport.subtaskReports
+            : [];
+        const failedReports = subtaskReports.filter((item) => String(item?.status || '').trim().toLowerCase() !== 'ok');
+
+        if (failedReports.length <= 0) {
+            onLog?.('No failed subtask route found for rerun.', 'info');
+            setAnalysisFlowStatus({
+                phase: 'warning',
+                message: t('当前没有失败子任务可重跑。', 'No failed subtask route found to rerun.'),
+            });
+            return;
+        }
+
+        const targetTypeSet = new Set();
+        failedReports.forEach((item) => {
+            const key = String(item?.key || '').trim().toLowerCase();
+            if (key === 'characters') targetTypeSet.add('characters');
+            else if (key === 'props') targetTypeSet.add('props');
+            else if (key === 'environments') {
+                targetTypeSet.add('environments');
+                targetTypeSet.add('posters');
+                targetTypeSet.add('covers');
+            } else if (key === 'posters' || key === 'covers') {
+                targetTypeSet.add('posters');
+                targetTypeSet.add('covers');
+            }
+        });
+
+        const targetEntityTypes = Array.from(targetTypeSet);
+        if (targetEntityTypes.length <= 0) {
+            onLog?.('Failed subtask routes were found but no recognized target types were resolved.', 'warning');
+            return;
+        }
+
+        const subjectIndexFromEpisode = extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || '').trim());
+        const fallbackSections = extractAnalysisSections(String(llmRawResultContent || llmResultContent || ''));
+        const subjectIndexFallback = extractPureSubjectIndexText(String(fallbackSections?.subjectIndexText || '').trim());
+        const subjectIndexText = String(subjectIndexFromEpisode || subjectIndexFallback || '').trim();
+
+        if (!subjectIndexText) {
+            alert(t('缺少第二阶段资产清单，无法仅重跑失败子任务。请先重新执行第二阶段。', 'Missing Stage 2 subject index. Cannot rerun failed subtask routes only.'));
+            return;
+        }
+
+        const confirmed = await confirmUiMessage(t(
+            `检测到 ${failedReports.length} 条失败路由，将仅重跑：${targetEntityTypes.join(', ')}。是否继续？`,
+            `Detected ${failedReports.length} failed routes. Rerun only: ${targetEntityTypes.join(', ')}. Continue?`
+        ));
+        if (!confirmed) return;
+
+        setIsRetryingPhase2(true);
+        setAnalysisFlowStatus({
+            phase: 'assets_gen',
+            message: t('正在重跑失败子任务路由（仅失败路由）...', 'Rerunning failed asset subtask routes only...'),
+        });
+
+        try {
+            const rerunReport = await runPostImportSceneSubjectPipeline(null, subjectIndexText, {
+                explicitSubjectIndexText: subjectIndexText,
+                isRetryPhase2: true,
+                targetEntityTypes,
+            });
+
+            setAnalysisUiReport((prev) => {
+                const prevReport = (prev && typeof prev === 'object') ? prev : {};
+                const prevImport = (prevReport.importReport && typeof prevReport.importReport === 'object') ? prevReport.importReport : {};
+                const prevScenePost = (prevImport.sceneSubjectPostImportReport && typeof prevImport.sceneSubjectPostImportReport === 'object')
+                    ? prevImport.sceneSubjectPostImportReport
+                    : {};
+                const nextScenePost = (rerunReport && typeof rerunReport === 'object') ? rerunReport : {};
+
+                const prevSubtasks = Array.isArray(prevScenePost.subtaskReports) ? prevScenePost.subtaskReports : [];
+                const nextSubtasks = Array.isArray(nextScenePost.subtaskReports) ? nextScenePost.subtaskReports : [];
+                const mergedSubtaskMap = new Map();
+                prevSubtasks.forEach((item) => {
+                    const key = String(item?.key || item?.traceId || Math.random()).trim();
+                    if (key) mergedSubtaskMap.set(key, item);
+                });
+                nextSubtasks.forEach((item) => {
+                    const key = String(item?.key || item?.traceId || Math.random()).trim();
+                    if (key) mergedSubtaskMap.set(key, item);
+                });
+
+                const mergedImportedCounts = {
+                    character: Number(prevImport?.importedSubjectCounts?.character || 0) + Number(nextScenePost?.importedSubjectCounts?.character || 0),
+                    prop: Number(prevImport?.importedSubjectCounts?.prop || 0) + Number(nextScenePost?.importedSubjectCounts?.prop || 0),
+                    environment: Number(prevImport?.importedSubjectCounts?.environment || 0) + Number(nextScenePost?.importedSubjectCounts?.environment || 0),
+                    poster: Number(prevImport?.importedSubjectCounts?.poster || 0) + Number(nextScenePost?.importedSubjectCounts?.poster || 0),
+                };
+
+                const prevSupplement = (prevScenePost?.supplementReport && typeof prevScenePost.supplementReport === 'object')
+                    ? prevScenePost.supplementReport
+                    : {};
+                const nextSupplement = (nextScenePost?.supplementReport && typeof nextScenePost.supplementReport === 'object')
+                    ? nextScenePost.supplementReport
+                    : {};
+
+                const mergedScenePost = {
+                    ...prevScenePost,
+                    ...nextScenePost,
+                    subtaskReports: Array.from(mergedSubtaskMap.values()),
+                    supplementReport: {
+                        ...prevSupplement,
+                        ...nextSupplement,
+                        createdItems: [
+                            ...(Array.isArray(prevSupplement.createdItems) ? prevSupplement.createdItems : []),
+                            ...(Array.isArray(nextSupplement.createdItems) ? nextSupplement.createdItems : []),
+                        ],
+                        skippedItems: [
+                            ...(Array.isArray(prevSupplement.skippedItems) ? prevSupplement.skippedItems : []),
+                            ...(Array.isArray(nextSupplement.skippedItems) ? nextSupplement.skippedItems : []),
+                        ],
+                        failedItems: [
+                            ...(Array.isArray(prevSupplement.failedItems) ? prevSupplement.failedItems : []),
+                            ...(Array.isArray(nextSupplement.failedItems) ? nextSupplement.failedItems : []),
+                        ],
+                    },
+                };
+
+                return {
+                    ...prevReport,
+                    status: 'completed',
+                    importReport: {
+                        ...prevImport,
+                        sceneSubjectPostImportReport: mergedScenePost,
+                        importedSubjectCounts: mergedImportedCounts,
+                        dbPersistedCounts: nextScenePost?.dbPersistedCounts || prevImport?.dbPersistedCounts,
+                        dbRunInsertedCounts: nextScenePost?.dbRunInsertedCounts || prevImport?.dbRunInsertedCounts,
+                    },
+                };
+            });
+
+            const created = Number(rerunReport?.supplementReport?.createdItems?.length || 0);
+            const skipped = Number(rerunReport?.supplementReport?.skippedItems?.length || 0);
+            const failed = Number(rerunReport?.supplementReport?.failedItems?.length || 0);
+
+            setAnalysisFlowStatus({
+                phase: failed > 0 ? 'warning' : 'completed',
+                message: failed > 0
+                    ? t(`失败路由重跑完成：新增 ${created}，跳过 ${skipped}，仍失败 ${failed}。`, `Failed-route rerun completed: created ${created}, skipped ${skipped}, still failed ${failed}.`)
+                    : t(`失败路由重跑完成：新增 ${created}，跳过 ${skipped}。`, `Failed-route rerun completed: created ${created}, skipped ${skipped}.`),
+            });
+            onLog?.(`Failed-route rerun completed: targets=${targetEntityTypes.join(',')} created=${created} skipped=${skipped} failed=${failed}`, failed > 0 ? 'warning' : 'success');
+        } catch (error) {
+            const detail = String(error?.message || error || 'unknown error');
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`),
+            });
+            onLog?.(`Failed-route rerun failed: ${detail}`, 'error');
+            alert(t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`));
+        } finally {
+            setIsRetryingPhase2(false);
+        }
+    }, [
+        isAnalyzing,
+        analysisUiReport,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        llmRawResultContent,
+        llmResultContent,
+        onLog,
+        t,
+        extractPureSubjectIndexText,
+        extractAnalysisSections,
+        confirmUiMessage,
+        runPostImportSceneSubjectPipeline,
+    ]);
 
 
     const phase2RetryOptionsRef = useRef({});
@@ -8136,7 +8600,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {!!getStageOutputContent('stage2', 'scene_markdown') ? (
                                     <div className="flex items-center gap-1">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
+                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
                                             {t('重排', 'Rerun')}
                                         </button>
                                     </div>
@@ -8337,6 +8801,65 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
+                                {(() => {
+                                    const subtaskReports = Array.isArray(analysisUiReport?.importReport?.sceneSubjectPostImportReport?.subtaskReports)
+                                        ? analysisUiReport.importReport.sceneSubjectPostImportReport.subtaskReports
+                                        : [];
+                                    if (!subtaskReports.length) return null;
+                                    const failedCount = subtaskReports.filter((item) => String(item?.status || '').trim().toLowerCase() !== 'ok').length;
+                                    return (
+                                        <div className="rounded-md border border-sky-400/30 bg-sky-500/10 px-2.5 py-2">
+                                            <div className="font-medium text-sky-100 mb-2 flex items-center justify-between gap-2">
+                                                <span>🧵 {t('并发子任务导入明细', 'Parallel Subtask Import Details')}</span>
+                                                {failedCount > 0 && (
+                                                    <button
+                                                        onClick={handleRerunFailedAssetSubtasks}
+                                                        disabled={isRetryingPhase2 || isAnalyzing}
+                                                        className={`px-2 py-1 rounded text-[10px] font-bold border ${isRetryingPhase2 || isAnalyzing ? 'bg-white/5 text-white/40 border-white/10 cursor-not-allowed' : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/40 text-amber-100'}`}
+                                                        title={t('自动识别失败路由并仅重跑失败路由', 'Auto detect failed routes and rerun failed routes only')}
+                                                    >
+                                                        {isRetryingPhase2 ? t('重跑中...', 'Rerunning...') : t('重跑失败路由', 'Rerun Failed Routes')}
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                {subtaskReports.map((item, idx) => {
+                                                    const status = String(item?.status || '').trim().toLowerCase();
+                                                    const isOk = status === 'ok';
+                                                    const statusText = isOk
+                                                        ? t('成功', 'OK')
+                                                        : (status === 'import_failed'
+                                                            ? t('导入失败', 'Import Failed')
+                                                            : t('LLM失败', 'LLM Failed'));
+                                                    return (
+                                                        <div
+                                                            key={`${String(item?.traceId || item?.key || 'subtask')}-${idx}`}
+                                                            className={`rounded border px-2 py-1.5 text-[11px] ${isOk ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-400/40 bg-amber-500/10 text-amber-100'}`}
+                                                        >
+                                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                                <span className="font-semibold">{String(item?.key || `slot${idx + 1}`)}</span>
+                                                                <span className="opacity-90">{t('状态', 'Status')}: {statusText}</span>
+                                                                <span className="opacity-90">{t('新增', 'Created')}: {Number(item?.created || 0)}</span>
+                                                                <span className="opacity-90">{t('跳过', 'Skipped')}: {Number(item?.skipped || 0)}</span>
+                                                            </div>
+                                                            <div className="mt-1 opacity-80 break-all">
+                                                                trace_id: {String(item?.traceId || '-')}
+                                                            </div>
+                                                            <div className="opacity-80 break-all">
+                                                                session_id: {String(item?.importSessionId || '-')}
+                                                            </div>
+                                                            {String(item?.error || '').trim() && (
+                                                                <div className="mt-1 text-red-200/90 break-words">
+                                                                    {t('错误', 'Error')}: {String(item.error).trim()}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                                 {String(analysisUiReport?.warning || '').trim() && (
                                     <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100">
                                         <span className="font-medium">⚠️ {t('提示', 'Notice')}:</span> {String(analysisUiReport.warning).trim()}

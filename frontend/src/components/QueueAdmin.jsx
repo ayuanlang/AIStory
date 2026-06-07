@@ -170,6 +170,7 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-400">任务队列</div>
           <div className="text-2xl font-bold text-blue-300">{queueStats?.runtime?.queue?.active_count ?? 0}</div>
           <div className="text-xs text-gray-500">活动任务(queued + running)</div>
+          <div className="text-xs text-cyan-300">工作位 已用/总量/可用: {queueStats?.runtime?.queue?.worker_slots_in_use ?? 0} / {queueStats?.runtime?.queue?.worker_slots_total ?? 0} / {queueStats?.runtime?.queue?.worker_slots_available ?? 0}</div>
           <div className="text-xs text-gray-300">Queued: {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | Running: {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
           <div className="text-xs text-gray-300">最近1小时完成: {queueStats?.runtime?.queue?.finished_last_hour ?? 0}</div>
           <div className="text-xs text-amber-300">最老排队等待: {formatDuration(queueStats?.runtime?.queue?.queued_oldest_wait_seconds)}</div>
@@ -181,6 +182,7 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-500">当前活跃 worker 数</div>
           <div className="text-xs text-gray-300">配置线程: {queueStats?.runtime?.workers?.configured_threads ?? 0}</div>
           <div className="text-xs text-gray-300">线程: {queueStats?.runtime?.workers?.effective_threads ?? 0} / 请求 {queueStats?.runtime?.workers?.requested_threads ?? 0}</div>
+          <div className="text-xs text-cyan-300">进程位 已用/总量/可用: {queueStats?.runtime?.workers?.slots_in_use ?? 0} / {queueStats?.runtime?.workers?.slots_total ?? 0} / {queueStats?.runtime?.workers?.slots_available ?? 0}</div>
           {queueStats?.runtime?.workers?.restart_required_for_thread_change ? (
             <div className="text-xs text-amber-300">检测到线程配置已变化，需重启后端以应用</div>
           ) : (
@@ -194,6 +196,7 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-400">回调队列</div>
           <div className="text-2xl font-bold text-cyan-300">{queueStats?.callback?.pending_jobs ?? 0}</div>
           <div className="text-xs text-gray-500">待回调/待落库任务</div>
+          <div className="text-xs text-cyan-300">回调并发位 已用/总量/可用: {queueStats?.callback?.slots_in_use ?? 0} / {queueStats?.callback?.slots_total ?? 0} / {queueStats?.callback?.slots_available ?? 0}</div>
           <div className="text-xs text-gray-300">回调缓存: {queueStats?.callback?.store_count ?? 0}</div>
           <div className="text-xs text-gray-300">Async Inflight: {queueStats?.callback?.async_inflight ?? 0}</div>
           <div className="text-xs text-gray-300">Persist Inflight(I/V): {queueStats?.callback?.image_persist_inflight ?? 0} / {queueStats?.callback?.video_persist_inflight ?? 0}</div>
@@ -204,6 +207,8 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-400">轮询与回调失败补偿</div>
           <div className="text-2xl font-bold text-orange-300">{queueStats?.callback_loss_retry?.retrying_jobs ?? 0}</div>
           <div className="text-xs text-gray-500">补偿重试中的任务</div>
+          <div className="text-xs text-cyan-300">补偿工作位 已用/总量/可用: {queueStats?.callback_loss_retry?.worker_slots_in_use ?? 0} / {queueStats?.callback_loss_retry?.worker_slots_total ?? 0} / {queueStats?.callback_loss_retry?.worker_slots_available ?? 0}</div>
+          <div className="text-xs text-cyan-300">补偿扫描批次 已用/总量/可用: {queueStats?.callback_loss_retry?.scan_batch_in_use ?? 0} / {queueStats?.callback_loss_retry?.scan_batch_size ?? 0} / {queueStats?.callback_loss_retry?.scan_batch_available ?? 0}</div>
           <div className="text-xs text-gray-300">轮询模式活跃任务: {queueStats?.polling?.active_polling_like_jobs ?? 0}</div>
           <div className="text-xs text-gray-300">纯回调模式生效: {queueStats?.polling?.pure_callback_mode_effective ? '是' : '否'}</div>
           <div className="text-xs text-gray-300">启动模式: {queueStats?.polling?.startup_mode || '-'}</div>

@@ -479,12 +479,22 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
 
         queued_oldest_created_at = float((queued_oldest_row or {}).get("oldest_created_at") or 0.0)
         queued_oldest_wait_seconds = int(max(0.0, now - queued_oldest_created_at)) if queued_oldest_created_at else 0
+        running_count = int(status_counts.get("running", 0))
+        queued_count = int(status_counts.get("queued", 0))
+        worker_slots_total = int(_QUEUE_WORKER_THREADS)
+        worker_slots_in_use = max(0, min(worker_slots_total, running_count))
+        worker_slots_available = max(0, worker_slots_total - worker_slots_in_use)
 
         return {
             "queue": {
                 "status_counts": status_counts,
                 "kind_counts": kind_counts,
-                "active_count": int(status_counts.get("queued", 0) + status_counts.get("running", 0)),
+                "active_count": int(queued_count + running_count),
+                "running_count": running_count,
+                "queued_count": queued_count,
+                "worker_slots_total": worker_slots_total,
+                "worker_slots_in_use": worker_slots_in_use,
+                "worker_slots_available": worker_slots_available,
                 "queued_oldest_wait_seconds": queued_oldest_wait_seconds,
                 "finished_last_hour": int((recent_completed_row or {}).get("cnt") or 0),
             },
@@ -495,6 +505,9 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
                 "thread_cap": int(_WORKER_THREAD_CAP),
                 "restart_required_for_thread_change": bool(configured_threads != int(_REQUESTED_WORKER_THREADS)),
                 "active_running_workers": len(active_workers),
+                "slots_total": worker_slots_total,
+                "slots_in_use": worker_slots_in_use,
+                "slots_available": worker_slots_available,
                 "stale_running_tasks": int(stale_running),
                 "oldest_running_seconds": int(oldest_running_seconds),
                 "queue_poll_seconds": float(_QUEUE_POLL_SECONDS),

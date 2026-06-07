@@ -38,3 +38,4 @@ class AnalyzeSceneRequest(BaseModel):
     include_negative_prompt: Optional[bool] = True
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
+    analysis_trace_id: Optional[str] = None

@@ -409,6 +409,16 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
     retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
     retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
     max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
+    callback_slots_total = int(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
+    callback_slots_in_use = max(0, min(callback_slots_total, int(callback_async_inflight)))
+    callback_slots_available = max(0, callback_slots_total - callback_slots_in_use)
+
+    retry_worker_slots_total = 1
+    retry_worker_slots_in_use = 1 if bool(_CALLBACK_COMPENSATION_STARTED) else 0
+    retry_worker_slots_available = max(0, retry_worker_slots_total - retry_worker_slots_in_use)
+    retry_scan_batch_total = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
+    retry_scan_batch_in_use = max(0, min(int(retry_scan_batch_total), int(compensation_candidate_count)))
+    retry_scan_batch_available = max(0, int(retry_scan_batch_total) - int(retry_scan_batch_in_use))
 
     return {
         "runtime": runtime_stats,
@@ -419,6 +429,9 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             "video_persist_inflight": video_callback_persist_inflight,
             "requested_threads": int(_q_conf.get("callback_threads", 10) or 10),
             "effective_threads": int(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY),
+            "slots_total": callback_slots_total,
+            "slots_in_use": callback_slots_in_use,
+            "slots_available": callback_slots_available,
             "pending_jobs": callback_pending_count,
             "waiting_finalize_jobs": callback_waiting_count,
         },
@@ -440,8 +453,13 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             "compensation_candidate_jobs": compensation_candidate_count,
             "scan_enabled": _queue_cfg_bool("callback_compensation_scan_enabled", True),
             "scan_interval_seconds": _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600),
-            "scan_batch_size": _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200),
+            "scan_batch_size": retry_scan_batch_total,
+            "scan_batch_in_use": retry_scan_batch_in_use,
+            "scan_batch_available": retry_scan_batch_available,
             "worker_started": bool(_CALLBACK_COMPENSATION_STARTED),
+            "worker_slots_total": retry_worker_slots_total,
+            "worker_slots_in_use": retry_worker_slots_in_use,
+            "worker_slots_available": retry_worker_slots_available,
         },
     }
 
@@ -644,6 +662,7 @@ def _normalize_analyze_scene_dedup_payload(value: Any) -> Any:
 def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -> str:
     payload = {
         "user_id": int(user_id or 0),
+        "analysis_trace_id": getattr(request, "analysis_trace_id", None),
         "project_id": getattr(request, "project_id", None),
         "episode_id": getattr(request, "episode_id", None),
         "text": getattr(request, "text", None),
@@ -861,7 +880,7 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
         if not isinstance(items_payload, list) or not items_payload:
             raise ValueError("Montage task missing items")
         try:
-            url = create_montage(project_id, items_payload, user_id=current_user.id if 'current_user' in locals() else user_id)
+            url = create_montage(project_id, items_payload, user_id=user_id)
         except Exception as exc:
             _set_task_status(job_id, status="failed", error=str(exc), error_code=500)
             raise
@@ -5389,7 +5408,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     Submits raw script text to LLM for Scene/Beat analysis using a specific prompt template.
     Returns the raw analysis result (Markdown/JSON).
     """
-    logger.info(f"[DEBUG] /analyze_scene received system_api_id={getattr(request, 'system_api_id', None)} async_mode={async_mode}")
+    analysis_trace_id = str(getattr(request, "analysis_trace_id", "") or "").strip()
+    logger.info(
+        "[DEBUG] /analyze_scene received system_api_id=%s async_mode=%s trace_id=%s",
+        getattr(request, "system_api_id", None),
+        async_mode,
+        analysis_trace_id or "-",
+    )
     if async_mode == "1":
         dedup_key = _build_analyze_scene_dedup_key(current_user.id, request)
         now_ts = time.time()
@@ -5411,18 +5436,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         if reused_task_id:
             logger.warning(
-                "[analyze_scene] deduplicated async submit user_id=%s episode_id=%s task_id=%s status=%s window_s=%s",
+                "[analyze_scene] deduplicated async submit user_id=%s episode_id=%s task_id=%s status=%s window_s=%s trace_id=%s",
                 current_user.id,
                 getattr(request, "episode_id", None),
                 reused_task_id,
                 reused_status,
                 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS,
+                analysis_trace_id or "-",
             )
             return JSONResponse({
                 "task_id": reused_task_id,
                 "async": True,
                 "deduplicated": True,
                 "status": reused_status,
+                "analysis_trace_id": analysis_trace_id,
             })
 
         tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene",
@@ -5433,8 +5460,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "task_id": tid,
                 "ts": now_ts,
                 "episode_id": getattr(request, "episode_id", None),
+                "analysis_trace_id": analysis_trace_id,
             }
-        return JSONResponse({"task_id": tid, "async": True})
+        return JSONResponse({"task_id": tid, "async": True, "analysis_trace_id": analysis_trace_id})
     logger.info("Received analyze_scene request")
     try:
         logger.info(f"[analyze_scene] request.episode_id={getattr(request, 'episode_id', None)}")
@@ -5734,24 +5762,42 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     obj = json.loads(candidate)
                 except Exception:
                     continue
+                parsed_objects: List[Dict[str, Any]] = []
                 if isinstance(obj, list):
                     grouped = {"characters": [], "props": [], "environments": [], "covers": [], "posters": []}
                     for item in obj:
-                        if not isinstance(item, dict): continue
+                        if not isinstance(item, dict):
+                            continue
+
+                        has_bucket_keys = any(k in item for k in ("characters", "props", "environments", "covers", "posters"))
+                        wrapped_payload = item.get("entities") or item.get("subjects") or item.get("payload")
+                        if has_bucket_keys:
+                            parsed_objects.append(item)
+                            continue
+                        if isinstance(wrapped_payload, dict):
+                            parsed_objects.append(wrapped_payload)
+                            continue
+
                         t = str(item.get("type") or item.get("subject_type") or item.get("entity_type") or "").strip().lower()
                         if t in {"character", "characters", "char", "role", "roles", "人物", "角色"}: grouped["characters"].append(item)
                         elif t in {"prop", "props", "item", "items", "道具", "物件"}: grouped["props"].append(item)
                         elif t in {"environment", "environments", "env", "scene", "场景", "环境"}: grouped["environments"].append(item)
                         elif t in {"poster", "posters", "cover", "covers", "海报", "封面"}: grouped["covers"].append(item)
-                    obj = grouped
-                if not isinstance(obj, dict):
-                    continue
-                for section in ("characters", "props", "environments", "covers", "posters"):
-                    items = obj.get(section)
-                    if section == "covers" and not items and "posters" in obj:
-                        items = obj.get("posters")
-                    if isinstance(items, list):
-                        payload[section].extend([x for x in items if isinstance(x, dict)])
+
+                    if any(len(grouped.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
+                        parsed_objects.append(grouped)
+                elif isinstance(obj, dict):
+                    parsed_objects.append(obj)
+
+                for parsed_obj in parsed_objects:
+                    if not isinstance(parsed_obj, dict):
+                        continue
+                    for section in ("characters", "props", "environments", "covers", "posters"):
+                        items = parsed_obj.get(section)
+                        if section == "covers" and not items and "posters" in parsed_obj:
+                            items = parsed_obj.get("posters")
+                        if isinstance(items, list):
+                            payload[section].extend([x for x in items if isinstance(x, dict)])
 
             return payload
 
@@ -6695,6 +6741,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # --- Debug / Truncation tracing ---
         debug_meta: Dict[str, Any] = {
             "stage": "pre_llm",
+            "analysis_trace_id": analysis_trace_id,
             "request_episode_id": getattr(request, "episode_id", None),
             "provider": (config or {}).get("provider"),
             "model": (config or {}).get("model"),
@@ -15097,6 +15144,9 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         if candidate:
             candidates.append(candidate)
 
+    if text.startswith("{") or text.startswith("["):
+        candidates.append(text)
+
     def _extract_object_after_label(source: str, label: str) -> Optional[str]:
         lower = source.lower()
         idx = lower.find(label.lower())
@@ -15249,13 +15299,22 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
 
         parsed_objects = []
         if isinstance(parsed, list):
-            # If the list itself is an array of entities, wrap them in a mock object
-            # grouped by type, or just pass them as generic items if we determine they have type fields
-            # Actually, let's just group them into a wrapper object
             grouped = {"characters": [], "props": [], "environments": [], "covers": [], "posters": []}
             for item in parsed:
                 if not isinstance(item, dict):
                     continue
+
+                # Support array-wrapped payloads, e.g. [{"characters": [...]}]
+                has_bucket_keys = any(k in item for k in ("characters", "props", "environments", "covers", "posters"))
+                wrapped_payload = item.get("entities") or item.get("subjects") or item.get("payload")
+                if has_bucket_keys:
+                    parsed_objects.append(item)
+                    continue
+                if isinstance(wrapped_payload, dict):
+                    parsed_objects.append(wrapped_payload)
+                    continue
+
+                # Flat typed-array fallback, e.g. [{"type":"character", ...}, ...]
                 t = str(item.get("type") or item.get("subject_type") or item.get("entity_type") or "").strip().lower()
                 if t in {"character", "characters", "char", "role", "roles", "人物", "角色"}:
                     grouped["characters"].append(item)
@@ -15265,7 +15324,9 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     grouped["environments"].append(item)
                 elif t in {"poster", "posters", "cover", "covers", "海报", "封面"}:
                     grouped["covers"].append(item)
-            parsed_objects.append(grouped)
+
+            if any(len(grouped.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
+                parsed_objects.append(grouped)
         elif isinstance(parsed, dict):
             parsed_objects.append(parsed)
 
@@ -15294,10 +15355,25 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
                     normalized_items.append(normalized)
                 payload[section].extend(normalized_items)
 
-        if any(len(payload.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
-            return payload
-
-    return payload
+    # Merge all candidates first, then deduplicate to avoid losing entities when
+    # early candidates are partial/incomplete.
+    for section in ("characters", "props", "environments", "covers", "posters"):
+        seen_item_keys = set()
+        deduped_items: List[Dict[str, Any]] = []
+        for item in payload.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            item_key = "|".join([
+                str(item.get("subject_no") or "").strip().lower(),
+                str(item.get("name") or "").strip().lower(),
+                str(item.get("name_en") or "").strip().lower(),
+                section,
+            ])
+            if item_key in seen_item_keys:
+                continue
+            seen_item_keys.add(item_key)
+            deduped_items.append(item)
+        payload[section] = deduped_items
 
     return payload
 
@@ -34655,7 +34731,7 @@ async def generate_montage(
             )
             return {"task_id": task_id, "async": True}
 
-        url = create_montage(project_id, items_payload, user_id=current_user.id if 'current_user' in locals() else user_id)
+        url = create_montage(project_id, items_payload, user_id=current_user.id)
         return {"url": url}
     except Exception as e:
         logger.error(f"Montage failed: {str(e)}")
