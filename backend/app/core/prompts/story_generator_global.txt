@@ -22,8 +22,8 @@ What to emphasize:
 - Story engine and stakes: why the conflict exists and why it matters now.
 - Structural skeleton: opening, trigger, development, midpoint shift, low point, climax, ending.
 - Suspense system: what keeps the audience wanting the next episode.
-- Payoff map: what setup must be paid off later.
-- Episode plan: a simple, coherent episode-by-episode outline with continuity anchors.
+- Payoff map: what setup must be paid off later, and in which episode it is expected to be paid off.
+- Episode plan: a simple, coherent episode-by-episode outline with continuity anchors, explicit previous-to-next episode handoff, and hook lifecycle tracking.
 - Final resolution: how the story closes and what changes.
 
 Simplification rules:
@@ -95,13 +95,24 @@ Output format:
 ## 7) 伏笔与回收
 - 伏笔清单：...
 - 回收清单：...
+- 钩子生命周期台账（Hook Ledger）：...
 
 ## 8) 分集规划
 Provide a numbered list from Episode 1 to Episode N.
 Each line must follow:
 - EPxx / Episode x / x-分集标题：定场 / 核心冲突 / 关键转折 / 小高潮 / 结尾钩子
   - Core Venue Seeds：...
+  - Carry-in from Previous Episode：...
+  - Hook Ledger Update：...
+  - Carry-out to Next Episode：...
   - Continuity Anchors：...
+
+Hard requirements for episode continuity:
+- Never write isolated episodes without cross-episode causality.
+- For each episode, explicitly state: what is inherited from previous episode, what unresolved tension is newly created, and what exact trigger is handed to the next episode.
+- Every major hook must have a stable Hook ID (e.g., H01/H02) and a status in each episode: setup / reinforce / misdirect / delay / payoff.
+- If a hook is paid off, explicitly reference its setup episode and describe the consequence shift after payoff.
+- If a hook is not paid off yet, state why it is delayed and when it is expected to advance next.
 
 ## 9) 最终高潮与结局
 - 最终高潮：...

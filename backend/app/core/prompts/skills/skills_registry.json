@@ -2,124 +2,86 @@
     "version": 1,
     "skills": [
         {
-            "id": "agent_orchestrator",
-            "title": "Agent Orchestrator",
-            "type": "agent",
-            "prompts": [
-                "skills/agent_orchestrator/system_prompt.txt"
-            ],
-            "legacy_refs": []
-        },
-        {
-            "id": "scene_analysis_feature_stack",
-            "title": "Scene Analysis Feature Stack",
-            "type": "analysis",
-            "prompts": [
-                "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md",
-                "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md",
-                "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md",
-                "skills/scene_analysis_feature_stack/entity_design.md"
-            ],
-            "legacy_refs": []
-        },
-        {
-            "id": "scene_analysis",
-            "title": "Scene Analysis",
-            "type": "analysis",
-            "prompts": [
-                "scene_analysis.txt",
-                "scene_analysis_subject_recovery_lite.txt"
-            ],
-            "legacy_refs": [
-                "scene_analysis.txt",
-                "scene_analysis_subject_recovery_lite.txt"
-            ]
-        },
-        {
-            "id": "story_generation",
-            "title": "Story Generation",
+            "id": "script_framework",
+            "title": "Script Framework (剧本框架)",
             "type": "story",
             "prompts": [
-                "story_generator_global.txt",
-                "story_generator_analyze_novel.txt"
+                "master_story_architect.md"
             ],
             "legacy_refs": [
-                "story_generator_global.txt",
-                "story_generator_analyze_novel.txt"
+                "master_story_architect.md"
             ]
         },
         {
-            "id": "script_generation",
-            "title": "Script Generation",
+            "id": "script_episode_generation",
+            "title": "Script Episode Generation (剧本分集生成)",
             "type": "script",
             "prompts": [
-                "script_generator_scenes.txt",
-                "script_generator_episode_script.txt",
-                "scene_regenerate.txt"
+                "master_episode_writer.md"
             ],
             "legacy_refs": [
-                "script_generator_scenes.txt",
-                "script_generator_episode_script.txt",
-                "scene_regenerate.txt"
+                "master_episode_writer.md"
             ]
         },
         {
-            "id": "promo_generation",
-            "title": "Promo Generation",
-            "type": "promo",
+            "id": "script_optimization",
+            "title": "Script Optimization (剧本优化)",
+            "type": "analysis",
             "prompts": [
-                "promo_generator_global.txt",
-                "promo_generator_episode_script.txt"
+                "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
             ],
             "legacy_refs": [
-                "promo_generator_global.txt",
-                "promo_generator_episode_script.txt"
+                "skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md"
             ]
         },
         {
-            "id": "image_style_extraction",
-            "title": "Image Style Extraction",
-            "type": "vision",
+            "id": "assets_extraction",
+            "title": "Assets Extraction (资产提取)",
+            "type": "analysis",
             "prompts": [
-                "image_style_extractor.txt"
+                "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md"
             ],
             "legacy_refs": [
-                "image_style_extractor.txt"
+                "skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md"
+            ]
+        },
+        {
+            "id": "scene_planning",
+            "title": "Scene Planning (场景编排)",
+            "type": "storyboard",
+            "prompts": [
+                "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md"
+            ],
+            "legacy_refs": [
+                "skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md"
+            ]
+        },
+        {
+            "id": "assets_generation",
+            "title": "Assets Generation (资产生成-多提示词)",
+            "type": "asset",
+            "prompts": [
+                "skills/scene_analysis_feature_stack/entity_design_common.md",
+                "skills/scene_analysis_feature_stack/entity_design_character.md",
+                "skills/scene_analysis_feature_stack/entity_design_prop.md",
+                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md"
+            ],
+            "legacy_refs": [
+                "skills/scene_analysis_feature_stack/entity_design_common.md",
+                "skills/scene_analysis_feature_stack/entity_design_character.md",
+                "skills/scene_analysis_feature_stack/entity_design_prop.md",
+                "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md"
             ]
         },
         {
             "id": "shot_generation",
-            "title": "Shot Generation",
+            "title": "Shot Generation (分镜生成)",
             "type": "storyboard",
             "prompts": [
-                "skills/shot_generation.md",
-                "shot_regenerate.txt"
+                "skills/shot_generation.md"
             ],
             "legacy_refs": [
-                "skills/shot_generation.md",
-                "shot_regenerate.txt"
-            ]
-        },
-        {
-            "id": "master_story_architect",
-            "title": "Master Story Architect (剧本故事DNA)",
-            "type": "story",
-            "prompts": [
-                "master_story_architect.md"
-            ],
-            "legacy_refs": [
-                "master_story_architect.md"
-            ]
-        },
-        {
-            "id": "master_episode_writer",
-            "title": "Master Episode Writer (生成剧本)",
-            "type": "script",
-            "prompts": [
-                "master_episode_writer.md"
-            ],
-            "legacy_refs": [
-                "master_episode_writer.md"
+                "skills/shot_generation.md"
             ]
         }
     ]

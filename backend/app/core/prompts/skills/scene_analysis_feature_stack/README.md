@@ -5,7 +5,7 @@ This package adds a routed scene-analysis base prompt plus runtime feature skill
 Current staged flow:
 - Stage 1: script adaptation (`scene_planning_1_script_optimization.md`)
 - Stage 2: asset analysis extraction (`scene_planning_2_beats_and_assets.md`)
-- Stage 3: asset design (`entity_design.md`)
+- Stage 3: asset design (`entity_design_common.md` + typed prompts: `entity_design_character.md`, `entity_design_prop.md`, `entity_design_environment_and_poster.md`)
 
 Goals:
 - Keep `classic` on the original `scene_analysis.txt` path.

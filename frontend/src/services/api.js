@@ -3150,6 +3150,15 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     if (!defaultApiId && functionName) {
         defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
     }
+    try {
+        console.info('[analyzeScene][routing] submit', {
+            function_name: functionName,
+            system_api_id: defaultApiId,
+            project_id: projectId || null,
+            episode_id: episodeId || null,
+            scene_analysis_mode: sceneAnalysisMode || null,
+        });
+    } catch {}
     const payload = {
         text: scriptText,
         system_prompt: systemPrompt,

@@ -1,5 +1,6 @@
 ﻿
-import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+import FunctionApiSelector from '../../../components/FunctionApiSelector';
+import { useFunctionApis } from '../../../components/useFunctionApis';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
@@ -164,6 +165,11 @@ const isDummySubject = (itemName) => {
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
+    const selectedScriptAnalysisApiId = useMemo(() => {
+        return Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
+            || Number(localStorage.getItem('func_api_script_analysis') || 0)
+            || null;
+    }, [functionApiConfigs?.selectedApi?.system_api_id]);
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
@@ -2032,8 +2038,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             let promptContent = '';
             try {
-                const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/entity_design.md');
-                promptContent = promptRes?.content || '';
+                const promptRefs = [
+                    'skills/scene_analysis_feature_stack/entity_design_common.md',
+                    'skills/scene_analysis_feature_stack/entity_design_character.md',
+                    'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md',
+                    'skills/scene_analysis_feature_stack/entity_design_prop.md',
+                ];
+                const promptParts = await Promise.all(promptRefs.map((ref) => fetchPrompt(ref).catch(() => null)));
+                promptContent = promptParts.map((res) => String(res?.content || '').trim()).filter(Boolean).join('\n\n');
             } catch {
                 try {
                     const fallbackRes = await fetchPrompt('scene_analysis_subject_recovery_lite.txt');
@@ -2060,7 +2072,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 null,
                 projectId,
                 null,
-                functionApiConfigs.selectedApi?.system_api_id
+                selectedScriptAnalysisApiId
             );
 
             const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
@@ -2501,7 +2513,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         try {
             // Coverage check is an auxiliary audit call and must not overwrite episode ai_scene_analysis_result.
-            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId, null, functionApiConfigs.selectedApi?.system_api_id);
+            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId, null, selectedScriptAnalysisApiId);
             const analyzedText = extractAnalysisTextFromResult(result);
             const report = parseCoreCoverageReport(analyzedText);
             setCoreCoverageReport(report);
@@ -4296,7 +4308,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
 
 
-            { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment.md' },
+            { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md' },
 
 
             { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
@@ -4413,9 +4425,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
 
-            const phase1SystemApiId = Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
-                || Number(localStorage.getItem('func_api_script_analysis') || 0)
-                || null;
+            const phase1SystemApiId = selectedScriptAnalysisApiId;
             if (phase1SystemApiId) {
                 onLog?.(`[Stage 3 Asset Design] Reusing Stage 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
             } else {
@@ -6563,7 +6573,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 1 });
                         },
                     },
-                    projectId
+                    projectId,
+                    'script_analysis',
+                    selectedScriptAnalysisApiId
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -7011,7 +7023,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 1 });
                         },
                     },
-                    projectId
+                    projectId,
+                    'script_analysis',
+                    selectedScriptAnalysisApiId
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -7171,7 +7185,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 2 });
                             },
                         },
-                        projectId
+                        projectId,
+                        'script_analysis',
+                        selectedScriptAnalysisApiId
                     ),
                     { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: baselineAnalysisText }
                 );
@@ -7242,7 +7258,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             },
                         },
                         projectId,
-                        'script_analysis_stage_2_2_beats'
+                        'script_analysis_stage_2_2_beats',
+                        selectedScriptAnalysisApiId
                     );
 
                     const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
@@ -7606,7 +7623,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 2 });
                         },
                     },
-                    projectId
+                    projectId,
+                    'script_analysis',
+                    selectedScriptAnalysisApiId
                 ),
                 { startedAt, baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim() }
             );
@@ -7666,7 +7685,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         }, 
                     }, 
                     projectId,
-                    'script_analysis_stage_2_2_beats'
+                    'script_analysis_stage_2_2_beats',
+                    selectedScriptAnalysisApiId
                 ); 
 
                 const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || ''; 
@@ -7914,7 +7934,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
                 projectId,
                 'script_analysis_stage_2_2_beats',
-                null,
+                selectedScriptAnalysisApiId,
                 'scene_beats_only'
             );
             onLog?.('[Task:Scene Beats Only Rerun] [Phase:submit] Forced scene_analysis_mode=scene_beats_only to bypass Stage 2.1 asset extraction.', 'info');

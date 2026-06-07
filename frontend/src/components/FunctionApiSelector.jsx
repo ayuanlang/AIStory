@@ -1,26 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { getFunctionApiConfigs } from '../services/api';
 import { getUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
-
-export const useFunctionApis = () => {
-    const [configs, setConfigs] = useState({});
-    
-    useEffect(() => {
-        const load = async () => {
-            try {
-                const res = await getFunctionApiConfigs();
-                const map = {};
-                res.forEach(item => {
-                    map[item.function_name] = item.api_settings;
-                });
-                setConfigs(map);
-            } catch (err) {}
-        };
-        load();
-    }, []);
-    return configs;
-};
-
 
 const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '' }) => {
 

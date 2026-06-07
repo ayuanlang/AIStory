@@ -4950,12 +4950,12 @@ _PROMPT_SKILL_ALIAS = {
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
     "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
-    "script_generator_episode_script.txt": "script_generator_episode_script.md",
+    "script_generator_episode_script.txt": "master_episode_writer.md",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
     "shot_generator.txt": "skills/shot_generation.md",
     "shot_regenerate.txt": "shot_regenerate.txt",
     "promo_generator_global.txt": "skill:promo_generation/promo_generator_global.txt",
-    "promo_generator_episode_script.txt": "script_generator_episode_script.md",
+    "promo_generator_episode_script.txt": "master_episode_writer.md",
     "image_style_extractor.txt": "skill:image_style_extraction/image_style_extractor.txt",
     "voice_tts_planner_system.txt": "voice_tts_planner_system.txt",
     "voice_tts_planner_user.txt": "voice_tts_planner_user.txt",
@@ -6772,6 +6772,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             config,
             request.project_metadata,
             context="analyze_scene",
+        )
+        logger.info(
+            "[analyze_scene][routing] function_name=%s system_api_id=%s provider=%s model=%s episode_id=%s trace_id=%s",
+            getattr(request, "function_name", None),
+            getattr(request, "system_api_id", None),
+            (config or {}).get("provider"),
+            (config or {}).get("model"),
+            getattr(request, "episode_id", None),
+            analysis_trace_id or "-",
         )
 
         # --- Debug / Truncation tracing ---
@@ -13857,7 +13866,7 @@ async def generate_project_episode_scripts_from_global_framework(
     )
 
     # Single stable prompt entry for episode script generation.
-    prompt_filename = "script_generator_episode_script.md"
+    prompt_filename = "master_episode_writer.md"
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
     except FileNotFoundError:

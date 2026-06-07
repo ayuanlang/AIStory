@@ -1,5 +1,6 @@
 
-import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+import FunctionApiSelector from '../../../components/FunctionApiSelector';
+import { useFunctionApis } from '../../../components/useFunctionApis';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { MediaPickerModal, AssetHoverMetaOverlay } from './MediaModals';
 import AiEntityCreateDialog from './AiEntityCreateDialog';
@@ -802,6 +803,25 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         return 'character';
     }, []);
 
+    const fetchEntityDesignSystemPrompt = useCallback(async (entityType) => {
+        const stableType = normalizeAiEntityType(entityType);
+        const typePromptPath = stableType === 'prop'
+            ? 'skills/scene_analysis_feature_stack/entity_design_prop.md'
+            : stableType === 'environment'
+                ? 'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md'
+                : stableType === 'poster'
+                    ? 'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md'
+                    : 'skills/scene_analysis_feature_stack/entity_design_character.md';
+        const [commonPromptRes, typePromptRes] = await Promise.all([
+            fetchPrompt('skills/scene_analysis_feature_stack/entity_design_common.md').catch(() => null),
+            fetchPrompt(typePromptPath).catch(() => null),
+        ]);
+        return [commonPromptRes?.content, typePromptRes?.content]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+            .join('\n\n');
+    }, [normalizeAiEntityType]);
+
     const getAiEntityTypePromptHint = useCallback((entityType) => {
         const stableType = normalizeAiEntityType(entityType);
         if (stableType === 'character') {
@@ -1347,10 +1367,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setIsAiEntityCreating(true);
         setAiEntityCreateReport(null);
         try {
-            const promptRes = await fetchPrompt('skills/scene_analysis_feature_stack/entity_design.md').catch(() => null);
-            const systemPrompt = String(promptRes?.content || '').trim();
+            const systemPrompt = String(await fetchEntityDesignSystemPrompt(aiEntityCreateForm?.type) || '').trim();
             if (!systemPrompt && onLog) {
-                onLog('entity_design.md is empty or unavailable, continuing with default routing.', 'warning');
+                onLog('entity design common+type prompts are empty or unavailable, continuing with default routing.', 'warning');
             }
 
             const stableTargetType = normalizeAiEntityType(aiEntityCreateForm?.type);
@@ -1463,6 +1482,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         allEntities,
         buildManualSubjectIndexInput,
         currentEpisode?.id,
+        fetchEntityDesignSystemPrompt,
         importSubjectsJsonDirectly,
         isAiReuseEntityAllowed,
         normalizeAiEntityType,

@@ -1,4 +1,5 @@
-﻿import FunctionApiSelector, { useFunctionApis } from '../../../components/FunctionApiSelector';
+﻿import FunctionApiSelector from '../../../components/FunctionApiSelector';
+import { useFunctionApis } from '../../../components/useFunctionApis';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
