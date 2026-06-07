@@ -1811,7 +1811,7 @@ Output ONLY the JSON object now."""
                 merged_config = dict(unified.get("config") or {})
                 merged_config.setdefault("__selection_source", "unified_media_api_config")
                 merged_config.setdefault("__resolved_category", resolved_category)
-                logger.info(
+                logger.debug(
                     "Resolved active API config via unified media resolver | user_id=%s category=%s provider=%s model=%s source=%s",
                     user_id,
                     resolved_category,

@@ -4562,7 +4562,7 @@ class MediaGenerationService:
                 # Non-strict mode: use the per-user category binding first.
                 if user_setting:
                     selected_system_setting_id = int(getattr(user_setting, "system_api_id", 0) or 0)
-                    logger.info(f"[DEBUG] get_api_config | user_id={user_id} category={resolved_category} function_name={function_name} got user_setting with system_api_id={selected_system_setting_id} from {getattr(user_setting, 'id', None)}")
+                    logger.debug(f"[DEBUG] get_api_config | user_id={user_id} category={resolved_category} function_name={function_name} got user_setting with system_api_id={selected_system_setting_id} from {getattr(user_setting, 'id', None)}")
                     if selected_system_setting_id > 0:
                         selected_binding_deprecated = False
                         selected_by_id = self._system_setting_query(session, category=resolved_category).filter(
@@ -4584,7 +4584,7 @@ class MediaGenerationService:
                                 user_binding_status = "resolved"
                                 user_binding_detail = f"{getattr(selected_by_id, 'provider', None) or '<none>'}/{getattr(selected_by_id, 'model', None) or '<none>'}"
                                 _trace_default_vs_selected("direct_system_api_id", selected_by_id, resolved_source, "explicit_user_category_binding")
-                                logger.info(f"[DEBUG] _build_runtime_from_system_row hit! selected_by_id={selected_by_id}")
+                                logger.debug(f"[DEBUG] _build_runtime_from_system_row hit! selected_by_id={selected_by_id}")
                                 return _build_runtime_from_system_row(
                                     selected_by_id,
                                     resolved_source,

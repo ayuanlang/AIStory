@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from datetime import datetime
 
 _cost_log = logging.getLogger("project_cost_estimation")
+_cost_log.setLevel(logging.WARNING)
 
 
 _DEFAULT_PROJECT_COST_ESTIMATION_CONFIG: Dict[str, Any] = {

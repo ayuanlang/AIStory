@@ -2242,6 +2242,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     );
 
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
+    const [assetDetailPreviewMode, setAssetDetailPreviewMode] = useState('fit');
     const [isEditingVideoPreviewArmed, setIsEditingVideoPreviewArmed] = useState(false);
     const [frameTrimModal, setFrameTrimModal] = useState(() => createInitialFrameTrimState());
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
@@ -2269,11 +2270,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
         setAssetDetailModal({ open: true, type, keyframeIndex });
+        setAssetDetailPreviewMode('fit');
     };
 
     const closeAssetDetailModal = () => {
         setTempPromptSubmitLang('');
         setShowPromptLangMenu(false);
+        setAssetDetailPreviewMode('fit');
         setAssetDetailModal({ open: false, type: 'start', keyframeIndex: -1 });
     };
 
@@ -10408,7 +10411,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                             {assetDetailModal.open && (
                                 <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-                                    <div className="w-full max-w-7xl h-[94vh] bg-[#09090b] border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+                                    <div className="w-full max-w-[96rem] h-[94vh] bg-[#09090b] border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden">
                                         <div className="p-4 border-b border-white/10 flex items-center justify-between">
                                             <h4 className="font-bold text-white flex items-center gap-2">
                                                 <Info className="w-4 h-4 text-primary" />
@@ -10837,11 +10840,35 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 );
                                                 };
 
+                                                const isOriginalPreview = assetDetailPreviewMode === 'original';
+                                                const previewShellClass = isOriginalPreview
+                                                    ? 'h-[46vh] xl:h-[58vh] bg-black/60 rounded border overflow-auto flex items-start justify-center relative transition-colors'
+                                                    : 'h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors';
+                                                const previewContentClass = isOriginalPreview
+                                                    ? 'min-w-max min-h-max p-4 flex items-start justify-center'
+                                                    : 'w-full h-full flex items-center justify-center';
+                                                const imagePreviewClass = isOriginalPreview
+                                                    ? 'max-w-none max-h-none w-auto h-auto shadow-lg rounded'
+                                                    : 'max-w-full max-h-full object-contain shadow-lg rounded';
+                                                const videoPreviewClass = isOriginalPreview
+                                                    ? 'w-auto h-auto max-w-none max-h-none shadow-lg rounded'
+                                                    : 'w-full h-full object-contain shadow-lg rounded';
+                                                const renderPreviewModeToggle = () => (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setAssetDetailPreviewMode((prev) => (prev === 'fit' ? 'original' : 'fit'))}
+                                                        className="absolute top-3 right-3 z-20 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 text-[11px] font-medium text-white/90 hover:bg-black/85"
+                                                    >
+                                                        {isOriginalPreview ? t('适配视窗', 'Fit View') : t('原始尺寸', 'Original Size')}
+                                                    </button>
+                                                );
+
                                                 if (modalType === 'start') {
                                                     return (
-                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
-                                                            <div className="space-y-3">
-                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] gap-4">
+                                                            <div className="space-y-3 min-w-0">
+                                                                <div className={`${previewShellClass} ${currentGeneratingState.start ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                                    {renderPreviewModeToggle()}
                                                                     {currentGeneratingState.start && (
                                                                         <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
                                                                             <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -10853,7 +10880,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             </div>
                                                                         </div>
                                                                     )}
-                                                                    {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    <div className={previewContentClass}>
+                                                                        {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className={imagePreviewClass} fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    </div>
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                     { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
@@ -10862,7 +10891,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 ])}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
-                                                            <div className="space-y-3">
+                                                            <div className="space-y-3 min-w-0">
                                                                 {renderFrameGeneratingNotice('start')}
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     {renderDetailActionButton({
@@ -10947,9 +10976,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                                 if (modalType === 'end') {
                                                     return (
-                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
-                                                            <div className="space-y-3">
-                                                                <div className={`h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] gap-4">
+                                                                <div className="space-y-3 min-w-0">
+                                                                    <div className={`${previewShellClass} ${currentGeneratingState.end ? 'border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.12)]' : 'border-white/10'}`}>
+                                                                        {renderPreviewModeToggle()}
                                                                     {currentGeneratingState.end && (
                                                                         <div className="absolute inset-0 z-10 bg-black/68 flex items-center justify-center flex-col gap-3">
                                                                             <div className="rounded-full border border-amber-300/30 bg-amber-500/10 p-3">
@@ -10961,7 +10991,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             </div>
                                                                         </div>
                                                                     )}
-                                                                    {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    <div className={previewContentClass}>
+                                                                        {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className={imagePreviewClass} fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                    </div>
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                     { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
@@ -10970,7 +11002,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 ])}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
-                                                            <div className="space-y-3">
+                                                            <div className="space-y-3 min-w-0">
                                                                 {renderFrameGeneratingNotice('end')}
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     {renderDetailActionButton({
@@ -11068,9 +11100,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     const hasVoicePersistedMeta = Boolean(voicePersistedMeta && Object.keys(voicePersistedMeta).length > 0);
                                                     const resolvedVoiceMeta = hasVoiceAssetMeta ? voiceAssetMeta : voicePersistedMeta;
                                                     return (
-                                                        <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
-                                                            <div className="space-y-3">
-                                                                <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center relative">
+                                                        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] gap-4">
+                                                            <div className="space-y-3 min-w-0">
+                                                                <div className={`${previewShellClass} border-white/10`}>
+                                                                    {renderPreviewModeToggle()}
                                                                     {currentGeneratingState.video && (
                                                                         <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -11086,18 +11119,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             )}</span>
                                                                         </div>
                                                                     )}
-                                                                    {editingShot.video_url ? (
-                                                                        <ManagedVideoPlayer
-                                                                            src={detailPreviewUrl || editingShot.video_url}
-                                                                            poster={resolveShotVideoPosterUrl(editingShot)}
-                                                                            className="w-full h-full object-contain"
-                                                                            wrapperClassName="w-full h-full"
-                                                                            preload="metadata"
-                                                                            suspend={Boolean(currentGeneratingState.video)}
-                                                                            hideBusyOverlay={Boolean(currentGeneratingState.video)}
-                                                                            uiLang={uiLang}
-                                                                        />
-                                                                    ) : <Video className="w-8 h-8 opacity-30" />}
+                                                                    <div className={previewContentClass}>
+                                                                        {editingShot.video_url ? (
+                                                                            <ManagedVideoPlayer
+                                                                                src={detailPreviewUrl || editingShot.video_url}
+                                                                                poster={resolveShotVideoPosterUrl(editingShot)}
+                                                                                className={videoPreviewClass}
+                                                                                wrapperClassName="w-full h-full"
+                                                                                preload="metadata"
+                                                                                suspend={Boolean(currentGeneratingState.video)}
+                                                                                hideBusyOverlay={Boolean(currentGeneratingState.video)}
+                                                                                uiLang={uiLang}
+                                                                            />
+                                                                        ) : <Video className="w-8 h-8 opacity-30" />}
+                                                                    </div>
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('素材名', 'Asset Name')}: {linkedAssetDetail.displayName || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
@@ -11156,7 +11191,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 )}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
-                                                            <div className="space-y-3">
+                                                            <div className="space-y-3 min-w-0">
                                                                 <div className="flex flex-wrap items-center gap-2">
                                                                     {assetDetailModal.type === 'video' && (
                                                                         <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">

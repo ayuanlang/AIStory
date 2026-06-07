@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Search } from 'lucide-react';
 import { getFullUrl, getSafeMediaUrl } from '../editorHelpers';
 
-export const LightweightMentionPicker = ({ isOpen, onClose, entities, uiLang, onSelect, position }) => {
+export const LightweightMentionPicker = ({ isOpen, onClose, entities, uiLang, onSelect }) => {
     const [search, setSearch] = useState('');
     const inputRef = useRef(null);
 
@@ -34,9 +34,9 @@ export const LightweightMentionPicker = ({ isOpen, onClose, entities, uiLang, on
         <div
             className="fixed z-[9999] bg-[#09090b] border border-white/20 rounded-lg shadow-2xl flex flex-col overflow-hidden w-64"
             style={{
-                left: position?.x || 0,
-                top: position?.y || 0,
-                transform: 'translateY(10px)' // slight offset
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)'
             }}
         >
             <div className="p-2 border-b border-white/10 flex items-center gap-2 bg-white/5">
@@ -106,7 +106,6 @@ export const PromptMentionTextarea = React.forwardRef(({
     const resolvedRef = ref || internalRef;
     
     const [pickerOpen, setPickerOpen] = useState(false);
-    const [pickerPos, setPickerPos] = useState({ x: 0, y: 0 });
 
     const handleKeyDown = (e) => {
         // If picker is open, let the user close it with Escape
@@ -127,10 +126,6 @@ export const PromptMentionTextarea = React.forwardRef(({
         console.log('User typed:', { val, selStart, beforeCursor, lastChar: beforeCursor.slice(-1) });
         // Check if the last character typed was @
         if (beforeCursor.endsWith('@') || beforeCursor.endsWith('\uFF20')) {
-            const rect = e.target.getBoundingClientRect();
-            console.log('Triggering Mention Picker!', rect);
-            // Try to place it near the textarea relative position
-            setPickerPos({ x: rect.left, y: rect.bottom });
             setPickerOpen(true);
         } else if (pickerOpen && (!beforeCursor.includes('@') && !beforeCursor.includes('\uFF20'))) {
             // Close if we deleted the @
@@ -221,7 +216,6 @@ export const PromptMentionTextarea = React.forwardRef(({
                     entities={entities}
                     uiLang={uiLang}
                     onSelect={handleSelectEntity}
-                    position={pickerPos}
                 />
             )}
         </>

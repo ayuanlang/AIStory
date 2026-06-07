@@ -2517,19 +2517,6 @@ class BillingService:
         db.commit()
         db.refresh(tx)
         logger.info(
-            "billing.reserve.audit %s",
-            json.dumps({
-                "tx_id": tx.id,
-                "user_id": user_id,
-                "task_type": task_type,
-                "provider": provider,
-                "model": model,
-                "reserved_cost": reserved_cost,
-                "billing_breakdown": reserve_details.get("billing_breakdown") or {},
-                "usage_metadata": reserve_breakdown.get("usage_metadata") or {},
-            }, ensure_ascii=False),
-        )
-        logger.info(
             f"Reserved {reserved_cost} credits from user {user_id} for {task_type}. New Balance: {user.credits}"
         )
         return tx
@@ -2617,21 +2604,6 @@ class BillingService:
         tx_details["refund_tx_id"] = refund_tx.id
         tx.details = tx_details
         db.commit()
-
-        logger.info(
-            "billing.cancel.audit %s",
-            json.dumps({
-                "reservation_tx_id": tx.id,
-                "refund_tx_id": refund_tx.id,
-                "user_id": tx.user_id,
-                "task_type": tx_task_type,
-                "provider": tx_provider,
-                "model": tx_model,
-                "reserved_cost": reserved_cost,
-                "error": str(error_msg or "")[:500] if error_msg else "",
-                "reservation_billing_breakdown": refund_details.get("reservation_billing_breakdown") or {},
-            }, ensure_ascii=False),
-        )
 
         return refund_tx
 
@@ -2855,26 +2827,6 @@ class BillingService:
             res_details["settlement_tx_id"] = settlement_tx.id
             reservation_tx.details = res_details
             db.commit()
-
-        logger.info(
-            "billing.settle.audit %s",
-            json.dumps({
-                "reservation_tx_id": reservation_tx.id,
-                "settlement_tx_id": settlement_tx.id if settlement_tx else None,
-                "user_id": user.id,
-                "task_type": res_task_type,
-                "provider": settle_provider,
-                "model": settle_model,
-                "reserved_cost": reserved_cost,
-                "actual_cost": actual_cost,
-                "delta": delta,
-                "charged_amount": charged_amount,
-                "refunded_amount": refunded_amount,
-                "outstanding": outstanding,
-                "billing_breakdown": res_details.get("billing_breakdown") or {},
-                "usage_metadata": breakdown.get("usage_metadata") or {},
-            }, ensure_ascii=False),
-        )
 
         return {
             "reserved_cost": reserved_cost,

@@ -6623,7 +6623,40 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     _estimate_tokens(meta_str),
                 )
 
-        attention_notes = (getattr(request, "analysis_attention_notes", None) or "").strip()
+        attention_notes_raw = (getattr(request, "analysis_attention_notes", None) or "").strip()
+        attention_notes = attention_notes_raw
+        if attention_notes:
+            # Guardrail: do not inject directives that force Subject-Index-only output,
+            # which can suppress scene table generation in scene analysis runs.
+            banned_line_patterns = [
+                re.compile(r"(?i)only\s+output\s+(?:the\s+)?subjects?\s*index"),
+                re.compile(r"(?i)only\s+return\s+(?:the\s+)?subjects?\s*index"),
+                re.compile(r"(?i)只\s*输出\s*subjects?\s*index"),
+                re.compile(r"(?i)仅\s*输出\s*subjects?\s*index"),
+                re.compile(r"(?i)只\s*输出\s*subject\s*index"),
+                re.compile(r"(?i)仅\s*输出\s*subject\s*index"),
+                re.compile(r"(?i)只\s*返回\s*subjects?\s*index"),
+                re.compile(r"(?i)仅\s*返回\s*subjects?\s*index"),
+            ]
+
+            cleaned_lines = []
+            removed_line_count = 0
+            for raw_line in str(attention_notes).splitlines():
+                line = str(raw_line or "")
+                if any(p.search(line) for p in banned_line_patterns):
+                    removed_line_count += 1
+                    continue
+                cleaned_lines.append(line)
+
+            attention_notes = "\n".join(cleaned_lines).strip()
+            if removed_line_count > 0:
+                logger.info(
+                    "Sanitized analysis attention notes: removed_subject_index_only_lines=%s raw_chars=%s cleaned_chars=%s",
+                    removed_line_count,
+                    len(attention_notes_raw),
+                    len(attention_notes),
+                )
+
         if attention_notes:
             attention_block = (
                 "Regeneration Attention Notes (High Priority):\n"

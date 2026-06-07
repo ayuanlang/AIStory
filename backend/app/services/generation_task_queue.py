@@ -402,6 +402,12 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
         1,
         int((live_cfg or {}).get("queue_threads", _DEFAULT_WORKER_THREADS) or _DEFAULT_WORKER_THREADS),
     )
+    requested_threads = max(1, int(_REQUESTED_WORKER_THREADS or configured_threads or _DEFAULT_WORKER_THREADS))
+    # Keep runtime slot capacity aligned with effective queue workers; guard against
+    # unexpected zero/invalid values so metrics never report 0 capacity while running.
+    effective_threads = max(1, int(_QUEUE_WORKER_THREADS or 0))
+    if effective_threads > int(_WORKER_THREAD_CAP):
+        effective_threads = int(_WORKER_THREAD_CAP)
     db = SessionLocal()
     try:
         status_rows = db.execute(
@@ -481,7 +487,7 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
         queued_oldest_wait_seconds = int(max(0.0, now - queued_oldest_created_at)) if queued_oldest_created_at else 0
         running_count = int(status_counts.get("running", 0))
         queued_count = int(status_counts.get("queued", 0))
-        worker_slots_total = int(_QUEUE_WORKER_THREADS)
+        worker_slots_total = int(effective_threads)
         worker_slots_in_use = max(0, min(worker_slots_total, running_count))
         worker_slots_available = max(0, worker_slots_total - worker_slots_in_use)
 
@@ -500,10 +506,10 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
             },
             "workers": {
                 "configured_threads": int(configured_threads),
-                "requested_threads": int(_REQUESTED_WORKER_THREADS),
-                "effective_threads": int(_QUEUE_WORKER_THREADS),
+                "requested_threads": int(requested_threads),
+                "effective_threads": int(effective_threads),
                 "thread_cap": int(_WORKER_THREAD_CAP),
-                "restart_required_for_thread_change": bool(configured_threads != int(_REQUESTED_WORKER_THREADS)),
+                "restart_required_for_thread_change": bool(configured_threads != int(requested_threads)),
                 "active_running_workers": len(active_workers),
                 "slots_total": worker_slots_total,
                 "slots_in_use": worker_slots_in_use,

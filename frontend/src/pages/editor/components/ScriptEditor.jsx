@@ -450,7 +450,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。仅提取实体建立资产库，绝不输出任何剧情拆解或 Scenes Table 表格。以下“优化后剧本”是主权威输入来源；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。基于“优化后剧本”提取实体并建立资产库；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3940,6 +3940,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const phase2ResolverRef = useRef(null);
     const superuserModalMutexRef = useRef(Promise.resolve());
     const phase2GenerationInFlightRef = useRef(false);
+    const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
     const analysisRunInFlightRef = useRef(false);
     const forceRegenerateRef = useRef(false);
@@ -4181,6 +4182,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [availableSubjectAssets, selectedReuseSubjectIds]);
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
+        if (sceneBeatsOnlyRerunInFlightRef.current) {
+            const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
+            onLog?.('[Task:Scene Beats Only Rerun] [Phase:guard] Blocked Stage 3 asset pipeline during scene-only rerun.', 'info');
+            return {
+                checkedSceneCount: importedSceneRows.length,
+                missingSceneCount: 0,
+                missingItemCount: 0,
+                missingSceneReports: [],
+                supplementReport: {
+                    createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
+                    countsByType: { character: 0, prop: 0, environment: 0 },
+                },
+                importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
+            };
+        }
+
         if (phase2GenerationInFlightRef.current) {
             onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
             return {
@@ -7673,10 +7690,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (isUpstreamError2) { 
                     throw new Error(errMsg2); 
                 } 
-                if (!String(text2_2).trim() || !text2_2.includes("|")) { 
-                    throw new Error('Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。\n' + text2_2.slice(0, 500)); 
-                } 
-                
                 return { stage2_2Text: text2_2, stage2_2Result: stage2_2ResultObj }; 
             };
 
@@ -7691,20 +7704,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             };
 
-            const [beatsOutcome, assetsOutcome] = await Promise.allSettled([
-                runStage2_2Task(),
-                runStage3Task()
-            ]);
+            const beatsPromise = runStage2_2Task();
+            const assetsPromise = runStage3Task();
 
-            if (beatsOutcome.status !== 'fulfilled') {
-                throw beatsOutcome.reason;
-            }
+            const { stage2_2Text, stage2_2Result } = await beatsPromise;
 
-            const { stage2_2Text, stage2_2Result } = beatsOutcome.value;
-            const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
+            setAnalysisFlowStatus({
+                phase: 'scene_beats',
+                message: t('✅ 场景编排 LLM 已返回，正在第一时间回写结果...', 'Scene beats LLM returned. Writing back results immediately...'),
+            });
+            onLog?.('[Task:Stage 2 Restart] [Phase:scene_beats_llm_returned] Stage 2.2 returned. Applying UI update and immediate writeback.', 'info');
 
             const stage2Text = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
             const finalAnalysisText = String(stage2_2Text || '').trim();
+            const hasValidBeatsTable = Boolean(finalAnalysisText && finalAnalysisText.includes('|'));
             
             const stage2Result = {
                 ...(stage2_1Result || {}),
@@ -7727,12 +7740,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisRuntimeMeta(runtimeMeta);
             }
 
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                status: 'running',
+                startedAt,
+                durationMs: Date.now() - startedAt,
+                runtimeMeta,
+                warning: '',
+                error: '',
+            }));
+
             await persistLlmResultContent(finalAnalysisText, 'ai_scene_analysis_result', {
                 source: 'restart-stage2',
                 stage1RawText: stage1SourceText,
                 stage2RawText: stage2Text,
                 stage2_1Text: stage2_1Text || undefined,
             });
+            onLog?.('[Task:Stage 2 Restart] [Phase:writeback] Scene beats result persisted to ai_scene_analysis_result.', 'success');
+
+            if (!hasValidBeatsTable) {
+                throw new Error('Stage 2.2 镜头节拍生成已返回，但未检测到有效分镜表格。原始返回已回写，请检查后重试。');
+            }
 
             importReport = await runAutoImportAndSwitchToScenes(finalAnalysisText, {
                 switchToScenes: false,
@@ -7744,6 +7772,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             importReport = await ensureSubjectsImportedBeforePostChecks(stage2Result, importReport);
             maybeAlertIncompleteSubjectsImport(stage2Result, finalAnalysisText);
+
+            const assetsOutcome = await assetsPromise
+                .then((value) => ({ status: 'fulfilled', value }))
+                .catch((reason) => ({ status: 'rejected', reason }));
+            const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
             if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
                 importReport = {
@@ -7831,6 +7864,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: 'scene_beats',
             message: t('正在仅重排场景（单路 Stage 2.2）...', 'Rerunning scene beats only (single-route Stage 2.2)...'),
         });
+        sceneBeatsOnlyRerunInFlightRef.current = true;
+        onLog?.('[Task:Scene Beats Only Rerun] [Phase:start] Entered scene-only mode and enabled Stage 3 hard guard.', 'info');
 
         try {
             const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
@@ -7878,13 +7913,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                 },
                 projectId,
-                'script_analysis_stage_2_2_beats'
+                'script_analysis_stage_2_2_beats',
+                null,
+                'scene_beats_only'
             );
+            onLog?.('[Task:Scene Beats Only Rerun] [Phase:submit] Forced scene_analysis_mode=scene_beats_only to bypass Stage 2.1 asset extraction.', 'info');
 
             const stage2_2Text = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
-            if (!String(stage2_2Text).trim() || !stage2_2Text.includes('|')) {
-                throw new Error('仅重排场景失败：未检测到有效场景/分镜表格产出，请重试。');
-            }
+            const hasValidBeatsTable = Boolean(String(stage2_2Text || '').trim() && String(stage2_2Text || '').includes('|'));
+
+            setAnalysisFlowStatus({
+                phase: 'scene_beats',
+                message: t('✅ 场景编排 LLM 已返回，正在第一时间回写结果...', 'Scene beats LLM returned. Writing back results immediately...'),
+            });
+            onLog?.('[Task:Scene Beats Only Rerun] [Phase:scene_beats_llm_returned] Stage 2.2 returned. Applying UI update and immediate writeback.', 'info');
 
             if (stage2_2ResultObj?.meta) {
                 runtimeMeta = extractAnalysisRuntimeMeta(stage2_2ResultObj.meta);
@@ -7901,6 +7943,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage2RawText: [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n'),
                 stage2_1Text: stage2_1Text || undefined,
             });
+            onLog?.('[Task:Scene Beats Only Rerun] [Phase:writeback] Scene beats result persisted to ai_scene_analysis_result.', 'success');
+
+            if (!hasValidBeatsTable) {
+                throw new Error('仅重排场景已返回内容，但未检测到有效场景/分镜表格。原始返回已回写，请检查后重试。');
+            }
 
             importReport = await runAutoImportAndSwitchToScenes(stage2_2Text, {
                 switchToScenes: false,
@@ -7948,6 +7995,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`Scene beats-only rerun failed: ${friendlyError}`, 'error');
             alert(t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`));
         } finally {
+            sceneBeatsOnlyRerunInFlightRef.current = false;
+            onLog?.('[Task:Scene Beats Only Rerun] [Phase:finish] Released scene-only mode Stage 3 guard.', 'info');
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
