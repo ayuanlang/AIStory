@@ -1869,6 +1869,13 @@ def _persist_remote_image_result(
     hostname = str(parsed.hostname or "").strip().lower()
     if hostname in {"localhost", "127.0.0.1"}:
         return media_url, metadata
+    if oss_storage_service.is_managed_url(raw):
+        logger.info(
+            "[ImageResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
+            getattr(current_user, "id", None),
+            raw,
+        )
+        return media_url, metadata
 
     source_url = raw
     resolved_kie_download_url = _resolve_kie_downloadable_url(source_url)

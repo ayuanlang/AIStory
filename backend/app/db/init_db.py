@@ -1831,6 +1831,22 @@ def init_system_api_settings(db):
         if key in existing_keys:
             continue
 
+        config_payload = {}
+        if item["category"] == "Image":
+            config_payload = {
+                "endpoint": (
+                    grsai_nano_banana_endpoint
+                    if "nano-banana" in item["name"]
+                    else grsai_gpt_image_endpoint
+                ),
+                "oss-id": "69c890a3a0a438550965e9ff",
+                "oss-path": "file/images",
+            }
+        elif item["category"] == "Video" and "sora-2" in item["name"]:
+            config_payload = {"endpoint": grsai_sora2_endpoint}
+        elif item["category"] == "Video" and "veo" in item["name"]:
+            config_payload = {"endpoint": grsai_veo_endpoint}
+
         db.add(SystemAPISetting(
             name=f"Grsai {item['name']}",
             category=item["category"],
@@ -1839,15 +1855,7 @@ def init_system_api_settings(db):
             base_url=grsai_base_url,
             model=item["model"],
             modality=item.get("modality"),
-            config={
-                "endpoint": grsai_nano_banana_endpoint
-            } if item["category"] == "Image" and "nano-banana" in item["name"] else ({
-                "endpoint": grsai_gpt_image_endpoint
-            } if item["category"] == "Image" and "gpt-image" in item["name"] else ({
-                "endpoint": grsai_sora2_endpoint
-            } if item["category"] == "Video" and "sora-2" in item["name"] else ({
-                "endpoint": grsai_veo_endpoint
-            } if item["category"] == "Video" and "veo" in item["name"] else {}))),
+            config=config_payload,
             is_active=False,
         ))
         existing_keys.add(key)

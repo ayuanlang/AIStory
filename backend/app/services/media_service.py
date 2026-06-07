@@ -5576,6 +5576,26 @@ class MediaGenerationService:
             
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
+            oss_config = tool_conf.get("oss") if isinstance(tool_conf.get("oss"), dict) else {}
+            oss_id = str(
+                tool_conf.get("oss-id")
+                or tool_conf.get("oss_id")
+                or tool_conf.get("ossId")
+                or (oss_config.get("id") if isinstance(oss_config, dict) else "")
+                or ""
+            ).strip()
+            oss_path = str(
+                tool_conf.get("oss-path")
+                or tool_conf.get("oss_path")
+                or tool_conf.get("ossPath")
+                or (oss_config.get("path") if isinstance(oss_config, dict) else "")
+                or ""
+            ).strip()
+            grsai_extra_headers: Dict[str, str] = {}
+            if oss_id:
+                grsai_extra_headers["oss-id"] = oss_id
+            if oss_path:
+                grsai_extra_headers["oss-path"] = oss_path
             callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
             payload["webHook"] = callback_payload_value
             payload["webhook"] = callback_payload_value
@@ -5726,6 +5746,7 @@ class MediaGenerationService:
                 extra_metadata=base_metadata,
                 trace_id=trace_id,
                 task_id_callback=task_id_callback,
+                extra_headers=grsai_extra_headers,
             )
 
         # Video
@@ -10518,8 +10539,12 @@ class MediaGenerationService:
                 )
             return {"error": str(exc), "submit_failed": True}
 
-    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None):
+    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None, extra_headers: Optional[Dict[str, str]] = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        if extra_headers:
+            for header_name, header_value in extra_headers.items():
+                if header_name and header_value:
+                    headers[str(header_name).strip()] = str(header_value).strip()
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
