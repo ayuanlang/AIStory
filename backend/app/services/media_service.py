@@ -10264,7 +10264,7 @@ class MediaGenerationService:
         api_key,
         log_tag,
         extra_metadata=None,
-        poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS,
+        poll_timeout_seconds: int = 1200,
         poll_interval_seconds: int = 2,
         pure_callback_mode: bool = False,
         callback_enabled: bool = False,
