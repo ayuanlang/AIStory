@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import { RefreshCw, Trash2, StopCircle, Clock, PlayCircle, Loader2, Save, X } from 'lucide-react';
 import { getAdminQueueTasks, cancelAdminQueueTask, cancelAllQueuedAdminTasks, getAdminQueueConfig, getAdminQueueStats, updateAdminQueueConfig, getSystemSettingsManage } from '../services/api';
 import { confirmUiMessage, notifyUiMessage } from '../lib/uiMessage';
@@ -22,6 +22,9 @@ export default function QueueAdmin() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [systemApis, setSystemApis] = useState([]);
   const [queueStats, setQueueStats] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [providerFilter, setProviderFilter] = useState('all');
+  const [apiFilter, setApiFilter] = useState('all');
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -105,6 +108,151 @@ export default function QueueAdmin() {
     return found ? found.name : `ID: ${apiId}`;
   };
 
+  const getApiMeta = (apiId) => {
+    if (!apiId) return null;
+    const found = systemApis.find(a => a.id === apiId);
+    return found || null;
+  };
+
+  const getTaskProviderLabel = (task) => {
+    const diag = task?.callback_diag || {};
+    const payload = task?.payload || {};
+    const apiMeta = getApiMeta(payload?.system_api_id);
+    const alias = String(diag.provider_alias || payload.provider_alias || '').trim();
+    const provider = String(diag.provider || payload.provider || apiMeta?.provider || '').trim();
+    const model = String(diag.model || payload.model || apiMeta?.model || '').trim();
+    if (alias && provider) return `${alias} (${provider})${model ? ` / ${model}` : ''}`;
+    if (alias) return `${alias}${model ? ` / ${model}` : ''}`;
+    if (provider) return `${provider}${model ? ` / ${model}` : ''}`;
+    return model || '-';
+  };
+
+  const getTaskStatusLabel = (task) => {
+    const status = String(task?.status || '').trim().toLowerCase();
+    const upstream = String(task?.callback_diag?.upstream_submit_state || '').trim().toLowerCase();
+    const hasTicket = Boolean(task?.callback_diag?.provider_callback_ticket);
+    const retrying = Number(task?.callback_diag?.callback_submit_retries || 0) > 0 || Boolean(task?.callback_diag?.callback_retry_at);
+
+    if (retrying) {
+      return {
+        text: '回调补偿重试中',
+        filterKey: 'callback_retrying',
+        tone: 'text-orange-300 border-orange-500/40 bg-orange-500/10',
+        icon: 'running',
+      };
+    }
+
+    if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('submitted') || upstream.includes('submit_ok')) && !hasTicket) {
+      return {
+        text: '已提交上游',
+        filterKey: 'submitted_upstream',
+        tone: 'text-sky-300 border-sky-500/40 bg-sky-500/10',
+        icon: 'running',
+      };
+    }
+
+    if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('callback_pending') || upstream.includes('submitted') || hasTicket)) {
+      return {
+        text: '等待回调入库',
+        filterKey: 'callback_waiting',
+        tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'queued') {
+      return {
+        text: '排队中',
+        filterKey: 'queued',
+        tone: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
+        icon: 'queued',
+      };
+    }
+
+    if (status === 'running' || status === 'processing' || status === 'pending') {
+      return {
+        text: '处理中',
+        filterKey: 'running',
+        tone: 'text-blue-300 border-blue-500/40 bg-blue-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'completed' || status === 'succeeded' || status === 'success' || status === 'done') {
+      return {
+        text: '已完成',
+        filterKey: 'completed',
+        tone: 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+        icon: 'done',
+      };
+    }
+
+    if (status === 'failed' || status === 'error') {
+      return {
+        text: '失败',
+        filterKey: 'failed',
+        tone: 'text-rose-300 border-rose-500/40 bg-rose-500/10',
+        icon: 'done',
+      };
+    }
+
+    if (status === 'canceled' || status === 'cancelled') {
+      return {
+        text: '已取消',
+        filterKey: 'canceled',
+        tone: 'text-gray-300 border-gray-500/40 bg-gray-500/10',
+        icon: 'done',
+      };
+    }
+
+    return {
+      text: status ? `未知(${status})` : '未知',
+      filterKey: 'unknown',
+      tone: 'text-gray-300 border-gray-500/40 bg-gray-500/10',
+      icon: 'done',
+    };
+  };
+
+  const renderStatusIcon = (kind) => {
+    if (kind === 'queued') return <Clock size={14} />;
+    if (kind === 'running') return <Loader2 size={14} className="animate-spin" />;
+    return <PlayCircle size={14} />;
+  };
+
+  const providerOptions = useMemo(() => {
+    const set = new Set();
+    for (const task of tasks) {
+      const value = getTaskProviderLabel(task);
+      if (value && value !== '-') set.add(value);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [tasks, systemApis, queueStats]);
+
+  const apiOptions = useMemo(() => {
+    const set = new Set();
+    for (const task of tasks) {
+      const payload = task?.payload || {};
+      const name = getApiName(payload.system_api_id) || payload.function_name || '';
+      const text = String(name || '').trim();
+      if (text) set.add(text);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [tasks, systemApis]);
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      const taskStatus = getTaskStatusLabel(task);
+      const provider = getTaskProviderLabel(task);
+      const payload = task?.payload || {};
+      const apiName = getApiName(payload.system_api_id) || payload.function_name || '-';
+
+      const statusPass = statusFilter === 'all' || taskStatus.filterKey === statusFilter;
+      const providerPass = providerFilter === 'all' || provider === providerFilter;
+      const apiPass = apiFilter === 'all' || apiName === apiFilter;
+      return statusPass && providerPass && apiPass;
+    });
+  }, [tasks, statusFilter, providerFilter, apiFilter, systemApis]);
+
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
@@ -171,7 +319,8 @@ export default function QueueAdmin() {
           <div className="text-2xl font-bold text-blue-300">{queueStats?.runtime?.queue?.active_count ?? 0}</div>
           <div className="text-xs text-gray-500">活动任务(queued + running)</div>
           <div className="text-xs text-cyan-300">工作位 已用/总量/可用: {queueStats?.runtime?.queue?.worker_slots_in_use ?? 0} / {queueStats?.runtime?.queue?.worker_slots_total ?? 0} / {queueStats?.runtime?.queue?.worker_slots_available ?? 0}</div>
-          <div className="text-xs text-gray-300">Queued: {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | Running: {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
+          <div className="text-xs text-gray-300">排队中(queued): {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | 执行中(running): {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
+          <div className="text-xs text-gray-300">已完成(completed): {queueStats?.runtime?.queue?.status_counts?.completed ?? 0} | 失败(failed): {queueStats?.runtime?.queue?.status_counts?.failed ?? 0} | 已取消(canceled): {queueStats?.runtime?.queue?.status_counts?.canceled ?? 0}</div>
           <div className="text-xs text-gray-300">最近1小时完成: {queueStats?.runtime?.queue?.finished_last_hour ?? 0}</div>
           <div className="text-xs text-amber-300">最老排队等待: {formatDuration(queueStats?.runtime?.queue?.queued_oldest_wait_seconds)}</div>
         </div>
@@ -195,12 +344,13 @@ export default function QueueAdmin() {
         <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
           <div className="text-xs text-gray-400">回调队列</div>
           <div className="text-2xl font-bold text-cyan-300">{queueStats?.callback?.pending_jobs ?? 0}</div>
-          <div className="text-xs text-gray-500">待回调/待落库任务</div>
+          <div className="text-xs text-gray-500">待回调/待落库任务(已提交上游后等待回调)</div>
           <div className="text-xs text-cyan-300">回调并发位 已用/总量/可用: {queueStats?.callback?.slots_in_use ?? 0} / {queueStats?.callback?.slots_total ?? 0} / {queueStats?.callback?.slots_available ?? 0}</div>
           <div className="text-xs text-gray-300">回调缓存: {queueStats?.callback?.store_count ?? 0}</div>
           <div className="text-xs text-gray-300">Async Inflight: {queueStats?.callback?.async_inflight ?? 0}</div>
           <div className="text-xs text-gray-300">Persist Inflight(I/V): {queueStats?.callback?.image_persist_inflight ?? 0} / {queueStats?.callback?.video_persist_inflight ?? 0}</div>
           <div className="text-xs text-gray-300">回调并发: {queueStats?.callback?.effective_threads ?? 0} / 请求 {queueStats?.callback?.requested_threads ?? 0}</div>
+          <div className="text-xs text-gray-300">已提交待回调(waiting_finalize_jobs): {queueStats?.callback?.waiting_finalize_jobs ?? 0}</div>
         </div>
 
         <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
@@ -291,6 +441,54 @@ export default function QueueAdmin() {
       </div>
 
       <div className="bg-[#111114] rounded-xl border border-white/10 overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/10 bg-white/5 text-xs text-gray-300 flex flex-wrap gap-3">
+          <span>状态标注:</span>
+          <span className="text-amber-300">排队中 = queued</span>
+          <span className="text-blue-300">处理中 = running/processing/pending</span>
+          <span className="text-sky-300">已提交上游 = 上游已接收任务</span>
+          <span className="text-cyan-300">等待回调入库 = 等待 provider callback 落库</span>
+          <span className="text-orange-300">回调补偿重试中 = 回调缺失触发补偿</span>
+          <span className="text-emerald-300">已完成 = completed/succeeded</span>
+          <span className="text-rose-300">失败 = failed</span>
+          <span className="text-gray-300">已取消 = canceled</span>
+        </div>
+        <div className="px-4 py-3 border-b border-white/10 bg-[#0f0f12] grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-gray-400">按状态筛选</label>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+              <option value="all">全部状态</option>
+              <option value="queued">排队中</option>
+              <option value="running">处理中</option>
+              <option value="submitted_upstream">已提交上游</option>
+              <option value="callback_waiting">等待回调入库</option>
+              <option value="callback_retrying">回调补偿重试中</option>
+              <option value="completed">已完成</option>
+              <option value="failed">失败</option>
+              <option value="canceled">已取消</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-400">按供应商筛选</label>
+            <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+              <option value="all">全部供应商</option>
+              {providerOptions.map((provider) => (
+                <option key={provider} value={provider}>{provider}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-400">按 API 筛选</label>
+            <select value={apiFilter} onChange={(e) => setApiFilter(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
+              <option value="all">全部 API</option>
+              {apiOptions.map((apiName) => (
+                <option key={apiName} value={apiName}>{apiName}</option>
+              ))}
+            </select>
+          </div>
+          <div className="md:col-span-3 text-xs text-gray-500">
+            当前筛选结果: {filteredTasks.length} / {tasks.length}
+          </div>
+        </div>
         <table className="w-full text-left text-sm">
           <thead className="bg-white/5 border-b border-white/10">
             <tr>
@@ -301,26 +499,27 @@ export default function QueueAdmin() {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {tasks.length === 0 ? (
+            {filteredTasks.length === 0 ? (
               <tr><td colSpan="4" className="p-8 text-center text-gray-500">No tasks in queue.</td></tr>
-            ) : tasks.map(task => {
+            ) : filteredTasks.map(task => {
               const payload = task.payload || {};
               const prompt = payload.prompt || payload.video_prompt || payload.image_prompt || '';
               const diag = task.callback_diag || {};
+              const taskStatus = getTaskStatusLabel(task);
+              const providerLabel = getTaskProviderLabel(task);
               return (
               <tr key={task.job_id} onClick={() => setSelectedTask(task)} className="hover:bg-white/5 transition-colors cursor-pointer">
                 <td className="p-4 max-w-[200px] align-top">
                   <div className="font-bold text-sm text-white">{task.kind}</div>
                   <div className="text-[11px] text-gray-500 font-mono mt-1" title={task.job_id}>{(task.job_id || '').slice(0, 12)}...</div>
                   <div className="text-xs text-blue-400 mt-1">User: {task.user_id}</div>
+                  <div className="text-xs text-cyan-300 mt-1">供应商/API: {providerLabel}</div>
                   {prompt && <div className="text-xs text-gray-500 mt-2 line-clamp-2 truncate" title={prompt}>Prompt: {prompt}</div>}
                 </td>
                 <td className="p-4 max-w-[300px] align-top">
-                  <span className={"inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium "}>
-                    {task.status === 'queued' ? <Clock size={14} /> :
-                     (task.status === 'processing' || task.status === 'running') ? <Loader2 size={14} className="animate-spin" /> :
-                     <PlayCircle size={14} />}
-                    {(task.status || '').toUpperCase()}
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${taskStatus.tone}`}>
+                    {renderStatusIcon(taskStatus.icon)}
+                    {taskStatus.text}
                   </span>
                   {diag.upstream_submit_state && (
                     <div className="mt-2 text-[11px] text-cyan-300">
@@ -385,7 +584,7 @@ export default function QueueAdmin() {
                 </div>
                 <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                   <div className="text-xs text-gray-500 mb-1 font-medium">Status</div>
-                  <div className="text-sm font-semibold capitalize text-green-300">{selectedTask.status}</div>
+                  <div className="text-sm font-semibold text-green-300">{getTaskStatusLabel(selectedTask).text}</div>
                 </div>
                 <div className="bg-black/20 p-3 rounded-lg border border-white/5">
                   <div className="text-xs text-gray-500 mb-1 font-medium">User ID</div>
@@ -402,6 +601,7 @@ export default function QueueAdmin() {
                       {getApiName(selectedTask.payload?.system_api_id) || selectedTask.payload?.function_name || 'Unknown'}
                       {selectedTask.payload?.function_name && <span className="ml-2 text-xs text-gray-500 font-normal opacity-70">({selectedTask.payload.function_name})</span>}
                     </div>
+                    <div className="text-xs text-cyan-300 mt-1">供应商: {getTaskProviderLabel(selectedTask)}</div>
                   </div>
                 )}
               </div>
@@ -413,6 +613,8 @@ export default function QueueAdmin() {
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 text-xs text-gray-300">
                     <div><span className="text-gray-500">Job Status:</span> {selectedTask.callback_diag.job_status || '-'}</div>
                     <div><span className="text-gray-500">Upstream Submit State:</span> {selectedTask.callback_diag.upstream_submit_state || '-'}</div>
+                    <div><span className="text-gray-500">Provider:</span> {selectedTask.callback_diag.provider_alias ? `${selectedTask.callback_diag.provider_alias} (${selectedTask.callback_diag.provider || '-'})` : (selectedTask.callback_diag.provider || '-')}</div>
+                    <div><span className="text-gray-500">Provider Model:</span> {selectedTask.callback_diag.model || '-'}</div>
                     <div><span className="text-gray-500">Provider Task ID:</span> {selectedTask.callback_diag.provider_task_id || '-'}</div>
                     <div><span className="text-gray-500">Callback Ticket:</span> {selectedTask.callback_diag.provider_callback_ticket || '-'}</div>
                     <div><span className="text-gray-500">Callback Submit Retries:</span> {Number(selectedTask.callback_diag.callback_submit_retries || 0)}</div>

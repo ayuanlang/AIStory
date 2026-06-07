@@ -293,6 +293,9 @@ def admin_list_queue_tasks(limit: int = 100, offset: int = 0, current_user: "Use
             "upstream_submit_state": str(runtime_job.get("upstream_submit_state") or "").strip() or None,
             "provider_task_id": str(runtime_job.get("provider_task_id") or "").strip() or None,
             "provider_callback_ticket": str(runtime_job.get("provider_callback_ticket") or "").strip() or None,
+            "provider": str(runtime_job.get("provider") or "").strip() or None,
+            "provider_alias": str(runtime_job.get("provider_alias") or "").strip() or None,
+            "model": str(runtime_job.get("model") or "").strip() or None,
             "callback_submit_retries": _safe_int(runtime_job.get("callback_submit_retries"), 0),
             "callback_retry_at": runtime_job.get("callback_retry_at"),
             "started_at": runtime_job.get("started_at"),
@@ -14884,9 +14887,92 @@ def delete_episode(
         raise HTTPException(status_code=404, detail="Episode not found")
     
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
-    
-    db.delete(episode)
-    db.commit()
+
+    try:
+        scene_ids = [row[0] for row in db.query(Scene.id).filter(Scene.episode_id == episode_id).all()]
+
+        # Defensive cleanup: some historical shots may only carry episode_id but not valid scene linkage.
+        episode_scoped_shot_ids = [
+            row[0]
+            for row in db.query(Shot.id).filter(Shot.episode_id == episode_id).all()
+        ]
+
+        candidate_urls: List[str] = []
+        if scene_ids or episode_scoped_shot_ids:
+            shot_filters = []
+            if scene_ids:
+                shot_filters.append(Shot.scene_id.in_(scene_ids))
+            if episode_scoped_shot_ids:
+                shot_filters.append(Shot.id.in_(episode_scoped_shot_ids))
+
+            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(or_(*shot_filters)).all():
+                if img_url:
+                    candidate_urls.append(img_url)
+                if vid_url:
+                    candidate_urls.append(vid_url)
+
+        for (img_url,) in db.query(Entity.image_url).filter(Entity.episode_id == episode_id).all():
+            if img_url:
+                candidate_urls.append(img_url)
+
+        normalized_candidate_urls = {str(u).strip() for u in candidate_urls if str(u or "").strip()}
+        asset_ids_to_delete = {
+            int(row[0])
+            for row in db.query(Asset.id).filter(Asset.episode_id == episode_id).all()
+        }
+
+        # Fallback: also delete project assets whose URL/meta explicitly maps to this episode.
+        project_assets = db.query(Asset.id, Asset.url, Asset.meta_info).filter(
+            Asset.project_id == episode.project_id
+        ).all()
+        for aid, aurl, ameta in project_assets:
+            meta = ameta if isinstance(ameta, dict) else {}
+            url_txt = str(aurl or "").strip()
+            should_delete = bool(url_txt and url_txt in normalized_candidate_urls)
+            if not should_delete:
+                meta_episode_id = meta.get("episode_id")
+                try:
+                    if meta_episode_id is not None and int(meta_episode_id) == int(episode_id):
+                        should_delete = True
+                except Exception:
+                    pass
+            if should_delete:
+                asset_ids_to_delete.add(int(aid))
+
+        # Pre-clear accounting references to avoid FK constraints.
+        db.query(TransactionAction).filter(TransactionAction.episode_id == episode_id).update(
+            {TransactionAction.episode_id: None},
+            synchronize_session=False,
+        )
+        db.query(TransactionHistory).filter(TransactionHistory.episode_id == episode_id).update(
+            {TransactionHistory.episode_id: None},
+            synchronize_session=False,
+        )
+
+        if scene_ids or episode_scoped_shot_ids:
+            shot_delete_filters = []
+            if scene_ids:
+                shot_delete_filters.append(Shot.scene_id.in_(scene_ids))
+            if episode_scoped_shot_ids:
+                shot_delete_filters.append(Shot.id.in_(episode_scoped_shot_ids))
+            db.query(Shot).filter(or_(*shot_delete_filters)).delete(synchronize_session=False)
+
+        if scene_ids:
+            db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
+
+        db.query(Entity).filter(Entity.episode_id == episode_id).delete(synchronize_session=False)
+        db.query(ScriptSegment).filter(ScriptSegment.episode_id == episode_id).delete(synchronize_session=False)
+
+        if asset_ids_to_delete:
+            db.query(Asset).filter(Asset.id.in_(list(asset_ids_to_delete))).delete(synchronize_session=False)
+
+        db.delete(episode)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[delete_episode] Cascade delete failed episode_id={episode_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
     return None
 
 # --- Scenes ---

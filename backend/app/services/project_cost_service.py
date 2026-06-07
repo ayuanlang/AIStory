@@ -213,6 +213,7 @@ _DEFAULT_PROJECT_COST_ESTIMATION_CONFIG: Dict[str, Any] = {
 		"aspect_ratio": ["16:9", "2.35:1", "4:3", "9:16", "1:1"],
 		"image_size": ["0.5K", "1K", "2K", "4K"],
 		"era": ["当代", "近未来", "民国近代", "古代", "架空时代"],
+		"season_occurrence": ["不限制 / No Limit", "春 / Spring", "夏 / Summer", "秋 / Autumn", "冬 / Winter", "全年 / All Seasons"],
 		"lens_preference": ["长镜头 / Long Take", "中景 / Medium Shot", "特写 / Close-up"],
 		"broadcast_safety_level": ["S", "A", "B", "C"],
 		"video_generation_preference": ["质感优先", "速度优先", "平衡"],

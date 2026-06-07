@@ -7284,7 +7284,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     else if (blob.type === 'image/webp') ext = 'webp';
                     
                     const file = new File([blob], `blob_upload_${Date.now()}.${ext}`, { type: blob.type });
-                    const uploaded = await uploadAsset(file, { project_id: projectId, shot_id: targetShotId });
+                    const uploaded = await uploadAsset(file, {
+                        project_id: projectId,
+                        episode_id: activeEpisode?.id,
+                        shot_id: targetShotId,
+                    });
                     
                     if (uploaded?.url) return uploaded.url;
                 } catch (e) {

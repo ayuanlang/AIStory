@@ -371,6 +371,10 @@ class LoggingMiddleware:
 
         method = request.method
         path = request.url.path
+        is_response_size_trace_target = bool(
+            path == "/api/v1/admin/queue/stats"
+            or path.startswith("/api/v1/generate/callback/")
+        )
         func_name = get_function_name(method, path)
         is_polling_suppressed = _is_polling_log_suppressed(method, path)
         noise_prefixes = (
@@ -400,11 +404,23 @@ class LoggingMiddleware:
 
         project_id = _resolve_project_id_for_logging(path, request, buffered_body)
         response_status: Optional[int] = None
+        response_content_length: Optional[str] = None
+        response_content_encoding: Optional[str] = None
 
         async def send_wrapper(message):
-            nonlocal response_status
+            nonlocal response_status, response_content_length, response_content_encoding
             if message.get("type") == "http.response.start":
                 response_status = int(message.get("status") or 0)
+                for key, value in (message.get("headers") or []):
+                    try:
+                        header_key = str(key, "utf-8").lower()
+                        header_value = str(value, "utf-8")
+                    except Exception:
+                        continue
+                    if header_key == "content-length":
+                        response_content_length = header_value
+                    elif header_key == "content-encoding":
+                        response_content_encoding = header_value
             await send(message)
 
         try:
@@ -424,6 +440,27 @@ class LoggingMiddleware:
 
         process_ms = int((time.time() - start_time) * 1000)
         status_code = response_status or 0
+
+        if is_response_size_trace_target:
+            trace_request_id = (
+                request.headers.get("x-request-id")
+                or request.headers.get("x-correlation-id")
+                or request.headers.get("x-amzn-trace-id")
+                or request.headers.get("traceparent")
+                or "-"
+            )
+            logger.info(
+                "HTTP Trace | Method: %s | Path: %s | Status: %s | Time: %sms | ReqBytes: %s | RespContentLength: %s | RespContentEncoding: %s | RequestID: %s | IP: %s",
+                method,
+                path,
+                status_code,
+                process_ms,
+                request.headers.get("content-length") or "-",
+                response_content_length or "-",
+                response_content_encoding or "-",
+                trace_request_id,
+                client_host,
+            )
 
         if not is_noise:
             if is_polling_suppressed:

@@ -327,6 +327,22 @@ export const PROJECT_SCENE_ANALYSIS_ERA_OPTIONS = [
 
 ];
 
+export const PROJECT_EP_SEASON_OCCURRENCE_OPTIONS = [
+
+    "不限制 / No Limit",
+
+    "春 / Spring",
+
+    "夏 / Summer",
+
+    "秋 / Autumn",
+
+    "冬 / Winter",
+
+    "全年 / All Seasons",
+
+];
+
 
 
 export const PROJECT_SCENE_ANALYSIS_REGION_OPTIONS = [

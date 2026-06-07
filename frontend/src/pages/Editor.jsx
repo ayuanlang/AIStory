@@ -592,7 +592,7 @@ const Editor = ({
 
     const handleDeleteEpisode = async (e, epId) => {
         e.stopPropagation();
-        if (!await confirmUiMessage("Delete this episode? This will delete all script content and scenes within it.")) return;
+        if (!await confirmUiMessage("Delete this episode? This action will permanently delete its script content, scenes, shots, episode assets, and related episode entities.")) return;
          try {
             await deleteEpisode(epId);
             const remaining = episodes.filter(ep => ep.id !== epId);

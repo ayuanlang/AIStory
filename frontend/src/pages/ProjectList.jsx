@@ -86,6 +86,7 @@ import {
     PROJECT_EP_LANGUAGE_OPTIONS,
     PROJECT_EP_BASE_POSITIONING_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
+    PROJECT_EP_SEASON_OCCURRENCE_OPTIONS,
     PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
     PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS,
@@ -209,6 +210,7 @@ const PROJECT_CREATE_DEFAULT_OPTIONS = {
     aspect_ratio: [...PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS],
     image_size: [...PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS],
     era: [...PROJECT_SCENE_ANALYSIS_ERA_OPTIONS],
+    season_occurrence: [...PROJECT_EP_SEASON_OCCURRENCE_OPTIONS],
     lens_preference: [...PROJECT_EP_LENS_PREFERENCE_OPTIONS],
     broadcast_safety_level: [...PROJECT_SCENE_ANALYSIS_SAFETY_OPTIONS],
     video_generation_preference: [...PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS],
@@ -297,6 +299,7 @@ const normalizeProjectCreateOptions = (payload) => {
     const normalizedEra = uniqueNonEmptyStrings(
         era.map(normalizeProjectSceneAnalysisEra).filter(Boolean)
     );
+    const seasonOccurrence = uniqueNonEmptyStrings(safe.season_occurrence);
     const lensPreference = uniqueNonEmptyStrings(safe.lens_preference);
     const broadcastSafetyLevel = uniqueNonEmptyStrings([
         ...(Array.isArray(safe.broadcast_safety_level) ? safe.broadcast_safety_level : []),
@@ -320,6 +323,7 @@ const normalizeProjectCreateOptions = (payload) => {
         aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
         image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
         era: normalizedEra.length ? normalizedEra : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
+        season_occurrence: seasonOccurrence.length ? seasonOccurrence : [...PROJECT_CREATE_DEFAULT_OPTIONS.season_occurrence],
         lens_preference: lensPreference.length ? lensPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.lens_preference],
         broadcast_safety_level: normalizedBroadcastSafetyLevel.length ? normalizedBroadcastSafetyLevel : [...PROJECT_CREATE_DEFAULT_OPTIONS.broadcast_safety_level],
         video_generation_preference: videoGenerationPreference.length ? videoGenerationPreference : [...PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference],
@@ -527,6 +531,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [newShareUsers, setNewShareUsers] = useState('');
     const [newReviewerUsers, setNewReviewerUsers] = useState('');
     const [newEra, setNewEra] = useState('');
+    const [newSeasonOccurrence, setNewSeasonOccurrence] = useState('');
     const [newLensPreference, setNewLensPreference] = useState('');
     const [newBroadcastSafetyLevel, setNewBroadcastSafetyLevel] = useState('');
     const [newVideoGenerationPreference, setNewVideoGenerationPreference] = useState(pickPreferredOrFirst(PROJECT_CREATE_DEFAULT_OPTIONS.video_generation_preference));
@@ -737,6 +742,7 @@ const ProjectList = ({ initialTab = 'projects' }) => {
                         : pickPreferredOrFirst(normalized.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE)
                 ));
                 setNewEra((prev) => (normalized.era.includes(prev) ? prev : ''));
+                setNewSeasonOccurrence((prev) => (normalized.season_occurrence.includes(prev) ? prev : ''));
                 setNewLensPreference((prev) => (normalized.lens_preference.includes(prev) ? prev : ''));
                 setNewBroadcastSafetyLevel((prev) => (normalized.broadcast_safety_level.includes(prev) ? prev : ''));
                 setNewVideoGenerationPreference((prev) => (normalized.video_generation_preference.includes(prev) ? prev : pickPreferredOrFirst(normalized.video_generation_preference)));
@@ -896,6 +902,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         setNewAspectRatio('');
         setNewImageSize(pickPreferredOrFirst(projectCreateOptions.image_size, PROJECT_CREATE_PREFERRED_IMAGE_SIZE));
         setNewEra('');
+        setNewSeasonOccurrence('');
         setNewLensPreference('');
         setNewBroadcastSafetyLevel('');
         setNewVideoGenerationPreference(pickPreferredOrFirst(projectCreateOptions.video_generation_preference));
@@ -953,6 +960,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 language: String(newLanguage || '').trim(),
                 base_positioning: String(newBasePositioning || '').trim(),
                 era: String(newEra || '').trim(),
+                season_occurrence: String(newSeasonOccurrence || '').trim(),
                 lens_preference: String(newLensPreference || '').trim(),
                 broadcast_safety_level: String(newBroadcastSafetyLevel || '').trim(),
                 creativity: String(newCreativity || '').trim(),
@@ -2062,6 +2070,9 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             
                                             <div>
                                                 <InputGroup label={t("时代设定", "Era")} value={newEra} onChange={setNewEra} list={projectCreateOptions.era} />
+                                            </div>
+                                            <div>
+                                                <InputGroup label={t("发生季节", "Season Occurrence")} value={newSeasonOccurrence} onChange={setNewSeasonOccurrence} list={projectCreateOptions.season_occurrence} />
                                             </div>
                                             <div>
                                                 <InputGroup label={t("镜头偏好", "Lens Preference")} value={newLensPreference} onChange={setNewLensPreference} list={projectCreateOptions.lens_preference} />

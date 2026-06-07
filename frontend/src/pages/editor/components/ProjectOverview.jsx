@@ -129,6 +129,7 @@ import {
     PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
     PROJECT_EP_CREATIVITY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
+    PROJECT_EP_SEASON_OCCURRENCE_OPTIONS,
     PROJECT_SCENE_ANALYSIS_REGION_OPTIONS,
     PROJECT_SCENE_ANALYSIS_MODEL_FAMILY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_WORKFLOW_OPTIONS,
@@ -206,6 +207,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         tone: "",
         lighting: "",
         language: "英文 / English",
+        season_occurrence: "",
         video_sound: true,
         borrowed_films: [],
         generation_seed: "",
@@ -2306,6 +2308,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             value={info.era}
                             onChange={v => updateField('era', v)}
                             list={PROJECT_SCENE_ANALYSIS_ERA_OPTIONS}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('发生季节', 'Season Occurrence')}
+                            value={info.season_occurrence}
+                            onChange={v => updateField('season_occurrence', v)}
+                            list={PROJECT_EP_SEASON_OCCURRENCE_OPTIONS}
                         />
                         <InputGroup idPrefix={prefix}
                             label={t('镜头偏好', 'Lens Preference')}
