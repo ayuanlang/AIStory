@@ -90,7 +90,9 @@
 
 ### 二、 角色 (CHAR) 提取边界
 - **身份深度提炼**：包含性别、年龄、种族、职业与特征，须符合剧本时代背景，严禁时代错位。不允许在一个原角色条目内混写多套服装。
+- **基础版强制存在（新增硬约束）**：每个实体族（CHAR/PROP/ENV）必须至少有一个“基础版”条目。基础版名称必须使用原始名称，严禁附加任何后缀、状态词、括号说明或修饰标签；即基础版 `subject_name_zh/subject_name_en` 必须与上游原始名称逐字一致。
 - **状态衍变必须分拆**：一旦换装、破损、重伤或戴面罩，必须拆分为带后缀的派生角色（如 `CHAR:[@XX_战损版]`），并在 `dependency_reference` 字段中显式指明依赖的原角色。
+- **先基础版后派生版（新增硬约束）**：任意“战损版/老年版/雨夜版/开门版/关门版”等状态派生条目，只有在同名基础版已存在时才允许输出；禁止只输出派生版而缺失基础版。
 - **群体实体现形**：有具体身份互动的群体词（比如“那对夫妻”）绝对禁止作为单一群体实体提取，必须拆为独立个体（男主、女主）。无推动作用的路人则降级归入 `ENV` 人群密度描述。
 - **不可见声源禁止建实体（强制）**：凡剧本仅出现“声音/台词/呼喊/脚步声/广播声”等听觉线索，但未出现可被镜头确认的实体形体（人物、道具或可定位物理声源）时，**一律不得**建立 `CHAR`、`PROP`、`ENV` 新实体。仅可在现有 `ENV` 或 Beat 文本中作为声场信息保留，不得反推创造“说话者”或“发声物”。**例外**：仅当剧本文字明确要求“系统/界面/设备等声源需要被明确显示并入镜”时，允许建立对应 `PROP` 或 `ENV`；即便如此，仍禁止仅凭声音补建 `CHAR`。
 
@@ -118,7 +120,7 @@
 | subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | S001 | character | 角色中文名 | Character English Name | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
-| S002 | character | 战损版角色 | Character Eng Damaged | Character English Name | 衍生说明... | 原名 |
+| S002 | character | 角色中文名_战损版 | Character English Name Damaged | Character English Name | 衍生说明... | 原名 |
 | S003 | environment | 环境首视角 | Environment English Front | None | FG/MG/BG设定。光源结构约束与舞台区。严禁混入剧情。 | 墙壁、窗户等 |
 | S004 | prop | 关键道具名 | Prop English Name | None或依赖原名 | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
 | S005 | cover_poster | 影视级宣发海报 | Project Cover Poster | [依赖的核心CHAR/PROP英语名] | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |

@@ -671,7 +671,6 @@ class OSSStorageService:
                         return cached
                     # fallthrough: the original upload may have failed; try again
 
-                try:
                     # Check if object already exists
                     try:
                         client.head_object(Bucket=pool.bucket, Key=key)
@@ -762,46 +761,46 @@ class OSSStorageService:
                                 client.put_object(**extra)
                             else:
                                 raise
-                url = self._build_public_url(client, pool, key, cred)
-                if not url:
-                    _visible_warning(
-                        "[OSSUploadResponse] provider=%s alias=%s pool_id=%s key=%s status=no_public_url",
+                    url = self._build_public_url(client, pool, key, cred)
+                    if not url:
+                        _visible_warning(
+                            "[OSSUploadResponse] provider=%s alias=%s pool_id=%s key=%s status=no_public_url",
+                            getattr(pool, "provider", None),
+                            getattr(pool, "provider_alias", None),
+                            getattr(pool, "id", None),
+                            key,
+                        )
+                        # Release waiting threads even on no-url so they don't hang.
+                        with _OSS_UPLOAD_INFLIGHT_LOCK:
+                            evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
+                        if evt:
+                            evt.set()
+                        continue
+                    _visible_info(
+                        "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=success url=%s",
                         getattr(pool, "provider", None),
                         getattr(pool, "provider_alias", None),
                         getattr(pool, "id", None),
+                        getattr(pool, "bucket", None),
                         key,
+                        url,
                     )
-                    # Release waiting threads even on no-url so they don't hang.
+                    upload_result = {
+                        "url": url,
+                        "key": key,
+                        "bucket": pool.bucket,
+                        "provider": pool.provider,
+                        "provider_alias": getattr(pool, "provider_alias", None),
+                        "endpoint": pool.endpoint,
+                        "public_base_url": self._normalize_public_base_url(pool) or None,
+                    }
+                    # Cache result and unblock any waiters.
+                    _OSS_UPLOAD_INFLIGHT_RESULTS[key] = upload_result
                     with _OSS_UPLOAD_INFLIGHT_LOCK:
                         evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
                     if evt:
                         evt.set()
-                    continue
-                _visible_info(
-                    "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=success url=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    getattr(pool, "bucket", None),
-                    key,
-                    url,
-                )
-                upload_result = {
-                    "url": url,
-                    "key": key,
-                    "bucket": pool.bucket,
-                    "provider": pool.provider,
-                    "provider_alias": getattr(pool, "provider_alias", None),
-                    "endpoint": pool.endpoint,
-                    "public_base_url": self._normalize_public_base_url(pool) or None,
-                }
-                # Cache result and unblock any waiters.
-                _OSS_UPLOAD_INFLIGHT_RESULTS[key] = upload_result
-                with _OSS_UPLOAD_INFLIGHT_LOCK:
-                    evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-                if evt:
-                    evt.set()
-                return upload_result
+                    return upload_result
             except Exception as exc:
                 # Release waiters so they don't hang forever on a failed upload.
                 with _OSS_UPLOAD_INFLIGHT_LOCK:
@@ -818,12 +817,12 @@ class OSSStorageService:
                     exc,
                 )
 
-        # If we fall through all pools without success, also clean up inflight entry.
-        with _OSS_UPLOAD_INFLIGHT_LOCK:
-            evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-        if evt:
-            evt.set()
-        return None
+            # If we fall through all pools without success, also clean up inflight entry.
+            with _OSS_UPLOAD_INFLIGHT_LOCK:
+                evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
+            if evt:
+                evt.set()
+            return None
 
     def upload_file(
         self,

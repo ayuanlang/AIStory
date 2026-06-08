@@ -6019,6 +6019,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 subject_no = str(parts[0] or "").strip()
                 name = str(parts[2] or "").strip()
                 name_en = str(parts[3] or "").strip()
+                dependency_reference = str(parts[4] or "").strip() if len(parts) > 4 else ""
                 if not subject_no or (not name and not name_en):
                     continue
 
@@ -6027,6 +6028,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "bucket": bucket,
                     "name": name,
                     "name_en": name_en,
+                    "dependency_reference": dependency_reference,
                 })
 
             return records
@@ -6213,6 +6215,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             expected_total = len(records)
             reconciled_subject_keys = _collect_subject_keys_by_bucket(reconciled)
             expected_by_bucket: Dict[str, set] = {"characters": set(), "props": set(), "environments": set(), "covers": set(), "posters": set()}
+            subject_index_identity_keys: set = set()
             for record in records:
                 bucket = str(record.get("bucket") or "")
                 if bucket not in expected_by_bucket:
@@ -6221,6 +6224,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     key = _normalize_subject_compare_key(candidate)
                     if key:
                         expected_by_bucket[bucket].add(key)
+                        subject_index_identity_keys.add(key)
+
+            missing_base_references: List[str] = []
+            for record in records:
+                dependency_reference = str(record.get("dependency_reference") or "").strip()
+                if not dependency_reference or dependency_reference.lower() in {"none", "null", "n/a", "na", "-", "无"}:
+                    continue
+                dep_key = _normalize_subject_compare_key(dependency_reference)
+                if dep_key and dep_key not in subject_index_identity_keys:
+                    derived_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip() or "(unnamed)"
+                    missing_base_references.append(f"{derived_name} -> {dependency_reference}")
 
             for bucket in ("characters", "props", "environments", "covers", "posters"):
                 actual_keys = set((reconciled_subject_keys.get(bucket) or {}).keys())
@@ -6251,6 +6265,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 warnings.append(
                     f"Subject Index alignment warning: {remaining_missing} expected entities are still missing after reconciliation."
                 )
+            if missing_base_references:
+                warning_codes.append("ANALYSIS_SUBJECT_INDEX_BASE_MISSING")
+                warnings.append(
+                    "Subject Index base-version warning: some derived entities reference a base name that does not exist in Subject Index. "
+                    + f"Examples: {', '.join(missing_base_references[:8])}"
+                )
 
             return {
                 "subjects_json": reconciled,
@@ -6261,6 +6281,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "name_aligned": name_aligned,
                     "remaining_missing": remaining_missing,
                     "missing_samples": missing_samples,
+                    "missing_base_references": missing_base_references[:20],
                     "notes": [
                         "subject_index_is_source_of_truth_for_bucket_routing",
                         "subject_index_is_source_of_truth_for_subject_identity",
@@ -28145,7 +28166,7 @@ async def _run_generate_image_job(
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
             _set_image_job(job_id, **update_fields)
-            mark_generation_task_status_external(job_id, status="running", error=None)
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
 
         with IMAGE_JOB_LOCK:
@@ -28263,7 +28284,7 @@ async def _run_generate_image_job(
                 provider_callback_ticket or None,
                 str(e.detail),
             )
-            mark_generation_task_status_external(job_id, status="running", error=None)
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
         _set_image_job(
             job_id,
@@ -30777,7 +30798,7 @@ async def _run_generate_video_job(
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
             _set_video_job(job_id, **update_fields)
-            mark_generation_task_status_external(job_id, status="running", error=None)
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
         _set_video_job(
             job_id,
@@ -30858,7 +30879,7 @@ async def _run_generate_video_job(
                 provider_callback_ticket or None,
                 str(e.detail),
             )
-            mark_generation_task_status_external(job_id, status="running", error=None)
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
         logger.warning(
             "[VideoJob] failed | job_id=%s user_id=%s detail=%s",
