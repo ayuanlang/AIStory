@@ -640,6 +640,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const SHOT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const SHOT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
     const shotBatchStatusTimerRef = useRef(null);
+    const shotBatchStatusErrorStreakRef = useRef(0);
     const shotBatchStartupGuardUntilRef = useRef(0);
     const shotBatchBootstrapUntilRef = useRef(0);
     const isBatchGeneratingRef = useRef(false);
@@ -6442,6 +6443,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     onLog?.('Start Frame Generated', 'success');
                     showNotification('Start Frame Generated', 'success');
                     refreshShotAssetsMeta();
+                    Promise.resolve(refreshShots()).catch(() => {});
                 } else {
                     throw new Error("No image URL returned");
                 }
@@ -6554,6 +6556,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
                     refreshShotAssetsMeta();
+                    Promise.resolve(refreshShots()).catch(() => {});
                 } else {
                      throw new Error("No image URL returned");
                 }
@@ -7470,6 +7473,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 }
 
                 refreshShotAssetsMeta();
+                Promise.resolve(refreshShots()).catch(() => {});
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
             }
 
@@ -7655,6 +7659,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 onLog?.(t('视频清晰度提升完成并已回填。', 'Video upscale completed and backfilled.'), 'success');
                 showNotification(t('视频清晰度提升完成', 'Video upscale completed'), 'success');
                 refreshShotAssetsMeta();
+                Promise.resolve(refreshShots()).catch(() => {});
                 setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
             }
 
@@ -8309,6 +8314,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         try {
             const status = await getShotMediaBatchStatus(activeEpisode.id);
             if (!status || typeof status !== 'object') return null;
+            shotBatchStatusErrorStreakRef.current = 0;
             const prevProgress = batchProgressRef.current || { current: 0, total: 0, status: '' };
 
             const nowMs = Date.now();
@@ -8333,8 +8339,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
 
             const running = Boolean(status.running);
+            isBatchGeneratingRef.current = running;
             setIsBatchGenerating(running);
-            setBatchProgress({
+            const nextProgress = {
                 current: Number(status.completed || 0),
                 total: Number(status.total || 0),
                 status: String(status.message || ''),
@@ -8342,7 +8349,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 currentShotLabel: String(status.current_shot_label || ''),
                 currentAssetLabel,
                 mode: String(status.mode || 'videos-backend'),
-            });
+            };
+            batchProgressRef.current = nextProgress;
+            setBatchProgress(nextProgress);
 
             if (!running && shotBatchStatusTimerRef.current) {
                 clearInterval(shotBatchStatusTimerRef.current);
@@ -8352,6 +8361,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             return status;
         } catch (e) {
+            shotBatchStatusErrorStreakRef.current = Number(shotBatchStatusErrorStreakRef.current || 0) + 1;
+            if (shotBatchStatusErrorStreakRef.current >= SHOT_JOB_MAX_STATUS_FAILURES) {
+                isBatchGeneratingRef.current = false;
+                setIsBatchGenerating(false);
+                setBatchProgress((prev) => ({
+                    ...prev,
+                    status: t('批量状态查询失败，已停止等待。请手动刷新确认结果。', 'Batch status polling failed. Waiting stopped. Please refresh manually.'),
+                    mode: String(prev?.mode || 'videos-backend'),
+                }));
+                if (shotBatchStatusTimerRef.current) {
+                    clearInterval(shotBatchStatusTimerRef.current);
+                    shotBatchStatusTimerRef.current = null;
+                }
+            }
             return null;
         }
     }, [activeEpisode?.id, createShotBatchProgressState, getPersistentLocalShotBatchRuntime, isLocalShotBatchMode, refreshShots, selectedSceneId, t]);
