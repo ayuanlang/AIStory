@@ -2020,7 +2020,7 @@ def _normalize_optional_http_url(value: Any) -> Optional[str]:
     text_value = str(value or "").strip()
     if not text_value:
         return None
-    parsed = urllib.parse.urlparse(text_value)
+    parsed = urlparse(text_value)
     if parsed.scheme:
         if parsed.scheme.lower() not in {"http", "https"}:
             return None
@@ -2030,7 +2030,7 @@ def _normalize_optional_http_url(value: Any) -> Optional[str]:
     if text_value.startswith("//"):
         text_value = text_value.lstrip("/")
     normalized = f"https://{text_value}"
-    parsed_normalized = urllib.parse.urlparse(normalized)
+    parsed_normalized = urlparse(normalized)
     if not parsed_normalized.netloc:
         return None
     return normalized
