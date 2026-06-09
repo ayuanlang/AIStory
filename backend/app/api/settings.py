@@ -2020,9 +2020,20 @@ def _normalize_optional_http_url(value: Any) -> Optional[str]:
     text_value = str(value or "").strip()
     if not text_value:
         return None
-    if not text_value.startswith(("http://", "https://")):
+    parsed = urllib.parse.urlparse(text_value)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return None
+        return text_value
+
+    # Support host-only input like qn.woola.fun by normalizing to https.
+    if text_value.startswith("//"):
+        text_value = text_value.lstrip("/")
+    normalized = f"https://{text_value}"
+    parsed_normalized = urllib.parse.urlparse(normalized)
+    if not parsed_normalized.netloc:
         return None
-    return text_value
+    return normalized
 
 
 def _derive_base_model_from_model(model_value: Any) -> Optional[str]:

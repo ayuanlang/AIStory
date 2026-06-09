@@ -684,6 +684,37 @@ class MediaGenerationService:
         if "图片" not in final_prompt and "素材" not in final_prompt:
             final_prompt = "图片1中，" + final_prompt
 
+        ref_url_kind = "asset"
+        ref_has_token = False
+        ref_log_url = ""
+        try:
+            ref_raw = str(asset_id_or_url or "").strip()
+            if ref_raw.startswith("asset://"):
+                ref_url_kind = "asset"
+                ref_log_url = ref_raw
+            elif ref_raw.startswith("data:"):
+                ref_url_kind = "data_uri"
+                ref_log_url = "data:image/..."
+            elif ref_raw.lower().startswith(("http://", "https://")):
+                import urllib.parse
+
+                ref_url_kind = "http"
+                ref_log_url = _strip_query_from_log_url(ref_raw)
+                parsed = urllib.parse.urlparse(ref_raw)
+                q = urllib.parse.parse_qs(parsed.query or "", keep_blank_values=True)
+                ref_has_token = any(k.lower() in {"token", "e", "x-oss-signature", "x-amz-signature"} for k in q.keys())
+            else:
+                ref_url_kind = "other"
+                ref_log_url = ref_raw[:120]
+        except Exception:
+            ref_url_kind = "unknown"
+            ref_log_url = _strip_query_from_log_url(str(asset_id_or_url or ""))
+
+        _debug_log(
+            f"[ark-seedance] pre-submit reference image | kind={ref_url_kind} has_token={ref_has_token} url={ref_log_url}",
+            "info",
+        )
+
         task_payload = {
             "model": model_id,
             "content": [
@@ -5976,10 +6007,13 @@ class MediaGenerationService:
                     if "data" in p_data and p_data["data"]:
                         final = p_data["data"][0].get("imageUrl" if not is_video else "videoUrl")
                         if final:
+                            resolved_final = str(final)
+                            if oss_storage_service.is_managed_url(resolved_final):
+                                resolved_final = str(oss_storage_service.refresh_url(resolved_final) or resolved_final)
                             metadata = {"raw": p_data}
                             if extra_metadata:
                                 metadata.update(extra_metadata)
-                            return {"url": final, "metadata": metadata}
+                            return {"url": resolved_final, "metadata": metadata}
             return {"error": "Timeout"}
         except Exception as e:
             traceback.print_exc()
@@ -10777,10 +10811,13 @@ class MediaGenerationService:
                     status_l = str(status or "").lower()
                     if status_l in {"succeeded", "success", "completed", "done"} or (not status_l and media_url):
                         if media_url:
+                            resolved_media_url = str(media_url)
+                            if oss_storage_service.is_managed_url(resolved_media_url):
+                                resolved_media_url = str(oss_storage_service.refresh_url(resolved_media_url) or resolved_media_url)
                             meta = {"raw": p_data, "submit_raw": data, "task_id": task_id, "taskId": task_id}
                             if extra_metadata:
                                 meta.update(extra_metadata)
-                            return {"url": media_url, "metadata": meta}
+                            return {"url": resolved_media_url, "metadata": meta}
                     elif status_l in {"failed", "error", "canceled", "cancelled"}:
                         if self._is_grsai_quota_or_throttle_error(p_data):
                             return {
@@ -13805,10 +13842,16 @@ class MediaGenerationService:
             optimized = self._optimize_data_uri_image(raw, profile=data_uri_profile)
             return optimized or raw
         if self._is_public_http_url(raw):
+            # Ensure managed OSS URLs (e.g. Qiniu) are always refreshed to signed URLs
+            # before they are sent to upstream providers as reference images.
+            if oss_storage_service.is_managed_url(raw):
+                return str(oss_storage_service.refresh_url(raw) or raw)
             return raw
         if prefer_public_upload_url:
             public_url = self._resolve_public_upload_url(raw)
             if public_url:
+                if oss_storage_service.is_managed_url(public_url):
+                    return str(oss_storage_service.refresh_url(public_url) or public_url)
                 return public_url
 
         encoded = self._get_image_base64_for_api(raw, force_data_uri=force_data_uri_for_local, data_uri_profile=data_uri_profile)
