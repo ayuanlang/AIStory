@@ -217,7 +217,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
-    const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 2;
+    const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 4;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
     const functionApiConfigs = useFunctionApis();
     const createSubjectBatchTaskState = useCallback(() => ({
@@ -773,6 +773,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return /^file\d*\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
         } catch {
             return false;
+        }
+    }, []);
+
+    const getTempMediaFilenameFromUrl = useCallback((url) => {
+        const rawUrl = String(url || '').trim();
+        if (!rawUrl) return '';
+        try {
+            const parsed = new URL(rawUrl, window.location.origin);
+            const pathname = String(parsed.pathname || '').trim();
+            if (!pathname) return '';
+            const parts = pathname.split('/').filter(Boolean);
+            return String(parts[parts.length - 1] || '').trim();
+        } catch {
+            return '';
         }
     }, []);
 
@@ -1644,6 +1658,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const timeoutMs = Math.max(3000, timeoutMsRaw || 120000);
         const intervalMs = Math.max(1000, intervalMsRaw || 2500);
         const entityLabel = String(options?.entityName || stableEntityId).trim() || stableEntityId;
+        const tempFilename = getTempMediaFilenameFromUrl(options?.initialUrl);
+        const tempFileLabel = tempFilename ? `（临时文件：${tempFilename}）` : '';
         const deadline = Date.now() + timeoutMs;
 
         let recoveredUrl = '';
@@ -1662,14 +1678,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (onLog) {
             onLog(
                 t(
-                    `等待主体稳定图片地址超时：${entityLabel}`,
-                    `Timed out waiting for durable subject image URL: ${entityLabel}`
+                    `等待主体稳定图片地址超时：${entityLabel}${tempFileLabel}`,
+                    `Timed out waiting for durable subject image URL: ${entityLabel}${tempFileLabel}`
                 ),
                 'warning'
             );
         }
         return '';
-    }, [isEphemeralProviderMediaUrl, onLog, refreshPersistedSubjectEntityImage, t]);
+    }, [getTempMediaFilenameFromUrl, isEphemeralProviderMediaUrl, onLog, refreshPersistedSubjectEntityImage, t]);
 
     const applyGenerateBatchState = useCallback((running, progress) => {
         if (!isMountedRef.current) return;
@@ -4594,10 +4610,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                     let resolvedImageUrl = String(generatedImageUrl || '').trim();
                     if (isEphemeralProviderMediaUrl(resolvedImageUrl)) {
+                        const tempFilename = getTempMediaFilenameFromUrl(resolvedImageUrl);
+                        const tempFileLabel = tempFilename ? `（临时文件：${tempFilename}）` : '';
                         onLog?.(
                             t(
-                                `批量主体生图返回了临时图片地址，正在等待稳定图片入库：${entity?.name || entity?.name_en || entity?.id}`,
-                                `Batch subject generation returned a temporary image URL; waiting for durable image persistence: ${entity?.name || entity?.name_en || entity?.id}`
+                                `批量主体生图返回了临时图片地址，正在等待稳定图片入库：${entity?.name || entity?.name_en || entity?.id}${tempFileLabel}`,
+                                `Batch subject generation returned a temporary image URL; waiting for durable image persistence: ${entity?.name || entity?.name_en || entity?.id}${tempFileLabel}`
                             ),
                             'process'
                         );

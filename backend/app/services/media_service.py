@@ -5573,6 +5573,12 @@ class MediaGenerationService:
             is_gpt_image_2_family = "gpt-image-2" in model_key
             if not raw_endpoint and is_banana:
                 endpoint = f"{base_url}/v1/draw/nano-banana"
+
+            request_user_id_raw = tool_conf.get("_request_user_id")
+            try:
+                request_user_id = int(request_user_id_raw or 1)
+            except Exception:
+                request_user_id = 1
             
             final_model = model or "sora-image"
             payload = {"model": final_model, "prompt": prompt, "shutProgress": False}
@@ -5582,20 +5588,43 @@ class MediaGenerationService:
                 or tool_conf.get("oss_id")
                 or tool_conf.get("ossId")
                 or (oss_config.get("id") if isinstance(oss_config, dict) else "")
+                or os.getenv("GRSAI_OSS_ID")
+                or "69c890a3a0a438550965e9ff"
                 or ""
             ).strip()
-            oss_path = str(
+            raw_oss_path = str(
                 tool_conf.get("oss-path")
                 or tool_conf.get("oss_path")
                 or tool_conf.get("ossPath")
                 or (oss_config.get("path") if isinstance(oss_config, dict) else "")
+                or os.getenv("GRSAI_OSS_PATH")
                 or ""
             ).strip()
+            if "{user_id}" in raw_oss_path:
+                oss_path = raw_oss_path.replace("{user_id}", str(request_user_id))
+            elif raw_oss_path:
+                normalized_oss_path = raw_oss_path.rstrip("/")
+                user_segment = f"/{request_user_id}"
+                if normalized_oss_path.endswith(user_segment):
+                    oss_path = normalized_oss_path
+                else:
+                    oss_path = f"{normalized_oss_path}{user_segment}"
+            else:
+                oss_path = f"file/images/{request_user_id}"
             grsai_extra_headers: Dict[str, str] = {}
             if oss_id:
                 grsai_extra_headers["oss-id"] = oss_id
             if oss_path:
                 grsai_extra_headers["oss-path"] = oss_path
+            logger.info(
+                "[GrsaiTrace][%s] image submit headers | content_type=application/json auth_bearer=%s has_oss_id=%s has_oss_path=%s oss_id=%s oss_path=%s",
+                trace_id,
+                bool(api_key),
+                bool(oss_id),
+                bool(oss_path),
+                oss_id,
+                oss_path,
+            )
             callback_payload_value = callback_url if callback_url and callback_url != "-1" else "-1"
             payload["webHook"] = callback_payload_value
             payload["webhook"] = callback_payload_value
@@ -5621,11 +5650,6 @@ class MediaGenerationService:
                 resolved_refs = []
                 _debug_log(f"[Grsai] Processing {len(ref_list)} reference images...")
                 prefer_public_upload_url = self._is_public_deployment_hint()
-                request_user_id_raw = tool_conf.get("_request_user_id")
-                try:
-                    request_user_id = int(request_user_id_raw or 1)
-                except Exception:
-                    request_user_id = 1
                 request_filename_base = str(tool_conf.get("_request_filename_base") or "grsai_ref").strip() or "grsai_ref"
                 for i, r in enumerate(ref_list):
                     candidate_ref = r
@@ -10546,6 +10570,16 @@ class MediaGenerationService:
                 if header_name and header_value:
                     headers[str(header_name).strip()] = str(header_value).strip()
         trace_id = trace_id or f"grsai-{uuid.uuid4().hex[:10]}"
+        logger.info(
+            "[GrsaiTrace][%s] submit headers effective | content_type=%s auth_bearer=%s has_oss_id=%s has_oss_path=%s oss_id=%s oss_path=%s",
+            trace_id,
+            str(headers.get("Content-Type") or ""),
+            str(headers.get("Authorization") or "").startswith("Bearer "),
+            bool(str(headers.get("oss-id") or "").strip()),
+            bool(str(headers.get("oss-path") or "").strip()),
+            str(headers.get("oss-id") or "").strip(),
+            str(headers.get("oss-path") or "").strip(),
+        )
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         log_tag = "grsai_video" if is_video else "grsai_image"

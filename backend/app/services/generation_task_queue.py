@@ -566,6 +566,7 @@ def mark_generation_task_status_external(
     normalized_status = str(status or "").strip().lower() or "running"
     terminal_statuses = {"completed", "failed", "canceled", "cancelled"}
     is_terminal = normalized_status in terminal_statuses
+    clear_worker = normalized_status != "running"
     where_sql = "WHERE job_id = :job_id"
     if preserve_canceled:
         where_sql += " AND status <> 'canceled'"
@@ -577,6 +578,7 @@ def mark_generation_task_status_external(
                 """
                 UPDATE generation_task_queue
                 SET status = :status,
+                    worker_id = CASE WHEN :clear_worker THEN NULL ELSE worker_id END,
                     finished_at = :finished_at,
                     last_heartbeat = :last_heartbeat,
                     error = :error
@@ -586,6 +588,7 @@ def mark_generation_task_status_external(
             {
                 "job_id": str(job_id),
                 "status": normalized_status,
+                "clear_worker": bool(clear_worker),
                 "finished_at": now if is_terminal else None,
                 "last_heartbeat": now,
                 "error": str(error) if error else None,
@@ -657,7 +660,7 @@ def cancel_generation_task(job_id: str, *, reason: str = "Task canceled by user"
                 """
                 UPDATE generation_task_queue
                 SET status = 'canceled', finished_at = :finished_at, error = :error
-                WHERE job_id = :job_id AND status IN ('queued', 'running')
+                WHERE job_id = :job_id AND status IN ('queued', 'running', 'waiting_callback')
                 """
             ),
             {
@@ -677,7 +680,7 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
     _ensure_queue_table_ready()
     now = time.time()
 
-    clauses = ["status IN ('queued', 'running')"]
+    clauses = ["status IN ('queued', 'running', 'waiting_callback')"]
     params: Dict[str, Any] = {
         "finished_at": now,
         "error": str(reason or "Task canceled by stop-all"),
@@ -796,6 +799,7 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_
                 """
                 UPDATE generation_task_queue
                 SET status = :status,
+                    worker_id = NULL,
                     finished_at = :finished_at,
                     last_heartbeat = :last_heartbeat,
                     error = :error
@@ -828,6 +832,37 @@ def _touch_task_heartbeat(job_id: str, worker_id: str) -> bool:
                 """
                 UPDATE generation_task_queue
                 SET last_heartbeat = :heartbeat
+                WHERE job_id = :job_id
+                  AND status = 'running'
+                  AND worker_id = :worker_id
+                """
+            ),
+            {
+                "job_id": str(job_id),
+                "worker_id": str(worker_id),
+                "heartbeat": now,
+            },
+        )
+        db.commit()
+        return int(result.rowcount or 0) > 0
+    finally:
+        db.close()
+
+
+def _defer_task_to_waiting_callback(job_id: str, worker_id: str) -> bool:
+    _ensure_queue_table_ready()
+    now = time.time()
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET status = 'waiting_callback',
+                    worker_id = NULL,
+                    last_heartbeat = :heartbeat,
+                    finished_at = NULL,
+                    error = NULL
                 WHERE job_id = :job_id
                   AND status = 'running'
                   AND worker_id = :worker_id
@@ -942,7 +977,7 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
                 and bool(processor_result.get("defer_completion"))
             )
             if defer_completion:
-                await asyncio.to_thread(_touch_task_heartbeat, str(task.get("job_id") or ""), worker_name)
+                await asyncio.to_thread(_defer_task_to_waiting_callback, str(task.get("job_id") or ""), worker_name)
                 continue
             finalized = await asyncio.to_thread(_finish_task, task["job_id"], status="completed", only_if_running=True)
             if not finalized:
@@ -1009,7 +1044,7 @@ def _worker_loop(worker_name: str, processor: Callable[[str, str, int, Dict[str,
                 and bool(processor_result.get("defer_completion"))
             )
             if defer_completion:
-                _touch_task_heartbeat(str(task.get("job_id") or ""), worker_name)
+                _defer_task_to_waiting_callback(str(task.get("job_id") or ""), worker_name)
                 continue
             finalized = _finish_task(task["job_id"], status="completed", only_if_running=True)
             if not finalized:

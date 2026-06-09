@@ -1802,6 +1802,17 @@ def init_system_api_settings(db):
             row.config = cfg
             updated_existing += 1
 
+        if row_category == "image":
+            has_oss_id = bool(str(cfg.get("oss-id") or cfg.get("oss_id") or cfg.get("ossId") or "").strip())
+            has_oss_path = bool(str(cfg.get("oss-path") or cfg.get("oss_path") or cfg.get("ossPath") or "").strip())
+            if not has_oss_id:
+                cfg["oss-id"] = "69c890a3a0a438550965e9ff"
+            if not has_oss_path:
+                cfg["oss-path"] = "file/images/{user_id}"
+            if (not has_oss_id) or (not has_oss_path):
+                row.config = cfg
+                updated_existing += 1
+
         current_base_url = (row.base_url or "").strip()
         normalized_base_url = current_base_url.replace("grsaiapi.com", "grsai.dakka.com.cn").rstrip("/")
         if normalized_base_url and not normalized_base_url.endswith("/chat/completions") and not normalized_base_url.endswith("/v1"):
@@ -1840,7 +1851,7 @@ def init_system_api_settings(db):
                     else grsai_gpt_image_endpoint
                 ),
                 "oss-id": "69c890a3a0a438550965e9ff",
-                "oss-path": "file/images",
+                "oss-path": "file/images/{user_id}",
             }
         elif item["category"] == "Video" and "sora-2" in item["name"]:
             config_payload = {"endpoint": grsai_sora2_endpoint}

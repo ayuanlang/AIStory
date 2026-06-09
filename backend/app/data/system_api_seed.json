@@ -189,7 +189,7 @@
         "is_deprecated": false,
         "disable_api": false,
         "oss-id": "69c890a3a0a438550965e9ff",
-        "oss-path": "file/images"
+        "oss-path": "file/images/{user_id}"
       },
       "deprecated": false,
       "is_active": false,

@@ -365,7 +365,7 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
         _prune_video_jobs_locked()
         video_jobs = [dict(job or {}) for job in VIDEO_JOB_STORE.values()]
 
-    active_statuses = {"queued", "running", "processing", "pending", "storing_asset"}
+    active_statuses = {"queued", "running", "processing", "pending", "storing_asset", "waiting_callback"}
     callback_pending_count = 0
     callback_waiting_count = 0
     callback_retrying_count = 0
@@ -395,15 +395,17 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             and "timed out" in str(job.get("error") or "").strip().lower()
         )
 
-        if status in active_statuses and callback_ticket:
+        is_waiting_callback = bool(status == "waiting_callback" or ("callback_pending" in upstream_state))
+
+        if is_waiting_callback and callback_ticket:
             callback_pending_count += 1
-        if callback_ticket and ("callback_pending" in upstream_state):
+        if callback_ticket and is_waiting_callback:
             callback_waiting_count += 1
         if retry_count > 0 or has_retry_at:
             callback_retrying_count += 1
         if is_timeout_failed and callback_ticket:
             callback_timeout_failed_count += 1
-        if callback_ticket and (status in {"queued", "running"} or is_timeout_failed):
+        if callback_ticket and (status in {"queued", "running", "waiting_callback"} or is_timeout_failed):
             compensation_candidate_count += 1
 
         if status in active_statuses and (not pure_callback_mode_effective):
@@ -959,7 +961,7 @@ def _run_callback_compensation_once() -> None:
                 status == "failed"
                 and "timed out" in str(job.get("error") or "").strip().lower()
             )
-            if status not in {"queued", "running"} and not is_timeout_failed:
+            if status not in {"queued", "running", "waiting_callback"} and not is_timeout_failed:
                 continue
             callback_ticket = _extract_job_provider_callback_ticket(job)
             if not callback_ticket:
@@ -969,12 +971,16 @@ def _run_callback_compensation_once() -> None:
     if not candidates:
         return
 
-    from app.services.generation_task_queue import get_generation_task_status, requeue_generation_task
+    from app.services.generation_task_queue import get_generation_task_status, mark_generation_task_status_external, requeue_generation_task
 
     for job_id, job in candidates:
         callback_ticket = _extract_job_provider_callback_ticket(job)
         if not callback_ticket:
             continue
+
+        upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
+        if "callback_pending" in upstream_state:
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
 
         callback_payload = _get_generation_callback_payload(callback_ticket)
         if callback_payload:
@@ -1878,6 +1884,7 @@ def _persist_remote_image_result(
         return media_url, metadata
 
     source_url = raw
+    temp_filename = _extract_media_filename_from_url(raw)
     resolved_kie_download_url = _resolve_kie_downloadable_url(source_url)
     if resolved_kie_download_url and resolved_kie_download_url != raw:
         raw = resolved_kie_download_url
@@ -1885,6 +1892,8 @@ def _persist_remote_image_result(
             parsed = urllib.parse.urlparse(raw)
         except Exception:
             parsed = urllib.parse.urlparse(source_url)
+        if not temp_filename:
+            temp_filename = _extract_media_filename_from_url(raw)
 
     max_remote_image_bytes = max(1, int(os.getenv("REMOTE_IMAGE_LOCALIZE_MAX_MB", "25"))) * 1024 * 1024
 
@@ -1899,15 +1908,18 @@ def _persist_remote_image_result(
         response.raise_for_status()
     except Exception as exc:
         logger.warning(
-            "[ImageResultNormalize] remote image download failed | user_id=%s url=%s err=%s",
+            "[ImageResultNormalize] remote image download failed | user_id=%s url=%s temp_filename=%s err=%s",
             getattr(current_user, "id", None),
             raw,
+            temp_filename,
             exc,
         )
         updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
         updated_metadata["remote_localization_failed"] = True
         updated_metadata["remote_localization_error"] = str(exc)
         updated_metadata["remote_localization_source_url"] = raw
+        if temp_filename:
+            updated_metadata["temporary_source_filename"] = temp_filename
         return media_url, updated_metadata
 
     content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
@@ -1991,6 +2003,8 @@ def _persist_remote_image_result(
 
     updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     updated_metadata["stored_from_remote_url"] = raw
+    if temp_filename:
+        updated_metadata["temporary_source_filename"] = temp_filename
     if resolved_kie_download_url:
         updated_metadata["stored_from_remote_url_source"] = source_url
         updated_metadata["stored_from_remote_url_resolved_via"] = "kie_download_url"
@@ -2088,6 +2102,25 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
         if pattern.match(hostname):
             return True
     return False
+
+
+def _extract_media_filename_from_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except Exception:
+        return ""
+
+    pathname = str(parsed.path or "").strip()
+    if not pathname:
+        return ""
+
+    try:
+        return os.path.basename(pathname).strip()
+    except Exception:
+        return ""
 
 
 def _assert_allowed_persisted_media_url(value: Any, *, field_label: str) -> None:
@@ -3163,6 +3196,7 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
     raw_url = _extract_job_result_url(result)
     if not raw_url:
         return result
+    raw_temp_filename = _extract_media_filename_from_url(raw_url)
 
     try:
         user_id = int(job.get("user_id") or 0)
@@ -3211,13 +3245,14 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         logger.info(
-            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s metadata_keys=%s",
+            "[ImageJobPersist] start | job_id=%s user_id=%s entity_id=%s entity_name=%s shot_id=%s raw_url=%s temp_filename=%s metadata_keys=%s",
             job_id,
             getattr(current_user, "id", None),
             req_context.get("entity_id"),
             req_context.get("entity_name") or req_context.get("subject_name"),
             req_context.get("shot_id"),
             raw_url,
+            raw_temp_filename,
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
         normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
@@ -3257,10 +3292,11 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
         elif normalized_url:
             if request_mode != "joint_diptych":
                 logger.warning(
-                "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s entity_id=%s shot_id=%s",
+                "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s temp_filename=%s entity_id=%s shot_id=%s",
                 job_id,
                 getattr(current_user, "id", None),
                 normalized_url,
+                _extract_media_filename_from_url(normalized_url),
                 req_context.get("entity_id"),
                 req_context.get("shot_id"),
             )
