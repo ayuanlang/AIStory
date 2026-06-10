@@ -9737,10 +9737,57 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
             separator_idx = i + 1
             break
 
-    if header_idx < 0 or separator_idx < 0:
+    raw_headers: List[str] = []
+    if header_idx >= 0 and separator_idx >= 0:
+        raw_headers = _split_markdown_row_escaped(lines[header_idx].strip())
+
+    # Fallback: some providers occasionally return a markdown table where
+    # the header row is missing, but separator/data rows still exist.
+    if not raw_headers:
+        sep_only_idx = -1
+        for i, line in enumerate(lines):
+            if _is_markdown_table_separator(str(line or "").strip()):
+                sep_only_idx = i
+                break
+
+        if sep_only_idx >= 0:
+            first_data_cells: List[str] = []
+            for line in lines[sep_only_idx + 1 :]:
+                stripped = str(line or "").strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("#"):
+                    break
+                if _looks_like_table_row(stripped) and not _is_markdown_table_separator(stripped):
+                    first_data_cells = _split_markdown_row_escaped(stripped)
+                    break
+
+            if first_data_cells:
+                fallback_headers = [
+                    "Shot ID",
+                    "Shot Name",
+                    "Scene ID",
+                    "Shot Logic (CN)",
+                    "Start Frame",
+                    "Video Content",
+                    "Duration (s)",
+                    "Keyframes",
+                    "End Frame",
+                    "Start Frame (CN)",
+                    "Video Content (CN)",
+                    "Keyframes (CN)",
+                    "End Frame (CN)",
+                    "Associated Entities",
+                ]
+                needed = len(first_data_cells)
+                if needed > len(fallback_headers):
+                    fallback_headers.extend([f"Column {idx}" for idx in range(len(fallback_headers) + 1, needed + 1)])
+                raw_headers = fallback_headers[:needed]
+                separator_idx = sep_only_idx
+
+    if not raw_headers or separator_idx < 0:
         return [], [], 0
 
-    raw_headers = _split_markdown_row_escaped(lines[header_idx].strip())
     headers = [h.replace("*", "").replace("_", "").strip() for h in raw_headers]
     header_count = len(headers)
     if header_count <= 0:
@@ -15245,12 +15292,52 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
                     return idx
         return -1
 
+    fallback_scene_headers = [
+        "Episode ID",
+        "Scene ID",
+        "Scene No",
+        "Scene Name",
+        "Equivalent Duration",
+        "Core Scene Info",
+        "Original Script Text",
+        "Environment Name",
+        "Linked Characters",
+        "Key Props",
+    ]
+
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
 
         headers = _split_row(stripped)
+        j = i + 1
+
+        # Fallback for headerless tables: separator + data rows only.
+        if re.fullmatch(r"[\|\s:\-]+", stripped or ""):
+            first_data_idx = -1
+            first_data_cols: List[str] = []
+            for k in range(i + 1, len(lines)):
+                candidate = lines[k].strip()
+                if not candidate:
+                    continue
+                if not candidate.startswith("|"):
+                    break
+                if re.fullmatch(r"[\|\s:\-]+", candidate or ""):
+                    continue
+                first_data_cols = _split_row(candidate)
+                first_data_idx = k
+                break
+
+            if first_data_idx < 0 or not first_data_cols:
+                continue
+
+            needed = len(first_data_cols)
+            headers = list(fallback_scene_headers[:needed])
+            if needed > len(headers):
+                headers.extend([f"Column {idx}" for idx in range(len(headers) + 1, needed + 1)])
+            j = first_data_idx
+
         if len(headers) < 4:
             continue
 
@@ -15261,8 +15348,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         if core_idx < 0 and original_idx < 0:
             continue
 
-        j = i + 1
-        if j < len(lines):
+        if j == i + 1 and j < len(lines):
             separator = lines[j].strip()
             if separator.startswith("|") and re.fullmatch(r"[\|\s:\-]+", separator or ""):
                 j += 1
