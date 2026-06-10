@@ -10066,19 +10066,38 @@ def _build_function_api_pricing_description_map(
 
     # Some deployments don't have a dedicated billing_unit_type column on SystemAPISetting;
     # fallback to config JSON key when rule table doesn't provide a unit.
-    fallback_rows = db.query(SystemAPISetting.id, SystemAPISetting.config).filter(
+    fallback_rows = db.query(
+        SystemAPISetting.id,
+        SystemAPISetting.config,
+        SystemAPISetting.price_avg_cost,
+        SystemAPISetting.price_min_cost,
+        SystemAPISetting.price_max_cost,
+    ).filter(
         SystemAPISetting.id.in_(normalized_ids)
     ).all()
+    cached_price_by_id: Dict[int, Dict[str, Any]] = {}
     for row in fallback_rows or []:
         sid = _safe_int(getattr(row, "id", 0), 0)
-        if sid <= 0 or sid in unit_map:
+        if sid <= 0:
             continue
-        cfg = _safe_json_dict(getattr(row, "config", None))
-        unit_map[sid] = _normalize_billing_unit_type(cfg.get("billing_unit_type"))
+        if sid not in unit_map:
+            cfg = _safe_json_dict(getattr(row, "config", None))
+            unit_map[sid] = _normalize_billing_unit_type(cfg.get("billing_unit_type"))
+        cached_price_by_id[sid] = {
+            "average_cost": _safe_int(getattr(row, "price_avg_cost", 0), 0),
+            "min_cost": _safe_int(getattr(row, "price_min_cost", 0), 0),
+            "max_cost": _safe_int(getattr(row, "price_max_cost", 0), 0),
+        }
 
     result: Dict[int, str] = {}
     for sid in normalized_ids:
         summary = pricing_map.get(sid) or {}
+        if (
+            _safe_int(summary.get("average_cost"), 0) <= 0
+            and _safe_int(summary.get("min_cost"), 0) <= 0
+            and _safe_int(summary.get("max_cost"), 0) <= 0
+        ):
+            summary = cached_price_by_id.get(sid) or summary
         unit_type = unit_map.get(sid, "per_call")
         result[sid] = _format_pricing_description_from_summary(summary, unit_type)
     return result

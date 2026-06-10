@@ -7193,12 +7193,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
 
                 const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-                globalStage2_1Text = stage2_1Text;
+                const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
+                globalStage2_1Text = stage2_1SubjectIndexText;
                 
                 // --- 第一时间保存 Stage 2.1 (提取的美术资产/Subject Index) 对应卡片！---
                 try {
                     if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately after return...', 'process');
-                    await persistLlmResultContent(String(stage2_1Text || '').trim(), 'ai_scene_analysis_subject_index', {
+                    await persistLlmResultContent(stage2_1SubjectIndexText, 'ai_scene_analysis_subject_index', {
                         source: 'advanced-analysis-stage2_1-subject-index-immediate'
                     });
                 } catch (persistErr) {
@@ -7215,7 +7216,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const runStage2_2Task = async () => {
                     const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
                     let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`;
+                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
                     if (isSuperuser || isSuperuserRef.current) {
                         const confirmedStage2_2 = await new Promise((resolve, reject) => {
@@ -7292,8 +7293,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                                 const runStage3Task = async () => {
                     try {
-                        return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1Text, {
-                            explicitSubjectIndexText: globalStage2_1Text || stage2_1Text
+                                        return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1SubjectIndexText, {
+                                            explicitSubjectIndexText: globalStage2_1Text || stage2_1SubjectIndexText
                         });
                     } catch (e) {
                         if (onLog) onLog(`Stage 3 background execution failed: ${e?.message || e}`, 'error');
@@ -7631,7 +7632,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
 
             const stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-            let globalStage2_1Text = stage2_1Text;
+            const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
+            let globalStage2_1Text = stage2_1SubjectIndexText;
             if (onLog) onLog('Stage 2.1 completed. Kicking off Stage 2.2 (Beats) and Stage 3 (Asset Design) concurrently for restart...', 'info');
 
             setAnalysisFlowStatus({
@@ -7642,7 +7644,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const runStage2_2Task = async () => { 
                 const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md'); 
                 let finalStage2_2Prompt = stage2_2PromptRes?.content || ''; 
-                let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`; 
+                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`; 
 
                 if (isSuperuser || isSuperuserRef.current) {
                         const confirmedStage2_2 = await new Promise((resolve, reject) => {
@@ -7715,8 +7717,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         const runStage3Task = async () => {
                 try {
-                    return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1Text, {
-                        explicitSubjectIndexText: globalStage2_1Text || stage2_1Text
+                                return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1SubjectIndexText, {
+                                    explicitSubjectIndexText: globalStage2_1Text || stage2_1SubjectIndexText
                     });
                 } catch (e) {
                     if (onLog) onLog(`Stage 3 background execution failed: ${e?.message || e}`, 'error');
@@ -7868,7 +7870,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || activeEpisode?.ai_scene_analysis_subject_index
             || ''
         ).trim();
-        if (!stage2_1Text) {
+        const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || stage2_1Text;
+        if (!stage2_1SubjectIndexText) {
             alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
             return;
         }
@@ -7890,7 +7893,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
             let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-            let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1Text}`;
+            let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
             if (isSuperuser || isSuperuserRef.current) {
                 const confirmedStage2_2 = await new Promise((resolve, reject) => {
