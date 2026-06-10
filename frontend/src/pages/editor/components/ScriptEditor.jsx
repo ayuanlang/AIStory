@@ -495,6 +495,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
 
+    // 专门用于 Stage 2.2 (Beats Generation) 的 userInput 构建 - 避免混淆 "第一步" vs "第二步"
+    const buildStage2_2UserInputFromStage1 = useCallback((stage1Text) => {
+        const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
+        const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
+        const stage2_2InputParts = [
+            '请执行第二阶段的第二步：视听推演与节拍拆解（Beat Generation & Scene Breakdown）。基于上游提取的"资产清单"和"优化后剧本"，生成标准化的《Scenes Table》——包含每一个可视场景的环境、角色、道具布局与动作节拍序列。',
+        ];
+
+        const projectContextSection = buildStage1ProjectContextSection();
+        if (projectContextSection) {
+            stage2_2InputParts.push(projectContextSection);
+        }
+
+        stage2_2InputParts.push(`[优化后剧本 - Stage 2.2权威输入]\n${adaptedScriptText || String(stage1Text || '').trim()}`);
+        if (stage1VisualBackfillJson) {
+            stage2_2InputParts.push(`[全局风格 - Stage 2.2补充约束]\n${stage1VisualBackfillJson}`);
+        }
+
+        return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
+    }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
+
     useEffect(() => {
         isSuperuserRef.current = isSuperuser;
     }, [isSuperuser]);
@@ -3231,10 +3252,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!parsed) return '';
 
         const normalizeHeader = (h) => String(h || '').toLowerCase().replace(/[\s_.\-]/g, '');
+
+        // Guard: the extracted table must have a Scene ID column to qualify as a Scenes Table.
+        // Without this check, Subject Index tables (subject_no / subject_type / ...) would be
+        // mistakenly stored as the scene_markdown result.
+        const hasSceneIdCol = parsed.headers.some((h) => {
+            const n = normalizeHeader(h);
+            return n.includes('sceneid') || n.includes('场景id');
+        });
+        
+        if (!hasSceneIdCol) {
+            // Log rejected table headers for debugging: prevents Subject Index tables from being stored as scenes markdown
+            const headersList = (parsed.headers || []).join(' | ');
+            console.warn('[normalizeLlmMarkdownTable] Rejected table (missing Scene ID column). Headers:', headersList);
+            return '';
+        }
+
         const sceneNoColIdx = parsed.headers.findIndex((h) => {
             const n = normalizeHeader(h);
             return n.includes('sceneno') || n.includes('场次序号') || n === '场次';
         });
+
+        // Log accepted table for debugging: scenes markdown normalization successful
+        const headersList = (parsed.headers || []).join(' | ');
+        console.info('[normalizeLlmMarkdownTable] Accepted Scenes Table. Headers:', headersList, 'Row count:', (parsed.rows || []).length);
 
         const normalizedRows = (parsed.rows || []).map((row, idx) => {
             const next = [...row];
@@ -7216,7 +7257,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const runStage2_2Task = async () => {
                     const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
                     let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
+                    // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
+                    let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
+                    let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
                     if (isSuperuser || isSuperuserRef.current) {
                         const confirmedStage2_2 = await new Promise((resolve, reject) => {
@@ -7316,9 +7359,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 stage2PhaseRawText = [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
 
+                // Validate Stage 2.2 output: must be a Scenes Table (with Scene ID column), not Subject Index
+                // Prevention: reject Subject Index tables which have subject_no/subject_type columns but no Scene ID column
+                const validatedStage2_2Text = normalizeLlmMarkdownTable(stage2_2Text || '');
+                if (!validatedStage2_2Text) {
+                    // If validation fails, it means the LLM returned Subject Index or invalid table
+                    throw new Error('Stage 2.2 Beats Generation validation failed: returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
+                }
+
                 // Persist/import only the Stage 2.2 scenes markdown table to avoid
                 // accidentally treating Subject Index text as scene rows.
-                finalAnalysisText = String(stage2_2Text || '').trim();
+                finalAnalysisText = validatedStage2_2Text;
                 importSourceText = finalAnalysisText;
                 phaseMarks.persistStartedAt = Date.now();
                 
@@ -7644,7 +7695,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const runStage2_2Task = async () => { 
                 const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md'); 
                 let finalStage2_2Prompt = stage2_2PromptRes?.content || ''; 
-                    let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`; 
+                    // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
+                    let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
+                    let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`; 
 
                 if (isSuperuser || isSuperuserRef.current) {
                         const confirmedStage2_2 = await new Promise((resolve, reject) => {
@@ -7772,7 +7825,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: '',
             }));
 
-            await persistLlmResultContent(finalAnalysisText, 'ai_scene_analysis_result', {
+            // Validate Stage 2.2 output before persistence: must have Scene ID column, reject Subject Index
+            const validatedBeatsText = normalizeLlmMarkdownTable(finalAnalysisText);
+            if (!validatedBeatsText) {
+                throw new Error('Stage 2.2 Beats Generation validation failed (restart mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
+            }
+
+            await persistLlmResultContent(validatedBeatsText, 'ai_scene_analysis_result', {
                 source: 'restart-stage2',
                 stage1RawText: stage1SourceText,
                 stage2RawText: stage2Text,
@@ -7893,7 +7952,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
             let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-            let finalStage2_2UserInput = `${stage2UserInput}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
+            // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
+            let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
+            let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
             if (isSuperuser || isSuperuserRef.current) {
                 const confirmedStage2_2 = await new Promise((resolve, reject) => {
@@ -7960,7 +8021,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmResultContent(normalizeLlmMarkdownTable(stage2_2Text));
             lastLoadedAnalysisRef.current = stage2_2Text;
 
-            await persistLlmResultContent(stage2_2Text, 'ai_scene_analysis_result', {
+            // Validate Stage 2.2 output before persistence: must have Scene ID column, reject Subject Index
+            const validatedBeatsText = normalizeLlmMarkdownTable(stage2_2Text);
+            if (!validatedBeatsText) {
+                throw new Error('Stage 2.2 Beats Generation validation failed (scene-beats-only mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
+            }
+
+            await persistLlmResultContent(validatedBeatsText, 'ai_scene_analysis_result', {
                 source: 'restart-scene-beats-only',
                 stage1RawText: stage1SourceText,
                 stage2RawText: [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n'),
