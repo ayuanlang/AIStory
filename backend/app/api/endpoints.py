@@ -6000,7 +6000,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "covers": {},
                 "posters": {},
             }
-            raw = str(text or "")
+            raw = sanitize_subject_index_text(text)
             if not raw:
                 return {"expected": expected, "total": 0}
 
@@ -6010,9 +6010,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 stripped = str(line or "").strip()
                 if not stripped:
                     continue
-                if not re.match(r"^S\d+\s*\|", stripped, flags=re.IGNORECASE):
+                if not re.match(r"^\|?\s*S\d+\s*\|", stripped, flags=re.IGNORECASE):
                     continue
-                parts = [p.strip() for p in stripped.split("|")]
+                normalized_line = stripped.strip("|").strip()
+                parts = [p.strip() for p in normalized_line.split("|")]
                 if len(parts) < 4:
                     continue
 
@@ -6033,7 +6034,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         def _extract_subject_index_records(source_text: str) -> List[Dict[str, str]]:
             records: List[Dict[str, str]] = []
-            raw = str(source_text or "")
+            raw = sanitize_subject_index_text(source_text)
             if not raw:
                 return records
 
@@ -6041,10 +6042,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 stripped = str(line or "").strip()
                 if not stripped:
                     continue
-                if not re.match(r"^S\d+\s*\|", stripped, flags=re.IGNORECASE):
+                if not re.match(r"^\|?\s*S\d+\s*\|", stripped, flags=re.IGNORECASE):
                     continue
 
-                parts = [p.strip() for p in stripped.split("|")]
+                normalized_line = stripped.strip("|").strip()
+                parts = [p.strip() for p in normalized_line.split("|")]
                 if len(parts) < 4:
                     continue
 
@@ -7325,6 +7327,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             else:
                 persisted_field_name = "ai_scene_analysis_result"
                 episode.ai_scene_analysis_result = result_content
+                episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
                 logger.info(
                     "[analyze_scene] Persisted raw phase1 output to ai_scene_analysis_result episode_id=%s chars=%s",
                     episode_id,
@@ -7376,10 +7379,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Do not hard-fail here so callers can still inspect/import partial output.
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
+        source_subject_index_text = sanitize_subject_index_text(getattr(request, "text", None))
         if not is_entity_design_phase:
             has_subject_index = bool(
-                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", str(result_content or ""))
-                or re.search(r"(?i)(?:subject_no|subject_type)", str(result_content or ""))
+                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
+                or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
             )
             if not has_subject_index:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
@@ -7469,7 +7473,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
 
-        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(getattr(request, "text", None), subjects_json)
+        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
         subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
         subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
         subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
@@ -7487,7 +7491,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
         debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
 
-        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(getattr(request, "text", None), subjects_json)
+        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
         debug_meta["subject_index_coverage"] = subject_index_coverage_meta
         debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
@@ -9601,6 +9605,91 @@ def sanitize_llm_markdown_output(text: str) -> str:
             lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
+
+
+def sanitize_subject_index_text(text: Any) -> str:
+    """Keep only Subject Index content and strip common LLM reasoning leakage.
+
+    This is intentionally conservative: if a clear Subject Index section is found,
+    return that section; otherwise fall back to the cleaned original text.
+    """
+    cleaned = sanitize_llm_markdown_output(str(text or ""))
+    if not cleaned:
+        return ""
+
+    delimiter = "----------------*****--------------"
+    delimiter_idx = cleaned.find(delimiter)
+    if delimiter_idx >= 0:
+        cleaned = cleaned[delimiter_idx + len(delimiter):].strip()
+        if not cleaned:
+            return ""
+
+    lines = [str(line or "") for line in cleaned.splitlines()]
+    if not lines:
+        return ""
+
+    subject_header_re = re.compile(r"(?i)^\s*(?:#{1,6}\s*)?(?:subject\s*index|subjects\s*index)\b")
+    subject_hint_re = re.compile(r"(?i)subject_no|subject_type|script_entity_coverage")
+    row_start_re = re.compile(r"(?i)^\s*\|?\s*S\d+\s*\|")
+    row_token_re = re.compile(r"(?i)S\d{3,}")
+
+    start_idx = -1
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if subject_header_re.search(stripped):
+            start_idx = idx
+            break
+    if start_idx < 0:
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if subject_hint_re.search(stripped) or row_start_re.match(stripped):
+                start_idx = idx
+                break
+
+    if start_idx < 0:
+        return cleaned
+
+    end_idx = len(lines)
+    for idx in range(start_idx + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if re.match(r"^#{1,6}\s+", stripped):
+            end_idx = idx
+            break
+
+    block_lines = lines[start_idx:end_idx]
+
+    # Remove obvious non-index reasoning lines inside the candidate block.
+    reasoning_line_re = re.compile(
+        r"(?i)^\s*(i\s+am\s+now|i\s+will|let\s+me|let's|analysis|reasoning|thought\s+process|"
+        r"我将|我会|下面|推理|思路)\b"
+    )
+    header_noise_re = re.compile(r"(?i)subject_no.*subject_type.*subject_name")
+    filtered_lines: List[str] = []
+    for line in block_lines:
+        stripped = line.strip()
+        if stripped == delimiter:
+            continue
+        if reasoning_line_re.match(stripped) and not subject_hint_re.search(stripped):
+            continue
+        if stripped.startswith("**") and "finalizing" in stripped.lower():
+            continue
+        if "finalizing index" in stripped.lower() or "output is finalized" in stripped.lower():
+            continue
+        if header_noise_re.search(stripped) and not row_token_re.search(stripped):
+            continue
+        # Compact outputs may glue header + first row in one line; keep only row part.
+        if header_noise_re.search(stripped) and row_token_re.search(stripped):
+            m = row_token_re.search(stripped)
+            if m:
+                line = stripped[m.start():]
+        filtered_lines.append(line)
+
+    result = "\n".join(filtered_lines).strip()
+    if result:
+        # Normalize glued rows like: ...S001...S002... into one row per line.
+        result = re.sub(r"(?<!^)\s*(?=S\d{3,})", "\n", result)
+        result = re.sub(r"\n{3,}", "\n\n", result).strip()
+    return result or cleaned
 
 
 def _is_provider_moderation_block_response(raw_text: Any, cleaned_text: Optional[str] = None) -> bool:
@@ -12359,10 +12448,17 @@ def update_episode(
     if episode_in.script_content is not None:
         episode.script_content = episode_in.script_content
     # episode_info is deprecated and intentionally ignored.
+    explicit_subject_index_update = bool(
+        hasattr(episode_in, 'ai_scene_analysis_subject_index')
+        and episode_in.ai_scene_analysis_subject_index is not None
+    )
+
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
+        if not explicit_subject_index_update:
+            episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_result)
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
-        episode.ai_scene_analysis_subject_index = episode_in.ai_scene_analysis_subject_index
+        episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
     if hasattr(episode_in, 'ai_scene_analysis_adaptation') and episode_in.ai_scene_analysis_adaptation is not None:
         episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
     if hasattr(episode_in, 'ai_entity_design_result') and episode_in.ai_entity_design_result is not None:
