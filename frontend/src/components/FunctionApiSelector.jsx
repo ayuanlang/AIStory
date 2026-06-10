@@ -42,7 +42,7 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
                 {apiList.map((api, index) => (
                     <option key={`${api.system_api_id}-${index}`} value={api.system_api_id}>
 
-                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}
+                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{api.pricing_description ? " | " + api.pricing_description : ""}
 
                     </option>
                 ))}

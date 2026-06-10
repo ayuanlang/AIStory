@@ -272,6 +272,20 @@ async function pollTask(taskId, {
     baseURL = undefined,
     notFoundGraceMs = LLM_TASK_NOT_FOUND_GRACE_MS,
 } = {}) {
+    const toStableStatus = (value) => String(value || '').trim().toLowerCase();
+    const isCompletedStatus = (value) => {
+        const status = toStableStatus(value);
+        return status === 'completed' || status === 'success' || status === 'succeeded' || status === 'done' || status === 'finished';
+    };
+    const isFailedStatus = (value) => {
+        const status = toStableStatus(value);
+        return status === 'failed' || status === 'error' || status === 'timeout';
+    };
+    const isCanceledStatus = (value) => {
+        const status = toStableStatus(value);
+        return status === 'canceled' || status === 'cancelled' || status === 'stopped';
+    };
+
     const startedAt = Date.now();
     let attempts = 0;
   const deadline = Date.now() + timeout;
@@ -294,15 +308,20 @@ const err = new Error('Task polling received an invalid response format (not an 
                 throw err;
             }
 
-            if (info.status === 'completed') return info.result;
-            if (info.status === 'failed') {
+            const stableStatus = toStableStatus(info.status);
+            const hasResult = Object.prototype.hasOwnProperty.call(info, 'result');
+
+            if (isCompletedStatus(stableStatus) || (!stableStatus && hasResult)) {
+                return hasResult ? info.result : info;
+            }
+            if (isFailedStatus(stableStatus)) {
                 const err = new Error(info.error || 'Task failed');
                 err.errorCode = info.error_code || 500;
                 err.isTaskFailure = true;
                 err.response = { status: info.error_code || 500, data: { detail: info.error } };
                 throw err;
             }
-            if (info.status === 'canceled' || info.status === 'cancelled') {
+            if (isCanceledStatus(stableStatus)) {
                 const err = new Error(info.error || 'Task canceled');
                 err.errorCode = info.error_code || 499;
                 err.isCanceled = true;
@@ -3460,6 +3479,11 @@ export const getFunctionApiConfigs = async () => {
 
 export const updateFunctionApiConfig = async (functionName, payload) => {
     const response = await api.post(`/settings/system/function_api_configs/${functionName}`, payload);
+    return response.data;
+};
+
+export const syncFunctionApiPricingDescriptions = async () => {
+    const response = await api.post('/settings/system/function_api_configs/sync-pricing-descriptions');
     return response.data;
 };
 

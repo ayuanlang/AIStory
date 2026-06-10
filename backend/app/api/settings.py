@@ -148,6 +148,18 @@ from app.services.billing_service import BillingService
 
 HAS_TASK_DEFAULT_SYSTEM_API_MODEL = True
 
+_SUPPORTED_FUNCTION_API_NAMES = [
+    "generate_subjects",
+    "generate_subjects_t2i",
+    "generate_subjects_i2i",
+    "generate_cover",
+    "generate_shot_images",
+    "generate_videos",
+    "script_analysis",
+    "ai_assistant",
+    "ai_shot",
+]
+
 router = APIRouter()
 logger = logging.getLogger("settings_api")
 logger.setLevel(logging.INFO)
@@ -10006,6 +10018,71 @@ def delete_oss_provider_pool(
 def get_defaults():
     return DEFAULTS
 
+
+def _format_billing_unit_short_label(unit_type: str) -> str:
+    unit = _normalize_billing_unit_type(unit_type)
+    mapping = {
+        "per_call": "次",
+        "per_second": "秒",
+        "per_minute": "分钟",
+        "per_token": "token",
+        "per_1k_tokens": "1k token",
+        "per_million_tokens": "百万 token",
+    }
+    return mapping.get(unit, "次")
+
+
+def _format_pricing_description_from_summary(
+    summary: Optional[Dict[str, Any]],
+    unit_type: str,
+) -> str:
+    data = summary or {}
+    avg_cost = _safe_int(data.get("average_cost"), 0)
+    min_cost = _safe_int(data.get("min_cost"), 0)
+    max_cost = _safe_int(data.get("max_cost"), 0)
+    unit_label = _format_billing_unit_short_label(unit_type)
+
+    if max_cost > 0:
+        if min_cost > 0 and min_cost != max_cost:
+            return f"{min_cost}-{max_cost} 积分/{unit_label}"
+        return f"约 {max_cost} 积分/{unit_label}"
+
+    if avg_cost > 0:
+        return f"约 {avg_cost} 积分/{unit_label}"
+
+    return ""
+
+
+def _build_function_api_pricing_description_map(
+    db: Session,
+    system_api_ids: List[int],
+) -> Dict[int, str]:
+    normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
+    if not normalized_ids:
+        return {}
+
+    pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, normalized_ids, include_audit=False)
+    unit_map = _batch_system_api_primary_billing_unit_type(db, normalized_ids)
+
+    # Some deployments don't have a dedicated billing_unit_type column on SystemAPISetting;
+    # fallback to config JSON key when rule table doesn't provide a unit.
+    fallback_rows = db.query(SystemAPISetting.id, SystemAPISetting.config).filter(
+        SystemAPISetting.id.in_(normalized_ids)
+    ).all()
+    for row in fallback_rows or []:
+        sid = _safe_int(getattr(row, "id", 0), 0)
+        if sid <= 0 or sid in unit_map:
+            continue
+        cfg = _safe_json_dict(getattr(row, "config", None))
+        unit_map[sid] = _normalize_billing_unit_type(cfg.get("billing_unit_type"))
+
+    result: Dict[int, str] = {}
+    for sid in normalized_ids:
+        summary = pricing_map.get(sid) or {}
+        unit_type = unit_map.get(sid, "per_call")
+        result[sid] = _format_pricing_description_from_summary(summary, unit_type)
+    return result
+
 # --- Function API Config Routes ---
 from app.schemas.settings import FunctionAPIConfigUpdate, FunctionAPIConfigOut  
 from app.models.all_models import APIRoutingConfig
@@ -10045,20 +10122,26 @@ def get_all_function_api_configs(
     from app.models.all_models import ProviderKeyPool
     configs = db.query(FunctionAPIConfig).all()
     
-    all_system_apis = db.query(SystemAPISetting).filter(SystemAPISetting.deprecated == False).all()
+    # Keep deprecated APIs in mapping response so historical function bindings remain visible/editable.
+    all_system_apis = db.query(SystemAPISetting).all()
     api_map = {api.id: api for api in all_system_apis}
 
     pools = db.query(ProviderKeyPool).all()
     pool_alias_map = {pool.provider: pool.provider_alias for pool in pools if pool.provider_alias}
     
+    configured_api_ids: List[int] = []
+    for cfg in configs:
+        for item in (cfg.api_settings or []):
+            if isinstance(item, dict):
+                sid = _safe_int(item.get("system_api_id"), 0)
+                if sid > 0:
+                    configured_api_ids.append(sid)
+    pricing_desc_map = _build_function_api_pricing_description_map(db, configured_api_ids)
+
     result = []
-    supported_functions = [
-        "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
-        "generate_videos", "script_analysis", "ai_assistant", "ai_shot"
-    ]
     
     config_dict = {c.function_name: c for c in configs}
-    for func_name in supported_functions:
+    for func_name in _SUPPORTED_FUNCTION_API_NAMES:
         config = config_dict.get(func_name)
         raw_settings = config.api_settings if config and config.api_settings else []
         
@@ -10077,6 +10160,8 @@ def get_all_function_api_configs(
                     "alias": item.get("alias") or sys_api.model or sys_api.name or f"API {sys_api.id}",
                     "provider_alias": provider_alias,
                     "applicable_languages": item.get("applicable_languages", []),
+                    "pricing_description": (str(item.get("pricing_description") or "").strip() or pricing_desc_map.get(sys_api.id) or ""),
+                    "deprecated": bool(getattr(sys_api, "deprecated", False)),
                     "explicit_selection": item.get("explicit_selection", False),
                     "strict_provider": item.get("strict_provider", False)
                 })
@@ -10085,6 +10170,65 @@ def get_all_function_api_configs(
         
     return result
 
+@router.post("/settings/system/function_api_configs/sync-pricing-descriptions")
+def sync_function_api_pricing_descriptions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage function API configs")
+
+    rows = db.query(FunctionAPIConfig).filter(
+        FunctionAPIConfig.function_name.in_(_SUPPORTED_FUNCTION_API_NAMES)
+    ).all()
+
+    target_ids: List[int] = []
+    for row in rows:
+        for item in (row.api_settings or []):
+            if isinstance(item, dict):
+                sid = _safe_int(item.get("system_api_id"), 0)
+                if sid > 0:
+                    target_ids.append(sid)
+
+    pricing_desc_map = _build_function_api_pricing_description_map(db, target_ids)
+    updated_rows = 0
+    updated_items = 0
+
+    for row in rows:
+        raw_settings = row.api_settings if isinstance(row.api_settings, list) else []
+        next_settings: List[Dict[str, Any]] = []
+        changed = False
+        for item in raw_settings:
+            if not isinstance(item, dict):
+                continue
+            next_item = dict(item)
+            sid = _safe_int(next_item.get("system_api_id"), 0)
+            next_desc = pricing_desc_map.get(sid, "") if sid > 0 else ""
+            current_desc = str(next_item.get("pricing_description") or "").strip()
+            if current_desc != next_desc:
+                changed = True
+                updated_items += 1
+                if next_desc:
+                    next_item["pricing_description"] = next_desc
+                else:
+                    next_item.pop("pricing_description", None)
+            next_settings.append(next_item)
+
+        if changed:
+            row.api_settings = next_settings
+            row.updated_at = now_bj_iso()
+            updated_rows += 1
+
+    if updated_rows > 0:
+        db.commit()
+
+    return {
+        "ok": True,
+        "updated_config_rows": updated_rows,
+        "updated_api_items": updated_items,
+    }
+
+
 @router.post("/settings/system/function_api_configs/{function_name}", response_model=FunctionAPIConfigOut)
 def update_function_api_config(
     function_name: str,
@@ -10092,11 +10236,7 @@ def update_function_api_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    supported_functions = [
-        "generate_subjects", "generate_subjects_t2i", "generate_subjects_i2i", "generate_cover", "generate_shot_images",
-        "generate_videos", "script_analysis", "ai_assistant", "ai_shot"
-    ]
-    if function_name not in supported_functions:
+    if function_name not in _SUPPORTED_FUNCTION_API_NAMES:
         raise HTTPException(status_code=400, detail="Unsupported function_name")
     
     config = db.query(FunctionAPIConfig).filter(FunctionAPIConfig.function_name == function_name).first()

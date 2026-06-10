@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Save, GripVertical, Download, Upload } from 'lucide-react';
-import { getFunctionApiConfigs, updateFunctionApiConfig, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage } from '../services/api';
+import { Plus, Trash2, Save, GripVertical, Download, Upload, RefreshCw } from 'lucide-react';
+import { getFunctionApiConfigs, updateFunctionApiConfig, syncFunctionApiPricingDescriptions, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage } from '../services/api';
 import { confirmUiMessage } from '../lib/uiMessage';
 
 
@@ -29,6 +29,7 @@ export default function FunctionApiConfigTab() {
         strict_provider: false
     });
     const [savingRouting, setSavingRouting] = useState(false);
+    const [syncingPricing, setSyncingPricing] = useState(false);
     const [categoryFilters, setCategoryFilters] = useState({});
     const [providerFilters, setProviderFilters] = useState({});
 
@@ -95,7 +96,7 @@ export default function FunctionApiConfigTab() {
             const existing = prev[funcName] || [];
             return {
                 ...prev,
-                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true, alias: '', applicable_languages: null }]
+                [funcName]: [...existing, { system_api_id: '', priority: 0, is_fallback: true, alias: '', applicable_languages: null, pricing_description: '' }]
             };
         });
     };
@@ -131,7 +132,8 @@ export default function FunctionApiConfigTab() {
                 is_fallback: Boolean(item.is_fallback),
 
                 alias: item.alias || '',
-                applicable_languages: item.applicable_languages || null
+                applicable_languages: item.applicable_languages || null,
+                pricing_description: String(item.pricing_description || '').trim() || null
 
             })).filter(item => !isNaN(item.system_api_id));
 
@@ -211,6 +213,22 @@ export default function FunctionApiConfigTab() {
 
     };
 
+    const handleSyncPricingDescriptions = async () => {
+        setSyncingPricing(true);
+        try {
+            const res = await syncFunctionApiPricingDescriptions();
+            await fetchData();
+            const updatedRows = Number(res?.updated_config_rows || 0);
+            const updatedItems = Number(res?.updated_api_items || 0);
+            alert(`定价说明同步完成：更新 ${updatedRows} 个功能配置，${updatedItems} 条 API 映射。`);
+        } catch (error) {
+            console.error('Sync pricing descriptions failed', error);
+            alert('同步定价说明失败');
+        } finally {
+            setSyncingPricing(false);
+        }
+    };
+
     if (loading) return <div className="text-gray-400 p-4">Loading configurations...</div>;
 
     const handleSaveRouting = async () => {
@@ -235,6 +253,14 @@ export default function FunctionApiConfigTab() {
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="text-xl font-medium text-white mb-2">功能专属 API 映射设置</h3>
                     <div className="flex gap-2">
+                        <button
+                            onClick={handleSyncPricingDescriptions}
+                            disabled={syncingPricing}
+                            className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                            <RefreshCw size={16} className={syncingPricing ? 'animate-spin' : ''} />
+                            {syncingPricing ? '同步中...' : '从计费规则同步定价说明'}
+                        </button>
                         <button
                             onClick={handleExport}
                             className="bg-white/5 hover:bg-white/10 text-white px-3 py-1.5 rounded-lg text-sm transition-colors border border-white/10 flex items-center gap-2"
@@ -396,7 +422,7 @@ export default function FunctionApiConfigTab() {
                                                         </option>
                                                     ))}
                                                     {/* If selected API is deprecated and missing from active list, inject it anyway */}
-                                                    {item.system_api_id && !systemApis.some(a => a.id === item.system_api_id) && (
+                                                    {item.system_api_id && !systemApis.some(a => Number(a.id) === Number(item.system_api_id)) && (
                                                         <option value={item.system_api_id}>
                                                             API [{item.system_api_name || item.system_api_id}] (已废弃/未验证)
                                                         </option>
@@ -420,6 +446,15 @@ export default function FunctionApiConfigTab() {
                                                         <option value="zh">中文</option>
                                                         <option value="en">英文</option>
                                                     </select>
+                                                </div>
+                                                <div className="mt-2">
+                                                    <input
+                                                        type="text"
+                                                        value={item.pricing_description || ''}
+                                                        onChange={(e) => handleChangeParams(funcName, originalIndex, 'pricing_description', e.target.value)}
+                                                        className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
+                                                        placeholder="定价说明（例：约 120 积分/次，可从计费规则同步）"
+                                                    />
                                                 </div>
                                             </div>
                                             <div className="w-[100px]">

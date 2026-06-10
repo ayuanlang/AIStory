@@ -1091,6 +1091,7 @@ class FunctionAPISettingItem(BaseModel):
     is_fallback: bool = False
     alias: Optional[str] = None
     applicable_languages: Optional[List[str]] = None
+    pricing_description: Optional[str] = None
 
 class FunctionAPIConfigUpdate(BaseModel):
     api_settings: List[FunctionAPISettingItem]
