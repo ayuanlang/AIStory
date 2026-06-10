@@ -1363,9 +1363,26 @@ export const generateEpisodeScenes = async (episodeId, payload) => {
 
 // Project Script Generator (Episodes -> Script drafts)
 export const generateProjectEpisodeScripts = async (projectId, payload) => {
+    const enrichedPayload = { ...(payload || {}) };
+    enrichedPayload.function_name = 'script_analysis';
+    if (!enrichedPayload.system_api_id) {
+        enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
+    const apiContextStr = localStorage.getItem('__function_api_context');
+    if (apiContextStr) {
+        try {
+            const ctx = JSON.parse(apiContextStr);
+            if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
+                enrichedPayload.system_api_id = ctx['script_analysis'].system_api_id;
+            }
+        } catch (e) {
+            console.warn('[API] generateProjectEpisodeScripts: Failed to parse function API context', e);
+        }
+    }
+
     return await asyncLLMPost(
         `/projects/${projectId}/script_generator/episodes/scripts`,
-        payload,
+        enrichedPayload,
         { pollOptions: { timeout: 30 * 60 * 1000 } }
     );
 }

@@ -12169,6 +12169,8 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
     script_title: Optional[str] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
     overwrite_existing: bool = True
     retry_failed_only: bool = False
     extra_notes: Optional[str] = None
@@ -12534,7 +12536,13 @@ async def generate_project_character_profile(
         "- Do/Don't (hard constraints): ...\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
+    system_api_id = getattr(req, "system_api_id", None) if req else None
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        function_name=function_name,
+        system_api_id=system_api_id,
+    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -15339,6 +15347,118 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
     if text.startswith("{") or text.startswith("["):
         candidates.append(text)
 
+    def _extract_balanced_json_objects(source: str, max_count: int = 24) -> List[str]:
+        objects: List[str] = []
+        depth = 0
+        in_str = False
+        escape = False
+        obj_start = -1
+        for i, ch in enumerate(source):
+            if in_str:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+
+            if ch == "{":
+                if depth == 0:
+                    obj_start = i
+                depth += 1
+                continue
+
+            if ch == "}":
+                if depth <= 0:
+                    continue
+                depth -= 1
+                if depth == 0 and obj_start >= 0:
+                    candidate = source[obj_start:i + 1].strip()
+                    if candidate:
+                        objects.append(candidate)
+                        if len(objects) >= max_count:
+                            break
+                    obj_start = -1
+
+        return objects
+
+    def _build_section_only_candidate(source: str, section: str) -> Optional[str]:
+        section_key = str(section or "").strip()
+        if not section_key:
+            return None
+        key_re = re.compile(rf'"{re.escape(section_key)}"\s*:\s*\[', re.IGNORECASE)
+        m = key_re.search(source)
+        if not m:
+            return None
+
+        start_bracket = source.find("[", m.start())
+        if start_bracket < 0:
+            return None
+
+        depth = 0
+        in_str = False
+        escape = False
+        end_bracket = -1
+        for i in range(start_bracket, len(source)):
+            ch = source[i]
+            if in_str:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "[":
+                depth += 1
+                continue
+            if ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end_bracket = i
+                    break
+
+        if end_bracket < 0:
+            return None
+
+        array_text = source[start_bracket:end_bracket + 1].strip()
+        if not array_text:
+            return None
+
+        skeleton: Dict[str, Any] = {
+            "characters": [],
+            "props": [],
+            "environments": [],
+            "covers": [],
+            "posters": [],
+        }
+        try:
+            parsed_array = json.loads(array_text, strict=False)
+            if isinstance(parsed_array, list):
+                skeleton[section_key] = parsed_array
+                # Keep both aliases synchronized to reduce downstream miss.
+                if section_key == "covers":
+                    skeleton["posters"] = parsed_array
+                elif section_key == "posters":
+                    skeleton["covers"] = parsed_array
+                return json.dumps(skeleton, ensure_ascii=False)
+        except Exception:
+            return None
+        return None
+
     def _extract_object_after_label(source: str, label: str) -> Optional[str]:
         lower = source.lower()
         idx = lower.find(label.lower())
@@ -15416,13 +15536,24 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
 
             start_pos = idx + 1
 
-    key_object = _extract_object_near_key(text, "characters")
-    if key_object:
-        candidates.append(key_object)
+    for key_name in ("characters", "props", "environments", "covers", "posters"):
+        key_object = _extract_object_near_key(text, key_name)
+        if key_object:
+            candidates.append(key_object)
 
     labeled_object = _extract_object_after_label(text, "SUBJECTS_JSON")
     if labeled_object:
         candidates.append(labeled_object)
+
+    for candidate in _extract_balanced_json_objects(text):
+        lower = candidate.lower()
+        if any(token in lower for token in ('"characters"', '"props"', '"environments"', '"covers"', '"posters"')):
+            candidates.append(candidate)
+
+    for section_name in ("characters", "props", "environments", "covers", "posters"):
+        section_candidate = _build_section_only_candidate(text, section_name)
+        if section_candidate:
+            candidates.append(section_candidate)
 
     def _pick_text(*values: Any) -> str:
         for value in values:
