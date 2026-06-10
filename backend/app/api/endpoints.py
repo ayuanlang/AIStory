@@ -6689,7 +6689,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "Ignore any Subject Index-like prose or reasoning fragments that may appear elsewhere in the input.\n\n"
                 f"{persisted_subject_index_for_prompt}"
             )
-            user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{request.text}"
+            # In downstream Subject-Index consumer stages, use persisted sanitized
+            # Subject Index as canonical source to avoid request text contamination.
+            canonical_stage_text = persisted_subject_index_for_prompt if is_subject_index_consumer_stage else str(request.text or "")
+            user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             logger.info(
                 "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s",
                 getattr(request, "episode_id", None),
@@ -6699,6 +6702,43 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
         else:
             user_content = f"Script to Analyze:\n\n{request.text}"
+
+        def _extract_reuse_assets_from_subject_index(subject_index_text: str) -> List[Dict[str, Any]]:
+            assets: List[Dict[str, Any]] = []
+            text = sanitize_subject_index_text(subject_index_text)
+            if not text:
+                return assets
+            for raw_line in str(text).splitlines():
+                line = str(raw_line or "").strip()
+                if not re.match(r"^\|?\s*S\d+\s*\|", line, flags=re.IGNORECASE):
+                    continue
+                normalized_line = line.strip("|").strip()
+                parts = [p.strip() for p in normalized_line.split("|")]
+                if len(parts) < 4:
+                    continue
+                subject_type = str(parts[1] or "").strip().lower()
+                name_zh = str(parts[2] or "").strip()
+                name_en = str(parts[3] or "").strip()
+                asset_name = name_zh or name_en
+                if not asset_name:
+                    continue
+                mapped_type = ""
+                if subject_type in {"character", "characters", "char", "人物", "角色"}:
+                    mapped_type = "character"
+                elif subject_type in {"prop", "props", "道具", "物件"}:
+                    mapped_type = "prop"
+                elif subject_type in {"environment", "environments", "env", "场景", "环境"}:
+                    mapped_type = "environment"
+                elif subject_type in {"cover", "covers", "poster", "posters", "cover_poster", "封面", "封面海报"}:
+                    mapped_type = "cover"
+                if not mapped_type:
+                    continue
+                assets.append({
+                    "name": asset_name,
+                    "type": mapped_type,
+                    "description": str(parts[5] or "").strip() if len(parts) > 5 else "",
+                })
+            return assets
         
         if request.project_metadata:
             project_context = _build_project_prompt_context(request.project_metadata)
@@ -6782,6 +6822,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
 
         reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
+        if is_subject_index_consumer_stage and persisted_subject_index_for_prompt:
+            derived_assets = _extract_reuse_assets_from_subject_index(persisted_subject_index_for_prompt)
+            if derived_assets:
+                reuse_subject_assets = derived_assets
+                logger.info(
+                    "[analyze_scene] override reuse_subject_assets from persisted subject index count=%s episode_id=%s",
+                    len(derived_assets),
+                    getattr(request, "episode_id", None),
+                )
         if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
             def _normalize_subject_type(raw_type: Any) -> str:
                 t = str(raw_type or "").strip().lower()
