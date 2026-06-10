@@ -6656,7 +6656,49 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             logger.warning(f"[analyze_scene] failed to inject character canon: {e}")
         
         # Prepare user content with optional project metadata
-        user_content = f"Script to Analyze:\n\n{request.text}"
+        prompt_file_lower = str(getattr(request, "prompt_file", "") or "").strip().lower()
+        mode_lower = str(effective_scene_analysis_mode or "").strip().lower()
+        is_subject_index_consumer_stage = bool(
+            "scene_planning_2_2" in prompt_file_lower
+            or "entity_design" in prompt_file_lower
+            or "subject_generation" in prompt_file_lower
+            or mode_lower.startswith("2_pass_generate_assets")
+            or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats"}
+        )
+
+        persisted_subject_index_for_prompt = ""
+        if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
+            try:
+                _ep_for_subject_index = db.query(Episode).filter(Episode.id == request.episode_id).first()
+                if _ep_for_subject_index:
+                    persisted_subject_index_for_prompt = sanitize_subject_index_text(
+                        getattr(_ep_for_subject_index, "ai_scene_analysis_subject_index", None)
+                    )
+                    if not persisted_subject_index_for_prompt:
+                        persisted_subject_index_for_prompt = sanitize_subject_index_text(
+                            getattr(_ep_for_subject_index, "ai_scene_analysis_result", None)
+                        )
+            except Exception as _subject_idx_inject_err:
+                logger.warning("[analyze_scene] failed loading persisted subject index for prompt injection: %s", _subject_idx_inject_err)
+
+        if persisted_subject_index_for_prompt:
+            saved_subject_index_block = (
+                "[Saved Subject Index Injection - Authoritative]\n"
+                "The following Subject Index is loaded from persisted sanitized episode data.\n"
+                "For this stage, treat this block as the ONLY authoritative Subject Index source.\n"
+                "Ignore any Subject Index-like prose or reasoning fragments that may appear elsewhere in the input.\n\n"
+                f"{persisted_subject_index_for_prompt}"
+            )
+            user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{request.text}"
+            logger.info(
+                "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s",
+                getattr(request, "episode_id", None),
+                len(persisted_subject_index_for_prompt),
+                effective_scene_analysis_mode,
+                getattr(request, "prompt_file", None),
+            )
+        else:
+            user_content = f"Script to Analyze:\n\n{request.text}"
         
         if request.project_metadata:
             project_context = _build_project_prompt_context(request.project_metadata)
