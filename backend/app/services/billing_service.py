@@ -1070,7 +1070,17 @@ class BillingService:
             if input_tokens == 0 and output_tokens == 0 and total_tokens > 0:
                 input_tokens = total_tokens
 
+            # Backward-compatibility guard:
+            # legacy data may store unit_type=per_token while costs are actually per-million-token rates.
+            # By default, treat per_token as per_million_tokens unless explicitly overridden.
             divisor = 1_000_000.0 if unit_type == 'per_million_tokens' else 1_000.0 if unit_type == 'per_1k_tokens' else 1.0
+            if unit_type == 'per_token':
+                raw_divisor = config.get("per_token_divisor")
+                if raw_divisor is None:
+                    raw_divisor = payload.get("per_token_divisor")
+                parsed_divisor = BillingService._safe_float(raw_divisor, 1_000_000.0)
+                divisor = parsed_divisor if parsed_divisor > 0 else 1_000_000.0
+
             token_cost = ((float(input_tokens) * float(cost_input)) + (float(output_tokens) * float(cost_output))) / divisor
             if cost_input == 0 and cost_output == 0 and base_cost > 0:
                 token_cost = (float(max(total_tokens, input_tokens + output_tokens)) * float(base_cost)) / divisor
