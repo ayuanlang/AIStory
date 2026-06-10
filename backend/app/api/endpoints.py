@@ -6673,7 +6673,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         )
 
         persisted_subject_index_for_prompt = ""
-        if is_subject_index_consumer_stage and (not is_scene_beats_stage) and getattr(request, "episode_id", None):
+        if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
                 _ep_for_subject_index = db.query(Episode).filter(Episode.id == request.episode_id).first()
                 if _ep_for_subject_index:
@@ -6687,6 +6687,31 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             except Exception as _subject_idx_inject_err:
                 logger.warning("[analyze_scene] failed loading persisted subject index for prompt injection: %s", _subject_idx_inject_err)
 
+        def _strip_embedded_subject_index_from_stage_text(raw_text: Any) -> str:
+            text = str(raw_text or "")
+            if not text.strip():
+                return ""
+
+            marker_patterns = [
+                r"(?im)^\s*#{1,6}\s*【上游提取的资产清单\s*Subject\s*Index】\s*$",
+                r"(?im)^\s*#{1,6}\s*Subject\s*Index\s*$",
+                r"(?im)^\s*#{1,6}\s*【.*Subject\s*Index.*】\s*$",
+            ]
+            cut_positions: List[int] = []
+            for pattern in marker_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    cut_positions.append(int(match.start()))
+
+            delimiter = "----------------*****--------------"
+            delimiter_idx = text.find(delimiter)
+            if delimiter_idx >= 0:
+                cut_positions.append(int(delimiter_idx))
+
+            if not cut_positions:
+                return text.strip()
+            return text[:min(cut_positions)].strip()
+
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
@@ -6697,14 +6722,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
-            canonical_stage_text = persisted_subject_index_for_prompt if is_subject_index_consumer_stage else str(request.text or "")
+            if is_scene_beats_stage:
+                canonical_stage_text = _strip_embedded_subject_index_from_stage_text(request.text)
+            elif is_subject_index_consumer_stage:
+                canonical_stage_text = persisted_subject_index_for_prompt
+            else:
+                canonical_stage_text = str(request.text or "")
             user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             logger.info(
-                "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s",
+                "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
                 getattr(request, "episode_id", None),
                 len(persisted_subject_index_for_prompt),
                 effective_scene_analysis_mode,
                 getattr(request, "prompt_file", None),
+                is_scene_beats_stage,
             )
         else:
             user_content = f"Script to Analyze:\n\n{request.text}"
