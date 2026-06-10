@@ -8455,7 +8455,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         key: 'restart-stage2-card',
                         label: t('重跑覆盖', 'Rerun & Overwrite'),
                         icon: 'refresh',
-                        onClick: handleRestartStage2,
+                        onClick: handleRerunSceneBeatsOnly,
                         disabled: isAnalyzing || !getStageOutputContent('stage1', 'adapted_script'),
                         loading: isAnalyzing,
                     },
@@ -8507,7 +8507,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 placeholder: t('第二阶段尚未生成资产清单。', 'No Stage 2 asset index yet.'),
             },
         ];
-    }, [activeEpisode?.ai_scene_analysis_subject_index, getStageOutputContent, handleImportStageArtifact, handleRestartStage2, isAnalyzing, subjectIndexText, t]);
+    }, [activeEpisode?.ai_scene_analysis_subject_index, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
         const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');
