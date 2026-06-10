@@ -6658,6 +6658,12 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Prepare user content with optional project metadata
         prompt_file_lower = str(getattr(request, "prompt_file", "") or "").strip().lower()
         mode_lower = str(effective_scene_analysis_mode or "").strip().lower()
+        function_name_lower = str(getattr(request, "function_name", "") or "").strip().lower()
+        is_scene_beats_stage = bool(
+            function_name_lower in {"script_analysis_stage_2_2_beats"}
+            or "scene_planning_2_2" in prompt_file_lower
+            or mode_lower in {"beats_generation", "scene_planning_beats", "scene_beats_only"}
+        )
         is_subject_index_consumer_stage = bool(
             "scene_planning_2_2" in prompt_file_lower
             or "entity_design" in prompt_file_lower
@@ -6667,7 +6673,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         )
 
         persisted_subject_index_for_prompt = ""
-        if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
+        if is_subject_index_consumer_stage and (not is_scene_beats_stage) and getattr(request, "episode_id", None):
             try:
                 _ep_for_subject_index = db.query(Episode).filter(Episode.id == request.episode_id).first()
                 if _ep_for_subject_index:
@@ -6776,7 +6782,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         attention_notes_raw = (getattr(request, "analysis_attention_notes", None) or "").strip()
         attention_notes = attention_notes_raw
-        if attention_notes:
+        if attention_notes and (not is_scene_beats_stage):
             # Guardrail: do not inject directives that force Subject-Index-only output,
             # which can suppress scene table generation in scene analysis runs.
             banned_line_patterns = [
@@ -6808,7 +6814,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     len(attention_notes),
                 )
 
-        if attention_notes:
+        if attention_notes and (not is_scene_beats_stage):
             attention_block = (
                 "Regeneration Attention Notes (High Priority):\n"
                 "When regenerating AI Scene Analysis, you MUST prioritize and satisfy these constraints:\n"
@@ -6831,7 +6837,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     len(derived_assets),
                     getattr(request, "episode_id", None),
                 )
-        if isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
+        if (not is_scene_beats_stage) and isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
             def _normalize_subject_type(raw_type: Any) -> str:
                 t = str(raw_type or "").strip().lower()
                 if t in {"character", "characters", "char", "人物", "角色"}:
