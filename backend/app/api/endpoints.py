@@ -4244,7 +4244,9 @@ def _build_scene_analysis_blocking_failure_detail(
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
-        reasons_cn.append("第一阶段未解析到完整的 Subject Index 区块")
+        reasons_cn.append("第一阶段未解析到 Subject Index 区块")
+    if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
+        reasons_cn.append("第一阶段仅解析到 Subject Index 表头，缺少实体条目")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
@@ -7493,16 +7495,33 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # Do not hard-fail here so callers can still inspect/import partial output.
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
-        source_subject_index_text = sanitize_subject_index_text(getattr(request, "text", None))
+        source_subject_index_text = sanitize_subject_index_text(result_content)
         if not is_entity_design_phase:
-            has_subject_index = bool(
+            has_subject_section = bool(
                 re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
                 or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
             )
-            if not has_subject_index:
+            has_subject_header = bool(
+                re.search(
+                    r"(?im)^\s*\|\s*subject_no\s*\|\s*subject_type\s*\|",
+                    source_subject_index_text,
+                )
+                or re.search(r"(?i)subject_no\s*=\s*", source_subject_index_text)
+            )
+            has_subject_rows = bool(
+                re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", source_subject_index_text)
+                or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", source_subject_index_text)
+            )
+
+            if not has_subject_section:
                 blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
                 blocking_subject_warnings.append(
                     "第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。"
+                )
+            elif has_subject_header and not has_subject_rows:
+                blocking_codes.append("ANALYSIS_SUBJECT_INDEX_HEADER_ONLY")
+                blocking_subject_warnings.append(
+                    "第一阶段仅解析到 Subject Index 表头，缺少实体条目（如 S001... 行或 subject_no=... 条目），请重试。"
                 )
 
         if blocking_codes:
@@ -7809,6 +7828,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
             "ANALYSIS_SUBJECT_INDEX_MISSING",
+            "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY",
         }
         matched_review_codes = [code for code in severe_import_review_codes if code in review_required_codes]
         if matched_review_codes:

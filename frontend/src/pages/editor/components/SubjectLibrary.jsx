@@ -2491,12 +2491,55 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 console.warn('Failed to refresh entity after succeeded image job without result URL', refreshErr);
                             }
                         }
-                        if (getCurrentJobEntry(entityId, jobId)) {
-                            clearLocalSubjectImageJobState(entityId);
+                        if (recoveredUrl) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
+                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+                            }
+                            continue;
                         }
-                        if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
-                            onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
+
+                        const now = Date.now();
+                        const persistWaitStartedAt = Number(job?.persistWaitStartedAt || 0) || now;
+                        const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
+                        const persistWaitElapsed = now - persistWaitStartedAt;
+
+                        if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
+                            onLog(
+                                t(
+                                    `主体任务已完成，正在等待稳定图片入库：${job?.entityName || entityId}`,
+                                    `Subject job completed and is waiting for durable image persistence: ${job?.entityName || entityId}`
+                                ),
+                                'process'
+                            );
                         }
+
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务状态为完成，但等待稳定图片超时：${job?.entityName || entityId}`,
+                                        `Subject job reported completed, but timed out waiting for a durable image URL: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                            continue;
+                        }
+
+                        statusUpdates[String(entityId)] = {
+                            status: 'persisting',
+                            lastPolledAt: now,
+                            statusFailureCount: 0,
+                            lastStatusError: '',
+                            persistWaitStartedAt,
+                            lastPersistWaitLogAt: now,
+                        };
                         continue;
                     }
 
