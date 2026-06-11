@@ -9919,6 +9919,67 @@ def _normalize_markdown_table_cells(cells: List[str], header_count: int) -> List
     return vals
 
 
+def _looks_like_markdown_table_row_for_shots(line: str) -> bool:
+    s = str(line or "").strip()
+    if not s:
+        return False
+    if s.startswith("|"):
+        return True
+    # Accept markdown rows without leading/trailing pipes.
+    return s.count("|") >= 2
+
+
+def sanitize_shots_markdown_table_text(text: Any) -> str:
+    """Keep only the first valid markdown table block from LLM shots output."""
+    cleaned = sanitize_llm_markdown_output(str(text or ""))
+    if not cleaned:
+        return ""
+
+    lines = str(cleaned).splitlines()
+    if not lines:
+        return ""
+
+    header_idx = -1
+    separator_idx = -1
+    for i in range(len(lines) - 1):
+        header_line = str(lines[i] or "").strip()
+        sep_line = str(lines[i + 1] or "").strip()
+        if not _looks_like_markdown_table_row_for_shots(header_line):
+            continue
+        if len(_split_markdown_row_escaped(header_line)) < 2:
+            continue
+        if _is_markdown_table_separator(sep_line):
+            header_idx = i
+            separator_idx = i + 1
+            break
+
+    if header_idx < 0 or separator_idx < 0:
+        return ""
+
+    kept_lines: List[str] = [str(lines[header_idx]), str(lines[separator_idx])]
+    data_row_count = 0
+    for line in lines[separator_idx + 1 :]:
+        stripped = str(line or "").strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            break
+        if _looks_like_markdown_table_row_for_shots(stripped):
+            if _is_markdown_table_separator(stripped):
+                continue
+            kept_lines.append(stripped)
+            data_row_count += 1
+            continue
+        # Stop on first non-table content after table begins.
+        if data_row_count > 0:
+            break
+
+    if data_row_count <= 0:
+        return ""
+
+    return "\n".join(kept_lines).strip()
+
+
 def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict[str, str]], int]:
     """Parse a markdown shot table into headers and rows.
 
@@ -9931,20 +9992,10 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
     header_idx = -1
     separator_idx = -1
 
-    def _looks_like_table_row(line: str) -> bool:
-        s = str(line or "").strip()
-        if not s:
-            return False
-        if s.startswith("|"):
-            return True
-        # Some providers emit markdown rows without leading/trailing pipes.
-        # Accept rows with at least two pipe separators as table rows.
-        return s.count("|") >= 2
-
     for i in range(len(lines) - 1):
         header_line = lines[i].strip()
         sep_line = lines[i + 1].strip()
-        if not _looks_like_table_row(header_line):
+        if not _looks_like_markdown_table_row_for_shots(header_line):
             continue
         header_cells_raw = _split_markdown_row_escaped(header_line)
         if len(header_cells_raw) < 2:
@@ -9975,7 +10026,7 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
                     continue
                 if stripped.startswith("#"):
                     break
-                if _looks_like_table_row(stripped) and not _is_markdown_table_separator(stripped):
+                if _looks_like_markdown_table_row_for_shots(stripped) and not _is_markdown_table_separator(stripped):
                     first_data_cells = _split_markdown_row_escaped(stripped)
                     break
 
@@ -10034,7 +10085,7 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
         if stripped.startswith("#"):
             break
 
-        if _looks_like_table_row(stripped):
+        if _looks_like_markdown_table_row_for_shots(stripped):
             if _is_markdown_table_separator(stripped):
                 continue
 
@@ -18422,6 +18473,9 @@ async def ai_generate_shots(
             cleaned_lines.append(line)
         response_content = "\n".join(cleaned_lines).strip()
 
+        # Keep only markdown table payload for shot generation flows.
+        response_content = sanitize_shots_markdown_table_text(response_content)
+
         if not response_content:
             logger.warning(
                 f"[ai_generate_shots] empty_after_sanitize scene_id={scene_id} user_id={current_user_id} raw_len={len(raw_str)}"
@@ -18683,6 +18737,9 @@ async def ai_regenerate_shots(
             if reservation_tx_id is not None:
                 billing_service.cancel_reservation(db, reservation_tx_id, "provider moderation block")
             raise HTTPException(status_code=502, detail="Provider moderation blocked shot regeneration (PROHIBITED_CONTENT)")
+
+        # Keep only markdown table payload for shot regeneration flows.
+        response_content = sanitize_shots_markdown_table_text(response_content)
 
         if not response_content:
             if reservation_tx_id is not None:
