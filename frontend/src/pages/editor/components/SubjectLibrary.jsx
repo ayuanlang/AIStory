@@ -897,7 +897,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             '[Existing Subjects For Reuse (Optional)]',
             selectedRefs.length > 0 ? selectedRefs.map((line, idx) => `${idx + 1}. ${line}`).join('\n') : '(none)',
             '---',
-            'Please return only import-ready SUBJECTS_JSON with keys: characters, props, environments, covers.',
+            'Please return only import-ready SUBJECTS_JSON with keys: characters, props, environments, covers, posters.',
         ].filter(Boolean);
 
         return lines.join('\n');
@@ -910,6 +910,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             props: 'prop',
             environments: 'environment',
             covers: 'poster',
+            posters: 'poster',
         };
         const normalizeImportEntityKey = (type, rawName) => {
             const stableType = String(type || '').trim().toLowerCase();
@@ -2398,6 +2399,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
+                            void loadAssets({ includeHistoricalEpisodeAssets: false });
                             continue;
                         }
 
@@ -2415,6 +2417,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
+                            void loadAssets({ includeHistoricalEpisodeAssets: false });
                             continue;
                         }
 
@@ -2498,6 +2501,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
                                 onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
                             }
+                            void loadAssets({ includeHistoricalEpisodeAssets: false });
                             continue;
                         }
 
@@ -2602,7 +2606,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
             clearInterval(timer);
         };
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, loadAssets, onLog, projectId, refreshPersistedSubjectEntityImage, subjectImageJobs, t]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });

@@ -580,7 +580,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             '[Existing Subjects For Reuse (Optional)]',
             selectedRefs.length > 0 ? selectedRefs.map((line, idx) => `${idx + 1}. ${line}`).join('\n') : '(none)',
             '---',
-            'Please return only import-ready SUBJECTS_JSON with keys: characters, props, environments, covers.',
+            'Please return only import-ready SUBJECTS_JSON with keys: characters, props, environments, covers, posters.',
         ].filter(Boolean);
 
         return lines.join('\n');
@@ -593,6 +593,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             props: 'prop',
             environments: 'environment',
             covers: 'poster',
+            posters: 'poster',
         };
         const normalizeImportEntityKey = (type, rawName) => {
             const stableType = String(type || '').trim().toLowerCase();
