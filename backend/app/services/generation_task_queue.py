@@ -1,23 +1,11 @@
-import json
 import logging
 import os
 import asyncio
 import contextlib
 
-QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
-def _load_queue_config():
-    config = {"queue_threads": 10, "callback_threads": 10}
-    if os.path.exists(QUEUE_CONFIG_FILE):
-        try:
-            with open(QUEUE_CONFIG_FILE, "r") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    config.update(d)
-        except Exception:
-            pass
-    return config
+from app.core.queue_config import DEFAULT_QUEUE_CONFIG, load_queue_config
 
-_q_conf = _load_queue_config()
+_q_conf = load_queue_config()
 
 import threading
 import time
@@ -52,7 +40,10 @@ _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
 _REQUESTED_WORKER_THREADS = max(
     1,
-    int(_q_conf.get("queue_threads", _DEFAULT_WORKER_THREADS) or _DEFAULT_WORKER_THREADS),
+    int(
+        _q_conf.get("queue_threads", DEFAULT_QUEUE_CONFIG["queue_threads"])
+        or DEFAULT_QUEUE_CONFIG["queue_threads"]
+    ),
 )
 # Keep the default queue target at 20 for dedicated worker processes, while
 # still degrading safely when the DB pool is smaller than that target.

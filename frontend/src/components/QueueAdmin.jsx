@@ -256,7 +256,7 @@ export default function QueueAdmin() {
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
-      await updateAdminQueueConfig({
+      const savedConfig = await updateAdminQueueConfig({
         queue_threads: Number(config.queue_threads),
         callback_threads: Number(config.callback_threads),
         pure_callback_mode_auto: Boolean(config.pure_callback_mode_auto),
@@ -268,6 +268,7 @@ export default function QueueAdmin() {
         callback_compensation_scan_interval_seconds: Number(config.callback_compensation_scan_interval_seconds),
         callback_compensation_scan_batch_size: Number(config.callback_compensation_scan_batch_size),
       });
+      setConfig(savedConfig);
       notifyUiMessage('Configuration saved. Some changes require a backend restart to fully apply.', 'success');
     } catch (e) {
       notifyUiMessage('Failed to save config', 'error');
@@ -376,12 +377,12 @@ export default function QueueAdmin() {
           <div className="space-y-1 flex-1 max-w-[200px]">
             <label className="text-sm text-gray-400">Queue Worker Threads</label>
             <input type="number" min="1" value={config.queue_threads} onChange={e => setConfig({...config, queue_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-            <div className="text-xs text-gray-500">Default: 10</div>
+            <div className="text-xs text-gray-500">Default comes from backend queue config.</div>
           </div>
           <div className="space-y-1 flex-1 max-w-[200px]">
             <label className="text-sm text-gray-400">Callback Threads</label>
             <input type="number" min="1" value={config.callback_threads} onChange={e => setConfig({...config, callback_threads: e.target.value})} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-            <div className="text-xs text-gray-500">Default: 10</div>
+            <div className="text-xs text-gray-500">Default comes from backend queue config.</div>
           </div>
           <div className="space-y-1 flex-1 min-w-[260px]">
             <label className="text-sm text-gray-400 block">Video Completion Mode</label>

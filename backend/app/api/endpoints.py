@@ -1,39 +1,16 @@
 
-import json
 import os
 from typing import Any, Dict
 import importlib
 
-QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "queue_config.json")
-def _load_queue_config():
-    config = {
-        "queue_threads": 10,
-        "callback_threads": 10,
-        "pure_callback_mode_auto": True,
-        "pure_callback_mode": False,
-        "callback_loss_retry_enabled": True,
-        "callback_loss_retry_after_seconds": 1200,
-        "callback_loss_max_submit_retries": 1,
-        "callback_compensation_scan_enabled": True,
-        "callback_compensation_scan_interval_seconds": 60,
-        "callback_compensation_scan_batch_size": 10,
-    }
-    if os.path.exists(QUEUE_CONFIG_FILE):
-        try:
-            with open(QUEUE_CONFIG_FILE, "r") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    config.update(d)
-        except Exception:
-            pass
-    return config
+from app.core.queue_config import DEFAULT_QUEUE_CONFIG, load_queue_config, save_queue_config
 
-_q_conf = _load_queue_config()
+_q_conf = load_queue_config()
 
 
 def _queue_runtime_config() -> Dict[str, Any]:
     try:
-        loaded = _load_queue_config()
+        loaded = load_queue_config()
         if isinstance(loaded, dict):
             return loaded
     except Exception:
@@ -432,7 +409,12 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             "async_inflight": callback_async_inflight,
             "image_persist_inflight": image_callback_persist_inflight,
             "video_persist_inflight": video_callback_persist_inflight,
-            "requested_threads": int(_q_conf.get("callback_threads", 10) or 10),
+            "requested_threads": _queue_cfg_int(
+                "callback_threads",
+                int(DEFAULT_QUEUE_CONFIG["callback_threads"]),
+                minimum=1,
+                maximum=1000,
+            ),
             "effective_threads": int(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY),
             "slots_total": callback_slots_total,
             "slots_in_use": callback_slots_in_use,
@@ -766,7 +748,11 @@ _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
 _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _CALLBACK_FINALIZE_CAP = max(1, min(10, _PER_PROCESS_POOL_BUDGET // 4))
-GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(1, min(int(_q_conf.get("callback_threads", 10)), _CALLBACK_FINALIZE_CAP))
+_DEFAULT_CALLBACK_THREADS = int(DEFAULT_QUEUE_CONFIG["callback_threads"])
+GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY = max(
+    1,
+    min(int(_q_conf.get("callback_threads", _DEFAULT_CALLBACK_THREADS)), _CALLBACK_FINALIZE_CAP),
+)
 GENERATION_CALLBACK_FINALIZE_SEMAPHORE = asyncio.Semaphore(GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY)
 GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS", "120") or 120))
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
@@ -787,10 +773,10 @@ WEBHOOK_REPLAY_STORE: Dict[str, float] = {}
 WEBHOOK_REPLAY_LOCK = threading.Lock()
 _UNSIGNED_WEBHOOK_WARNING_EMITTED = False
 
-if int(_q_conf.get("callback_threads", 10)) > GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY:
+if int(_q_conf.get("callback_threads", _DEFAULT_CALLBACK_THREADS)) > GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY:
     logger.warning(
         "generation callback finalize concurrency capped | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
-        int(_q_conf.get("callback_threads", 10)),
+        int(_q_conf.get("callback_threads", _DEFAULT_CALLBACK_THREADS)),
         GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY,
         _POOL_CAPACITY,
         _WEB_CONCURRENCY,
@@ -35544,16 +35530,16 @@ async def analyze_asset_image(
 
     # 4. Construct Image URL
     base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
-    
-        if image_url_raw and image_url_raw.startswith("http"):
-            image_url_raw = _refresh_managed_media_url(image_url_raw, db)
-         # Check if it is localhost and we are not in a local env (heuristic)
-         # If the backend is local and the LLM is remote, the LLM cannot see 'localhost'.
-         # We must assume the LLM cannot access localhost.
-         # For production/render, RENDER_EXTERNAL_URL should be set.
-         # For local dev with remote LLM, we might need to upload the image to the LLM or use a tunnel.
-         # Many Vision APIs (OfferAI, Gemini) require a public URL or Base64.
-         image_url = image_url_raw
+
+    if image_url_raw and image_url_raw.startswith("http"):
+        image_url_raw = _refresh_managed_media_url(image_url_raw, db)
+        # Check if it is localhost and we are not in a local env (heuristic)
+        # If the backend is local and the LLM is remote, the LLM cannot see 'localhost'.
+        # We must assume the LLM cannot access localhost.
+        # For production/render, RENDER_EXTERNAL_URL should be set.
+        # For local dev with remote LLM, we might need to upload the image to the LLM or use a tunnel.
+        # Many Vision APIs (OfferAI, Gemini) require a public URL or Base64.
+        image_url = image_url_raw
     else:
         # Local path
         path_part = image_url_raw if image_url_raw.startswith("/") else f"/{image_url_raw}"
@@ -36593,7 +36579,7 @@ class QueueConfigBase(BaseModel):
 async def admin_get_queue_config(current_user: User = Depends(get_current_user)):
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    return QueueConfigBase(**_load_queue_config())
+    return QueueConfigBase(**load_queue_config())
 
 @router.put("/admin/queue/config", response_model=QueueConfigBase)
 async def admin_update_queue_config(config: QueueConfigBase, current_user: User = Depends(get_current_user)):
@@ -36601,13 +36587,12 @@ async def admin_update_queue_config(config: QueueConfigBase, current_user: User 
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
-    with open(QUEUE_CONFIG_FILE, "w") as f:
-        json.dump(payload, f)
+    saved_config = save_queue_config(payload)
     
     # Reload locally and let user know it applies on restart
     global _q_conf
-    _q_conf = dict(payload)
-    return config
+    _q_conf = dict(saved_config)
+    return QueueConfigBase(**saved_config)
     
 
 

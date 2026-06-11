@@ -280,7 +280,7 @@ _RUNTIME_DIAG_STORE_SAMPLE_ITEMS = max(8, int(os.getenv("RUNTIME_DIAG_STORE_SAMP
 _RUNTIME_DIAG_TRACEMALLOC_ENABLED = os.getenv("RUNTIME_DIAG_TRACEMALLOC_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_TRACEMALLOC_FRAMES = max(5, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_FRAMES", "15") or 15))
 _RUNTIME_DIAG_TRACEMALLOC_TOP = max(3, int(os.getenv("RUNTIME_DIAG_TRACEMALLOC_TOP", "8") or 8))
-_QUEUE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "queue_config.json")
+from app.core.queue_config import QUEUE_CONFIG_FILE as _QUEUE_CONFIG_FILE
 
 
 def _read_queue_worker_threads_setting() -> Any:
