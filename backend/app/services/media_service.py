@@ -572,6 +572,23 @@ class MediaGenerationService:
             
         if not ref_image:
             return {"error": "seedance 2.0 requires an image reference"}
+
+        # Align with other provider paths (e.g. KIE): normalize and refresh
+        # managed OSS URLs before downstream submission.
+        try:
+            resolved_ref_image = await self._resolve_ref_for_api_async(
+                ref_image,
+                force_data_uri_for_local=False,
+                prefer_public_upload_url=True,
+            )
+            if resolved_ref_image:
+                ref_image = resolved_ref_image
+                _debug_log(
+                    f"[ark-seedance] reference pre-resolved | preview={_strip_query_from_log_url(str(ref_image)[:300])}",
+                    "info",
+                )
+        except Exception as resolve_err:
+            logger.warning("Ark Seedance reference pre-resolve failed | error=%s", str(resolve_err)[:300])
             
         import base64
         import json
@@ -2214,6 +2231,11 @@ class MediaGenerationService:
         runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
         model_hint = str(active_config.get("model") or tool_conf.get("model") or "").strip().lower()
         prefer_higher_seedance_duration = bool(category == "Video" and "seedance" in model_hint)
+        seedance_resolution_override = None
+        if category == "Video" and "seedance" in model_hint:
+            is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+            seedance_resolution_override = "480p" if is_draft_mode else "720p"
+            tool_conf["resolution"] = seedance_resolution_override
 
         effective_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
         effective_image_size = str(image_size or "").strip() or None
@@ -2240,9 +2262,10 @@ class MediaGenerationService:
             tool_conf["image_size"] = effective_image_size
             tool_conf["imageSize"] = effective_image_size
 
-        mapped_resolution = self._map_resolution_to_allowed(tool_conf.get("resolution"), runtime_enum_catalog.get("resolution"))
-        if mapped_resolution:
-            tool_conf["resolution"] = mapped_resolution
+        if seedance_resolution_override is None:
+            mapped_resolution = self._map_resolution_to_allowed(tool_conf.get("resolution"), runtime_enum_catalog.get("resolution"))
+            if mapped_resolution:
+                tool_conf["resolution"] = mapped_resolution
 
         if category in {"Video", "Voice"}:
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
@@ -6833,6 +6856,8 @@ class MediaGenerationService:
         if not raw:
             return None
         if self._is_public_http_url(raw):
+            if oss_storage_service.is_managed_url(raw):
+                return str(oss_storage_service.refresh_url(raw) or raw)
             return raw
 
         uploaded_url = self._upload_runninghub_binary_ref(raw, api_key=api_key, base_url=base_url)
@@ -8278,6 +8303,22 @@ class MediaGenerationService:
             submit_url = f"{base_url}/{model}/v1/"
             poll_base = f"{base_url}/{model}/v1"
 
+        resolved_ref_image = None
+        resolved_last_frame = None
+        if gen_type == "video":
+            if ref_image:
+                resolved_ref_image = await self._resolve_ref_for_api_async(
+                    ref_image,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                )
+            if last_frame_url:
+                resolved_last_frame = await self._resolve_ref_for_api_async(
+                    last_frame_url,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                )
+
         if "veo" in model_lower and gen_type == "video":
             payload = {
                 "model": model,
@@ -8289,10 +8330,10 @@ class MediaGenerationService:
                 "generateAudio": False,
                 "personGeneration": "allow_adult"
             }
-            if ref_image:
-                payload["image"] = {"imageUrl": ref_image}
-            if last_frame_url:
-                payload["lastFrame"] = {"imageUrl": last_frame_url}
+            if resolved_ref_image:
+                payload["image"] = {"imageUrl": resolved_ref_image}
+            if resolved_last_frame:
+                payload["lastFrame"] = {"imageUrl": resolved_last_frame}
         elif any(k in model_lower for k in ["kling", "hailuo", "vidu", "sora", "jimeng"]) and gen_type == "video":
             payload = {
                 "model": model,
@@ -8302,10 +8343,10 @@ class MediaGenerationService:
                 payload["negative_prompt"] = negative_prompt
                 
             # For endpoints needing reference images
-            if ref_image:
-                payload["image_url"] = ref_image
-            if last_frame_url:
-                payload["last_frame_url"] = last_frame_url
+            if resolved_ref_image:
+                payload["image_url"] = resolved_ref_image
+            if resolved_last_frame:
+                payload["last_frame_url"] = resolved_last_frame
         else:
             payload = {
                 "prompt": self._merge_negative_prompt(prompt, negative_prompt)
@@ -14521,7 +14562,14 @@ class MediaGenerationService:
                     data = f.read()
                 mime = _guess_mime_from_path(local_path)
             elif raw_ref.startswith("http"):
-                r = requests.get(url_or_path, timeout=30)
+                http_ref = raw_ref
+                try:
+                    if oss_storage_service.is_managed_url(http_ref):
+                        http_ref = str(oss_storage_service.refresh_url(http_ref) or http_ref)
+                except Exception:
+                    pass
+
+                r = requests.get(http_ref, timeout=30)
                 if r.status_code == 200:
                     data = r.content
                     ct = r.headers.get("Content-Type", "")
@@ -14532,7 +14580,7 @@ class MediaGenerationService:
                     elif "gif" in ct:
                         mime = "image/gif"
                 else:
-                    _debug_log(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {url_or_path}", "error")
+                    _debug_log(f"[MediaService] Error: HTTP Download Failed {r.status_code}: {http_ref}", "error")
             
             if data:
                 logger.info(

@@ -35545,7 +35545,8 @@ async def analyze_asset_image(
     # 4. Construct Image URL
     base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
     
-    if image_url_raw and image_url_raw.startswith("http"):
+        if image_url_raw and image_url_raw.startswith("http"):
+            image_url_raw = _refresh_managed_media_url(image_url_raw, db)
          # Check if it is localhost and we are not in a local env (heuristic)
          # If the backend is local and the LLM is remote, the LLM cannot see 'localhost'.
          # We must assume the LLM cannot access localhost.
@@ -35984,7 +35985,7 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         import base64
         
         base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000").rstrip("/")
-        image_url_raw = entity.image_url
+        image_url_raw = _refresh_managed_media_url(entity.image_url, db)
         image_url_final = image_url_raw
         
         local_file_path = None
