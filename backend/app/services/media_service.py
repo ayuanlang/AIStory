@@ -590,7 +590,6 @@ class MediaGenerationService:
         except Exception as resolve_err:
             logger.warning("Ark Seedance reference pre-resolve failed | error=%s", str(resolve_err)[:300])
             
-        import base64
         import json
         import urllib.parse
         
@@ -615,114 +614,162 @@ class MediaGenerationService:
             "info",
         )
 
-        if not ref_is_http and not ref_raw.startswith("asset://"):
-            _debug_log(
-                f"[ark-seedance] entering asset-upload path | reason=non_http_or_non_asset "
-                f"ref_preview={_strip_query_from_log_url(ref_raw)[:300]}",
-                "info",
-            )
-            img_b64 = ""
-            marker = ";base64,"
-            idx = ref_raw.find(marker)
-            if idx != -1:
-                img_b64 = ref_raw[idx + len(marker):].strip()
-                _debug_log(f"[ark-seedance] source detected as data-uri base64 | base64_len={len(img_b64 or '')}", "info")
-            else:
-                resolved_b64 = await self._get_image_base64_for_api_async(ref_image, force_data_uri=False)
-                resolved_raw = str(resolved_b64 or "").strip()
-                if resolved_raw.startswith("data:image/"):
-                    resolved_idx = resolved_raw.find(marker)
-                    if resolved_idx != -1:
-                        img_b64 = resolved_raw[resolved_idx + len(marker):].strip()
-                        _debug_log(f"[ark-seedance] normalized to data-uri base64 | base64_len={len(img_b64 or '')}", "info")
-                elif resolved_raw.lower().startswith(("http://", "https://")):
-                    # If ref is resolvable public URL after normalization, skip asset upload.
-                    asset_id_or_url = resolved_raw
-                    _debug_log(
-                        f"[ark-seedance] normalized to public http url; skip asset upload | "
-                        f"normalized_preview={_strip_query_from_log_url(resolved_raw)[:300]}",
-                        "info",
-                    )
-                else:
-                    img_b64 = resolved_raw or ref_raw
-                    _debug_log(f"[ark-seedance] using raw/non-http source as base64 candidate | candidate_len={len(img_b64 or '')}", "info")
+        if not ref_raw.startswith("asset://"):
+            resolved_public_ref = ref_raw
+            if not ref_is_http:
+                _debug_log(
+                    f"[ark-seedance] private-asset mode requires public URL; trying to resolve upload path | "
+                    f"ref_preview={_strip_query_from_log_url(ref_raw)[:300]}",
+                    "info",
+                )
+                resolved_candidate = await self._resolve_ref_for_api_async(
+                    ref_image,
+                    force_data_uri_for_local=False,
+                    prefer_public_upload_url=True,
+                )
+                resolved_public_ref = str(resolved_candidate or "").strip()
 
-            if asset_id_or_url == ref_image:
-                img_b64 = re.sub(r"\s+", "", str(img_b64 or ""))
-                if not img_b64:
-                    return {"error": "Asset upload failed: empty image base64 payload"}
-                _debug_log(f"[ark-seedance] create-asset via Data payload | base64_len={len(img_b64 or '')}", "info")
-                # Best-effort validation and padding repair for base64 input.
-                try:
-                    missing_padding = len(img_b64) % 4
-                    if missing_padding:
-                        img_b64 += "=" * (4 - missing_padding)
-                    base64.b64decode(img_b64, validate=True)
-                except Exception:
-                    return {"error": "Asset upload failed: image reference is not a valid HTTP URL or base64 payload"}
+            if not str(resolved_public_ref or "").lower().startswith(("http://", "https://")):
+                return {
+                    "error": "Ark private avatar asset mode requires a publicly accessible HTTP(S) reference image URL"
+                }
 
-                try:
-                    api_version = "2024-12-01"
-                    group_res = self._do_volc_request(
+            try:
+                api_version = str(tool_conf.get("asset_api_version") or "2024-01-01").strip()
+                asset_group_id = str(tool_conf.get("asset_group_id") or "").strip()
+                asset_group_name = str(tool_conf.get("asset_group_name") or "seedance_asset").strip() or "seedance_asset"
+
+                if not asset_group_id:
+                    list_payload = {
+                        "Filter": {
+                            "Name": asset_group_name,
+                            "GroupType": "AIGC",
+                        },
+                        "PageNumber": 1,
+                        "PageSize": 20,
+                        "ProjectName": project_name,
+                    }
+                    list_res = self._do_volc_request(
                         "POST",
-                        "CreateAssetGroup",
+                        "ListAssetGroups",
                         api_version,
-                        json.dumps({"Name": "seedance_asset", "ProjectName": project_name}),
+                        json.dumps(list_payload),
                         "ark",
                         ak,
                         sk,
                     )
-                    asset_group_id = group_res.get("AssetGroupId") or group_res.get("GroupId") or group_res.get("Id")
-                    if not asset_group_id:
-                        return {"error": f"Failed to create AssetGroupId: {group_res}"}
+                    list_items = list_res.get("Items") if isinstance(list_res, dict) else None
+                    if isinstance(list_items, list):
+                        matched_group = None
+                        for item in list_items:
+                            if not isinstance(item, dict):
+                                continue
+                            item_name = str(item.get("Name") or item.get("Title") or "").strip()
+                            item_project = str(item.get("ProjectName") or "").strip()
+                            if item_name == asset_group_name and (not item_project or item_project == project_name):
+                                matched_group = item
+                                break
+                        if not matched_group and list_items:
+                            first = list_items[0]
+                            if isinstance(first, dict):
+                                matched_group = first
+                        if matched_group:
+                            asset_group_id = str(
+                                matched_group.get("Id")
+                                or matched_group.get("GroupId")
+                                or matched_group.get("AssetGroupId")
+                                or ""
+                            ).strip()
 
-                    asset_payload = json.dumps({
-                        "AssetGroupId": asset_group_id,
-                        "Type": "image",
-                        "Data": img_b64,
-                    })
-                    asset_res = self._do_volc_request("POST", "CreateAsset", api_version, asset_payload, "ark", ak, sk)
-                    asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
-                    asset_id = (
-                        asset_obj.get("AssetId")
-                        or asset_obj.get("Id")
-                        or asset_res.get("AssetId")
-                        or asset_res.get("Id")
+                if not asset_group_id:
+                    group_payload = {
+                        "Name": asset_group_name,
+                        "Description": "aistory seedance private assets",
+                        "GroupType": "AIGC",
+                        "ProjectName": project_name,
+                    }
+                    group_res = self._do_volc_request(
+                        "POST",
+                        "CreateAssetGroup",
+                        api_version,
+                        json.dumps(group_payload),
+                        "ark",
+                        ak,
+                        sk,
                     )
-                    if not asset_id:
-                        return {"error": f"Failed to create Asset: {asset_res}"}
+                    asset_group_id = str(
+                        group_res.get("GroupId")
+                        or group_res.get("Id")
+                        or group_res.get("AssetGroupId")
+                        or ""
+                    ).strip()
 
-                    import asyncio
+                if not asset_group_id:
+                    return {"error": "Failed to resolve/create asset group for Ark private avatar assets"}
 
-                    max_polls = 180
-                    ready = False
-                    for _ in range(max_polls):
-                        await asyncio.sleep(5)
-                        poll_req = json.dumps({"AssetId": asset_id, "ProjectName": project_name})
-                        poll_res = self._do_volc_request("POST", "GetAsset", api_version, poll_req, "ark", ak, sk)
+                asset_payload = {
+                    "GroupId": asset_group_id,
+                    "URL": resolved_public_ref,
+                    "AssetType": "Image",
+                    "Name": "seedance_image",
+                    "ProjectName": project_name,
+                }
+                asset_res = self._do_volc_request(
+                    "POST",
+                    "CreateAsset",
+                    api_version,
+                    json.dumps(asset_payload),
+                    "ark",
+                    ak,
+                    sk,
+                )
 
-                        status = poll_res.get("Status", "")
-                        if not status:
-                            status = poll_res.get("status", "")
-                        if not status:
-                            status = poll_res.get("Asset", {}).get("Status", "")
-                        if not status:
-                            status = poll_res.get("Asset", {}).get("status", "")
+                asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
+                asset_id = (
+                    asset_res.get("Id")
+                    or asset_res.get("AssetId")
+                    or asset_obj.get("Id")
+                    or asset_obj.get("AssetId")
+                )
+                if not asset_id:
+                    return {"error": f"Failed to create private avatar asset: {asset_res}"}
 
-                        status = str(status).lower()
+                max_polls = 180
+                active = False
+                for _ in range(max_polls):
+                    await asyncio.sleep(5)
+                    poll_req = {"Id": asset_id, "ProjectName": project_name}
+                    poll_res = self._do_volc_request(
+                        "POST",
+                        "GetAsset",
+                        api_version,
+                        json.dumps(poll_req),
+                        "ark",
+                        ak,
+                        sk,
+                    )
 
-                        if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
-                            ready = True
-                            break
-                        if status == "failed":
-                            return {"error": f"Asset upload failed during polling: {poll_res}"}
+                    status = (
+                        poll_res.get("Status")
+                        or poll_res.get("status")
+                        or poll_res.get("Asset", {}).get("Status")
+                        or poll_res.get("Asset", {}).get("status")
+                        or ""
+                    )
+                    status = str(status).strip().lower()
 
-                    if not ready:
-                        return {"error": "Timed out waiting for Ark asset to become ready"}
+                    if status in {"active", "ready", "success", "completed"}:
+                        active = True
+                        break
+                    if status == "failed":
+                        return {"error": f"Private avatar asset processing failed: {poll_res}"}
 
-                    asset_id_or_url = f"asset://{asset_id}"
-                except Exception as e:
-                    return {"error": f"Asset upload raised exception: {e}"}
+                if not active:
+                    return {"error": "Timed out waiting for Ark private avatar asset to become Active"}
+
+                asset_id_or_url = f"asset://{asset_id}"
+            except Exception as e:
+                return {"error": f"Private avatar asset flow raised exception: {e}"}
                 
         # Fire the generation task
         inner_conf = tool_conf
