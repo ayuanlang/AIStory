@@ -564,14 +564,14 @@ class MediaGenerationService:
             or os.getenv("ARK_PROJECT_NAME")
             or ""
         ).strip()
-        project_name = explicit_project_name or "test3(伙伴)"
+        project_name = explicit_project_name or "test3"
         if ":" in dp_token:
             subparts = dp_token.split(":", 1)
             dp_token = subparts[0]
             token_project_name = str(subparts[1] or "").strip()
             if not explicit_project_name and token_project_name:
                 project_name = token_project_name
-        project_name = str(project_name or "").strip() or "test3(伙伴)"
+        project_name = str(project_name or "").strip() or "test3"
         if project_name.isdigit() and not str(tool_conf.get("project_name") or "").strip():
             # Some legacy keys append non-project numeric suffixes after EP token.
             # Treat them as invalid project names and fallback to default.
@@ -579,7 +579,7 @@ class MediaGenerationService:
                 f"[ark-seedance] ignore numeric project suffix from api_key | suffix={project_name}",
                 "warning",
             )
-            project_name = "test3(伙伴)"
+            project_name = "test3"
         _debug_log(
             f"[ark-seedance] effective project selected | project_name={project_name}",
             "info",
