@@ -10037,13 +10037,16 @@ def _format_pricing_description_from_summary(
     unit_type: str,
     *,
     force_token_k_unit: bool = False,
+    token_cost_input: Optional[int] = None,
+    token_cost_output: Optional[int] = None,
 ) -> str:
     data = summary or {}
     avg_cost = float(_safe_int(data.get("average_cost"), 0))
     min_cost = float(_safe_int(data.get("min_cost"), 0))
     max_cost = float(_safe_int(data.get("max_cost"), 0))
     normalized_unit = _normalize_billing_unit_type(unit_type)
-    if force_token_k_unit and normalized_unit == "per_million_tokens":
+    is_million = normalized_unit == "per_million_tokens"
+    if force_token_k_unit and is_million:
         # Sync-only conversion: keep billing module unchanged, only normalize pricing description output unit.
         avg_cost = avg_cost / 1000.0
         min_cost = min_cost / 1000.0
@@ -10057,6 +10060,21 @@ def _format_pricing_description_from_summary(
         if abs(rounded - int(rounded)) < 1e-9:
             return str(int(rounded))
         return ("{:.6f}".format(rounded)).rstrip("0").rstrip(".")
+
+    # If we have explicit per-input/output costs for token pricing, prefer that format.
+    is_token_unit = normalized_unit in {"per_1k_tokens", "per_million_tokens", "per_token"}
+    if force_token_k_unit and is_token_unit and (token_cost_input or token_cost_output):
+        divisor = 1000.0 if is_million else 1.0
+        ci = float(token_cost_input or 0) / divisor
+        co = float(token_cost_output or 0) / divisor
+        display_unit = "per_1k_tokens" if is_million else normalized_unit
+        label = _format_billing_unit_short_label(display_unit)
+        if ci > 0 and co > 0:
+            return f"输入 {_format_cost_text(ci)} / 输出 {_format_cost_text(co)} 积分/{label}"
+        if co > 0:
+            return f"输出 {_format_cost_text(co)} 积分/{label}"
+        if ci > 0:
+            return f"输入 {_format_cost_text(ci)} 积分/{label}"
 
     if max_cost > 0:
         if min_cost > 0 and abs(min_cost - max_cost) > 1e-9:
@@ -10074,11 +10092,13 @@ def _build_function_api_pricing_description_map(
     system_api_ids: List[int],
     *,
     force_token_k_unit: bool = False,
+    use_cached_price_fallback: bool = True,
 ) -> Dict[int, str]:
     normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not normalized_ids:
         return {}
 
+    # pricing_map comes from rule-level effective cost and already applies charge_multiplier.
     pricing_map = _batch_system_api_pricing_from_rules_and_audit(db, normalized_ids, include_audit=False)
     unit_map = _batch_system_api_primary_billing_unit_type(db, normalized_ids)
 
@@ -10107,20 +10127,64 @@ def _build_function_api_pricing_description_map(
             "max_cost": _safe_int(getattr(row, "price_max_cost", 0), 0),
         }
 
+    # For the sync path, additionally collect per-sid max charged input/output costs separately
+    # so we can show "输入X / 输出Y" format for token-priced APIs.
+    token_io_by_sid: Dict[int, Dict[str, int]] = {}
+    if force_token_k_unit and _db_has_table(db, "system_api_billing_rules"):
+        _token_unit_set = {"per_token", "per_1k_tokens", "per_million_tokens"}
+        rule_io_rows = db.query(
+            SystemAPIBillingRule.system_api_id,
+            SystemAPIBillingRule.billing_unit_type,
+            SystemAPIBillingRule.billing_cost_input,
+            SystemAPIBillingRule.billing_cost_output,
+            SystemAPIBillingRule.charge_multiplier,
+        ).filter(
+            SystemAPIBillingRule.system_api_id.in_(normalized_ids),
+            or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
+        ).all()
+        _input_max: Dict[int, int] = {}
+        _output_max: Dict[int, int] = {}
+        for row in rule_io_rows or []:
+            sid = _safe_int(getattr(row, "system_api_id", 0), 0)
+            if sid <= 0:
+                continue
+            unit = _normalize_billing_unit_type(getattr(row, "billing_unit_type", None))
+            if unit not in _token_unit_set:
+                continue
+            multiplier = _normalize_rule_charge_multiplier(getattr(row, "charge_multiplier", None), default=2.0)
+            ci = _apply_charge_multiplier_to_credit(
+                _non_negative_int(getattr(row, "billing_cost_input", 0), 0), multiplier
+            )
+            co = _apply_charge_multiplier_to_credit(
+                _non_negative_int(getattr(row, "billing_cost_output", 0), 0), multiplier
+            )
+            if ci > _input_max.get(sid, 0):
+                _input_max[sid] = ci
+            if co > _output_max.get(sid, 0):
+                _output_max[sid] = co
+        for sid in normalized_ids:
+            ci = _input_max.get(sid, 0)
+            co = _output_max.get(sid, 0)
+            if ci > 0 or co > 0:
+                token_io_by_sid[sid] = {"cost_input": ci, "cost_output": co}
+
     result: Dict[int, str] = {}
     for sid in normalized_ids:
         summary = pricing_map.get(sid) or {}
-        if (
+        if use_cached_price_fallback and (
             _safe_int(summary.get("average_cost"), 0) <= 0
             and _safe_int(summary.get("min_cost"), 0) <= 0
             and _safe_int(summary.get("max_cost"), 0) <= 0
         ):
             summary = cached_price_by_id.get(sid) or summary
         unit_type = unit_map.get(sid, "per_call")
+        io = token_io_by_sid.get(sid) or {}
         result[sid] = _format_pricing_description_from_summary(
             summary,
             unit_type,
             force_token_k_unit=force_token_k_unit,
+            token_cost_input=io.get("cost_input"),
+            token_cost_output=io.get("cost_output"),
         )
     return result
 
@@ -10235,6 +10299,7 @@ def sync_function_api_pricing_descriptions(
         db,
         target_ids,
         force_token_k_unit=True,
+        use_cached_price_fallback=False,
     )
     updated_rows = 0
     updated_items = 0
