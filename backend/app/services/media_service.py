@@ -575,68 +575,137 @@ class MediaGenerationService:
             
         import base64
         import json
+        import urllib.parse
         
         asset_id_or_url = ref_image
-        
-        if not str(ref_image).startswith("http"):
+        ref_raw = str(ref_image or "").strip()
+        ref_is_http = ref_raw.lower().startswith(("http://", "https://"))
+        ref_has_ctrl = any(ord(ch) < 32 for ch in ref_raw)
+        ref_has_inner_space = bool(re.search(r"\s", ref_raw))
+        ref_scheme = ""
+        ref_netloc = ""
+        try:
+            parsed_ref = urllib.parse.urlparse(ref_raw)
+            ref_scheme = str(parsed_ref.scheme or "").lower()
+            ref_netloc = str(parsed_ref.netloc or "")
+        except Exception:
+            parsed_ref = None
+
+        _debug_log(
+            f"[ark-seedance] reference classify | raw_preview={_strip_query_from_log_url(ref_raw)[:300]} "
+            f"scheme={ref_scheme or None} netloc={ref_netloc or None} ref_is_http={ref_is_http} "
+            f"has_ctrl={ref_has_ctrl} has_whitespace={ref_has_inner_space}",
+            "info",
+        )
+
+        if not ref_is_http and not ref_raw.startswith("asset://"):
+            _debug_log(
+                f"[ark-seedance] entering asset-upload path | reason=non_http_or_non_asset "
+                f"ref_preview={_strip_query_from_log_url(ref_raw)[:300]}",
+                "info",
+            )
             img_b64 = ""
             marker = ";base64,"
-            idx = ref_image.find(marker)
+            idx = ref_raw.find(marker)
             if idx != -1:
-                img_b64 = ref_image[idx + len(marker):].strip()
+                img_b64 = ref_raw[idx + len(marker):].strip()
+                _debug_log(f"[ark-seedance] source detected as data-uri base64 | base64_len={len(img_b64 or '')}", "info")
             else:
-                img_b64 = ref_image
-            asset_url = ref_image if str(ref_image).startswith("data:") else f"data:image/jpeg;base64,{img_b64}"
-                
-            try:
-                group_res = self._do_volc_request("POST", "CreateAssetGroup", "2024-01-01", json.dumps({"Name": "seedance_asset", "ProjectName": project_name}), "ark", ak, sk)
-                asset_group_id = group_res.get("GroupId") or group_res.get("Id")
-                if not asset_group_id:
-                    return {"error": f"Failed to create AssetGroupId: {group_res}"}
-                    
-                asset_payload = json.dumps({
-                    "GroupId": asset_group_id,
-                    "AssetType": "Image",
-                    "URL": asset_url,
-                    "Name": "seedance_image",
-                "ProjectName": project_name
-                })
-                asset_res = self._do_volc_request("POST", "CreateAsset", "2024-01-01", asset_payload, "ark", ak, sk)
-                asset_id = asset_res.get("Asset", {}).get("AssetId") or asset_res.get("Asset", {}).get("Id") or asset_res.get("Id")
-                if not asset_id:
-                    return {"error": f"Failed to create Asset: {asset_res}"}
-                    
-                import time
-                import asyncio
-                max_polls = 180
-                ready = False
-                for _ in range(max_polls):
-                    await asyncio.sleep(5)
-                    poll_req = json.dumps({"Id": asset_id, "ProjectName": project_name})
-                    poll_res = self._do_volc_request("POST", "GetAsset", "2024-01-01", poll_req, "ark", ak, sk)
-                    
-                    status = poll_res.get("Status", "")
-                    if not status:
-                        status = poll_res.get("status", "")
-                    if not status:
-                        status = poll_res.get("Asset", {}).get("Status", "")
-                    if not status:
-                        status = poll_res.get("Asset", {}).get("status", "")
-                        
-                    status = str(status).lower()
-                    
-                    if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
-                        ready = True
-                        break
-                    if status == "failed":
-                        return {"error": f"Asset upload failed during polling: {poll_res}"}
-                        
-                if not ready:
-                    return {"error": "Timed out waiting for Ark asset to become ready"}
-                
-                asset_id_or_url = f"asset://{asset_id}"
-            except Exception as e:
-                return {"error": f"Asset upload raised exception: {e}"}
+                resolved_b64 = await self._get_image_base64_for_api_async(ref_image, force_data_uri=False)
+                resolved_raw = str(resolved_b64 or "").strip()
+                if resolved_raw.startswith("data:image/"):
+                    resolved_idx = resolved_raw.find(marker)
+                    if resolved_idx != -1:
+                        img_b64 = resolved_raw[resolved_idx + len(marker):].strip()
+                        _debug_log(f"[ark-seedance] normalized to data-uri base64 | base64_len={len(img_b64 or '')}", "info")
+                elif resolved_raw.lower().startswith(("http://", "https://")):
+                    # If ref is resolvable public URL after normalization, skip asset upload.
+                    asset_id_or_url = resolved_raw
+                    _debug_log(
+                        f"[ark-seedance] normalized to public http url; skip asset upload | "
+                        f"normalized_preview={_strip_query_from_log_url(resolved_raw)[:300]}",
+                        "info",
+                    )
+                else:
+                    img_b64 = resolved_raw or ref_raw
+                    _debug_log(f"[ark-seedance] using raw/non-http source as base64 candidate | candidate_len={len(img_b64 or '')}", "info")
+
+            if asset_id_or_url == ref_image:
+                img_b64 = re.sub(r"\s+", "", str(img_b64 or ""))
+                if not img_b64:
+                    return {"error": "Asset upload failed: empty image base64 payload"}
+                _debug_log(f"[ark-seedance] create-asset via Data payload | base64_len={len(img_b64 or '')}", "info")
+                # Best-effort validation and padding repair for base64 input.
+                try:
+                    missing_padding = len(img_b64) % 4
+                    if missing_padding:
+                        img_b64 += "=" * (4 - missing_padding)
+                    base64.b64decode(img_b64, validate=True)
+                except Exception:
+                    return {"error": "Asset upload failed: image reference is not a valid HTTP URL or base64 payload"}
+
+                try:
+                    api_version = "2024-12-01"
+                    group_res = self._do_volc_request(
+                        "POST",
+                        "CreateAssetGroup",
+                        api_version,
+                        json.dumps({"Name": "seedance_asset", "ProjectName": project_name}),
+                        "ark",
+                        ak,
+                        sk,
+                    )
+                    asset_group_id = group_res.get("AssetGroupId") or group_res.get("GroupId") or group_res.get("Id")
+                    if not asset_group_id:
+                        return {"error": f"Failed to create AssetGroupId: {group_res}"}
+
+                    asset_payload = json.dumps({
+                        "AssetGroupId": asset_group_id,
+                        "Type": "image",
+                        "Data": img_b64,
+                    })
+                    asset_res = self._do_volc_request("POST", "CreateAsset", api_version, asset_payload, "ark", ak, sk)
+                    asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
+                    asset_id = (
+                        asset_obj.get("AssetId")
+                        or asset_obj.get("Id")
+                        or asset_res.get("AssetId")
+                        or asset_res.get("Id")
+                    )
+                    if not asset_id:
+                        return {"error": f"Failed to create Asset: {asset_res}"}
+
+                    import asyncio
+
+                    max_polls = 180
+                    ready = False
+                    for _ in range(max_polls):
+                        await asyncio.sleep(5)
+                        poll_req = json.dumps({"AssetId": asset_id, "ProjectName": project_name})
+                        poll_res = self._do_volc_request("POST", "GetAsset", api_version, poll_req, "ark", ak, sk)
+
+                        status = poll_res.get("Status", "")
+                        if not status:
+                            status = poll_res.get("status", "")
+                        if not status:
+                            status = poll_res.get("Asset", {}).get("Status", "")
+                        if not status:
+                            status = poll_res.get("Asset", {}).get("status", "")
+
+                        status = str(status).lower()
+
+                        if status in ["ready", "success", "uploaded", "created", "active", "completed"]:
+                            ready = True
+                            break
+                        if status == "failed":
+                            return {"error": f"Asset upload failed during polling: {poll_res}"}
+
+                    if not ready:
+                        return {"error": "Timed out waiting for Ark asset to become ready"}
+
+                    asset_id_or_url = f"asset://{asset_id}"
+                except Exception as e:
+                    return {"error": f"Asset upload raised exception: {e}"}
                 
         # Fire the generation task
         inner_conf = tool_conf
