@@ -6540,10 +6540,10 @@ class MediaGenerationService:
         resolution = str(
             config.get("resolution")
             or cfg.get("resolution")
-            or "1080P"
+            or "720P"
         ).strip().upper()
         if resolution not in {"1080P", "720P"}:
-            resolution = "1080P"
+            resolution = "720P"
 
         safe_duration = 5
         try:
@@ -12057,6 +12057,16 @@ class MediaGenerationService:
             elif model_lower == "hailuo/02-text-to-video-pro":
                 if "prompt_optimizer" not in payload_input:
                     payload_input["prompt_optimizer"] = bool(tool_conf.get("prompt_optimizer", True))
+
+            allowed_resolution_values = [
+                str(item or "").strip()
+                for item in (runtime_enum_catalog.get("resolution") or [])
+                if str(item or "").strip()
+            ]
+            if "resolution" not in payload_input and allowed_resolution_values:
+                default_resolution = self._map_resolution_to_allowed("720p", allowed_resolution_values)
+                if default_resolution:
+                    payload_input["resolution"] = str(default_resolution).strip()
 
         internal_callback_url = str(tool_conf.get("_provider_callback_url") or "").strip()
         raw_callback_url = str(
