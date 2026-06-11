@@ -589,8 +589,11 @@ class MediaGenerationService:
             return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
             
         ref_image = reference_image_url
+        extra_ref_images: List[Any] = []
         if isinstance(ref_image, list):
-            ref_image = ref_image[0] if len(ref_image) > 0 else None
+            cleaned_refs = [item for item in ref_image if str(item or "").strip()]
+            ref_image = cleaned_refs[0] if cleaned_refs else None
+            extra_ref_images = cleaned_refs[1:] if len(cleaned_refs) > 1 else []
             
         if not ref_image:
             return {"error": "seedance 2.0 requires an image reference"}
@@ -935,6 +938,51 @@ class MediaGenerationService:
                     asset_id_or_url = rebuilt_asset_uri
             except Exception as e:
                 return {"error": f"Ark private asset validation failed: {e}", "submit_failed": True}
+
+        asset_image_refs: List[str] = [str(asset_id_or_url or "").strip()]
+        asset_rebuild_source_urls: List[str] = [str(asset_rebuild_source_url or "").strip()]
+
+        # Process additional reference images and append them to payload.
+        for extra_ref in extra_ref_images:
+            extra_raw = str(extra_ref or "").strip()
+            if not extra_raw:
+                continue
+
+            try:
+                resolved_extra = await self._resolve_ref_for_api_async(
+                    extra_raw,
+                    force_data_uri_for_local=False,
+                    prefer_public_upload_url=True,
+                )
+                if resolved_extra:
+                    extra_raw = str(resolved_extra or "").strip()
+            except Exception:
+                pass
+
+            if not extra_raw:
+                continue
+
+            extra_asset_ref = extra_raw
+            extra_source_url = ""
+            if not extra_raw.startswith("asset://"):
+                if extra_raw.lower().startswith(("http://", "https://")):
+                    extra_source_url = extra_raw
+                    try:
+                        rebuilt_extra_asset = await _register_private_asset_from_public_url(extra_raw, project_name)
+                        if rebuilt_extra_asset:
+                            extra_asset_ref = rebuilt_extra_asset
+                    except Exception:
+                        # Keep direct URL as fallback for this reference.
+                        extra_asset_ref = extra_raw
+                else:
+                    continue
+
+            asset_image_refs.append(str(extra_asset_ref or "").strip())
+            asset_rebuild_source_urls.append(str(extra_source_url or "").strip())
+
+        asset_image_refs = [item for item in asset_image_refs if item]
+        if not asset_image_refs:
+            return {"error": "seedance 2.0 requires at least one valid image reference"}
                 
         # Fire the generation task
         inner_conf = tool_conf
@@ -1027,21 +1075,26 @@ class MediaGenerationService:
             "info",
         )
 
-        task_payload = {
-            "model": model_id,
-            "content": [
-                {
-                    "type": "text",
-                    "text": final_prompt
-                },
+        content_items: List[Dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": final_prompt
+            }
+        ]
+        for image_ref in asset_image_refs:
+            content_items.append(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": asset_id_or_url
+                        "url": image_ref
                     },
                     "role": "reference_image"
                 }
-            ],
+            )
+
+        task_payload = {
+            "model": model_id,
+            "content": content_items,
             "generate_audio": True,
             "watermark": True
         }
@@ -1084,12 +1137,18 @@ class MediaGenerationService:
         )
         first_payload = first_result if isinstance(first_result, dict) else {}
         failure_text = self._flatten_text(first_payload).lower()
+        missing_asset_match = re.search(r"content\[(\d+)\]\.image_url\.url", failure_text)
+        failed_payload_index = int(missing_asset_match.group(1)) if missing_asset_match else 1
+        failed_ref_index = max(0, failed_payload_index - 1)
+        rebuild_source_for_failed_ref = ""
+        if 0 <= failed_ref_index < len(asset_rebuild_source_urls):
+            rebuild_source_for_failed_ref = str(asset_rebuild_source_urls[failed_ref_index] or "").strip()
         asset_not_found = (
             "specified asset" in failure_text
             and "is not found" in failure_text
-            and "content[1].image_url.url" in failure_text
+            and "image_url.url" in failure_text
         )
-        if asset_not_found and str(asset_rebuild_source_url or "").lower().startswith(("http://", "https://")):
+        if asset_not_found and rebuild_source_for_failed_ref.lower().startswith(("http://", "https://")):
             try:
                 _debug_log(
                     "[ark-seedance] submit failed with missing asset; rebuilding private asset and retrying once",
@@ -1099,11 +1158,12 @@ class MediaGenerationService:
                 attempted_projects: List[str] = []
                 for candidate_project in project_candidates:
                     attempted_projects.append(candidate_project)
-                    rebuilt_asset_uri = await _register_private_asset_from_public_url(asset_rebuild_source_url, candidate_project)
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(rebuild_source_for_failed_ref, candidate_project)
                     if not rebuilt_asset_uri:
                         continue
 
-                    task_payload["content"][1]["image_url"]["url"] = rebuilt_asset_uri
+                    if 0 <= failed_payload_index < len(task_payload.get("content") or []):
+                        task_payload["content"][failed_payload_index]["image_url"]["url"] = rebuilt_asset_uri
                     retry_result = await self._submit_and_poll_video(
                         url=task_endpoint,
                         payload=task_payload,
@@ -1135,10 +1195,11 @@ class MediaGenerationService:
 
                 # Final fallback: submit with original public URL directly to
                 # separate "asset visibility" failures from content-policy issues.
-                direct_ref_url = str(asset_rebuild_source_url or "").strip()
+                direct_ref_url = rebuild_source_for_failed_ref
                 if direct_ref_url.lower().startswith(("http://", "https://")):
                     logger.warning("Ark Seedance fallback to direct URL submit after asset rebuild failures")
-                    task_payload["content"][1]["image_url"]["url"] = direct_ref_url
+                    if 0 <= failed_payload_index < len(task_payload.get("content") or []):
+                        task_payload["content"][failed_payload_index]["image_url"]["url"] = direct_ref_url
                     direct_result = await self._submit_and_poll_video(
                         url=task_endpoint,
                         payload=task_payload,
