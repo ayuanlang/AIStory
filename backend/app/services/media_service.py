@@ -557,11 +557,32 @@ class MediaGenerationService:
             sk = parts[1]
             dp_token = parts[2]
             
-        project_name = tool_conf.get("project_name", "default")
+        explicit_project_name = str(
+            tool_conf.get("project_name")
+            or tool_conf.get("projectName")
+            or config.get("project_name")
+            or ""
+        ).strip()
+        project_name = explicit_project_name or "default"
         if ":" in dp_token:
             subparts = dp_token.split(":", 1)
             dp_token = subparts[0]
-            project_name = subparts[1]
+            token_project_name = str(subparts[1] or "").strip()
+            if not explicit_project_name and token_project_name:
+                project_name = token_project_name
+        project_name = str(project_name or "").strip() or "default"
+        if project_name.isdigit() and not str(tool_conf.get("project_name") or "").strip():
+            # Some legacy keys append non-project numeric suffixes after EP token.
+            # Treat them as invalid project names and fallback to default.
+            _debug_log(
+                f"[ark-seedance] ignore numeric project suffix from api_key | suffix={project_name}",
+                "warning",
+            )
+            project_name = "default"
+        _debug_log(
+            f"[ark-seedance] effective project selected | project_name={project_name}",
+            "info",
+        )
             
         if not ak or not sk or not dp_token:
             return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
@@ -596,135 +617,176 @@ class MediaGenerationService:
         api_version = str(tool_conf.get("asset_api_version") or "2024-01-01").strip()
         asset_group_name = str(tool_conf.get("asset_group_name") or "seedance_asset").strip() or "seedance_asset"
         asset_item_name = str(tool_conf.get("asset_name") or tool_conf.get("asset_item_name") or "seedance_image").strip() or "seedance_image"
+        asset_rebuild_source_url = ""
 
-        async def _register_private_asset_from_public_url(source_url: str) -> str:
+        def _collect_project_candidates() -> List[str]:
+            candidates: List[str] = []
+            for value in (
+                project_name,
+                tool_conf.get("project_name"),
+                tool_conf.get("projectName"),
+                tool_conf.get("project"),
+                tool_conf.get("ark_project_name"),
+                tool_conf.get("volc_project_name"),
+                config.get("project_name"),
+                os.getenv("ARK_PROJECT_NAME"),
+                "default",
+            ):
+                item = str(value or "").strip()
+                if item and item not in candidates:
+                    candidates.append(item)
+            return candidates
+
+        async def _register_private_asset_from_public_url(source_url: str, target_project_name: Optional[str] = None) -> str:
             candidate_url = str(source_url or "").strip()
             if not candidate_url.lower().startswith(("http://", "https://")):
                 return ""
+            effective_project_name = str(target_project_name or project_name or "").strip() or "default"
 
-            group_id_local = str(tool_conf.get("asset_group_id") or "").strip()
-            if not group_id_local:
-                list_payload = {
-                    "Filter": {
+            async def _register_once(project_for_register: str) -> str:
+                local_project_name = str(project_for_register or "").strip() or "default"
+                _debug_log(
+                    f"[ark-seedance] private asset register start | project_name={local_project_name} asset_group={asset_group_name}",
+                    "info",
+                )
+                group_id_local = str(tool_conf.get("asset_group_id") or "").strip()
+                if not group_id_local:
+                    list_payload = {
+                        "Filter": {
+                            "Name": asset_group_name,
+                            "GroupType": "AIGC",
+                        },
+                        "PageNumber": 1,
+                        "PageSize": 20,
+                        "ProjectName": local_project_name,
+                    }
+                    list_res = self._do_volc_request(
+                        "POST",
+                        "ListAssetGroups",
+                        api_version,
+                        json.dumps(list_payload),
+                        "ark",
+                        ak,
+                        sk,
+                    )
+                    list_items = list_res.get("Items") if isinstance(list_res, dict) else None
+                    if isinstance(list_items, list):
+                        matched_group = None
+                        for item in list_items:
+                            if not isinstance(item, dict):
+                                continue
+                            item_name = str(item.get("Name") or item.get("Title") or "").strip()
+                            item_project = str(item.get("ProjectName") or "").strip()
+                            if item_name == asset_group_name and (not item_project or item_project == local_project_name):
+                                matched_group = item
+                                break
+                        if not matched_group and list_items:
+                            first = list_items[0]
+                            if isinstance(first, dict):
+                                matched_group = first
+                        if matched_group:
+                            group_id_local = str(
+                                matched_group.get("Id")
+                                or matched_group.get("GroupId")
+                                or matched_group.get("AssetGroupId")
+                                or ""
+                            ).strip()
+
+                if not group_id_local:
+                    group_payload = {
                         "Name": asset_group_name,
+                        "Description": "aistory seedance private assets",
                         "GroupType": "AIGC",
-                    },
-                    "PageNumber": 1,
-                    "PageSize": 20,
-                    "ProjectName": project_name,
-                }
-                list_res = self._do_volc_request(
-                    "POST",
-                    "ListAssetGroups",
-                    api_version,
-                    json.dumps(list_payload),
-                    "ark",
-                    ak,
-                    sk,
-                )
-                list_items = list_res.get("Items") if isinstance(list_res, dict) else None
-                if isinstance(list_items, list):
-                    matched_group = None
-                    for item in list_items:
-                        if not isinstance(item, dict):
-                            continue
-                        item_name = str(item.get("Name") or item.get("Title") or "").strip()
-                        item_project = str(item.get("ProjectName") or "").strip()
-                        if item_name == asset_group_name and (not item_project or item_project == project_name):
-                            matched_group = item
-                            break
-                    if not matched_group and list_items:
-                        first = list_items[0]
-                        if isinstance(first, dict):
-                            matched_group = first
-                    if matched_group:
-                        group_id_local = str(
-                            matched_group.get("Id")
-                            or matched_group.get("GroupId")
-                            or matched_group.get("AssetGroupId")
-                            or ""
-                        ).strip()
+                        "ProjectName": local_project_name,
+                    }
+                    group_res = self._do_volc_request(
+                        "POST",
+                        "CreateAssetGroup",
+                        api_version,
+                        json.dumps(group_payload),
+                        "ark",
+                        ak,
+                        sk,
+                    )
+                    group_id_local = str(
+                        group_res.get("GroupId")
+                        or group_res.get("Id")
+                        or group_res.get("AssetGroupId")
+                        or ""
+                    ).strip()
 
-            if not group_id_local:
-                group_payload = {
-                    "Name": asset_group_name,
-                    "Description": "aistory seedance private assets",
-                    "GroupType": "AIGC",
-                    "ProjectName": project_name,
-                }
-                group_res = self._do_volc_request(
-                    "POST",
-                    "CreateAssetGroup",
-                    api_version,
-                    json.dumps(group_payload),
-                    "ark",
-                    ak,
-                    sk,
-                )
-                group_id_local = str(
-                    group_res.get("GroupId")
-                    or group_res.get("Id")
-                    or group_res.get("AssetGroupId")
-                    or ""
-                ).strip()
-
-            if not group_id_local:
-                return ""
-
-            asset_payload = {
-                "GroupId": group_id_local,
-                "URL": candidate_url,
-                "AssetType": "Image",
-                "Name": asset_item_name,
-                "ProjectName": project_name,
-            }
-            asset_res = self._do_volc_request(
-                "POST",
-                "CreateAsset",
-                api_version,
-                json.dumps(asset_payload),
-                "ark",
-                ak,
-                sk,
-            )
-            asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
-            created_asset_id = str(
-                asset_res.get("Id")
-                or asset_res.get("AssetId")
-                or asset_obj.get("Id")
-                or asset_obj.get("AssetId")
-                or ""
-            ).strip()
-            if not created_asset_id:
-                return ""
-
-            max_polls = 180
-            for _ in range(max_polls):
-                await asyncio.sleep(5)
-                poll_req = {"Id": created_asset_id, "ProjectName": project_name}
-                poll_res = self._do_volc_request(
-                    "POST",
-                    "GetAsset",
-                    api_version,
-                    json.dumps(poll_req),
-                    "ark",
-                    ak,
-                    sk,
-                )
-                status = (
-                    poll_res.get("Status")
-                    or poll_res.get("status")
-                    or poll_res.get("Asset", {}).get("Status")
-                    or poll_res.get("Asset", {}).get("status")
-                    or ""
-                )
-                status = str(status).strip().lower()
-                if status in {"active", "ready", "success", "completed"}:
-                    return f"asset://{created_asset_id}"
-                if status == "failed":
+                if not group_id_local:
                     return ""
 
-            return ""
+                asset_payload = {
+                    "GroupId": group_id_local,
+                    "URL": candidate_url,
+                    "AssetType": "Image",
+                    "Name": asset_item_name,
+                    "ProjectName": local_project_name,
+                }
+                asset_res = self._do_volc_request(
+                    "POST",
+                    "CreateAsset",
+                    api_version,
+                    json.dumps(asset_payload),
+                    "ark",
+                    ak,
+                    sk,
+                )
+                asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
+                created_asset_id = str(
+                    asset_res.get("Id")
+                    or asset_res.get("AssetId")
+                    or asset_obj.get("Id")
+                    or asset_obj.get("AssetId")
+                    or ""
+                ).strip()
+                if not created_asset_id:
+                    return ""
+
+                max_polls = 180
+                for _ in range(max_polls):
+                    await asyncio.sleep(5)
+                    poll_req = {"Id": created_asset_id, "ProjectName": local_project_name}
+                    poll_res = self._do_volc_request(
+                        "POST",
+                        "GetAsset",
+                        api_version,
+                        json.dumps(poll_req),
+                        "ark",
+                        ak,
+                        sk,
+                    )
+                    status = (
+                        poll_res.get("Status")
+                        or poll_res.get("status")
+                        or poll_res.get("Asset", {}).get("Status")
+                        or poll_res.get("Asset", {}).get("status")
+                        or ""
+                    )
+                    status = str(status).strip().lower()
+                    if status in {"active", "ready", "success", "completed"}:
+                        _debug_log(
+                            f"[ark-seedance] private asset active | project_name={local_project_name} asset_id={created_asset_id}",
+                            "info",
+                        )
+                        return f"asset://{created_asset_id}"
+                    if status == "failed":
+                        return ""
+
+                return ""
+            try:
+                return await _register_once(effective_project_name)
+            except Exception as register_err:
+                err_text = self._flatten_text(register_err).lower()
+                if "notfound.projectname" in err_text and effective_project_name != "default":
+                    logger.warning(
+                        "Ark private asset register fallback to default project | invalid_project=%s",
+                        effective_project_name,
+                    )
+                    return await _register_once("default")
+                raise
 
         def _extract_asset_id_from_uri(value: Any) -> str:
             raw = str(value or "").strip()
@@ -786,9 +848,10 @@ class MediaGenerationService:
                 return {
                     "error": "Ark private avatar asset mode requires a publicly accessible HTTP(S) reference image URL"
                 }
+            asset_rebuild_source_url = str(resolved_public_ref or "").strip()
 
             try:
-                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref)
+                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref, project_name)
                 if not rebuilt_asset_uri:
                     return {"error": "Failed to register Ark private avatar asset from reference URL"}
                 asset_id_or_url = rebuilt_asset_uri
@@ -861,12 +924,13 @@ class MediaGenerationService:
                             "submit_failed": True,
                         }
 
-                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url)
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url, project_name)
                     if not rebuilt_asset_uri:
                         return {
                             "error": "Ark private asset rebuild failed after missing asset detection",
                             "submit_failed": True,
                         }
+                    asset_rebuild_source_url = discovered_source_url
                     asset_id_or_url = rebuilt_asset_uri
             except Exception as e:
                 return {"error": f"Ark private asset validation failed: {e}", "submit_failed": True}
@@ -896,10 +960,20 @@ class MediaGenerationService:
                 raw_callback_url or None,
             )
         
-        # Smart routing: If API key is native Volcengine (ark- or ep-), force native endpoint
-        if dp_token and (dp_token.startswith("ark-") or dp_token.startswith("ep-")):
-            if "zlhub" in task_endpoint_raw.lower() or "zhonglian" in task_endpoint_raw.lower():
-                task_endpoint_raw = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+        # Private avatar assets are account/project scoped in Volcengine.
+        # To avoid cross-vendor context mismatch (asset created via AK/SK on Ark,
+        # but generation sent through third-party proxy), always submit directly
+        # to native Ark endpoint for ark-seedance flow.
+        if (
+            "zlhub" in str(task_endpoint_raw or "").lower()
+            or "zhonglian" in str(task_endpoint_raw or "").lower()
+            or "proxy/ark" in str(task_endpoint_raw or "").lower()
+        ):
+            _debug_log(
+                f"[ark-seedance] force native Ark endpoint for private assets | from={task_endpoint_raw}",
+                "warning",
+            )
+            task_endpoint_raw = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
 
         task_endpoint = self._normalize_doubao_video_tasks_endpoint(task_endpoint_raw)
         
@@ -947,6 +1021,10 @@ class MediaGenerationService:
             f"[ark-seedance] pre-submit reference image | kind={ref_url_kind} has_token={ref_has_token} url={ref_log_url}",
             "info",
         )
+        _debug_log(
+            f"[ark-seedance] submit context | project_name={project_name} endpoint={task_endpoint} asset_ref={asset_id_or_url}",
+            "info",
+        )
 
         task_payload = {
             "model": model_id,
@@ -991,7 +1069,7 @@ class MediaGenerationService:
         callback_enabled = bool(callback_url and callback_url != "-1")
         pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         
-        return await self._submit_and_poll_video(
+        first_result = await self._submit_and_poll_video(
             url=task_endpoint,
             payload=task_payload,
             api_key=dp_token,
@@ -1003,6 +1081,85 @@ class MediaGenerationService:
             callback_ticket=callback_ticket,
             callback_url=callback_url,
         )
+        first_payload = first_result if isinstance(first_result, dict) else {}
+        failure_text = self._flatten_text(first_payload).lower()
+        asset_not_found = (
+            "specified asset" in failure_text
+            and "is not found" in failure_text
+            and "content[1].image_url.url" in failure_text
+        )
+        if asset_not_found and str(asset_rebuild_source_url or "").lower().startswith(("http://", "https://")):
+            try:
+                _debug_log(
+                    "[ark-seedance] submit failed with missing asset; rebuilding private asset and retrying once",
+                    "warning",
+                )
+                project_candidates = _collect_project_candidates()
+                attempted_projects: List[str] = []
+                for candidate_project in project_candidates:
+                    attempted_projects.append(candidate_project)
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(asset_rebuild_source_url, candidate_project)
+                    if not rebuilt_asset_uri:
+                        continue
+
+                    task_payload["content"][1]["image_url"]["url"] = rebuilt_asset_uri
+                    retry_result = await self._submit_and_poll_video(
+                        url=task_endpoint,
+                        payload=task_payload,
+                        api_key=dp_token,
+                        log_tag="ark-seedance",
+                        extra_metadata=extra_metadata,
+                        poll_timeout_seconds=300,
+                        pure_callback_mode=pure_callback_mode,
+                        callback_enabled=callback_enabled,
+                        callback_ticket=callback_ticket,
+                        callback_url=callback_url,
+                    )
+                    retry_payload = retry_result if isinstance(retry_result, dict) else {}
+                    if retry_payload.get("url") or retry_payload.get("video_url"):
+                        _debug_log(
+                            f"[ark-seedance] missing-asset retry succeeded | project={candidate_project}",
+                            "warning",
+                        )
+                        return retry_result
+                    retry_failure = self._flatten_text(retry_payload).lower()
+                    if not ("specified asset" in retry_failure and "is not found" in retry_failure):
+                        return retry_result
+
+                if attempted_projects:
+                    first_payload["diagnostic"] = {
+                        "project_candidates": attempted_projects,
+                        "hint": "asset not found across candidate projects; verify AK/SK account and EP token belong to same Volcengine account/project",
+                    }
+
+                # Final fallback: submit with original public URL directly to
+                # separate "asset visibility" failures from content-policy issues.
+                direct_ref_url = str(asset_rebuild_source_url or "").strip()
+                if direct_ref_url.lower().startswith(("http://", "https://")):
+                    logger.warning("Ark Seedance fallback to direct URL submit after asset rebuild failures")
+                    task_payload["content"][1]["image_url"]["url"] = direct_ref_url
+                    direct_result = await self._submit_and_poll_video(
+                        url=task_endpoint,
+                        payload=task_payload,
+                        api_key=dp_token,
+                        log_tag="ark-seedance",
+                        extra_metadata=extra_metadata,
+                        poll_timeout_seconds=300,
+                        pure_callback_mode=pure_callback_mode,
+                        callback_enabled=callback_enabled,
+                        callback_ticket=callback_ticket,
+                        callback_url=callback_url,
+                    )
+                    direct_payload = direct_result if isinstance(direct_result, dict) else {}
+                    if direct_payload.get("url") or direct_payload.get("video_url"):
+                        return direct_result
+                    direct_failure = self._flatten_text(direct_payload).lower()
+                    if "specified asset" not in direct_failure or "is not found" not in direct_failure:
+                        return direct_result
+            except Exception as rebuild_err:
+                logger.warning("Ark Seedance missing-asset retry failed | error=%s", str(rebuild_err)[:300])
+
+        return first_result
     def _classify_media_retry(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = result if isinstance(result, dict) else {}
         has_output = bool(payload.get("url")) or bool(payload.get("video_url"))
@@ -1017,12 +1174,17 @@ class MediaGenerationService:
             "output_moderation",
             "moderation blocked",
             "moderation blocked reference material",
+            "inputimagesensitivecontentdetected.privacyinformation",
+            "may contain real person",
+            "contain real person",
+            "privacyinformation",
             "content policy",
             "policy violation",
             "safety violation",
             "unsafe content",
             "内容审核",
             "审核拦截",
+            "隐私信息",
             "违规",
         )
         if any(marker in failure_text for marker in non_retryable_markers):
