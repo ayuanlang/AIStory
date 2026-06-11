@@ -165,11 +165,28 @@ const isDummySubject = (itemName) => {
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
-    const selectedScriptAnalysisApiId = useMemo(() => {
-        return Number(functionApiConfigs?.selectedApi?.system_api_id || 0)
-            || Number(localStorage.getItem('func_api_script_analysis') || 0)
-            || null;
-    }, [functionApiConfigs?.selectedApi?.system_api_id]);
+    const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
+        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+    });
+    useEffect(() => {
+        const apiList = Array.isArray(functionApiConfigs?.script_analysis) ? functionApiConfigs.script_analysis : [];
+        if (apiList.length <= 0) return;
+
+        const currentId = Number(selectedScriptAnalysisApiId || 0);
+        const hasCurrent = currentId > 0 && apiList.some((item) => Number(item?.system_api_id || 0) === currentId);
+        if (hasCurrent) return;
+
+        const storageId = Number(localStorage.getItem('func_api_script_analysis') || 0);
+        const hasStorage = storageId > 0 && apiList.some((item) => Number(item?.system_api_id || 0) === storageId);
+        const fallbackId = hasStorage
+            ? storageId
+            : Number((apiList.find((item) => !item?.is_fallback) || apiList[0])?.system_api_id || 0);
+
+        if (fallbackId > 0) {
+            setSelectedScriptAnalysisApiId(fallbackId);
+            localStorage.setItem('func_api_script_analysis', String(fallbackId));
+        }
+    }, [functionApiConfigs?.script_analysis, selectedScriptAnalysisApiId]);
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
@@ -8637,7 +8654,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 <div className="flex items-center gap-2">
                     {isRawMode && (
                         <>
-                            <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} />
+                            <FunctionApiSelector
+                                functionName="script_analysis"
+                                configs={functionApiConfigs}
+                                onChange={setSelectedScriptAnalysisApiId}
+                            />
                             <button 
                                 onClick={handleAnalysisClick} 
                                 disabled={isAnalyzing}

@@ -10035,20 +10035,36 @@ def _format_billing_unit_short_label(unit_type: str) -> str:
 def _format_pricing_description_from_summary(
     summary: Optional[Dict[str, Any]],
     unit_type: str,
+    *,
+    force_token_k_unit: bool = False,
 ) -> str:
     data = summary or {}
-    avg_cost = _safe_int(data.get("average_cost"), 0)
-    min_cost = _safe_int(data.get("min_cost"), 0)
-    max_cost = _safe_int(data.get("max_cost"), 0)
-    unit_label = _format_billing_unit_short_label(unit_type)
+    avg_cost = float(_safe_int(data.get("average_cost"), 0))
+    min_cost = float(_safe_int(data.get("min_cost"), 0))
+    max_cost = float(_safe_int(data.get("max_cost"), 0))
+    normalized_unit = _normalize_billing_unit_type(unit_type)
+    if force_token_k_unit and normalized_unit == "per_million_tokens":
+        # Sync-only conversion: keep billing module unchanged, only normalize pricing description output unit.
+        avg_cost = avg_cost / 1000.0
+        min_cost = min_cost / 1000.0
+        max_cost = max_cost / 1000.0
+        normalized_unit = "per_1k_tokens"
+
+    unit_label = _format_billing_unit_short_label(normalized_unit)
+
+    def _format_cost_text(value: float) -> str:
+        rounded = round(float(value), 6)
+        if abs(rounded - int(rounded)) < 1e-9:
+            return str(int(rounded))
+        return ("{:.6f}".format(rounded)).rstrip("0").rstrip(".")
 
     if max_cost > 0:
-        if min_cost > 0 and min_cost != max_cost:
-            return f"{min_cost}-{max_cost} 积分/{unit_label}"
-        return f"约 {max_cost} 积分/{unit_label}"
+        if min_cost > 0 and abs(min_cost - max_cost) > 1e-9:
+            return f"{_format_cost_text(min_cost)}-{_format_cost_text(max_cost)} 积分/{unit_label}"
+        return f"约 {_format_cost_text(max_cost)} 积分/{unit_label}"
 
     if avg_cost > 0:
-        return f"约 {avg_cost} 积分/{unit_label}"
+        return f"约 {_format_cost_text(avg_cost)} 积分/{unit_label}"
 
     return ""
 
@@ -10056,6 +10072,8 @@ def _format_pricing_description_from_summary(
 def _build_function_api_pricing_description_map(
     db: Session,
     system_api_ids: List[int],
+    *,
+    force_token_k_unit: bool = False,
 ) -> Dict[int, str]:
     normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not normalized_ids:
@@ -10099,7 +10117,11 @@ def _build_function_api_pricing_description_map(
         ):
             summary = cached_price_by_id.get(sid) or summary
         unit_type = unit_map.get(sid, "per_call")
-        result[sid] = _format_pricing_description_from_summary(summary, unit_type)
+        result[sid] = _format_pricing_description_from_summary(
+            summary,
+            unit_type,
+            force_token_k_unit=force_token_k_unit,
+        )
     return result
 
 # --- Function API Config Routes ---
@@ -10209,7 +10231,11 @@ def sync_function_api_pricing_descriptions(
                 if sid > 0:
                     target_ids.append(sid)
 
-    pricing_desc_map = _build_function_api_pricing_description_map(db, target_ids)
+    pricing_desc_map = _build_function_api_pricing_description_map(
+        db,
+        target_ids,
+        force_token_k_unit=True,
+    )
     updated_rows = 0
     updated_items = 0
 

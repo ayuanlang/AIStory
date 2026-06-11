@@ -1,11 +1,38 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { getUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
-const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '' }) => {
+const FUNCTION_API_CHANGE_EVENT = 'aistory:function-api-changed';
+
+const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '', onChange }) => {
 
     const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
+
+    const applyValue = useCallback((nextValue, { persist = true } = {}) => {
+        const normalized = Number(nextValue) || '';
+        setValue(normalized);
+        if (persist) {
+            if (normalized) {
+                localStorage.setItem(storageKey, String(normalized));
+            } else {
+                localStorage.removeItem(storageKey);
+            }
+            try {
+                window.dispatchEvent(new CustomEvent(FUNCTION_API_CHANGE_EVENT, {
+                    detail: { storageKey, value: normalized || null },
+                }));
+            } catch (_) {}
+        }
+        if (typeof onChange === 'function') {
+            onChange(normalized || null);
+        }
+    }, [onChange, storageKey]);
+
+    useEffect(() => {
+        const stored = Number(localStorage.getItem(storageKey) || 0) || '';
+        setValue(stored);
+    }, [storageKey]);
     
     useEffect(() => {
         if (apiList.length > 0) {
@@ -13,18 +40,42 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
             if (!value || !isValid) {
                 const primary = apiList.find(a => !a.is_fallback) || apiList[0];
                 if (primary && primary.system_api_id) {
-                    setValue(primary.system_api_id);
-                    localStorage.setItem(storageKey, primary.system_api_id);
+                    applyValue(primary.system_api_id, { persist: true });
                 }
             }
         }
-    }, [apiList, value, storageKey]);
+    }, [apiList, value, applyValue]);
+
+    useEffect(() => {
+        if (typeof onChange === 'function') {
+            onChange(Number(value) || null);
+        }
+    }, [onChange, value]);
+
+    useEffect(() => {
+        const handleStorage = (event) => {
+            if (event?.key !== storageKey) return;
+            const next = Number(event?.newValue || 0) || '';
+            setValue(next);
+        };
+        const handleInternalSync = (event) => {
+            const detailKey = String(event?.detail?.storageKey || '');
+            if (detailKey !== storageKey) return;
+            const next = Number(event?.detail?.value || 0) || '';
+            setValue(next);
+        };
+        window.addEventListener('storage', handleStorage);
+        window.addEventListener(FUNCTION_API_CHANGE_EVENT, handleInternalSync);
+        return () => {
+            window.removeEventListener('storage', handleStorage);
+            window.removeEventListener(FUNCTION_API_CHANGE_EVENT, handleInternalSync);
+        };
+    }, [storageKey]);
 
     if (apiList.length === 0) return null;
 
     const handleChange = (val) => {
-        setValue(val);
-        localStorage.setItem(storageKey, val);
+        applyValue(val, { persist: true });
     };
 
     return (

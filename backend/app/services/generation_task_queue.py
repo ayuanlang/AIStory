@@ -389,7 +389,7 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
     _ensure_queue_table_ready()
     now = time.time()
     stale_heartbeat_cutoff = now - max(60.0, _QUEUE_RECLAIM_SECONDS / 2.0)
-    live_cfg = _load_queue_config()
+    live_cfg = load_queue_config()
     configured_threads = max(
         1,
         int((live_cfg or {}).get("queue_threads", _DEFAULT_WORKER_THREADS) or _DEFAULT_WORKER_THREADS),
