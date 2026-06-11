@@ -592,6 +592,159 @@ class MediaGenerationService:
             
         import json
         import urllib.parse
+
+        api_version = str(tool_conf.get("asset_api_version") or "2024-01-01").strip()
+        asset_group_name = str(tool_conf.get("asset_group_name") or "seedance_asset").strip() or "seedance_asset"
+        asset_item_name = str(tool_conf.get("asset_name") or tool_conf.get("asset_item_name") or "seedance_image").strip() or "seedance_image"
+
+        async def _register_private_asset_from_public_url(source_url: str) -> str:
+            candidate_url = str(source_url or "").strip()
+            if not candidate_url.lower().startswith(("http://", "https://")):
+                return ""
+
+            group_id_local = str(tool_conf.get("asset_group_id") or "").strip()
+            if not group_id_local:
+                list_payload = {
+                    "Filter": {
+                        "Name": asset_group_name,
+                        "GroupType": "AIGC",
+                    },
+                    "PageNumber": 1,
+                    "PageSize": 20,
+                    "ProjectName": project_name,
+                }
+                list_res = self._do_volc_request(
+                    "POST",
+                    "ListAssetGroups",
+                    api_version,
+                    json.dumps(list_payload),
+                    "ark",
+                    ak,
+                    sk,
+                )
+                list_items = list_res.get("Items") if isinstance(list_res, dict) else None
+                if isinstance(list_items, list):
+                    matched_group = None
+                    for item in list_items:
+                        if not isinstance(item, dict):
+                            continue
+                        item_name = str(item.get("Name") or item.get("Title") or "").strip()
+                        item_project = str(item.get("ProjectName") or "").strip()
+                        if item_name == asset_group_name and (not item_project or item_project == project_name):
+                            matched_group = item
+                            break
+                    if not matched_group and list_items:
+                        first = list_items[0]
+                        if isinstance(first, dict):
+                            matched_group = first
+                    if matched_group:
+                        group_id_local = str(
+                            matched_group.get("Id")
+                            or matched_group.get("GroupId")
+                            or matched_group.get("AssetGroupId")
+                            or ""
+                        ).strip()
+
+            if not group_id_local:
+                group_payload = {
+                    "Name": asset_group_name,
+                    "Description": "aistory seedance private assets",
+                    "GroupType": "AIGC",
+                    "ProjectName": project_name,
+                }
+                group_res = self._do_volc_request(
+                    "POST",
+                    "CreateAssetGroup",
+                    api_version,
+                    json.dumps(group_payload),
+                    "ark",
+                    ak,
+                    sk,
+                )
+                group_id_local = str(
+                    group_res.get("GroupId")
+                    or group_res.get("Id")
+                    or group_res.get("AssetGroupId")
+                    or ""
+                ).strip()
+
+            if not group_id_local:
+                return ""
+
+            asset_payload = {
+                "GroupId": group_id_local,
+                "URL": candidate_url,
+                "AssetType": "Image",
+                "Name": asset_item_name,
+                "ProjectName": project_name,
+            }
+            asset_res = self._do_volc_request(
+                "POST",
+                "CreateAsset",
+                api_version,
+                json.dumps(asset_payload),
+                "ark",
+                ak,
+                sk,
+            )
+            asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
+            created_asset_id = str(
+                asset_res.get("Id")
+                or asset_res.get("AssetId")
+                or asset_obj.get("Id")
+                or asset_obj.get("AssetId")
+                or ""
+            ).strip()
+            if not created_asset_id:
+                return ""
+
+            max_polls = 180
+            for _ in range(max_polls):
+                await asyncio.sleep(5)
+                poll_req = {"Id": created_asset_id, "ProjectName": project_name}
+                poll_res = self._do_volc_request(
+                    "POST",
+                    "GetAsset",
+                    api_version,
+                    json.dumps(poll_req),
+                    "ark",
+                    ak,
+                    sk,
+                )
+                status = (
+                    poll_res.get("Status")
+                    or poll_res.get("status")
+                    or poll_res.get("Asset", {}).get("Status")
+                    or poll_res.get("Asset", {}).get("status")
+                    or ""
+                )
+                status = str(status).strip().lower()
+                if status in {"active", "ready", "success", "completed"}:
+                    return f"asset://{created_asset_id}"
+                if status == "failed":
+                    return ""
+
+            return ""
+
+        def _extract_asset_id_from_uri(value: Any) -> str:
+            raw = str(value or "").strip()
+            if not raw.startswith("asset://"):
+                return ""
+            return raw[len("asset://"):].strip()
+
+        def _get_asset_info(asset_id: str, candidate_project: Optional[str]) -> Dict[str, Any]:
+            req: Dict[str, Any] = {"Id": asset_id}
+            if str(candidate_project or "").strip():
+                req["ProjectName"] = str(candidate_project).strip()
+            return self._do_volc_request(
+                "POST",
+                "GetAsset",
+                api_version,
+                json.dumps(req),
+                "ark",
+                ak,
+                sk,
+            )
         
         asset_id_or_url = ref_image
         ref_raw = str(ref_image or "").strip()
@@ -635,141 +788,88 @@ class MediaGenerationService:
                 }
 
             try:
-                api_version = str(tool_conf.get("asset_api_version") or "2024-01-01").strip()
-                asset_group_id = str(tool_conf.get("asset_group_id") or "").strip()
-                asset_group_name = str(tool_conf.get("asset_group_name") or "seedance_asset").strip() or "seedance_asset"
-
-                if not asset_group_id:
-                    list_payload = {
-                        "Filter": {
-                            "Name": asset_group_name,
-                            "GroupType": "AIGC",
-                        },
-                        "PageNumber": 1,
-                        "PageSize": 20,
-                        "ProjectName": project_name,
-                    }
-                    list_res = self._do_volc_request(
-                        "POST",
-                        "ListAssetGroups",
-                        api_version,
-                        json.dumps(list_payload),
-                        "ark",
-                        ak,
-                        sk,
-                    )
-                    list_items = list_res.get("Items") if isinstance(list_res, dict) else None
-                    if isinstance(list_items, list):
-                        matched_group = None
-                        for item in list_items:
-                            if not isinstance(item, dict):
-                                continue
-                            item_name = str(item.get("Name") or item.get("Title") or "").strip()
-                            item_project = str(item.get("ProjectName") or "").strip()
-                            if item_name == asset_group_name and (not item_project or item_project == project_name):
-                                matched_group = item
-                                break
-                        if not matched_group and list_items:
-                            first = list_items[0]
-                            if isinstance(first, dict):
-                                matched_group = first
-                        if matched_group:
-                            asset_group_id = str(
-                                matched_group.get("Id")
-                                or matched_group.get("GroupId")
-                                or matched_group.get("AssetGroupId")
-                                or ""
-                            ).strip()
-
-                if not asset_group_id:
-                    group_payload = {
-                        "Name": asset_group_name,
-                        "Description": "aistory seedance private assets",
-                        "GroupType": "AIGC",
-                        "ProjectName": project_name,
-                    }
-                    group_res = self._do_volc_request(
-                        "POST",
-                        "CreateAssetGroup",
-                        api_version,
-                        json.dumps(group_payload),
-                        "ark",
-                        ak,
-                        sk,
-                    )
-                    asset_group_id = str(
-                        group_res.get("GroupId")
-                        or group_res.get("Id")
-                        or group_res.get("AssetGroupId")
-                        or ""
-                    ).strip()
-
-                if not asset_group_id:
-                    return {"error": "Failed to resolve/create asset group for Ark private avatar assets"}
-
-                asset_payload = {
-                    "GroupId": asset_group_id,
-                    "URL": resolved_public_ref,
-                    "AssetType": "Image",
-                    "Name": "seedance_image",
-                    "ProjectName": project_name,
-                }
-                asset_res = self._do_volc_request(
-                    "POST",
-                    "CreateAsset",
-                    api_version,
-                    json.dumps(asset_payload),
-                    "ark",
-                    ak,
-                    sk,
-                )
-
-                asset_obj = asset_res.get("Asset", {}) if isinstance(asset_res, dict) else {}
-                asset_id = (
-                    asset_res.get("Id")
-                    or asset_res.get("AssetId")
-                    or asset_obj.get("Id")
-                    or asset_obj.get("AssetId")
-                )
-                if not asset_id:
-                    return {"error": f"Failed to create private avatar asset: {asset_res}"}
-
-                max_polls = 180
-                active = False
-                for _ in range(max_polls):
-                    await asyncio.sleep(5)
-                    poll_req = {"Id": asset_id, "ProjectName": project_name}
-                    poll_res = self._do_volc_request(
-                        "POST",
-                        "GetAsset",
-                        api_version,
-                        json.dumps(poll_req),
-                        "ark",
-                        ak,
-                        sk,
-                    )
-
-                    status = (
-                        poll_res.get("Status")
-                        or poll_res.get("status")
-                        or poll_res.get("Asset", {}).get("Status")
-                        or poll_res.get("Asset", {}).get("status")
-                        or ""
-                    )
-                    status = str(status).strip().lower()
-
-                    if status in {"active", "ready", "success", "completed"}:
-                        active = True
-                        break
-                    if status == "failed":
-                        return {"error": f"Private avatar asset processing failed: {poll_res}"}
-
-                if not active:
-                    return {"error": "Timed out waiting for Ark private avatar asset to become Active"}
-
-                asset_id_or_url = f"asset://{asset_id}"
+                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref)
+                if not rebuilt_asset_uri:
+                    return {"error": "Failed to register Ark private avatar asset from reference URL"}
+                asset_id_or_url = rebuilt_asset_uri
             except Exception as e:
                 return {"error": f"Private avatar asset flow raised exception: {e}"}
+        else:
+            try:
+                asset_id = _extract_asset_id_from_uri(ref_raw)
+                if not asset_id:
+                    return {"error": "Invalid asset URI for Ark private avatar mode"}
+
+                resolved_asset = None
+                try:
+                    resolved_asset = _get_asset_info(asset_id, project_name)
+                except Exception:
+                    resolved_asset = None
+
+                status = str(
+                    (resolved_asset or {}).get("Status")
+                    or (resolved_asset or {}).get("status")
+                    or (resolved_asset or {}).get("Asset", {}).get("Status")
+                    or (resolved_asset or {}).get("Asset", {}).get("status")
+                    or ""
+                ).strip().lower()
+                if status in {"active", "ready", "success", "completed"}:
+                    asset_id_or_url = ref_raw
+                else:
+                    # Recovery path: stale asset IDs may belong to another project.
+                    # Try to discover source URL and re-register into current project.
+                    discovered_source_url = ""
+                    candidate_projects = [
+                        str(tool_conf.get("asset_source_project") or "").strip(),
+                        "default",
+                        "",
+                    ]
+                    for candidate_project in candidate_projects:
+                        if candidate_project == project_name:
+                            continue
+                        try:
+                            info = _get_asset_info(asset_id, candidate_project if candidate_project else None)
+                        except Exception:
+                            continue
+                        source_url = str(
+                            info.get("URL")
+                            or info.get("Url")
+                            or info.get("Asset", {}).get("URL")
+                            or info.get("Asset", {}).get("Url")
+                            or ""
+                        ).strip()
+                        if source_url.lower().startswith(("http://", "https://")):
+                            discovered_source_url = source_url
+                            break
+
+                    if not discovered_source_url:
+                        fallback_source_keys = [
+                            "asset_source_url",
+                            "reference_image_url",
+                            "source_image_url",
+                            "image_url",
+                        ]
+                        for key in fallback_source_keys:
+                            value = str(tool_conf.get(key) or "").strip()
+                            if value.lower().startswith(("http://", "https://")):
+                                discovered_source_url = value
+                                break
+
+                    if not discovered_source_url:
+                        return {
+                            "error": f"Ark private asset not found in project '{project_name}' and no fallback source URL for rebuild",
+                            "submit_failed": True,
+                        }
+
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url)
+                    if not rebuilt_asset_uri:
+                        return {
+                            "error": "Ark private asset rebuild failed after missing asset detection",
+                            "submit_failed": True,
+                        }
+                    asset_id_or_url = rebuilt_asset_uri
+            except Exception as e:
+                return {"error": f"Ark private asset validation failed: {e}", "submit_failed": True}
                 
         # Fire the generation task
         inner_conf = tool_conf
