@@ -102,6 +102,13 @@ export default function QueueAdmin() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!selectedTask?.job_id) return;
+    const latestTask = tasks.find((task) => task?.job_id === selectedTask.job_id);
+    if (!latestTask) return;
+    setSelectedTask((prev) => (prev?.job_id === latestTask.job_id ? latestTask : prev));
+  }, [tasks, selectedTask?.job_id]);
+
   const getApiName = (apiId) => {
     if (!apiId) return null;
     const found = systemApis.find(a => a.id === apiId);
@@ -125,6 +132,15 @@ export default function QueueAdmin() {
     if (alias) return `${alias}${model ? ` / ${model}` : ''}`;
     if (provider) return `${provider}${model ? ` / ${model}` : ''}`;
     return model || '-';
+  };
+
+  const getTaskCombinedPayload = (task) => {
+    const payload = task?.payload || {};
+    const finalPayload = payload.combined_payload || payload.final_provider_payload;
+    const displayPayload = finalPayload && typeof finalPayload === 'object' ? finalPayload : payload;
+    return Object.fromEntries(
+      Object.entries(displayPayload || {}).filter(([, value]) => value !== null && value !== undefined && value !== '')
+    );
   };
 
   const getTaskStatusLabel = (task) => {
@@ -680,9 +696,7 @@ export default function QueueAdmin() {
                 <div className="relative">
                   <pre className="text-gray-300 text-xs whitespace-pre-wrap font-mono bg-[#111114] p-4 rounded border border-white/5 overflow-x-auto selection:bg-blue-500/30">
                     {JSON.stringify(
-                      Object.fromEntries(
-                        Object.entries(selectedTask.payload || {}).filter(([_, v]) => v !== null && v !== undefined && v !== '')
-                      ), 
+                      getTaskCombinedPayload(selectedTask), 
                       null, 2
                     )}
                   </pre>
