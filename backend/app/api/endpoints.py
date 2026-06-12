@@ -30932,6 +30932,35 @@ async def _run_generate_video(
             provider=resolved_video_provider,
             model=resolved_video_model,
         )
+        if isinstance(req.multi_prompt, list):
+            patched_multi_prompt: List[Dict[str, Any]] = []
+            for item in req.multi_prompt:
+                if not isinstance(item, dict):
+                    continue
+                patched_item = dict(item)
+                item_prompt = str(patched_item.get("prompt") or "").strip()
+                if item_prompt:
+                    patched_item["prompt"] = _append_video_api_ref_mapping(
+                        item_prompt,
+                        flat_refs,
+                        req.ref_image_url,
+                        req.last_frame_url,
+                        effective_keyframes,
+                        req.ref_video_urls,
+                        entity_lookup=entity_lookup if is_reference_image_mode else None,
+                        use_prev_video=getattr(req, "use_prev_video", False),
+                        provider=resolved_video_provider,
+                        model=resolved_video_model,
+                    )
+                patched_multi_prompt.append(patched_item)
+            req.multi_prompt = patched_multi_prompt
+            logger.info(
+                "[GenerateVideo] synchronized multi_prompt mapping | shot_id=%s count=%s use_prev_video=%s ref_videos=%s",
+                req.shot_id,
+                len(patched_multi_prompt),
+                bool(getattr(req, "use_prev_video", False)),
+                len(req.ref_video_urls or []) if isinstance(req.ref_video_urls, list) else 0,
+            )
 
         try:
             db.rollback()
@@ -31812,6 +31841,28 @@ async def submit_generate_video_endpoint(
                 provider=req_payload.get("provider", ""),
                 model=req_payload.get("model", ""),
             )
+            if isinstance(req_payload.get("multi_prompt"), list):
+                patched_multi_prompt: List[Dict[str, Any]] = []
+                for item in req_payload.get("multi_prompt") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    patched_item = dict(item)
+                    item_prompt = str(patched_item.get("prompt") or "").strip()
+                    if item_prompt:
+                        patched_item["prompt"] = _append_video_api_ref_mapping(
+                            item_prompt,
+                            submit_refs,
+                            submit_ref_image_url,
+                            submit_last_frame_url,
+                            submit_keyframes,
+                            submit_ref_video_urls,
+                            entity_lookup=submit_entity_lookup,
+                            use_prev_video=req_payload.get("use_prev_video", False),
+                            provider=req_payload.get("provider", ""),
+                            model=req_payload.get("model", ""),
+                        )
+                    patched_multi_prompt.append(patched_item)
+                req_payload["multi_prompt"] = patched_multi_prompt
     except Exception as e:
         logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
     scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
