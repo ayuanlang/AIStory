@@ -34052,7 +34052,20 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
     return prev_end or None
 
 
-def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None) -> Dict[str, Any]:
+def _find_previous_shot_video_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
+    prev_shot = (
+        db.query(Shot)
+        .filter(Shot.episode_id == episode_id, Shot.id < shot_id, Shot.video_url.isnot(None), Shot.video_url != "")
+        .order_by(Shot.id.desc())
+        .first()
+    )
+    if not prev_shot:
+        return None
+    prev_video = str(prev_shot.video_url or "").strip()
+    return prev_video or None
+
+
+def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None, use_prev_video: bool = False) -> Dict[str, Any]:
     item_db = SessionLocal()
     cancel_event = _get_shot_media_batch_cancel_event(int(episode_id), create=True)
 
@@ -34234,14 +34247,23 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             if "seedance" in str(pre_api_cfg.get("provider") or "").lower() or "seedance" in str(pre_api_cfg.get("model") or "").lower():
                 is_seedance_batch = True
 
+        reference_video_urls: List[str] = []
+        if use_prev_video:
+            prev_video_url = _find_previous_shot_video_url(item_db, episode_id, int(shot.id))
+            if prev_video_url:
+                reference_video_urls.append(prev_video_url)
+
         video_prompt = _append_video_api_ref_mapping(
             video_prompt,
             ordered_video_refs,
             normalized_refs,
             normalized_last_frame_url,
             None,
+            reference_video_urls,
             provider="seedance" if is_seedance_batch else None,
+            model=str(pre_api_cfg.get("model") or "") if getattr(locals(), "pre_api_cfg", None) else "",
             entity_lookup=entity_lookup,
+            use_prev_video=bool(use_prev_video),
         )
         if video_mode == "keyframes_entity_refs":
             keyframe_ref_count = 1 if keyframe_priority_refs else 0
@@ -34258,8 +34280,11 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 normalized_refs,
                 normalized_last_frame_url,
                 None,
+                reference_video_urls,
                 provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
+                model=str(pre_api_cfg.get("model") or "") if getattr(locals(), "pre_api_cfg", None) else "",
                 entity_lookup=entity_lookup,
+                use_prev_video=bool(use_prev_video),
             )
             if video_mode == "keyframes_entity_refs":
                 keyframe_ref_count = 1 if keyframe_priority_refs else 0
@@ -34307,6 +34332,8 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             shot_name=shot.shot_name,
             asset_type="video",
             system_api_id=system_api_id,
+            ref_video_urls=reference_video_urls or None,
+            use_prev_video=bool(use_prev_video),
         )
         _release_db_connection(item_db, "shot_media_batch_video")
         try:
@@ -34539,10 +34566,18 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                     user_id,
                     overwrite_existing,
                     system_api_id,
+                    bool((request_payload or {}).get("use_prev_video")),
                 )] = int(shot.id)
                 return True
 
             max_workers = max(1, min(batch_max_concurrency, total or 1))
+            if bool((request_payload or {}).get("use_prev_video")):
+                max_workers = 1
+                logger.info(
+                    "[shot_media_batch] forcing sequential video batch for previous-video continuation | episode_id=%s total=%s",
+                    episode_id,
+                    total,
+                )
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 while len(active_future_map) < max_workers and _submit_next_shot(executor):
                     pass
@@ -34965,14 +35000,22 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                     *[ref for ref in ordered_video_refs if ref not in keyframe_priority_refs],
                                 ]
 
+                        reference_video_urls: List[str] = []
+                        if bool((request_payload or {}).get("use_prev_video")):
+                            prev_video_url = _find_previous_shot_video_url(db, episode_id, int(shot.id))
+                            if prev_video_url:
+                                reference_video_urls.append(prev_video_url)
+
                         video_prompt = _append_video_api_ref_mapping(
                             video_prompt,
                             ordered_video_refs,
                             normalized_refs,
                             normalized_last_frame_url,
                             None,
+                            reference_video_urls,
                             entity_lookup=entity_lookup,
                             use_prev_video=bool((request_payload or {}).get("use_prev_video")),
+                            provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                         )
                         if video_mode == "keyframes_entity_refs":
                             keyframe_ref_count = 1 if keyframe_priority_refs else 0
@@ -34989,8 +35032,10 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 normalized_refs,
                                 normalized_last_frame_url,
                                 None,
+                                reference_video_urls,
                                 entity_lookup=entity_lookup,
                                 use_prev_video=bool((request_payload or {}).get("use_prev_video")),
+                                provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                             )
                             if video_mode == "keyframes_entity_refs":
                                 keyframe_ref_count = 1 if keyframe_priority_refs else 0
@@ -35038,6 +35083,8 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             shot_name=shot.shot_name,
                             asset_type="video",
                             system_api_id=system_api_id,
+                            ref_video_urls=reference_video_urls or None,
+                            use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                         )
                         _release_db_connection(db, "shot_media_batch_video")
                         try:

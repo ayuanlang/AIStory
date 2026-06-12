@@ -38,6 +38,52 @@ import time
 import re
 
 
+def _read_git_commit_from_files() -> str:
+    try:
+        root = Path(__file__).resolve().parents[2]
+        git_dir = root / ".git"
+        head_file = git_dir / "HEAD"
+        if not head_file.exists():
+            return ""
+        head = head_file.read_text(encoding="utf-8", errors="ignore").strip()
+        if head.startswith("ref:"):
+            ref_path = head.split(" ", 1)[1].strip()
+            ref_file = git_dir / ref_path
+            if ref_file.exists():
+                return ref_file.read_text(encoding="utf-8", errors="ignore").strip()
+            packed_refs = git_dir / "packed-refs"
+            if packed_refs.exists():
+                for line in packed_refs.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if not line or line.startswith("#") or line.startswith("^"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1] == ref_path:
+                        return parts[0].strip()
+            return ""
+        return head
+    except Exception:
+        return ""
+
+
+def _runtime_version_info() -> Dict[str, Any]:
+    commit = (
+        os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("GIT_COMMIT")
+        or os.getenv("SOURCE_VERSION")
+        or _read_git_commit_from_files()
+        or ""
+    ).strip()
+    return {
+        "commit": commit or None,
+        "commit_short": commit[:7] if commit else None,
+        "python_version": sys.version.split()[0],
+        "render_service_name": os.getenv("RENDER_SERVICE_NAME") or None,
+        "render_instance_id": os.getenv("RENDER_INSTANCE_ID") or None,
+        "run_generation_queue_worker": _RUN_GENERATION_QUEUE_WORKER_ON_START if "_RUN_GENERATION_QUEUE_WORKER_ON_START" in globals() else None,
+        "run_db_bootstrap": _RUN_DB_BOOTSTRAP_ON_START if "_RUN_DB_BOOTSTRAP_ON_START" in globals() else None,
+    }
+
+
 def _resolve_endpoints_router():
     """Resolve API router robustly and emit diagnostics for partial module init issues."""
     module_name = "app.api.endpoints"
@@ -301,9 +347,14 @@ def _env_for_log(name: str) -> str:
 
 
 def _log_runtime_startup_profile() -> None:
+    version_info = _runtime_version_info()
     logger.info(
-        "Runtime startup profile | pid=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
+        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
         os.getpid(),
+        version_info.get("commit_short") or "unknown",
+        version_info.get("render_service_name") or "unset",
+        version_info.get("render_instance_id") or "unset",
+        version_info.get("python_version") or "unknown",
         _env_for_log("WEB_CONCURRENCY"),
         _env_for_log("GUNICORN_TIMEOUT"),
         _env_for_log("GUNICORN_GRACEFUL_TIMEOUT"),
@@ -501,15 +552,18 @@ def _snapshot_dict_footprint(name: str, store: Any, lock: Any = None) -> Dict[st
 
 def _collect_endpoint_store_footprints() -> List[Dict[str, Any]]:
     footprints: List[Dict[str, Any]] = []
+    endpoints_module = globals().get("_endpoints_module") or sys.modules.get("app.api.endpoints")
+    if endpoints_module is None:
+        return footprints
     candidates = [
-        ("image_job_store", getattr(endpoints, "IMAGE_JOB_STORE", None), getattr(endpoints, "IMAGE_JOB_LOCK", None)),
-        ("video_job_store", getattr(endpoints, "VIDEO_JOB_STORE", None), getattr(endpoints, "VIDEO_JOB_LOCK", None)),
-        ("generation_callback_store", getattr(endpoints, "GENERATION_CALLBACK_STORE", None), getattr(endpoints, "GENERATION_CALLBACK_LOCK", None)),
-        ("generation_callback_async_inflight", getattr(endpoints, "GENERATION_CALLBACK_ASYNC_INFLIGHT", None), getattr(endpoints, "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK", None)),
-        ("generation_callback_no_match_cache", getattr(endpoints, "GENERATION_CALLBACK_NO_MATCH_LOG_CACHE", None), getattr(endpoints, "GENERATION_CALLBACK_NO_MATCH_LOG_LOCK", None)),
-        ("webhook_replay_store", getattr(endpoints, "WEBHOOK_REPLAY_STORE", None), getattr(endpoints, "WEBHOOK_REPLAY_LOCK", None)),
-        ("generation_job_pool_cache", getattr(endpoints, "_GENERATION_JOB_POOL_CACHE", None), getattr(endpoints, "_GENERATION_JOB_POOL_CACHE_LOCK", None)),
-        ("analyze_scene_recent_tasks", getattr(endpoints, "_ANALYZE_SCENE_RECENT_TASKS", None), getattr(endpoints, "_ANALYZE_SCENE_RECENT_TASKS_LOCK", None)),
+        ("image_job_store", getattr(endpoints_module, "IMAGE_JOB_STORE", None), getattr(endpoints_module, "IMAGE_JOB_LOCK", None)),
+        ("video_job_store", getattr(endpoints_module, "VIDEO_JOB_STORE", None), getattr(endpoints_module, "VIDEO_JOB_LOCK", None)),
+        ("generation_callback_store", getattr(endpoints_module, "GENERATION_CALLBACK_STORE", None), getattr(endpoints_module, "GENERATION_CALLBACK_LOCK", None)),
+        ("generation_callback_async_inflight", getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT", None), getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK", None)),
+        ("generation_callback_no_match_cache", getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_CACHE", None), getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_LOCK", None)),
+        ("webhook_replay_store", getattr(endpoints_module, "WEBHOOK_REPLAY_STORE", None), getattr(endpoints_module, "WEBHOOK_REPLAY_LOCK", None)),
+        ("generation_job_pool_cache", getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE", None), getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE_LOCK", None)),
+        ("analyze_scene_recent_tasks", getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS", None), getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS_LOCK", None)),
     ]
 
     for name, store, lock in candidates:
@@ -1257,6 +1311,14 @@ else:
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/version")
+def version():
+    return {
+        "status": "ok",
+        **_runtime_version_info(),
+    }
 
 
 @app.post(f"{settings.API_V1_STR}/diag/post-ping")
