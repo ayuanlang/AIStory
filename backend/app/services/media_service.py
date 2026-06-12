@@ -13089,6 +13089,18 @@ class MediaGenerationService:
             if multi_shots_supported is False and "multi_shots" in payload_input_obj:
                 payload_input_obj["multi_shots"] = False
 
+            if is_seedance_video_model and not is_gemini_omni_video_model:
+                seedance_default_resolution = "480p" if (tool_conf.get("draft") or tool_conf.get("draft_mode")) else "720p"
+                if not str(payload_input_obj.get("resolution") or "").strip():
+                    payload_input_obj["resolution"] = seedance_default_resolution
+                elif allowed_resolutions:
+                    mapped_seedance_resolution = self._map_resolution_to_allowed(
+                        payload_input_obj.get("resolution"),
+                        runtime_enum_catalog.get("resolution"),
+                    )
+                    if mapped_seedance_resolution:
+                        payload_input_obj["resolution"] = str(mapped_seedance_resolution).strip()
+
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
                 if not is_gemini_omni_video_model:
                     payload_input_obj["resolution"] = "480p"
