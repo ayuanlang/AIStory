@@ -2267,6 +2267,86 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         subjectImageJobsRef.current = subjectImageJobs || {};
     }, [subjectImageJobs]);
 
+    // Load Assets
+    const loadAssets = useCallback(async (options = {}) => {
+        setAssetsLoading(true);
+        try {
+            const parseAssetMeta = (asset) => {
+                if (!asset || typeof asset !== 'object') return {};
+                let meta = asset.meta_info;
+                for (let i = 0; i < 3; i += 1) {
+                    if (typeof meta !== 'string') break;
+                    const text = meta.trim();
+                    if (!text) {
+                        meta = {};
+                        break;
+                    }
+                    try {
+                        meta = JSON.parse(text);
+                    } catch {
+                        break;
+                    }
+                }
+                return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+            };
+
+            const isImageType = (value) => {
+                const stable = String(value || '').trim().toLowerCase();
+                if (!stable) return false;
+                return stable === 'image'
+                    || stable.includes('image')
+                    || stable.includes('frame')
+                    || stable.includes('photo');
+            };
+
+            const pageSize = 200;
+            const maxPages = 25;
+            const allRows = [];
+
+            for (let page = 0; page < maxPages; page += 1) {
+                const data = await fetchAssets({
+                    project_id: projectId || undefined,
+                    include_project_null_episode: true,
+                    current_project_asset: 'all',
+                    skip: page * pageSize,
+                    limit: pageSize,
+                });
+                const rows = Array.isArray(data) ? data : [];
+                if (!rows.length) break;
+                allRows.push(...rows);
+                if (rows.length < pageSize) break;
+            }
+
+            const uniqueById = new Map();
+            allRows.forEach((row) => {
+                const key = String(row?.id || '').trim();
+                if (!key || uniqueById.has(key)) return;
+                uniqueById.set(key, {
+                    ...row,
+                    meta_info: parseAssetMeta(row),
+                });
+            });
+
+            const imageAssets = Array.from(uniqueById.values()).filter((a) => isImageType(a?.type));
+            setAssets(imageAssets);
+
+            const currentProjectKey = String(projectId || '').trim();
+            if (!currentProjectKey) return;
+
+            const hasCurrentProjectAssets = imageAssets.some((asset) => {
+                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
+                return String(meta.project_id || '').trim() === currentProjectKey;
+            });
+            if (hasCurrentProjectAssets) {
+                setAssetProjectFilter(currentProjectKey);
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setAssetsLoading(false);
+        }
+    }, [projectId]);
+
     useEffect(() => {
         const trackedEntityIds = Array.from(new Set([
             String(selectedEntity?.id || '').trim(),
@@ -3648,86 +3728,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (imageModalTab === 'generate') return;
         setImageModalTab('generate');
     }, [imageModalTab, isSubjectImageActionLocked, selectedEntity, showImageModal]);
-
-    // Load Assets
-    const loadAssets = useCallback(async (options = {}) => {
-        setAssetsLoading(true);
-        try {
-            const parseAssetMeta = (asset) => {
-                if (!asset || typeof asset !== 'object') return {};
-                let meta = asset.meta_info;
-                for (let i = 0; i < 3; i += 1) {
-                    if (typeof meta !== 'string') break;
-                    const text = meta.trim();
-                    if (!text) {
-                        meta = {};
-                        break;
-                    }
-                    try {
-                        meta = JSON.parse(text);
-                    } catch {
-                        break;
-                    }
-                }
-                return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
-            };
-
-            const isImageType = (value) => {
-                const stable = String(value || '').trim().toLowerCase();
-                if (!stable) return false;
-                return stable === 'image'
-                    || stable.includes('image')
-                    || stable.includes('frame')
-                    || stable.includes('photo');
-            };
-
-            const pageSize = 200;
-            const maxPages = 25;
-            const allRows = [];
-
-            for (let page = 0; page < maxPages; page += 1) {
-                const data = await fetchAssets({
-                    project_id: projectId || undefined,
-                    include_project_null_episode: true,
-                    current_project_asset: 'all',
-                    skip: page * pageSize,
-                    limit: pageSize,
-                });
-                const rows = Array.isArray(data) ? data : [];
-                if (!rows.length) break;
-                allRows.push(...rows);
-                if (rows.length < pageSize) break;
-            }
-
-            const uniqueById = new Map();
-            allRows.forEach((row) => {
-                const key = String(row?.id || '').trim();
-                if (!key || uniqueById.has(key)) return;
-                uniqueById.set(key, {
-                    ...row,
-                    meta_info: parseAssetMeta(row),
-                });
-            });
-
-            const imageAssets = Array.from(uniqueById.values()).filter((a) => isImageType(a?.type));
-            setAssets(imageAssets);
-
-            const currentProjectKey = String(projectId || '').trim();
-            if (!currentProjectKey) return;
-
-            const hasCurrentProjectAssets = imageAssets.some((asset) => {
-                const meta = asset?.meta_info && typeof asset.meta_info === 'object' ? asset.meta_info : {};
-                return String(meta.project_id || '').trim() === currentProjectKey;
-            });
-            if (hasCurrentProjectAssets) {
-                setAssetProjectFilter(currentProjectKey);
-            }
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setAssetsLoading(false);
-        }
-    }, [projectId]);
 
     useEffect(() => {
         if (!showImageModal) return;
