@@ -623,6 +623,52 @@ class MediaGenerationService:
         asset_item_name = str(tool_conf.get("asset_name") or tool_conf.get("asset_item_name") or "seedance_image").strip() or "seedance_image"
         asset_rebuild_source_url = ""
 
+        def _guess_ark_asset_type(value: Any) -> str:
+            if isinstance(value, dict):
+                explicit_type = str(
+                    value.get("asset_type")
+                    or value.get("media_type")
+                    or value.get("type")
+                    or value.get("category")
+                    or ""
+                ).strip().lower()
+                if "video" in explicit_type:
+                    return "Video"
+                if "audio" in explicit_type:
+                    return "Audio"
+                for key in ("video_url", "videoUrl", "video", "url", "src"):
+                    nested = value.get(key)
+                    if nested:
+                        return _guess_ark_asset_type(nested)
+
+            raw_value = str(value or "").strip().lower()
+            path_only = raw_value.split("?", 1)[0].split("#", 1)[0]
+            if path_only.endswith((".mp4", ".mov", ".webm", ".avi", ".mkv", ".m4v")):
+                return "Video"
+            if path_only.endswith((".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus")):
+                return "Audio"
+            return "Image"
+
+        def _build_ark_reference_content(media_ref: str, asset_type: str) -> Dict[str, Any]:
+            normalized_type = str(asset_type or "Image").strip().lower()
+            if normalized_type == "video":
+                return {
+                    "type": "video_url",
+                    "video_url": {"url": media_ref},
+                    "role": "reference_video",
+                }
+            if normalized_type == "audio":
+                return {
+                    "type": "audio_url",
+                    "audio_url": {"url": media_ref},
+                    "role": "reference_audio",
+                }
+            return {
+                "type": "image_url",
+                "image_url": {"url": media_ref},
+                "role": "reference_image",
+            }
+
         def _collect_project_candidates() -> List[str]:
             candidates: List[str] = []
             for value in (
@@ -641,11 +687,14 @@ class MediaGenerationService:
                     candidates.append(item)
             return candidates
 
-        async def _register_private_asset_from_public_url(source_url: str, target_project_name: Optional[str] = None) -> str:
+        async def _register_private_asset_from_public_url(source_url: str, target_project_name: Optional[str] = None, asset_type: str = "Image") -> str:
             candidate_url = str(source_url or "").strip()
             if not candidate_url.lower().startswith(("http://", "https://")):
                 return ""
             effective_project_name = str(target_project_name or project_name or "").strip() or "default"
+            normalized_asset_type = str(asset_type or "Image").strip().title()
+            if normalized_asset_type not in {"Image", "Video", "Audio"}:
+                normalized_asset_type = "Image"
 
             async def _register_once(project_for_register: str) -> str:
                 local_project_name = str(project_for_register or "").strip() or "default"
@@ -725,8 +774,8 @@ class MediaGenerationService:
                 asset_payload = {
                     "GroupId": group_id_local,
                     "URL": candidate_url,
-                    "AssetType": "Image",
-                    "Name": asset_item_name,
+                    "AssetType": normalized_asset_type,
+                    "Name": f"{asset_item_name}_{normalized_asset_type.lower()}",
                     "ProjectName": local_project_name,
                 }
                 asset_res = self._do_volc_request(
@@ -813,6 +862,7 @@ class MediaGenerationService:
             )
         
         asset_id_or_url = ref_image
+        primary_asset_type = _guess_ark_asset_type(ref_image)
         ref_raw = str(ref_image or "").strip()
         ref_is_http = ref_raw.lower().startswith(("http://", "https://"))
         ref_has_ctrl = any(ord(ch) < 32 for ch in ref_raw)
@@ -855,7 +905,7 @@ class MediaGenerationService:
             asset_rebuild_source_url = str(resolved_public_ref or "").strip()
 
             try:
-                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref, project_name)
+                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref, project_name, primary_asset_type)
                 if not rebuilt_asset_uri:
                     return {"error": "Failed to register Ark private avatar asset from reference URL"}
                 asset_id_or_url = rebuilt_asset_uri
@@ -928,7 +978,7 @@ class MediaGenerationService:
                             "submit_failed": True,
                         }
 
-                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url, project_name)
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url, project_name, primary_asset_type)
                     if not rebuilt_asset_uri:
                         return {
                             "error": "Ark private asset rebuild failed after missing asset detection",
@@ -941,12 +991,14 @@ class MediaGenerationService:
 
         asset_image_refs: List[str] = [str(asset_id_or_url or "").strip()]
         asset_rebuild_source_urls: List[str] = [str(asset_rebuild_source_url or "").strip()]
+        asset_ref_types: List[str] = [primary_asset_type]
 
-        # Process additional reference images and append them to payload.
+        # Process additional reference media and append them to payload.
         for extra_ref in extra_ref_images:
             extra_raw = str(extra_ref or "").strip()
             if not extra_raw:
                 continue
+            extra_asset_type = _guess_ark_asset_type(extra_ref)
 
             try:
                 resolved_extra = await self._resolve_ref_for_api_async(
@@ -956,6 +1008,8 @@ class MediaGenerationService:
                 )
                 if resolved_extra:
                     extra_raw = str(resolved_extra or "").strip()
+                    if extra_asset_type == "Image":
+                        extra_asset_type = _guess_ark_asset_type(extra_raw)
             except Exception:
                 pass
 
@@ -968,7 +1022,7 @@ class MediaGenerationService:
                 if extra_raw.lower().startswith(("http://", "https://")):
                     extra_source_url = extra_raw
                     try:
-                        rebuilt_extra_asset = await _register_private_asset_from_public_url(extra_raw, project_name)
+                        rebuilt_extra_asset = await _register_private_asset_from_public_url(extra_raw, project_name, extra_asset_type)
                         if rebuilt_extra_asset:
                             extra_asset_ref = rebuilt_extra_asset
                     except Exception:
@@ -979,6 +1033,7 @@ class MediaGenerationService:
 
             asset_image_refs.append(str(extra_asset_ref or "").strip())
             asset_rebuild_source_urls.append(str(extra_source_url or "").strip())
+            asset_ref_types.append(extra_asset_type)
 
         asset_image_refs = [item for item in asset_image_refs if item]
         if not asset_image_refs:
@@ -1081,16 +1136,9 @@ class MediaGenerationService:
                 "text": final_prompt
             }
         ]
-        for image_ref in asset_image_refs:
-            content_items.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": image_ref
-                    },
-                    "role": "reference_image"
-                }
-            )
+        for idx, image_ref in enumerate(asset_image_refs):
+            ref_type = asset_ref_types[idx] if idx < len(asset_ref_types) else "Image"
+            content_items.append(_build_ark_reference_content(image_ref, ref_type))
 
         task_payload = {
             "model": model_id,
@@ -1137,16 +1185,17 @@ class MediaGenerationService:
         )
         first_payload = first_result if isinstance(first_result, dict) else {}
         failure_text = self._flatten_text(first_payload).lower()
-        missing_asset_match = re.search(r"content\[(\d+)\]\.image_url\.url", failure_text)
+        missing_asset_match = re.search(r"content\[(\d+)\]\.(?:image_url|video_url|audio_url)\.url", failure_text)
         failed_payload_index = int(missing_asset_match.group(1)) if missing_asset_match else 1
         failed_ref_index = max(0, failed_payload_index - 1)
         rebuild_source_for_failed_ref = ""
         if 0 <= failed_ref_index < len(asset_rebuild_source_urls):
             rebuild_source_for_failed_ref = str(asset_rebuild_source_urls[failed_ref_index] or "").strip()
+        failed_ref_type = asset_ref_types[failed_ref_index] if 0 <= failed_ref_index < len(asset_ref_types) else "Image"
         asset_not_found = (
             "specified asset" in failure_text
             and "is not found" in failure_text
-            and "image_url.url" in failure_text
+            and ("image_url.url" in failure_text or "video_url.url" in failure_text or "audio_url.url" in failure_text)
         )
         if asset_not_found and rebuild_source_for_failed_ref.lower().startswith(("http://", "https://")):
             try:
@@ -1158,12 +1207,12 @@ class MediaGenerationService:
                 attempted_projects: List[str] = []
                 for candidate_project in project_candidates:
                     attempted_projects.append(candidate_project)
-                    rebuilt_asset_uri = await _register_private_asset_from_public_url(rebuild_source_for_failed_ref, candidate_project)
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(rebuild_source_for_failed_ref, candidate_project, failed_ref_type)
                     if not rebuilt_asset_uri:
                         continue
 
                     if 0 <= failed_payload_index < len(task_payload.get("content") or []):
-                        task_payload["content"][failed_payload_index]["image_url"]["url"] = rebuilt_asset_uri
+                        task_payload["content"][failed_payload_index] = _build_ark_reference_content(rebuilt_asset_uri, failed_ref_type)
                     retry_result = await self._submit_and_poll_video(
                         url=task_endpoint,
                         payload=task_payload,
@@ -1199,7 +1248,7 @@ class MediaGenerationService:
                 if direct_ref_url.lower().startswith(("http://", "https://")):
                     logger.warning("Ark Seedance fallback to direct URL submit after asset rebuild failures")
                     if 0 <= failed_payload_index < len(task_payload.get("content") or []):
-                        task_payload["content"][failed_payload_index]["image_url"]["url"] = direct_ref_url
+                        task_payload["content"][failed_payload_index] = _build_ark_reference_content(direct_ref_url, failed_ref_type)
                     direct_result = await self._submit_and_poll_video(
                         url=task_endpoint,
                         payload=task_payload,
