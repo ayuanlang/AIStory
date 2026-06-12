@@ -12121,6 +12121,10 @@ class MediaGenerationService:
         if ref_image:
             ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
             for ref in ref_list:
+                ref_text = str(ref or "").strip()
+                if ref_text.startswith("asset://"):
+                    logger.warning("KIE ignored Ark private asset URI reference | ref=%s", ref_text[:80])
+                    continue
                 if use_veo_api:
                     resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
@@ -12143,6 +12147,10 @@ class MediaGenerationService:
             if isinstance(option_refs, str):
                 option_refs = [option_refs]
             for ref in option_refs if isinstance(option_refs, list) else []:
+                ref_text = str(ref or "").strip()
+                if ref_text.startswith("asset://"):
+                    logger.warning("KIE ignored Ark private asset URI option reference | ref=%s", ref_text[:80])
+                    continue
                 if use_veo_api:
                     resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
                 else:
@@ -14377,6 +14385,8 @@ class MediaGenerationService:
 
         raw = str(url_or_path or "").strip()
         if not raw:
+            return None
+        if raw.startswith("asset://"):
             return None
         if raw.startswith("data:"):
             optimized = self._optimize_data_uri_image(raw, profile=data_uri_profile)

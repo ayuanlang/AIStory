@@ -8534,6 +8534,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 mode,
                 shot_ids: targetShotIds,
                 draft_mode: isDraftMode,
+                use_prev_video: mode === 'videos' ? usePrevVideo : false,
                 overwrite_existing: false,
                 system_api_id: mode === 'videos' ? (Number(localStorage.getItem('func_api_generate_videos')) || undefined) : undefined,
             });

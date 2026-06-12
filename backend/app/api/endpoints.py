@@ -26135,6 +26135,7 @@ class ShotMediaBatchStartRequest(BaseModel):
     overwrite_existing: bool = False
     system_api_id: Optional[int] = None
     draft_mode: Optional[bool] = False
+    use_prev_video: Optional[bool] = False
 
 
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
@@ -33894,6 +33895,32 @@ def _append_video_api_ref_mapping(
     video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
     media_slots = image_slots + video_slots
 
+    def _append_reference_video_instruction(source_text: str) -> str:
+        updated_source = str(source_text or "").strip()
+        if not updated_source:
+            return updated_source
+        if not (reference_video_urls and is_seedance):
+            return updated_source
+
+        if original_use_prev_video:
+            vid_tag = "@Video 1"
+            vid_tag_nospace = "@Video1"
+            if vid_tag not in updated_source and vid_tag_nospace not in updated_source:
+                updated_source = f"延长{vid_tag_nospace}，一镜到底，要参考视频的角色站位建置运镜。\n\n{updated_source.strip()}"
+
+        added_videos = False
+        for idx in range(1, len(reference_video_urls) + 1):
+            vid_tag = f"@Video {idx}"
+            vid_tag_nospace = f"@Video{idx}"
+            if vid_tag not in updated_source and vid_tag_nospace not in updated_source:
+                if not added_videos:
+                    updated_source = f"{updated_source.strip()}，参考视频是 {vid_tag}"
+                    added_videos = True
+                else:
+                    updated_source = f"{updated_source.strip()} {vid_tag}"
+
+        return updated_source
+
     pairs: List[Tuple[int, str, str]] = []
 
     # First, always show explicit start/end images if they are mapped and if desired?
@@ -33945,7 +33972,7 @@ def _append_video_api_ref_mapping(
             pairs.append((mapped_idx, entity_name, ""))
 
     if not pairs:
-        return text
+        return _append_reference_video_instruction(text)
 
     pairs.sort(key=lambda x: x[0])
 
@@ -34008,25 +34035,7 @@ def _append_video_api_ref_mapping(
         if count > 0:
             updated_text = replaced_text
 
-    if reference_video_urls and is_seedance:
-        if original_use_prev_video:
-            vid_tag = "@Video 1"
-            vid_tag_nospace = "@Video1"
-            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                updated_text = f"延长{vid_tag_nospace}，一镜到底，要参考视频的角色站位建置运镜。\n\n{updated_text.strip()}"
-        
-        added_videos = False
-        for idx in range(1, len(reference_video_urls) + 1):
-            vid_tag = f"@Video {idx}"
-            vid_tag_nospace = f"@Video{idx}"
-            if vid_tag not in updated_text and vid_tag_nospace not in updated_text:
-                if not added_videos:
-                    updated_text = f"{updated_text.strip()}，参考视频是 {vid_tag}"
-                    added_videos = True
-                else:
-                    updated_text = f"{updated_text.strip()} {vid_tag}"
-
-    return updated_text
+    return _append_reference_video_instruction(updated_text)
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
