@@ -113,6 +113,7 @@ import urllib.parse
 import socket
 import sys
 import time
+import math
 import io
 import zipfile
 
@@ -631,6 +632,101 @@ async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: D
             time.monotonic() - started_at,
         )
         return await llm_task
+
+
+def _script_analysis_function_api_name(function_name: Any) -> str:
+    raw = str(function_name or "").strip()
+    if raw.startswith("script_analysis"):
+        return "script_analysis"
+    return raw or "script_analysis"
+
+
+def _resolve_script_analysis_dropdown_order(db: Session, function_name: Any) -> List[int]:
+    resolved_function_name = _script_analysis_function_api_name(function_name)
+    row = db.query(models.FunctionAPIConfig).filter(
+        models.FunctionAPIConfig.function_name == resolved_function_name,
+    ).first()
+    raw_settings = row.api_settings if row and isinstance(row.api_settings, list) else []
+
+    def _priority(item: Dict[str, Any]) -> int:
+        try:
+            return int(item.get("priority") or 0)
+        except Exception:
+            return 0
+
+    ordered_ids: List[int] = []
+    for item in sorted(
+        [entry for entry in raw_settings if isinstance(entry, dict)],
+        key=_priority,
+        reverse=True,
+    ):
+        try:
+            setting_id = int(item.get("system_api_id") or 0)
+        except Exception:
+            setting_id = 0
+        if setting_id > 0 and setting_id not in ordered_ids:
+            ordered_ids.append(setting_id)
+    return ordered_ids
+
+
+def _select_script_analysis_api_order(ordered_ids: List[int], selected_system_api_id: Any) -> Tuple[Optional[int], List[int]]:
+    try:
+        selected_id = int(selected_system_api_id or 0)
+    except Exception:
+        selected_id = 0
+
+    if selected_id > 0 and selected_id in ordered_ids:
+        primary_id = selected_id
+    elif ordered_ids:
+        primary_id = ordered_ids[0]
+    else:
+        primary_id = None
+
+    fallback_ids = [setting_id for setting_id in ordered_ids if setting_id != primary_id]
+    return primary_id, fallback_ids
+
+
+def _resolve_script_analysis_dropdown_llm_config(
+    db: Session,
+    current_user_id: int,
+    function_name: Any,
+    system_api_id: Any,
+    *,
+    context: str,
+) -> Tuple[Dict[str, Any], int, List[int], List[int]]:
+    dropdown_order_ids = _resolve_script_analysis_dropdown_order(db, function_name)
+    selected_dropdown_id, dropdown_fallback_ids = _select_script_analysis_api_order(
+        dropdown_order_ids,
+        system_api_id,
+    )
+    if not selected_dropdown_id:
+        raise HTTPException(status_code=400, detail="Script analysis API dropdown has no configured LLM API.")
+
+    primary_configs = agent_service.get_fallback_configs_by_ids([selected_dropdown_id])
+    config = primary_configs[0] if primary_configs else {}
+    if not config or not config.get("api_key"):
+        raise HTTPException(status_code=400, detail="Selected script analysis LLM API is unavailable. Please check the API dropdown settings.")
+
+    cfg_for_route = config.get("config") if isinstance(config.get("config"), dict) else {}
+    cfg_for_route["__override_fallback_candidates"] = dropdown_fallback_ids
+    cfg_for_route["__selection_source"] = "script_analysis_dropdown_priority"
+    cfg_for_route["__resolved_user_id"] = current_user_id
+    cfg_for_route["__resolved_category"] = "LLM"
+    cfg_for_route["__dropdown_order_ids"] = dropdown_order_ids
+    cfg_for_route["__active_retry_attempts"] = 1
+    config["config"] = cfg_for_route
+
+    logger.info(
+        "[%s][routing] source=dropdown_priority function_name=%s requested_system_api_id=%s selected_system_api_id=%s fallback_ids=%s provider=%s model=%s",
+        context,
+        function_name,
+        system_api_id,
+        selected_dropdown_id,
+        dropdown_fallback_ids,
+        (config or {}).get("provider"),
+        (config or {}).get("model"),
+    )
+    return config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids
 
 
 def _normalize_analyze_scene_dedup_payload(value: Any) -> Any:
@@ -6936,19 +7032,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             {"role": "user", "content": user_content}
         ]
 
-        # Resolve LLM config from user's active setting (api_key/base_url always from system_api_settings).
+        # Resolve script-analysis LLM config strictly from the function API dropdown order.
         try:
             db.commit()
         except Exception:
             pass
-        config = agent_service.get_active_llm_config(
-            user_id=current_user_id, 
-            category="LLM",
-            system_api_id=getattr(request, "system_api_id", None),
-            function_name=getattr(request, "function_name", None),
+        config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids = _resolve_script_analysis_dropdown_llm_config(
+            db,
+            current_user_id,
+            getattr(request, "function_name", None),
+            getattr(request, "system_api_id", None),
+            context="analyze_scene",
         )
-        if not config or not config.get("api_key"):
-             raise HTTPException(status_code=400, detail="LLM Configuration missing. Please check your settings.")
         config = _inject_user_advanced_llm_preferences(config, current_user)
         config = _inject_project_creativity_temperature(
             config,
@@ -6956,9 +7051,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             context="analyze_scene",
         )
         logger.info(
-            "[analyze_scene][routing] function_name=%s system_api_id=%s provider=%s model=%s episode_id=%s trace_id=%s",
+            "[analyze_scene][routing] source=dropdown_priority function_name=%s requested_system_api_id=%s selected_system_api_id=%s fallback_ids=%s provider=%s model=%s episode_id=%s trace_id=%s",
             getattr(request, "function_name", None),
             getattr(request, "system_api_id", None),
+            selected_dropdown_id,
+            dropdown_fallback_ids,
             (config or {}).get("provider"),
             (config or {}).get("model"),
             getattr(request, "episode_id", None),
@@ -18362,10 +18459,13 @@ async def ai_generate_shots(
             db.commit()
         except Exception:
             pass
-        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
-        if not llm_config:
-            logger.error(f"[ai_generate_shots] missing_llm_config scene_id={scene_id} user_id={current_user_id}")
-            raise HTTPException(status_code=400, detail="No active LLM config")
+        llm_config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids = _resolve_script_analysis_dropdown_llm_config(
+            db,
+            current_user_id,
+            function_name,
+            system_api_id,
+            context="ai_generate_shots",
+        )
             
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
         llm_config = _inject_project_creativity_temperature(
@@ -18378,7 +18478,8 @@ async def ai_generate_shots(
         provider = llm_config.get("provider") 
         model = llm_config.get("model")
         logger.info(
-            f"[ai_generate_shots] llm_selection provider={provider} model={model} scene_id={scene_id}"
+            f"[ai_generate_shots] llm_selection source=dropdown_priority provider={provider} model={model} "
+            f"scene_id={scene_id} selected_system_api_id={selected_dropdown_id} fallback_ids={dropdown_fallback_ids}"
         )
         reservation_tx = None
         reservation_tx_id: Optional[int] = None
@@ -18681,9 +18782,13 @@ async def ai_regenerate_shots(
             db.commit()
         except Exception:
             pass
-        llm_config = agent_service.get_active_llm_config(current_user_id, system_api_id=system_api_id, function_name=function_name)
-        if not llm_config:
-            raise HTTPException(status_code=400, detail="No active LLM config")
+        llm_config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids = _resolve_script_analysis_dropdown_llm_config(
+            db,
+            current_user_id,
+            function_name,
+            system_api_id,
+            context="ai_regenerate_shots",
+        )
 
         llm_config = _inject_user_advanced_llm_preferences(llm_config, current_user)
         llm_config = _inject_project_creativity_temperature(
@@ -30758,6 +30863,28 @@ async def _run_generate_video(
                 resolved_project_id,
                 normalized_ref_mode or "list_ref",
             )
+
+        if bool(getattr(req, "use_prev_video", False)):
+            existing_video_refs = [
+                str(x).strip()
+                for x in (req.ref_video_urls or [])
+                if str(x).strip()
+            ] if isinstance(req.ref_video_urls, list) else []
+            if not existing_video_refs and _to_positive_int_or_none(getattr(req, "shot_id", None)):
+                prev_video_episode_id = _to_positive_int_or_none(getattr(req, "episode_id", None))
+                if not prev_video_episode_id:
+                    prev_video_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
+                    prev_video_episode_id = _to_positive_int_or_none(getattr(prev_video_shot, "episode_id", None)) if prev_video_shot else None
+                if prev_video_episode_id:
+                    prev_video_url = _find_previous_shot_video_url(db, int(prev_video_episode_id), int(req.shot_id))
+                    if prev_video_url:
+                        req.ref_video_urls = [prev_video_url]
+                        logger.info(
+                            "[GenerateVideo] backfilled previous video ref | shot_id=%s episode_id=%s ref=%s",
+                            req.shot_id,
+                            prev_video_episode_id,
+                            str(prev_video_url or "")[:300],
+                        )
 
         flat_refs: List[str] = []
         if isinstance(req.ref_image_url, list):
