@@ -1146,6 +1146,8 @@ class MediaGenerationService:
             "generate_audio": True,
             "watermark": True
         }
+        is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+        task_payload["resolution"] = str(tool_conf.get("resolution") or ("480p" if is_draft_mode else "720p")).strip()
         if callback_url and callback_url != "-1":
             task_payload["callback_url"] = callback_url
         
@@ -5780,6 +5782,9 @@ class MediaGenerationService:
                 "logo_info": {"add_logo": False},
                 "watermark": False
             }
+            if is_seedance_model:
+                is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+                payload["resolution"] = str(tool_conf.get("resolution") or ("480p" if is_draft_mode else "720p")).strip()
             if callback_url and callback_url != "-1":
                 payload["callback_url"] = callback_url
 
@@ -5965,25 +5970,32 @@ class MediaGenerationService:
             if images: payload["images"] = images
 
         # Shared: Duration & Resolution
+        is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
         if duration:
             dur_int = int(duration)
-            if dur_int < 1: dur_int = 4 
+            if dur_int < 1:
+                dur_int = 4
             if model == "vidu2.0":
-                 payload["duration"] = 8 if dur_int >= 6 else 4
-                 if payload["duration"] == 8: payload["resolution"] = "720p" 
+                payload["duration"] = 8 if dur_int >= 6 else 4
+                if payload["duration"] == 8:
+                    payload["resolution"] = "720p"
             elif "viduq1" in model:
-                 payload["duration"] = 5
-                 payload["resolution"] = "1080p"
+                payload["duration"] = 5
+                payload["resolution"] = "720p"
             else:
-                 payload["duration"] = min(dur_int, 8)
+                payload["duration"] = min(dur_int, 8)
 
-        if "resolution" not in payload: payload["resolution"] = "720p" 
+        if is_draft_mode:
+            payload["resolution"] = "480p"
+        elif "resolution" not in payload or str(payload.get("resolution") or "").strip().lower() == "1080p":
+            payload["resolution"] = "720p"
 
         # Config overrides
         if config.get("config"):
              cf = config.get("config")
              if cf.get("seed"): payload["seed"] = int(cf.get("seed"))
              if cf.get("resolution"): payload["resolution"] = cf.get("resolution")
+             if self._normalize_bool_value(cf.get("draft_mode") or cf.get("draft")): payload["resolution"] = "480p"
 
         # Always pass the resolved audio flag to Vidu payload.
         payload["is_rec"] = bool(sound_enabled)
@@ -6393,19 +6405,22 @@ class MediaGenerationService:
                 payload["webhook"] = callback_payload_value
                 # API requires integer for duration
                 payload["duration"] = int(duration) if duration else 5
+                video_is_draft = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
                 if aspect_ratio:
                     # Default map for common ratios if API expects WxH
                     map_size = {
-                        "16:9": "1280x720", 
-                        "9:16": "720x1280", 
-                        "1:1": "1024x1024", 
-                        "4:3": "1024x768",
-                        "2.35:1": "1920x816"
+                        "16:9": "854x480" if video_is_draft else "1280x720",
+                        "9:16": "480x854" if video_is_draft else "720x1280",
+                        "1:1": "480x480" if video_is_draft else "720x720",
+                        "4:3": "640x480" if video_is_draft else "960x720",
+                        "2.35:1": "1128x480" if video_is_draft else "1692x720"
                     }
                     if aspect_ratio in map_size:
                         payload["size"] = map_size[aspect_ratio]
                     else:
                         payload["aspect_ratio"] = aspect_ratio
+                elif not is_veo:
+                    payload["size"] = "854x480" if video_is_draft else "1280x720"
 
             base_metadata = {"provider": "grsai", "model": final_model, "prompt": prompt}
             
@@ -6751,7 +6766,8 @@ class MediaGenerationService:
         
         # Construct Parameters safely
         # Default resolution
-        res = str(config.get("resolution", "720P"))
+        is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+        res = "480P" if is_draft_mode else str(config.get("resolution", "720P"))
         
         # Override with aspect_ratio if provided
         if aspect_ratio:
@@ -7468,6 +7484,9 @@ class MediaGenerationService:
             return _normalize_duration_value(requested_duration, 5)
 
         def _runninghub_video_resolution_allowed_values() -> List[str]:
+            runtime_values = self._normalize_str_list(runtime_enum_catalog.get("resolution") if isinstance(runtime_enum_catalog, dict) else None)
+            if runtime_values:
+                return runtime_values
             if "/openapi/v2/rhart-video" in endpoint_lower:
                 return ["480p", "720p", "1080p", "2k", "4k"]
             if not _is_runninghub_vidu_video_endpoint():
@@ -7749,9 +7768,10 @@ class MediaGenerationService:
                 endpoint_lower = submit_url.lower()
 
         normalized_video_duration = _normalize_runninghub_video_duration(explicit_duration, duration)
-        normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, "720p" if _is_runninghub_vidu_video_endpoint() else None)
+        default_video_resolution = "480p" if is_draft else "720p"
+        normalized_video_resolution = _normalize_runninghub_video_resolution(explicit_resolution, default_video_resolution)
         if is_draft:
-            normalized_video_resolution = "480p"
+            normalized_video_resolution = _normalize_runninghub_video_resolution("480p", "480p") or "480p"
 
         if "video-edit" in endpoint_lower or "edit-video" in endpoint_lower or "video-extend" in endpoint_lower:
             source_video = video_refs[0] if video_refs else None
@@ -8225,16 +8245,17 @@ class MediaGenerationService:
             elif "/v1/videos" not in endpoint_lower:
                 return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
 
+            video_resolution = str(tool_conf.get("resolution") or ("480p" if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")) else "720p")).strip()
             payload = {
                 "model": model,
                 "prompt": _sanitize_video_prompt_if_needed(prompt, negative_prompt, model),
                 "seconds": str(int(duration or tool_conf.get("seconds") or 4)),
-                "size": str(tool_conf.get("size") or "2560x1440"),
+                "size": str(tool_conf.get("size") or ("854x480" if video_resolution == "480p" else "1280x720")),
             }
             if aspect_ratio and not tool_conf.get("size"):
                 size_map = {
-                    "16:9": "1280x720",
-                    "9:16": "720x1280",
+                    "16:9": "854x480" if video_resolution == "480p" else "1280x720",
+                    "9:16": "480x854" if video_resolution == "480p" else "720x1280",
                 }
                 payload["size"] = size_map.get(str(aspect_ratio).strip(), payload["size"])
 
@@ -8361,7 +8382,8 @@ class MediaGenerationService:
             if mapped_duration is not None:
                 duration_in = int(mapped_duration)
 
-        resolution = str(tool_conf.get("resolution") or "720p").strip() or "720p"
+        is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
+        resolution = str(tool_conf.get("resolution") or ("480p" if is_draft_mode else "720p")).strip() or ("480p" if is_draft_mode else "720p")
         normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio or tool_conf.get("ratio"))
         if not normalized_ratio or normalized_ratio == "adaptive":
             normalized_ratio = "16:9"
@@ -8739,6 +8761,7 @@ class MediaGenerationService:
                     prefer_public_upload_url=True,
                 )
 
+        video_resolution = str(tool_conf.get("resolution") or ("480p" if self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft")) else "720p")).strip()
         if "veo" in model_lower and gen_type == "video":
             payload = {
                 "model": model,
@@ -8746,7 +8769,7 @@ class MediaGenerationService:
                 "negativePrompt": negative_prompt or "",
                 "aspectRatio": str(aspect_ratio or "9:16").strip(),
                 "durationSeconds": str(duration or 6),
-                "resolution": "720p",
+                "resolution": video_resolution,
                 "generateAudio": False,
                 "personGeneration": "allow_adult"
             }
@@ -8758,6 +8781,7 @@ class MediaGenerationService:
             payload = {
                 "model": model,
                 "prompt": prompt,
+                "resolution": video_resolution,
             }
             if negative_prompt:
                 payload["negative_prompt"] = negative_prompt
@@ -8785,6 +8809,7 @@ class MediaGenerationService:
                 payload["resolution"] = str(image_size or "2K").strip()
             elif gen_type == "video":
                 payload["type"] = "TEXTTOVIDEO"
+                payload["resolution"] = video_resolution
                 
         if callback_url and callback_url != "-1":
             payload["webhook_url"] = callback_url
@@ -9753,6 +9778,8 @@ class MediaGenerationService:
             value = tool_conf.get(source_key)
             if source_key == "resolution" and not value:
                 value = image_size or tool_conf.get("image_size") or tool_conf.get("size")
+            if source_key == "resolution" and not value:
+                value = "720p"
             if source_key == "resolution" and is_draft:
                 value = "480p"
             if value is None:
@@ -12494,7 +12521,7 @@ class MediaGenerationService:
                 payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
             elif model_lower == "wan/2-6-text-to-video":
                 payload_input["duration"] = "10" if str(payload_input.get("duration")) not in {"5", "10", "15"} else str(payload_input.get("duration"))
-                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "1080p"))
+                payload_input.setdefault("resolution", str(tool_conf.get("resolution") or "720p"))
             elif model_lower == "sora-2-text-to-video":
                 if "n_frames" not in payload_input:
                     payload_input["n_frames"] = "10"
