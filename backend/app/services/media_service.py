@@ -12345,7 +12345,25 @@ class MediaGenerationService:
                 payload_input.pop("first_frame_url", None)
                 payload_input.pop("last_frame_url", None)
                 
-                valid_videos = [str(v).strip() for v in ref_videos if str(v).strip()]
+                valid_videos: List[str] = []
+                invalid_videos: List[str] = []
+                for video_ref in ref_videos:
+                    raw_video_ref = str(video_ref or "").strip()
+                    if not raw_video_ref:
+                        continue
+                    resolved_video_ref = self._resolve_public_media_url(raw_video_ref) or raw_video_ref
+                    if not self._is_public_http_url(resolved_video_ref):
+                        invalid_videos.append(raw_video_ref[:300])
+                        continue
+                    valid_videos.append(resolved_video_ref)
+                valid_videos = [x for x in dict.fromkeys(valid_videos) if x]
+                if invalid_videos:
+                    return {
+                        "error": "KIE submission validation failed",
+                        "details": f"Seedance reference_video_urls must be public http(s) URLs; unresolved refs={invalid_videos[:3]}",
+                        "submit_failed": True,
+                        "runtime_model": model,
+                    }
                 payload_input["reference_video_urls"] = valid_videos
             else:
                 # Normal image-to-video
@@ -14432,6 +14450,8 @@ class MediaGenerationService:
             or os.getenv("RENDER_EXTERNAL_URL")
             or ""
         ).strip().rstrip("/")
+        if not public_base:
+            public_base = self._resolve_public_base_url()
         if not public_base:
             return None
         if not re.match(r"^https?://", public_base, flags=re.IGNORECASE):

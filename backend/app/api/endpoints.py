@@ -34052,6 +34052,44 @@ def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int
     return prev_end or None
 
 
+def _make_public_upload_url_for_provider(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        return raw
+    upload_suffix = ""
+    if raw.startswith("/uploads/"):
+        upload_suffix = raw
+    elif "/uploads/" in raw:
+        upload_suffix = raw[raw.index("/uploads/"):]
+    if not upload_suffix:
+        return raw
+    public_base = str(
+        os.getenv("AISTORY_PUBLIC_BASE_URL")
+        or os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("RENDER_EXTERNAL_URL")
+        or getattr(settings, "RENDER_EXTERNAL_URL", "")
+        or os.getenv("RAILWAY_STATIC_URL")
+        or ""
+    ).strip().rstrip("/")
+    if not public_base:
+        frontend_base = str(
+            os.getenv("AISTORY_FRONTEND_BASE_URL")
+            or os.getenv("FRONTEND_BASE_URL")
+            or getattr(settings, "FRONTEND_BASE_URL", "")
+            or ""
+        ).strip()
+        match = re.match(r"^https?://[^/]+", frontend_base, flags=re.IGNORECASE)
+        if match:
+            public_base = match.group(0).replace("-frontend.", "-backend.").replace("frontend.onrender.com", "backend.onrender.com")
+    if not public_base:
+        return raw
+    if not re.match(r"^https?://", public_base, flags=re.IGNORECASE):
+        public_base = f"https://{public_base}"
+    return f"{public_base.rstrip('/')}{upload_suffix}"
+
+
 def _find_previous_shot_video_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
     prev_shot = (
         db.query(Shot)
@@ -34062,7 +34100,7 @@ def _find_previous_shot_video_url(db: Session, episode_id: int, shot_id: int) ->
     if not prev_shot:
         return None
     prev_video = str(prev_shot.video_url or "").strip()
-    return prev_video or None
+    return _make_public_upload_url_for_provider(prev_video) or None
 
 
 def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int, overwrite_existing: bool = False, system_api_id: Optional[int] = None, use_prev_video: bool = False) -> Dict[str, Any]:
