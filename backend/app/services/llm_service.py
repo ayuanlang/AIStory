@@ -3761,13 +3761,20 @@ class LLMService:
             content_text = str(result_dict.get("content") or "").strip()
             return content_text == ""
 
-        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
+        active_cfg_obj = dict((config.get('config') or {}))
+        active_setting_id = active_cfg_obj.get("__resolved_setting_id")
         if user_id is None:
-            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
+            user_id = active_cfg_obj.get("__resolved_user_id") or 1
+
+        try:
+            active_retry_attempts = int(active_cfg_obj.get("__active_retry_attempts") or 2)
+        except Exception:
+            active_retry_attempts = 2
+        active_retry_attempts = max(1, min(5, active_retry_attempts))
         last_err = ""
 
-        # ── active config: 2 attempts ──
-        for attempt in range(1, 3):
+        # ── active config attempts ──
+        for attempt in range(1, active_retry_attempts + 1):
             result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
             content = str(result.get("content") or "")
             if not content.startswith("Error:") and not _is_empty_success(result):
@@ -3777,17 +3784,16 @@ class LLMService:
             last_err = content
             if self._is_runtime_shutdown_text(content):
                 logger.warning(
-                    "[llm_fallback] active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
-                    attempt, config.get("provider"), config.get("model"),
+                    "[llm_fallback] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                    attempt, active_retry_attempts, config.get("provider"), config.get("model"),
                 )
                 return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
             logger.warning(
-                "[llm_fallback] active attempt %d/2 failed | provider=%s model=%s err=%s",
-                attempt, config.get("provider"), config.get("model"), content[:200],
+                "[llm_fallback] active attempt %d/%d failed | provider=%s model=%s err=%s",
+                attempt, active_retry_attempts, config.get("provider"), config.get("model"), content[:200],
             )
 
-        # ── fallback candidates: up to 3 ──
-        active_cfg_obj = dict((config.get('config') or {}))
+        # ── fallback candidates ──
         __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
         if __override_fallback_candidates is not None:
             override_ids = [int(x) for x in __override_fallback_candidates]
@@ -3849,14 +3855,21 @@ class LLMService:
                 return True
             return False
 
-        active_setting_id = (config.get("config") or {}).get("__resolved_setting_id")
+        active_cfg_obj = dict((config.get('config') or {}))
+        active_setting_id = active_cfg_obj.get("__resolved_setting_id")
         if user_id is None:
-            user_id = (config.get("config") or {}).get("__resolved_user_id") or 1
+            user_id = active_cfg_obj.get("__resolved_user_id") or 1
+
+        try:
+            active_retry_attempts = int(active_cfg_obj.get("__active_retry_attempts") or 2)
+        except Exception:
+            active_retry_attempts = 2
+        active_retry_attempts = max(1, min(5, active_retry_attempts))
         
         last_result = None
 
-        # ── active config: 2 attempts ──
-        for attempt in range(1, 3):
+        # ── active config attempts ──
+        for attempt in range(1, active_retry_attempts + 1):
             result = await self.chat_completion(messages, config)
             content = str(result.get("content") or "")
             if not _is_empty_or_error(result):
@@ -3866,17 +3879,16 @@ class LLMService:
             last_result = result
             if self._is_runtime_shutdown_text(content):
                 logger.warning(
-                    "[llm_fallback_chat] active attempt %d/2 aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
-                    attempt, config.get("provider"), config.get("model"),
+                    "[llm_fallback_chat] active attempt %d/%d aborted: runtime shutting down, skip fallback chain | provider=%s model=%s",
+                    attempt, active_retry_attempts, config.get("provider"), config.get("model"),
                 )
                 return self._attach_routing_metadata(last_result, config)
             logger.warning(
-                "[llm_fallback_chat] active attempt %d/2 failed | provider=%s model=%s finish_reason=%s err=%s",
-                attempt, config.get("provider"), config.get("model"), result.get("finish_reason"), content[:200],
+                "[llm_fallback_chat] active attempt %d/%d failed | provider=%s model=%s finish_reason=%s err=%s",
+                attempt, active_retry_attempts, config.get("provider"), config.get("model"), result.get("finish_reason"), content[:200],
             )
 
-        # ── fallback candidates: up to 3 ──
-        active_cfg_obj = dict((config.get('config') or {}))
+        # ── fallback candidates ──
         __override_fallback_candidates = active_cfg_obj.get('__override_fallback_candidates')
         if __override_fallback_candidates is not None:
             override_ids = [int(x) for x in __override_fallback_candidates]
