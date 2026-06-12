@@ -34187,7 +34187,11 @@ def _append_video_api_ref_mapping(
         if original_use_prev_video:
             vid_tag = "@Video 1"
             vid_tag_nospace = "@Video1"
-            if vid_tag not in updated_source and vid_tag_nospace not in updated_source:
+            has_continuation_instruction = bool(
+                re.search(r"延长\s*@?Video\s*1", updated_source, flags=re.IGNORECASE)
+                or re.search(r"延长\s*视频\s*@?Video\s*1", updated_source, flags=re.IGNORECASE)
+            )
+            if not has_continuation_instruction:
                 updated_source = f"延长{vid_tag_nospace}，一镜到底，要参考视频的角色站位建置运镜。\n\n{updated_source.strip()}"
 
         added_videos = False
