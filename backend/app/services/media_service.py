@@ -13229,6 +13229,24 @@ class MediaGenerationService:
                 dumped = str(log_payload)
             logger.info(f"====== PRE_SUBMIT DUMP [{kie_tag}] ======\nURL: {submit_url}\nModel: {submit_payload.get('model')}\nPayload: {dumped}\n====== END PRE_SUBMIT DUMP ======")
             _debug_log(f"[KIE_{kie_tag}] Submitting to URL: {submit_url} | Model: {submit_payload.get('model')} | Payload: {log_payload}")
+            if callable(provider_payload_callback):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": "kie",
+                            "type": kie_tag,
+                            "method": "POST",
+                            "url": submit_url,
+                            "model": submit_payload.get("model"),
+                            "payload": log_payload,
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "KIE provider payload callback failed | model=%s error=%s",
+                        submit_payload.get("model"),
+                        callback_err,
+                    )
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
             return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 600), verify=False)
@@ -13285,6 +13303,9 @@ class MediaGenerationService:
         task_id_callback = tool_conf.get("_provider_task_id_callback")
         if not callable(task_id_callback):
             task_id_callback = None
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if not callable(provider_payload_callback):
+            provider_payload_callback = None
 
         if gen_type in {"image", "video"}:
             logger.info(
@@ -13378,7 +13399,9 @@ class MediaGenerationService:
             )
 
         def _rehost_kie_submit_input_urls(payload_obj: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
-            candidate = copy.deepcopy(payload_obj or {})
+            import copy as copy_module
+
+            candidate = copy_module.deepcopy(payload_obj or {})
             changed = False
 
             def _upload_one_ref(raw_value: Any, tag: str) -> Optional[str]:

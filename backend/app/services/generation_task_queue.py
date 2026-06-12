@@ -546,6 +546,53 @@ def enqueue_generation_task(*, job_id: str, kind: str, user_id: int, payload: Di
     return str(job_id)
 
 
+def patch_generation_task_payload(job_id: str, patch: Dict[str, Any]) -> bool:
+    _ensure_queue_table_ready()
+    if not isinstance(patch, dict) or not patch:
+        return False
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT payload_json
+                FROM generation_task_queue
+                WHERE job_id = :job_id
+                """
+            ),
+            {"job_id": str(job_id)},
+        ).mappings().first()
+        if not row:
+            return False
+        try:
+            payload = json.loads(str(row.get("payload_json") or "{}"))
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.update(patch)
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET payload_json = :payload_json,
+                    last_heartbeat = COALESCE(last_heartbeat, :last_heartbeat)
+                WHERE job_id = :job_id
+                """
+            ),
+            {
+                "job_id": str(job_id),
+                "payload_json": json.dumps(payload, ensure_ascii=False, default=str),
+                "last_heartbeat": time.time(),
+            },
+        )
+        db.commit()
+        return int(result.rowcount or 0) > 0
+    finally:
+        db.close()
+
+
 def mark_generation_task_status_external(
     job_id: str,
     *,

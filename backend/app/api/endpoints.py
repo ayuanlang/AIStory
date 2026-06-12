@@ -30186,6 +30186,7 @@ async def _run_generate_video(
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
     force_pure_callback_mode: bool = False,
+    provider_payload_callback: Any = None,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -30977,6 +30978,8 @@ async def _run_generate_video(
             video_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
             video_provider_options["_provider_callback_url"] = str(provider_callback_url).strip()
+        if callable(provider_payload_callback):
+            video_provider_options["_provider_payload_callback"] = provider_payload_callback
         if (force_pure_callback_mode or _is_pure_callback_mode_enabled()) and provider_callback_ticket and provider_callback_url:
             video_provider_options["_pure_callback_mode"] = True
         is_kie_kling3_video = bool(
@@ -31425,12 +31428,30 @@ async def _run_generate_video_job(
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
 )-> Dict[str, Any]:
-    from app.services.generation_task_queue import mark_generation_task_status_external
+    from app.services.generation_task_queue import mark_generation_task_status_external, patch_generation_task_payload
 
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
     req_provider = str(req_payload.get("provider") or "").strip() or None
     req_model = str(req_payload.get("model") or "").strip() or None
+
+    def _on_provider_payload(payload_snapshot: Any) -> None:
+        if not isinstance(payload_snapshot, dict):
+            return
+        patch_generation_task_payload(
+            job_id,
+            {
+                "combined_payload": payload_snapshot,
+                "final_provider_payload": payload_snapshot,
+                "final_provider_payload_at": now_bj_iso(),
+            },
+        )
+        logger.info(
+            "[VideoJob] final provider payload recorded | job_id=%s provider=%s model=%s",
+            job_id,
+            req_provider or "unknown",
+            req_model or "unknown",
+        )
     try:
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -31463,6 +31484,7 @@ async def _run_generate_video_job(
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
                 force_pure_callback_mode=True,
+                provider_payload_callback=_on_provider_payload,
             ),
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
