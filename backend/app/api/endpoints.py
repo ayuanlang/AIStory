@@ -6756,6 +6756,68 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats"}
         )
 
+        def _normalize_subject_index_entity_type(raw_type: Any) -> str:
+            t = str(raw_type or "").strip().lower()
+            if t in {"character", "characters", "char", "人物", "角色"}:
+                return "character"
+            if t in {"prop", "props", "item", "items", "道具", "物件"}:
+                return "prop"
+            if t in {"environment", "environments", "env", "scene", "scenes", "场景", "环境"}:
+                return "environment"
+            if t in {"cover", "covers", "poster", "posters", "cover_poster", "封面", "封面海报", "海报"}:
+                return "cover"
+            return ""
+
+        def _infer_subject_index_allowed_types_for_request() -> set:
+            source = f"{mode_lower} {prompt_file_lower}"
+            if "2_pass_generate_assets_characters" in source or "entity_design_character" in source:
+                return {"character"}
+            if "2_pass_generate_assets_props" in source or "entity_design_prop" in source:
+                return {"prop"}
+            if (
+                "2_pass_generate_assets_environments" in source
+                or "entity_design_environment" in source
+                or "entity_design_poster" in source
+            ):
+                return {"environment", "cover"}
+            return set()
+
+        subject_index_allowed_types_for_request = _infer_subject_index_allowed_types_for_request()
+
+        def _filter_subject_index_text_by_types(subject_index_text: Any, allowed_types: set) -> str:
+            text = sanitize_subject_index_text(subject_index_text)
+            if not text or not allowed_types:
+                return text
+
+            filtered_lines: List[str] = []
+            total_subject_rows = 0
+            kept_subject_rows = 0
+            for raw_line in str(text).splitlines():
+                line = str(raw_line or "")
+                stripped = line.strip()
+                normalized_line = stripped.strip("|").strip()
+                parts = [p.strip() for p in normalized_line.split("|")]
+                is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 2
+                if is_subject_row:
+                    total_subject_rows += 1
+                    normalized_type = _normalize_subject_index_entity_type(parts[1] if len(parts) > 1 else "")
+                    if normalized_type in allowed_types:
+                        filtered_lines.append(line)
+                        kept_subject_rows += 1
+                    continue
+                filtered_lines.append(line)
+
+            filtered_text = "\n".join(filtered_lines).strip()
+            logger.info(
+                "[analyze_scene] filtered subject index for target types types=%s rows=%s kept=%s mode=%s prompt_file=%s",
+                sorted(allowed_types),
+                total_subject_rows,
+                kept_subject_rows,
+                effective_scene_analysis_mode,
+                getattr(request, "prompt_file", None),
+            )
+            return filtered_text
+
         persisted_subject_index_for_prompt = ""
         if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
@@ -6767,6 +6829,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     if not persisted_subject_index_for_prompt:
                         persisted_subject_index_for_prompt = sanitize_subject_index_text(
                             getattr(_ep_for_subject_index, "ai_scene_analysis_result", None)
+                        )
+                    if persisted_subject_index_for_prompt and subject_index_allowed_types_for_request:
+                        persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
+                            persisted_subject_index_for_prompt,
+                            subject_index_allowed_types_for_request,
                         )
             except Exception as _subject_idx_inject_err:
                 logger.warning("[analyze_scene] failed loading persisted subject index for prompt injection: %s", _subject_idx_inject_err)
@@ -6951,6 +7018,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "[analyze_scene] override reuse_subject_assets from persisted subject index count=%s episode_id=%s",
                     len(derived_assets),
                     getattr(request, "episode_id", None),
+                )
+        elif subject_index_allowed_types_for_request and isinstance(reuse_subject_assets, list):
+            original_reuse_count = len(reuse_subject_assets)
+            reuse_subject_assets = [
+                item for item in reuse_subject_assets
+                if isinstance(item, dict)
+                and _normalize_subject_index_entity_type(item.get("type")) in subject_index_allowed_types_for_request
+            ]
+            if original_reuse_count != len(reuse_subject_assets):
+                logger.info(
+                    "[analyze_scene] filtered request reuse_subject_assets for target types types=%s before=%s after=%s mode=%s",
+                    sorted(subject_index_allowed_types_for_request),
+                    original_reuse_count,
+                    len(reuse_subject_assets),
+                    effective_scene_analysis_mode,
                 )
         if (not is_scene_beats_stage) and isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
             def _normalize_subject_type(raw_type: Any) -> str:
