@@ -884,6 +884,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (normalized === 'ANALYSIS_JSON_INVALID') {
             return t('AI Script Analysis 检测到结构片段损坏。', 'AI Script Analysis detected invalid structured fragments.');
         }
+        if (normalized === 'ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING') {
+            return t('Subject Index 缺少封面海报行。第二阶段资产清单必须包含唯一且置尾的 cover_poster/poster 条目。', 'Subject Index is missing the cover poster row. Stage 2 asset extraction must include one final cover_poster/poster row.');
+        }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
             return '';
         }

@@ -4381,10 +4381,8 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("第一阶段缺少 Project Visual Backfill JSON，结果不完整")
     if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID" in codes:
         reasons_cn.append("第一阶段 Project Visual Backfill JSON 损坏，无法安全解析")
-    if "ANALYSIS_POSTER_CONTENT_MISSING" in codes:
-        reasons_cn.append("资产清单缺少封面海报内容，结果不完整")
-    if "ANALYSIS_POSTER_CONTENT_INCOMPLETE" in codes:
-        reasons_cn.append("资产清单封面海报内容不完整，结果不可靠")
+    if "ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING" in codes:
+        reasons_cn.append("Subject Index 缺少封面海报行，结果不完整")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
         reasons_cn.append("第一阶段未解析到 Subject Index 区块")
     if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
@@ -5747,10 +5745,41 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
 
         def _is_stage1_script_optimization_request() -> bool:
+            try:
+                mode_text = str(effective_scene_analysis_mode or "").strip().lower()
+            except Exception:
+                mode_text = ""
+
+            function_text = str(getattr(request, "function_name", "") or "").strip().lower()
+            prompt_text = str(getattr(request, "prompt_file", "") or "").strip().lower()
+            has_inline_system_prompt = bool(str(getattr(request, "system_prompt", "") or "").strip())
+
+            # Pydantic gives AnalyzeSceneRequest a Stage-1 default prompt_file even
+            # when callers submit an inline system_prompt for Stage 2 / entity design.
+            # In that case the default prompt_file is not the active template and must
+            # not make asset JSON fail Stage-1 backfill checks.
+            if has_inline_system_prompt:
+                prompt_text = ""
+
+            stage2_or_subject_consumer_markers = (
+                "scene_planning_2_1",
+                "scene_planning_2_2",
+                "entity_design",
+                "subject_generation",
+                "beats_generation",
+                "scene_planning_beats",
+                "scene_beats_only",
+                "2_pass_generate_assets",
+            )
+            stage_source = " ".join([prompt_text, function_text, mode_text])
+            if any(marker in stage_source for marker in stage2_or_subject_consumer_markers):
+                return False
+
             source = " ".join([
-                str(getattr(request, "prompt_file", "") or ""),
+                prompt_text,
                 str(template_signature.get("template_source") or ""),
-                str(getattr(request, "function_name", "") or ""),
+                function_text,
+                mode_text,
             ]).lower()
             return bool(
                 "scene_planning_1_script_optimization" in source
@@ -6450,6 +6479,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     sample_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip()
                     if sample_name and len(missing_samples) < 12:
                         missing_samples.append(sample_name)
+                    placeholder = _build_subject_placeholder(record)
+                    reconciled[target_bucket].append(placeholder)
+                    filled_missing += 1
                     continue
 
                 ref_idx = int(match.get("ref_idx"))
@@ -6669,111 +6701,62 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "warnings": warnings,
             }
 
-        def _detect_poster_content_integrity(output_text: Any) -> Dict[str, Any]:
-            if _is_stage1_script_optimization_request():
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
-
+        def _is_stage2_subject_index_request() -> bool:
             try:
-                allowed_types = subject_index_allowed_types_for_request
+                mode_text = str(effective_scene_analysis_mode or "").strip().lower()
             except Exception:
-                allowed_types = set()
-            if allowed_types and not ({"cover", "environment"} & set(allowed_types)):
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
+                mode_text = ""
+            function_text = str(getattr(request, "function_name", "") or "").strip().lower()
+            prompt_text = str(getattr(request, "prompt_file", "") or "").strip().lower()
+            template_text = str(template_signature.get("template_source") or "").strip().lower()
+            source = " ".join([mode_text, function_text, prompt_text, template_text])
+            stage2_beats_markers = (
+                "scene_planning_2_2",
+                "script_analysis_stage_2_2",
+                "beats_generation",
+                "scene_beats_only",
+                "scene_planning_beats",
+            )
+            if any(marker in source for marker in stage2_beats_markers):
+                return False
+            return bool(
+                "scene_planning_2_1" in source
+                or "assets_extraction" in source
+                or mode_text in {"subject_index", "assets_extraction", "scene_planning_assets"}
+                or function_text in {"script_analysis_stage_2_1_assets", "script_analysis_stage_2_1_subject_index"}
+            )
+
+        def _detect_subject_index_poster_row_integrity(output_text: Any) -> Dict[str, Any]:
+            if not _is_stage2_subject_index_request():
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": []}
 
             text = str(output_text or "")
             expected_meta = _extract_expected_subjects_from_subject_index(text)
             expected = expected_meta.get("expected") or {}
             expected_total = int(expected_meta.get("total") or 0)
-            expected_posters: Dict[str, str] = {}
-            for bucket in ("covers", "posters"):
-                for key, display in (expected.get(bucket) or {}).items():
-                    if key and key not in expected_posters:
-                        expected_posters[key] = display
+            has_poster_row = any(bool((expected.get(bucket) or {})) for bucket in ("covers", "posters"))
 
-            if expected_total > 0 and not expected_posters:
+            if expected_total > 0 and not has_poster_row:
                 return {
                     "ok": False,
                     "expected_posters": [],
-                    "actual_poster_count": 0,
-                    "missing_posters": ["封面海报"],
-                    "incomplete_posters": [],
-                    "warning_codes": ["ANALYSIS_POSTER_CONTENT_MISSING"],
-                    "warnings": ["资产清单未返回封面海报条目（cover_poster/poster/封面海报），当前资产清单不完整。"],
+                    "missing_posters": ["Subject Index cover_poster row"],
+                    "warning_codes": ["ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING"],
+                    "warnings": ["Subject Index 未返回 cover_poster/poster 行；第二阶段资产清单必须包含唯一且置尾的封面海报条目。"],
                 }
 
-            if not expected_posters:
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
-
-            raw_payload = _extract_entities_from_json_candidates(text)
-            poster_items = [
-                item
-                for bucket in ("covers", "posters")
-                for item in (raw_payload.get(bucket) or [])
-                if isinstance(item, dict)
-            ]
-
-            poster_by_key: Dict[str, Dict[str, Any]] = {}
-            for item in poster_items:
-                for raw_name in (item.get("name"), item.get("name_en")):
-                    key = _normalize_subject_compare_key(raw_name)
-                    if key and key not in poster_by_key:
-                        poster_by_key[key] = item
-
-            missing_posters: List[str] = []
-            incomplete_posters: List[str] = []
-            required_text_fields = [
-                "name",
-                "name_en",
-                "description_cn",
-                "generation_prompt_cn",
-                "generation_prompt_en",
-                "negative_prompt_en",
-                "anchor_description",
-            ]
-            for expected_key, display in expected_posters.items():
-                item = poster_by_key.get(expected_key)
-                if not item:
-                    missing_posters.append(display)
-                    continue
-                missing_fields = [field for field in required_text_fields if not str(item.get(field) or "").strip()]
-                visual_dependencies = item.get("visual_dependencies")
-                dependency_strategy = item.get("dependency_strategy")
-                if not isinstance(visual_dependencies, list):
-                    missing_fields.append("visual_dependencies")
-                if not isinstance(dependency_strategy, dict) or not str(dependency_strategy.get("logic") or "").strip():
-                    missing_fields.append("dependency_strategy.logic")
-                if missing_fields:
-                    incomplete_posters.append(f"{display}({', '.join(missing_fields[:6])})")
-
-            warning_codes: List[str] = []
-            warnings: List[str] = []
-            if missing_posters:
-                warning_codes.append("ANALYSIS_POSTER_CONTENT_MISSING")
-                warnings.append(
-                    "资产清单缺少封面海报 JSON 内容。缺失: "
-                    + ", ".join([str(x or "").strip() for x in missing_posters[:8] if str(x or "").strip()])
-                )
-            if incomplete_posters:
-                warning_codes.append("ANALYSIS_POSTER_CONTENT_INCOMPLETE")
-                warnings.append(
-                    "资产清单封面海报 JSON 内容不完整。示例: "
-                    + ", ".join([str(x or "").strip() for x in incomplete_posters[:5] if str(x or "").strip()])
-                )
-
             return {
-                "ok": not warning_codes,
-                "expected_posters": list(expected_posters.values()),
-                "actual_poster_count": len(poster_items),
-                "missing_posters": missing_posters,
-                "incomplete_posters": incomplete_posters,
-                "warning_codes": warning_codes,
-                "warnings": warnings,
+                "ok": True,
+                "expected_posters": ["Subject Index poster row"] if has_poster_row else [],
+                "missing_posters": [],
+                "warning_codes": [],
+                "warnings": [],
             }
 
         def _detect_fallback_blocking_integrity(output_text: Any) -> Dict[str, Any]:
             checks = [
                 _detect_stage1_script_optimization_integrity(output_text),
-                _detect_poster_content_integrity(output_text),
+                _detect_subject_index_poster_row_integrity(output_text),
             ]
             warning_codes: List[str] = []
             warnings: List[str] = []
