@@ -461,7 +461,10 @@ def _read_cgroup_memory_metrics() -> Dict[str, Any]:
 def _read_generation_queue_snapshot() -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {
         "queued": 0,
+        "submit": 0,
         "running": 0,
+        "waiting_callback": 0,
+        "callback_processing": 0,
         "failed": 0,
         "completed": 0,
         "canceled": 0,

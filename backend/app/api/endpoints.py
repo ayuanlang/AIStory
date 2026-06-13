@@ -343,7 +343,7 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
         _prune_video_jobs_locked()
         video_jobs = [dict(job or {}) for job in VIDEO_JOB_STORE.values()]
 
-    active_statuses = {"queued", "running", "processing", "pending", "storing_asset", "waiting_callback"}
+    active_statuses = {"queued", "submit", "running", "processing", "pending", "storing_asset", "waiting_callback", "callback_processing"}
     callback_pending_count = 0
     callback_waiting_count = 0
     callback_retrying_count = 0
@@ -383,7 +383,7 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             callback_retrying_count += 1
         if is_timeout_failed and callback_ticket:
             callback_timeout_failed_count += 1
-        if callback_ticket and (status in {"queued", "running", "waiting_callback"} or is_timeout_failed):
+        if callback_ticket and (status in {"queued", "submit", "running", "waiting_callback", "callback_processing"} or is_timeout_failed):
             compensation_candidate_count += 1
 
         if status in active_statuses and (not pure_callback_mode_effective):
@@ -915,7 +915,7 @@ def _generation_task_status(task_ref: Any, *, user_id: Optional[int] = None) -> 
 
 def _generation_task_is_active(task_ref: Any, *, user_id: Optional[int] = None) -> bool:
     info = _generation_task_status(task_ref, user_id=user_id)
-    return str((info or {}).get("status") or "").strip().lower() in {"queued", "pending", "running"}
+    return str((info or {}).get("status") or "").strip().lower() in {"queued", "submit", "pending", "running", "waiting_callback", "callback_processing"}
 
 
 def _cancel_generation_task_ref(task_ref: Any, *, user_id: Optional[int] = None, reason: str = "Task canceled by user") -> None:
@@ -1043,7 +1043,7 @@ def _run_callback_compensation_once() -> None:
                 status == "failed"
                 and "timed out" in str(job.get("error") or "").strip().lower()
             )
-            if status not in {"queued", "running", "waiting_callback"} and not is_timeout_failed:
+            if status not in {"queued", "submit", "running", "waiting_callback", "callback_processing"} and not is_timeout_failed:
                 continue
             callback_ticket = _extract_job_provider_callback_ticket(job)
             if not callback_ticket:
@@ -3596,9 +3596,23 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         return
 
     for job_id, job in matched_jobs:
+        callback_payload = _get_generation_callback_payload(stable_ticket) or {}
+        callback_status = _normalize_generation_status(
+            callback_payload.get("status") or _extract_callback_status(callback_payload)
+        )
+        callback_is_terminal = callback_status in {"succeeded", "failed", "canceled"}
+        if callback_is_terminal:
+            mark_generation_task_status_external(job_id, status="callback_processing", error=None)
+
         previous_status = _normalize_generation_status(job.get("status"))
         previous_result_url = _extract_job_result_url(job.get("result"))
-        updated_job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
+        try:
+            updated_job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
+        except Exception as exc:
+            logger.exception("[ImageJob] callback processing failed | job_id=%s callback_ticket=%s", job_id, stable_ticket)
+            if callback_is_terminal:
+                mark_generation_task_status_external(job_id, status="waiting_callback", error=str(exc))
+            continue
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
 
@@ -3608,6 +3622,8 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
             mark_generation_task_status_external(job_id, status="failed", error=str(updated_job.get("error") or "callback finalized failed") or None)
         elif updated_status in {"canceled", "cancelled"}:
             mark_generation_task_status_external(job_id, status="canceled", error=str(updated_job.get("error") or "Cancelled") or None)
+        elif callback_is_terminal:
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
 
         if updated_status == previous_status and updated_result_url == previous_result_url:
             continue
@@ -3930,9 +3946,25 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         return
 
     for job_id, job in matched_jobs:
+        callback_payload = _get_generation_callback_payload(stable_ticket) or {}
+        callback_status = _normalize_generation_status(
+            callback_payload.get("status") or _extract_callback_status(callback_payload)
+        )
+        if not callback_status and _extract_job_result_url(_build_result_from_provider_callback(callback_payload) or {}):
+            callback_status = "succeeded"
+        callback_is_terminal = callback_status in {"succeeded", "failed", "canceled"}
+        if callback_is_terminal:
+            mark_generation_task_status_external(job_id, status="callback_processing", error=None)
+
         previous_status = _normalize_generation_status(job.get("status"))
         previous_result_url = _extract_job_result_url(job.get("result"))
-        updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+        try:
+            updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+        except Exception as exc:
+            logger.exception("[VideoJob] callback processing failed | job_id=%s callback_ticket=%s", job_id, stable_ticket)
+            if callback_is_terminal:
+                mark_generation_task_status_external(job_id, status="waiting_callback", error=str(exc))
+            continue
         updated_status = _normalize_generation_status(updated_job.get("status"))
         updated_result_url = _extract_job_result_url(updated_job.get("result"))
 
@@ -3942,6 +3974,8 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
             mark_generation_task_status_external(job_id, status="failed", error=str(updated_job.get("error") or "callback finalized failed") or None)
         elif updated_status in {"canceled", "cancelled"}:
             mark_generation_task_status_external(job_id, status="canceled", error=str(updated_job.get("error") or "Cancelled") or None)
+        elif callback_is_terminal:
+            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
 
         if updated_status == previous_status and updated_result_url == previous_result_url:
             continue
@@ -4159,16 +4193,20 @@ async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any
     stable_ticket = str(ticket or "").strip()
     if not stable_ticket:
         return
+
+    def _run_callback_finalizers() -> None:
+        if stable_ticket.startswith("image-job-"):
+            asyncio.run(_finalize_image_jobs_from_provider_callback(stable_ticket))
+        elif stable_ticket.startswith("video-job-"):
+            asyncio.run(_finalize_video_jobs_from_provider_callback(stable_ticket))
+        else:
+            asyncio.run(_finalize_image_jobs_from_provider_callback(stable_ticket))
+            asyncio.run(_finalize_video_jobs_from_provider_callback(stable_ticket))
+
     try:
         async with GENERATION_CALLBACK_FINALIZE_SEMAPHORE:
             await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
-            if stable_ticket.startswith("image-job-"):
-                await _finalize_image_jobs_from_provider_callback(stable_ticket)
-            elif stable_ticket.startswith("video-job-"):
-                await _finalize_video_jobs_from_provider_callback(stable_ticket)
-            else:
-                await _finalize_image_jobs_from_provider_callback(stable_ticket)
-                await _finalize_video_jobs_from_provider_callback(stable_ticket)
+            await asyncio.to_thread(_run_callback_finalizers)
     except Exception:
         logger.exception("[GenerationCallback] async finalize failed | ticket=%s", stable_ticket)
     finally:
@@ -28912,7 +28950,7 @@ async def _run_generate_image_job(
         user_principal = _snapshot_user_principal(user)
 
         req_obj = GenerationRequest(**req_payload)
-        _set_image_job(job_id, status="running", started_at=now_bj_iso())
+        _set_image_job(job_id, status="submit", started_at=now_bj_iso())
         logger.info(
             "[ImageJob] started | job_id=%s user_id=%s provider=%s model=%s",
             job_id,
@@ -28945,7 +28983,7 @@ async def _run_generate_image_job(
                 or ""
             ).strip()
             update_fields: Dict[str, Any] = {
-                "status": "running",
+                "status": "waiting_callback",
                 "error": None,
                 "upstream_submit_state": "callback_pending",
             }
@@ -29058,7 +29096,7 @@ async def _run_generate_image_job(
         if _is_ambiguous_image_submit_detail(e.detail):
             _set_image_job(
                 job_id,
-                status="running",
+                status="waiting_callback",
                 error=None,
                 ambiguous_submit=True,
                 ambiguous_submit_at=now_bj_iso(),
@@ -31606,7 +31644,7 @@ async def _run_generate_video_job(
         user_principal = _snapshot_user_principal(user)
 
         req_obj = VideoGenerationRequest(**req_payload)
-        _set_video_job(job_id, status="running", started_at=now_bj_iso())
+        _set_video_job(job_id, status="submit", started_at=now_bj_iso())
         logger.info(
             "[VideoJob] started | job_id=%s user_id=%s provider=%s model=%s callback_ticket=%s",
             job_id,
@@ -31650,7 +31688,7 @@ async def _run_generate_video_job(
                 or ""
             ).strip()
             update_fields: Dict[str, Any] = {
-                "status": "running",
+                "status": "waiting_callback",
                 "error": None,
                 "upstream_submit_state": "callback_pending",
             }
@@ -31726,7 +31764,7 @@ async def _run_generate_video_job(
         if _is_ambiguous_image_submit_detail(e.detail):
             _set_video_job(
                 job_id,
-                status="running",
+                status="waiting_callback",
                 error=None,
                 ambiguous_submit=True,
                 ambiguous_submit_at=now_bj_iso(),

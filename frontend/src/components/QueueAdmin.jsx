@@ -167,11 +167,38 @@ export default function QueueAdmin() {
       };
     }
 
+    if (status === 'submit') {
+      return {
+        text: '提交上游中',
+        filterKey: 'submit',
+        tone: 'text-violet-300 border-violet-500/40 bg-violet-500/10',
+        icon: 'running',
+      };
+    }
+
     if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('callback_pending') || upstream.includes('submitted') || hasTicket)) {
       return {
         text: '等待回调入库',
         filterKey: 'callback_waiting',
         tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'waiting_callback') {
+      return {
+        text: '等待回调入库',
+        filterKey: 'callback_waiting',
+        tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'callback_processing') {
+      return {
+        text: '回调处理中',
+        filterKey: 'callback_processing',
+        tone: 'text-teal-300 border-teal-500/40 bg-teal-500/10',
         icon: 'running',
       };
     }
@@ -334,9 +361,11 @@ export default function QueueAdmin() {
         <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
           <div className="text-xs text-gray-400">任务队列</div>
           <div className="text-2xl font-bold text-blue-300">{queueStats?.runtime?.queue?.active_count ?? 0}</div>
-          <div className="text-xs text-gray-500">活动任务(queued + running)</div>
+          <div className="text-xs text-gray-500">活动任务(queued + submit + running)</div>
           <div className="text-xs text-cyan-300">工作位 已用/总量/可用: {queueStats?.runtime?.queue?.worker_slots_in_use ?? 0} / {queueStats?.runtime?.queue?.worker_slots_total ?? 0} / {queueStats?.runtime?.queue?.worker_slots_available ?? 0}</div>
-          <div className="text-xs text-gray-300">排队中(queued): {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | 执行中(running): {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
+          <div className="text-xs text-gray-300">排队中(queued): {queueStats?.runtime?.queue?.status_counts?.queued ?? 0} | 提交中(submit): {queueStats?.runtime?.queue?.submit_count ?? queueStats?.runtime?.queue?.status_counts?.submit ?? 0} | 执行中(running): {queueStats?.runtime?.queue?.status_counts?.running ?? 0}</div>
+          <div className="text-xs text-cyan-300">等待回调(waiting_callback): {queueStats?.runtime?.queue?.waiting_callback_count ?? queueStats?.runtime?.queue?.status_counts?.waiting_callback ?? 0} | 残留工作位: {queueStats?.runtime?.queue?.waiting_callback_with_worker_count ?? 0}</div>
+          <div className="text-xs text-teal-300">回调处理中(callback_processing): {queueStats?.runtime?.queue?.callback_processing_count ?? queueStats?.runtime?.queue?.status_counts?.callback_processing ?? 0}</div>
           <div className="text-xs text-gray-300">已完成(completed): {queueStats?.runtime?.queue?.status_counts?.completed ?? 0} | 失败(failed): {queueStats?.runtime?.queue?.status_counts?.failed ?? 0} | 已取消(canceled): {queueStats?.runtime?.queue?.status_counts?.canceled ?? 0}</div>
           <div className="text-xs text-gray-300">最近1小时完成: {queueStats?.runtime?.queue?.finished_last_hour ?? 0}</div>
           <div className="text-xs text-amber-300">最老排队等待: {formatDuration(queueStats?.runtime?.queue?.queued_oldest_wait_seconds)}</div>
@@ -349,6 +378,7 @@ export default function QueueAdmin() {
           <div className="text-xs text-gray-300">配置线程: {queueStats?.runtime?.workers?.configured_threads ?? 0}</div>
           <div className="text-xs text-gray-300">线程: {queueStats?.runtime?.workers?.effective_threads ?? 0} / 请求 {queueStats?.runtime?.workers?.requested_threads ?? 0}</div>
           <div className="text-xs text-cyan-300">进程位 已用/总量/可用: {queueStats?.runtime?.workers?.slots_in_use ?? 0} / {queueStats?.runtime?.workers?.slots_total ?? 0} / {queueStats?.runtime?.workers?.slots_available ?? 0}</div>
+          <div className="text-xs text-gray-300">队列线程已启动: {queueStats?.runtime?.workers?.worker_thread_started ? '是' : '否'} | 本进程持有 leader: {queueStats?.runtime?.workers?.leader_lock_held_by_process ? '是' : '否'}</div>
           {queueStats?.runtime?.workers?.restart_required_for_thread_change ? (
             <div className="text-xs text-amber-300">检测到线程配置已变化，需重启后端以应用</div>
           ) : (
@@ -461,9 +491,11 @@ export default function QueueAdmin() {
         <div className="px-4 py-3 border-b border-white/10 bg-white/5 text-xs text-gray-300 flex flex-wrap gap-3">
           <span>状态标注:</span>
           <span className="text-amber-300">排队中 = queued</span>
+          <span className="text-violet-300">提交上游中 = submit</span>
           <span className="text-blue-300">处理中 = running/processing/pending</span>
           <span className="text-sky-300">已提交上游 = 上游已接收任务</span>
           <span className="text-cyan-300">等待回调入库 = 等待 provider callback 落库</span>
+          <span className="text-teal-300">回调处理中 = 回调线程处理文件并更新记录</span>
           <span className="text-orange-300">回调补偿重试中 = 回调缺失触发补偿</span>
           <span className="text-emerald-300">已完成 = completed/succeeded</span>
           <span className="text-rose-300">失败 = failed</span>
@@ -475,9 +507,11 @@ export default function QueueAdmin() {
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500">
               <option value="all">全部状态</option>
               <option value="queued">排队中</option>
+              <option value="submit">提交上游中</option>
               <option value="running">处理中</option>
               <option value="submitted_upstream">已提交上游</option>
               <option value="callback_waiting">等待回调入库</option>
+              <option value="callback_processing">回调处理中</option>
               <option value="callback_retrying">回调补偿重试中</option>
               <option value="completed">已完成</option>
               <option value="failed">失败</option>
@@ -567,7 +601,7 @@ export default function QueueAdmin() {
                   {task.attempt_count > 0 && <div><span className="text-gray-500">Attempts:</span> {task.attempt_count}</div>}
                 </td>
                 <td className="p-4 text-right align-top">
-                  {(task.status === 'queued' || task.status === 'running' || task.status === 'processing') && (
+                  {(task.status === 'queued' || task.status === 'submit' || task.status === 'running' || task.status === 'processing' || task.status === 'waiting_callback' || task.status === 'callback_processing') && (
                     <button onClick={(e) => { e.stopPropagation(); handleCancel(task.job_id); }} className="p-2 text-gray-500 hover:text-red-400 bg-white/5 rounded-lg transition-colors" title="Cancel Task"> 
                       <Trash2 size={16} />
                     </button>

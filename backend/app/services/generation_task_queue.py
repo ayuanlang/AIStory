@@ -423,9 +423,18 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
         running_rows = db.execute(
             text(
                 """
+                SELECT status, worker_id, started_at, last_heartbeat
+                FROM generation_task_queue
+                WHERE status IN ('submit', 'running')
+                """
+            )
+        ).mappings().all()
+        waiting_callback_rows = db.execute(
+            text(
+                """
                 SELECT worker_id, started_at, last_heartbeat
                 FROM generation_task_queue
-                WHERE status = 'running'
+                WHERE status = 'waiting_callback'
                 """
             )
         ).mappings().all()
@@ -477,19 +486,29 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
 
         queued_oldest_created_at = float((queued_oldest_row or {}).get("oldest_created_at") or 0.0)
         queued_oldest_wait_seconds = int(max(0.0, now - queued_oldest_created_at)) if queued_oldest_created_at else 0
+        submit_count = int(status_counts.get("submit", 0))
         running_count = int(status_counts.get("running", 0))
         queued_count = int(status_counts.get("queued", 0))
+        waiting_callback_count = int(status_counts.get("waiting_callback", 0))
+        callback_processing_count = int(status_counts.get("callback_processing", 0))
+        waiting_callback_with_worker = sum(
+            1 for row in waiting_callback_rows if str(row.get("worker_id") or "").strip()
+        )
         worker_slots_total = int(effective_threads)
-        worker_slots_in_use = max(0, min(worker_slots_total, running_count))
+        worker_slots_in_use = max(0, min(worker_slots_total, submit_count + running_count))
         worker_slots_available = max(0, worker_slots_total - worker_slots_in_use)
 
         return {
             "queue": {
                 "status_counts": status_counts,
                 "kind_counts": kind_counts,
-                "active_count": int(queued_count + running_count),
+                "active_count": int(queued_count + submit_count + running_count),
+                "submit_count": submit_count,
                 "running_count": running_count,
                 "queued_count": queued_count,
+                "waiting_callback_count": waiting_callback_count,
+                "callback_processing_count": callback_processing_count,
+                "waiting_callback_with_worker_count": int(waiting_callback_with_worker),
                 "worker_slots_total": worker_slots_total,
                 "worker_slots_in_use": worker_slots_in_use,
                 "worker_slots_available": worker_slots_available,
@@ -502,10 +521,13 @@ def get_generation_queue_runtime_stats() -> Dict[str, Any]:
                 "effective_threads": int(effective_threads),
                 "thread_cap": int(_WORKER_THREAD_CAP),
                 "restart_required_for_thread_change": bool(configured_threads != int(requested_threads)),
+                "worker_thread_started": bool(_QUEUE_STARTED),
+                "leader_lock_held_by_process": bool(_QUEUE_LEADER_CONN is not None) if _is_postgres_engine() else True,
                 "active_running_workers": len(active_workers),
                 "slots_total": worker_slots_total,
                 "slots_in_use": worker_slots_in_use,
                 "slots_available": worker_slots_available,
+                "waiting_callback_with_worker_count": int(waiting_callback_with_worker),
                 "stale_running_tasks": int(stale_running),
                 "oldest_running_seconds": int(oldest_running_seconds),
                 "queue_poll_seconds": float(_QUEUE_POLL_SECONDS),
@@ -605,7 +627,7 @@ def mark_generation_task_status_external(
     normalized_status = str(status or "").strip().lower() or "running"
     terminal_statuses = {"completed", "failed", "canceled", "cancelled"}
     is_terminal = normalized_status in terminal_statuses
-    clear_worker = normalized_status != "running"
+    clear_worker = normalized_status not in {"submit", "running"}
     where_sql = "WHERE job_id = :job_id"
     if preserve_canceled:
         where_sql += " AND status <> 'canceled'"
@@ -698,8 +720,11 @@ def cancel_generation_task(job_id: str, *, reason: str = "Task canceled by user"
             text(
                 """
                 UPDATE generation_task_queue
-                SET status = 'canceled', finished_at = :finished_at, error = :error
-                WHERE job_id = :job_id AND status IN ('queued', 'running', 'waiting_callback')
+                SET status = 'canceled',
+                    worker_id = NULL,
+                    finished_at = :finished_at,
+                    error = :error
+                WHERE job_id = :job_id AND status IN ('queued', 'submit', 'running', 'waiting_callback', 'callback_processing')
                 """
             ),
             {
@@ -719,7 +744,7 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
     _ensure_queue_table_ready()
     now = time.time()
 
-    clauses = ["status IN ('queued', 'running', 'waiting_callback')"]
+    clauses = ["status IN ('queued', 'submit', 'running', 'waiting_callback', 'callback_processing')"]
     params: Dict[str, Any] = {
         "finished_at": now,
         "error": str(reason or "Task canceled by stop-all"),
@@ -739,6 +764,7 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
                 f"""
                 UPDATE generation_task_queue
                 SET status = 'canceled',
+                    worker_id = NULL,
                     finished_at = :finished_at,
                     error = :error
                 WHERE {where_sql}
@@ -763,7 +789,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
                 SELECT job_id, kind, user_id, payload_json, created_at
                 FROM generation_task_queue
                 WHERE status = 'queued'
-                   OR (status = 'running' AND COALESCE(last_heartbeat, 0) < :cutoff)
+                         OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff)
                 ORDER BY created_at ASC
                 LIMIT 1
                 """
@@ -789,7 +815,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
                     error = :error,
                     attempt_count = attempt_count + 1
                 WHERE job_id = :job_id
-                  AND (status = 'queued' OR (status = 'running' AND COALESCE(last_heartbeat, 0) < :cutoff))
+                  AND (status = 'queued' OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff))
                 """
             ),
             {
@@ -798,7 +824,7 @@ def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
                 "started_at": now,
                 "heartbeat": now,
                 "cutoff": cutoff,
-                "next_status": 'failed' if is_expired else 'running',
+                "next_status": 'failed' if is_expired else 'submit',
                 "finished_at": now if is_expired else None,
                 "error": 'Task queued for over 60 minutes. Timed out.' if is_expired else None,
             },
@@ -831,7 +857,7 @@ def _finish_task(job_id: str, *, status: str, error: Optional[str] = None, only_
     try:
         where_clause = "WHERE job_id = :job_id"
         if only_if_running:
-            where_clause += " AND status = 'running'"
+            where_clause += " AND status IN ('submit', 'running')"
 
         result = db.execute(
             text(
@@ -872,7 +898,7 @@ def _touch_task_heartbeat(job_id: str, worker_id: str) -> bool:
                 UPDATE generation_task_queue
                 SET last_heartbeat = :heartbeat
                 WHERE job_id = :job_id
-                  AND status = 'running'
+                                    AND status IN ('submit', 'running')
                   AND worker_id = :worker_id
                 """
             ),
@@ -903,7 +929,7 @@ def _defer_task_to_waiting_callback(job_id: str, worker_id: str) -> bool:
                     finished_at = NULL,
                     error = NULL
                 WHERE job_id = :job_id
-                  AND status = 'running'
+                                    AND status IN ('submit', 'running')
                   AND worker_id = :worker_id
                 """
             ),
@@ -920,10 +946,46 @@ def _defer_task_to_waiting_callback(job_id: str, worker_id: str) -> bool:
 
 _QUEUE_LAST_CLEANUP_TIME = 0.0
 _QUEUE_LAST_TIMEOUT_SWEEP_TIME = 0.0
+_QUEUE_LAST_CALLBACK_LEASE_REPAIR_TIME = 0.0
+
+
+def _repair_waiting_callback_worker_leases() -> int:
+    _ensure_queue_table_ready()
+    db = SessionLocal()
+    try:
+        result = db.execute(
+            text(
+                """
+                UPDATE generation_task_queue
+                SET worker_id = NULL,
+                    finished_at = NULL,
+                    last_heartbeat = COALESCE(last_heartbeat, :heartbeat)
+                WHERE status = 'waiting_callback'
+                  AND (worker_id IS NOT NULL OR finished_at IS NOT NULL)
+                """
+            ),
+            {"heartbeat": time.time()},
+        )
+        db.commit()
+        return int(result.rowcount or 0)
+    finally:
+        db.close()
 
 def _cleanup_old_tasks() -> None:
-    global _QUEUE_LAST_CLEANUP_TIME, _QUEUE_LAST_TIMEOUT_SWEEP_TIME
+    global _QUEUE_LAST_CLEANUP_TIME, _QUEUE_LAST_TIMEOUT_SWEEP_TIME, _QUEUE_LAST_CALLBACK_LEASE_REPAIR_TIME
     now = time.time()
+    if now - _QUEUE_LAST_CALLBACK_LEASE_REPAIR_TIME >= 60.0:
+        _QUEUE_LAST_CALLBACK_LEASE_REPAIR_TIME = now
+        try:
+            repaired = _repair_waiting_callback_worker_leases()
+            if repaired > 0:
+                logger.warning(
+                    "generation queue repaired %s waiting_callback tasks with stale worker leases",
+                    repaired,
+                )
+        except Exception as exc:
+            logger.warning("generation queue waiting_callback lease repair failed: %s", exc)
+
     if now - _QUEUE_LAST_TIMEOUT_SWEEP_TIME < 60.0:
         return
     _QUEUE_LAST_TIMEOUT_SWEEP_TIME = now
@@ -934,18 +996,19 @@ def _cleanup_old_tasks() -> None:
         _QUEUE_LAST_CLEANUP_TIME = now
         do_full_cleanup = True
     cutoff = now - 86400.0  # 1 day cutoff
-    timeout_cutoff = now - 3600.0 # 60 min timeout for running tasks
+    timeout_cutoff = now - 3600.0 # 60 min timeout for worker-owned tasks
     db = SessionLocal()
     try:
-        # Mark 30+ min long running tasks as failed
+        # Mark long worker-owned tasks as failed.
         r_timeout = db.execute(
             text(
                 """
                 UPDATE generation_task_queue 
                 SET status = 'failed', 
-                    error = 'Task running for over 60 minutes. Timed out.',
+                    worker_id = NULL,
+                    error = 'Task submit/running for over 60 minutes. Timed out.',
                     finished_at = :now
-                WHERE status = 'running' 
+                WHERE status IN ('submit', 'running')
                   AND COALESCE(started_at, created_at) < :timeout_cutoff
                 """
             ),
@@ -953,7 +1016,7 @@ def _cleanup_old_tasks() -> None:
         )
         db.commit()
         if (r_timeout.rowcount or 0) > 0:
-            logger.warning("generation queue sweep timed out %s running tasks (>60m)", r_timeout.rowcount)
+            logger.warning("generation queue sweep timed out %s submit/running tasks (>60m)", r_timeout.rowcount)
 
         if do_full_cleanup:
             result = db.execute(
@@ -1142,6 +1205,16 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
     with _QUEUE_START_LOCK:
         if _QUEUE_STARTED:
             return
+
+        try:
+            repaired = _repair_waiting_callback_worker_leases()
+            if repaired > 0:
+                logger.warning(
+                    "generation queue startup repaired %s waiting_callback tasks with stale worker leases",
+                    repaired,
+                )
+        except Exception as exc:
+            logger.warning("generation queue startup waiting_callback lease repair failed: %s", exc)
             
         thread = threading.Thread(
             target=_worker_thread_main,
