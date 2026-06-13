@@ -10466,10 +10466,16 @@ _SHOT_REQUIRED_ROW_FIELDS: List[Tuple[str, List[str]]] = [
     ("Shot Name", ["Shot Name", "shot_name", "镜头名称"]),
     ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场景编号"]),
     ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头画面逻辑说明"]),
-    ("Start Frame", ["Start Frame", "start_frame", "起始画面"]),
-    ("Video Content", ["Video Content", "video_content", "视频内容"]),
-    ("Duration (s)", ["Duration (s)", "Duration", "duration", "时长", "时长(s)"]),
-    ("End Frame", ["End Frame", "end_frame", "结束画面"]),
+    ("Associated Entities", ["Associated Entities", "associated_entities", "关联实体"]),
+]
+
+
+_SHOT_REQUIRED_ROW_FIELD_GROUPS: List[Tuple[str, List[str]]] = [
+    ("Video Content or Video Content (CN)", [
+        "Video Content", "video_content", "视频内容",
+        "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
+    ]),
 ]
 
 
@@ -10480,6 +10486,17 @@ def _pick_shot_cell(row: Dict[str, Any], aliases: List[str], default: str = "") 
         if key in row and row.get(key) is not None:
             return str(row.get(key) or "").strip()
     return default
+
+
+def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
+    missing_fields: List[str] = []
+    for label, aliases in _SHOT_REQUIRED_ROW_FIELDS:
+        if not _pick_shot_cell(row, aliases, ""):
+            missing_fields.append(label)
+    for label, aliases in _SHOT_REQUIRED_ROW_FIELD_GROUPS:
+        if not _pick_shot_cell(row, aliases, ""):
+            missing_fields.append(label)
+    return missing_fields
 
 
 def _escape_shot_markdown_cell(value: Any) -> str:
@@ -10545,10 +10562,7 @@ def _validate_shot_rows_or_raise(
 
     row_errors: List[str] = []
     for idx, row in enumerate(normalized_rows, start=1):
-        missing_fields: List[str] = []
-        for label, aliases in _SHOT_REQUIRED_ROW_FIELDS:
-            if not _pick_shot_cell(row, aliases, ""):
-                missing_fields.append(label)
+        missing_fields = _collect_missing_shot_required_fields(row)
 
         raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
         duration_ok = False
@@ -10592,10 +10606,7 @@ def _validate_shot_rows_for_apply_with_tolerance(
         if not any(str(val or "").strip() for val in item.values()):
             continue
 
-        missing_fields: List[str] = []
-        for label, aliases in _SHOT_REQUIRED_ROW_FIELDS:
-            if not _pick_shot_cell(item, aliases, ""):
-                missing_fields.append(label)
+        missing_fields = _collect_missing_shot_required_fields(item)
 
         raw_duration = _pick_shot_cell(item, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
         duration_ok = False

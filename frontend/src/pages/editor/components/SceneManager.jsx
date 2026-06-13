@@ -854,7 +854,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                                     className={`w-full px-3 py-2 text-left text-[11px] hover:bg-white/10 flex items-center gap-2 ${shotsBusy ? (onStopGenerateShots ? 'text-red-400' : 'text-white/50 opacity-50') : 'text-white/90'}`}
                                 >
                                     {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />) : <Wand2 className="w-3 h-3" />}
-                                    {shotsBusy ? (onStopGenerateShots ? t('停止生成', 'Stop Generating') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
+                                    {shotsBusy ? (onStopGenerateShots ? t('停止生成', 'Stop Generating') : t('生成中...', 'Generating...')) : t('生成分镜', 'Generate Shot')}
                                 </button>
                                 <button
                                     onClick={handleSupplement}
@@ -880,7 +880,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                             title={shotsBusy ? t('停止生成', 'Stop Generating') : t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
                             {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin"/>) : <Wand2 className="w-3 h-3"/>}
-                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('生成分镜', 'Generate Shot')}
                         </button>
                     </div>
                 </div>
@@ -1016,7 +1016,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                             title={shotsBusy ? t('停止生成', 'Stop Generating') : t('AI 生成镜头列表', 'AI Generate Shot List')}
                         >
                             {shotsBusy ? (onStopGenerateShots ? <X className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin"/>) : <Wand2 className="w-3 h-3"/>}
-                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('AI 镜头', 'AI Shots')}
+                            {shotsBusy ? (onStopGenerateShots ? t('停止...', 'Stop') : t('生成中...', 'Generating...')) : t('生成分镜', 'Generate Shot')}
                         </button>
                         <button
                             onClick={handleSupplement}
@@ -4286,7 +4286,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                         title={t('后台批量对当前分集所有场景执行 AI Shots 并自动导入', 'Run AI Shots in background for all scenes in this episode and auto-apply')}
                     >
                         {batchAiShotsProgress.running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                        {batchAiShotsProgress.running ? t('执行中...', 'Running...') : t('AI Shots', 'AI Shots')}
+                        {batchAiShotsProgress.running ? t('执行中...', 'Running...') : t('生成所有分镜', 'Generate All Shots')}
                     </button>
                     <button
                         onClick={handleStopBatchAiShots}
@@ -4524,7 +4524,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                         className={`px-3 py-1.5 ${isSceneAiShotsBusy(editingScene?.id) ? 'bg-red-500/20 hover:bg-red-500/30 text-red-500 border-red-500/20' : 'bg-primary/20 hover:bg-primary/30 text-primary border-primary/20'} border rounded text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed`}
                                         title={editingScene?.id ? (isSceneAiShotsBusy(editingScene?.id) ? t('停止生成', 'Stop generating') : t('为该场景生成 AI 镜头', 'Generate AI shots for this scene')) : t('请先保存场景再生成 AI 镜头', 'Save scene first to generate AI shots')}
                                     >
-                                        {isSceneAiShotsBusy(editingScene?.id) ? <X className="w-3 h-3" /> : <Wand2 className="w-3 h-3"/>} {isSceneAiShotsBusy(editingScene?.id) ? t('停止...', 'Stop') : 'AI Shots'}
+                                        {isSceneAiShotsBusy(editingScene?.id) ? <X className="w-3 h-3" /> : <Wand2 className="w-3 h-3"/>} {isSceneAiShotsBusy(editingScene?.id) ? t('停止...', 'Stop') : t('生成分镜', 'Generate Shot')}
                                     </button>
                                     <button
                                         onClick={() => {
