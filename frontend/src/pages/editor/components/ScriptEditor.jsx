@@ -4656,6 +4656,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (filteredSubjectIndex.totalRows > 0) {
                         onLog?.(`[Stage 3 Asset Design] Subject Index filtered key=${pData.key || `slot${index + 1}`} kept=${filteredSubjectIndex.keptRows}/${filteredSubjectIndex.totalRows}`, 'info');
                     }
+                    const subtaskRequestedTargets = Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
+                        ? requestedTargetFilters
+                        : (pData.key === 'characters'
+                            ? ['characters']
+                            : (pData.key === 'props'
+                                ? ['props']
+                                : (pData.key === 'environments' ? ['environments', 'posters', 'covers'] : [])));
+                    const sceneAnalysisModeForSubtask = `2_pass_generate_assets_${pData.key}${subtaskRequestedTargets.length ? `__targets_${subtaskRequestedTargets.join('_')}` : ''}`;
 
                     return awaitAnalyzeSceneWithRecovery(
                         () => analyzeScene(
@@ -4674,11 +4682,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     }
                                 },
                                 analysisTraceId: subtaskTraceId,
+                                analysisFeatures: {
+                                    target_entity_types: subtaskRequestedTargets,
+                                    asset_task_key: pData.key || `slot${index + 1}`,
+                                },
                             }, 
                             projectId,
                             "script_analysis",
                             phase1SystemApiId,
-                            `2_pass_generate_assets_${pData.key}`
+                            sceneAnalysisModeForSubtask
                         ),
                         { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
                     ).then(async (res) => {

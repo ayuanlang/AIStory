@@ -6768,8 +6768,56 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return "cover"
             return ""
 
+        def _normalize_requested_asset_target_type(raw_type: Any) -> str:
+            t = str(raw_type or "").strip().lower().replace("-", "_")
+            if t in {"character", "characters", "char", "role", "roles", "人物", "角色"}:
+                return "character"
+            if t in {"prop", "props", "item", "items", "object", "objects", "道具", "物件"}:
+                return "prop"
+            if t in {"environment", "environments", "env", "scene", "scenes", "场景", "环境"}:
+                return "environment"
+            if t in {"cover", "covers", "poster", "posters", "cover_poster", "封面", "封面海报", "海报"}:
+                return "cover"
+            return ""
+
         def _infer_subject_index_allowed_types_for_request() -> set:
+            feature_targets: List[Any] = []
+            features = getattr(request, "scene_analysis_features", None)
+            if isinstance(features, dict):
+                raw_targets = (
+                    features.get("target_entity_types")
+                    or features.get("targetEntityTypes")
+                    or features.get("asset_target_types")
+                    or features.get("assetTargetTypes")
+                )
+                if isinstance(raw_targets, list):
+                    feature_targets = raw_targets
+                elif isinstance(raw_targets, str):
+                    feature_targets = [part for part in re.split(r"[,，\s]+", raw_targets) if part]
+
+            if feature_targets:
+                normalized_targets = {
+                    normalized
+                    for normalized in (_normalize_requested_asset_target_type(item) for item in feature_targets)
+                    if normalized
+                }
+                if normalized_targets:
+                    return normalized_targets
+
             source = f"{mode_lower} {prompt_file_lower}"
+            target_suffix_match = re.search(r"__targets_([a-z0-9_\-]+)", source, flags=re.IGNORECASE)
+            if target_suffix_match:
+                normalized_targets = {
+                    normalized
+                    for normalized in (
+                        _normalize_requested_asset_target_type(item)
+                        for item in str(target_suffix_match.group(1) or "").split("_")
+                    )
+                    if normalized
+                }
+                if normalized_targets:
+                    return normalized_targets
+
             if "2_pass_generate_assets_characters" in source or "entity_design_character" in source:
                 return {"character"}
             if "2_pass_generate_assets_props" in source or "entity_design_prop" in source:
@@ -6795,6 +6843,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             for raw_line in str(text).splitlines():
                 line = str(raw_line or "")
                 stripped = line.strip()
+                key_value_type_match = re.search(r"\bsubject_type\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
+                key_value_subject_match = re.search(r"\bsubject_no\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
+                if key_value_type_match and (key_value_subject_match or re.search(r"\bsubject_name_(?:zh|en|exact)\s*=", stripped, flags=re.IGNORECASE)):
+                    total_subject_rows += 1
+                    normalized_type = _normalize_subject_index_entity_type(key_value_type_match.group(1))
+                    if normalized_type in allowed_types:
+                        filtered_lines.append(line)
+                        kept_subject_rows += 1
+                    continue
+
                 normalized_line = stripped.strip("|").strip()
                 parts = [p.strip() for p in normalized_line.split("|")]
                 is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 2

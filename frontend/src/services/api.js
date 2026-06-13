@@ -3224,6 +3224,9 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     if (analysisTraceId) {
         payload.analysis_trace_id = analysisTraceId;
     }
+    if (runtimeHooks?.analysisFeatures && typeof runtimeHooks.analysisFeatures === 'object') {
+        payload.scene_analysis_features = runtimeHooks.analysisFeatures;
+    }
     const submitTimeoutRaw = Number(import.meta?.env?.VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS || 600000);
     const submitTimeout = Number.isFinite(submitTimeoutRaw)
         ? Math.max(30000, Math.min(600000, Math.floor(submitTimeoutRaw)))
