@@ -11357,7 +11357,7 @@ async def generate_project_story_dna_global(
     if generator_kind == "promo":
         prompt_filename = "promo_generator_global.txt"
     else:
-        prompt_filename = "story_generator_global.txt"
+        prompt_filename = "master_story_architect.md"
 
     try:
         sys_prompt = _resolve_prompt_text(prompt_filename)
@@ -13630,7 +13630,7 @@ async def generate_episode_story_dna(
         if generator_kind == "promo":
             prompt_filename = "promo_generator_global.txt"
         else:
-            prompt_filename = "story_generator_global.txt"
+            prompt_filename = "master_story_architect.md"
     else:
         if not req.episode_number or int(req.episode_number) <= 0:
             raise HTTPException(status_code=400, detail="episode_number is required for episode mode")
