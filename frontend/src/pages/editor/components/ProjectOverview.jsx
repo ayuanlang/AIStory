@@ -110,6 +110,7 @@ import RefineControl from '../../../components/RefineControl.jsx';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
+import MarkdownHelpModal from './MarkdownHelpModal';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -304,6 +305,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [isImportingStoryPackage, setIsImportingStoryPackage] = useState(false);
     const [novelImportText, setNovelImportText] = useState('');
     const [showGlobalStoryGuide, setShowGlobalStoryGuide] = useState(false);
+    const [manualModalOpen, setManualModalOpen] = useState(false);
     const [projectTab, setProjectTab] = useState(mode === 'generator' ? 'story_generator' : 'overview');
 
     const [expandedSections, setExpandedSections] = useState({
@@ -2186,6 +2188,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
+            <MarkdownHelpModal
+                open={manualModalOpen}
+                initialDocKey="generation"
+                onClose={() => setManualModalOpen(false)}
+                uiLang={uiLang}
+            />
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-8">
                 <div className="flex items-center gap-4">
                     <h2 className="text-2xl font-bold">{mode === 'generator' ? t('生成器', 'Generators') : t('项目总览', 'Project Overview')}</h2>
@@ -2201,6 +2209,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     )}
                 </div>
                 <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
+                    {mode === 'generator' && (
+                        <button
+                            type="button"
+                            onClick={() => setManualModalOpen(true)}
+                            className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 border border-white/10 flex items-center justify-center gap-2 w-full sm:w-auto"
+                            title={t('查看生成剧本操作手册', 'View script generation manual')}
+                        >
+                            <Info className="w-4 h-4" /> {t('生成剧本操作手册', 'Script Generation Manual')}
+                        </button>
+                    )}
                     <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
                         <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
                     </button>

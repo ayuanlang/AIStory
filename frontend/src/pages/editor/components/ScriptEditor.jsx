@@ -113,6 +113,7 @@ import RefineControl from '../../../components/RefineControl.jsx';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
+import MarkdownHelpModal from './MarkdownHelpModal';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -212,6 +213,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
+    const [manualModalOpen, setManualModalOpen] = useState(false);
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
@@ -6299,30 +6301,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         await autoSaveScriptBeforeAnalysis();
 
-        if (actualContent && actualContent.trim().length > 5000) {
-            const ok = window.confirm(t(
-                '检测到剧本内容超过5000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 5000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
-            ));
-            if (ok) {
-                if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
-                try {
-                    const { splitEpisodeScript } = await import('../../../services/api');
-                    await splitEpisodeScript(projectId, activeEpisode.id, { script_content: actualContent });
-                    if (onLog) onLog("分集保存成功，即将刷新！");
-                    window.location.reload();
-                } catch (e) {
-                    console.error("Script split failed", e);
-                    alert("分集失败: " + e.message);
-                }
-                return;
-            }
-        }
-
-        if (actualContent && actualContent.trim().length > 5000) {
+        if (actualContent && actualContent.trim().length > 6000) {
             const ok = await confirmUiMessage(t(
-                '检测到剧本内容超过5000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 5000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+                '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
             ));
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
@@ -9113,6 +9095,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     return (
         <div className="p-4 sm:p-8 h-full flex flex-col w-full max-w-full overflow-hidden">
+            <MarkdownHelpModal
+                open={manualModalOpen}
+                initialDocKey="analysis"
+                onClose={() => setManualModalOpen(false)}
+                uiLang={uiLang}
+            />
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 shrink-0">
                 <h2 className="text-2xl font-bold flex items-center gap-2">
                     {buildEpisodeDisplayLabel({
@@ -9124,6 +9112,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </span>
                 </h2>
                 <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setManualModalOpen(true)}
+                        className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 border border-white/10 flex items-center gap-2"
+                        title={t('查看剧本分析操作手册', 'View script analysis manual')}
+                    >
+                        <Info className="w-4 h-4" /> {t('剧本分析操作手册', 'Script Analysis Manual')}
+                    </button>
                     {isRawMode && (
                         <>
                             <FunctionApiSelector

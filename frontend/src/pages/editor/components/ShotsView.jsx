@@ -2822,6 +2822,79 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, []);
 
+    const getShotVideoPromptForFrameBase = useCallback((shot, techObj = null) => {
+        if (!shot || typeof shot !== 'object') return { text: '', source: '' };
+        const tech = techObj && typeof techObj === 'object'
+            ? techObj
+            : parseTechnicalNotesSafe(shot.technical_notes);
+
+        const cnCandidates = [
+            tech.video_prompt_cn,
+            shot.video_prompt_cn,
+            shot.video_content_cn,
+            shot.prompt_cn,
+            shot.video_content,
+            shot.prompt,
+        ];
+        const enCandidates = [
+            shot.video_content,
+            shot.prompt,
+            tech.video_prompt_en,
+            shot.video_prompt_en,
+            tech.video_prompt_cn,
+            shot.video_prompt_cn,
+            shot.video_content_cn,
+            shot.prompt_cn,
+        ];
+        const candidates = resolvedPromptSubmitLang === 'cn' ? cnCandidates : enCandidates;
+
+        for (const candidate of candidates) {
+            const text = String(candidate || '').trim();
+            if (text) return { text, source: 'video' };
+        }
+
+        return { text: '', source: '' };
+    }, [parseTechnicalNotesSafe, resolvedPromptSubmitLang]);
+
+    const buildShotFramePromptFromVideoBase = useCallback((shot, frameRole = 'start', techObj = null, fallbackPrompt = '') => {
+        const role = frameRole === 'end' ? 'end' : 'start';
+        const videoBase = getShotVideoPromptForFrameBase(shot, techObj);
+        const baseText = String(videoBase.text || fallbackPrompt || '').trim();
+        if (!baseText) {
+            return { text: role === 'end' ? 'End frame' : 'A cinematic shot', source: 'fallback' };
+        }
+
+        if (videoBase.source !== 'video') {
+            return { text: baseText, source: 'fallback' };
+        }
+
+        const text = resolvedPromptSubmitLang === 'cn'
+            ? (role === 'end'
+                ? [
+                    '请以以下视频提示词作为唯一基础提示词，自动抽取适合作为本 shot 结束帧的单张静态画面。只生成一张电影静帧，不生成视频、多宫格、连环图、文字说明或分屏版式。结束帧必须对应视频提示词的终段、最终落点、动作结果或收束定格；保持人物身份、环境锚点、光照、构图、道具状态和实体标签一致，不要改写剧情。',
+                    '视频提示词:',
+                    baseText,
+                ].join('\n')
+                : [
+                    '请以以下视频提示词作为唯一基础提示词，自动抽取适合作为本 shot 起始帧的单张静态画面。只生成一张电影静帧，不生成视频、多宫格、连环图、文字说明或分屏版式。起始帧必须对应视频提示词的 P1、起始状态、动作起点或镜头开端；保持人物身份、环境锚点、光照、构图、道具状态和实体标签一致，不要改写剧情。',
+                    '视频提示词:',
+                    baseText,
+                ].join('\n'))
+            : (role === 'end'
+                ? [
+                    'Use the following video prompt as the only base prompt and automatically extract one still image suitable for this shot end frame. Generate exactly one cinematic still image, not a video, multi-panel image, comic sequence, text label, or split-screen layout. The end frame must correspond to the final phase, final landing state, action result, or closing hold described in the video prompt. Preserve identity, environment anchors, lighting, composition, prop state, and entity tags without rewriting the story.',
+                    'Video prompt:',
+                    baseText,
+                ].join('\n')
+                : [
+                    'Use the following video prompt as the only base prompt and automatically extract one still image suitable for this shot start frame. Generate exactly one cinematic still image, not a video, multi-panel image, comic sequence, text label, or split-screen layout. The start frame must correspond to P1, the initial state, action starting point, or opening camera setup described in the video prompt. Preserve identity, environment anchors, lighting, composition, prop state, and entity tags without rewriting the story.',
+                    'Video prompt:',
+                    baseText,
+                ].join('\n'));
+
+        return { text, source: 'video' };
+    }, [getShotVideoPromptForFrameBase, resolvedPromptSubmitLang]);
+
     const normalizeShotPromptDefaults = useCallback((shot) => {
         if (!shot || typeof shot !== 'object') return shot;
 
@@ -3750,15 +3823,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
         const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
-        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyStartPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnStartPrompt || shotSnapshot.start_frame || shotSnapshot.video_content || 'A cinematic shot')
             : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || 'A cinematic shot');
-        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyEndPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnEndPrompt || shotSnapshot.end_frame || 'End frame')
             : (shotSnapshot.end_frame || cnEndPrompt || 'End frame');
+        const startFramePrompt = buildShotFramePromptFromVideoBase(shotSnapshot, 'start', techNotes, legacyStartPrompt);
+        const endFramePrompt = buildShotFramePromptFromVideoBase(shotSnapshot, 'end', techNotes, legacyEndPrompt);
+        const rawStartPrompt = startFramePrompt.text;
+        const rawEndPrompt = endFramePrompt.text;
 
-        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
-        if (['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
+        const normalizedEndPrompt = String(legacyEndPrompt || '').trim().toUpperCase();
+        if (endFramePrompt.source !== 'video' && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
             showNotification(
                 t('当前结束帧被配置为复用起始帧，无法执行首尾联合生图。', 'End frame is configured to reuse the start frame, so joint start/end generation is unavailable.'),
                 'warning'
@@ -3901,15 +3978,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
         const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
-        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyStartPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnStartPrompt || stableShot?.start_frame || stableShot?.video_content || 'A cinematic shot')
             : (stableShot?.start_frame || cnStartPrompt || stableShot?.video_content || 'A cinematic shot');
-        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyEndPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnEndPrompt || stableShot?.end_frame || 'End frame')
             : (stableShot?.end_frame || cnEndPrompt || 'End frame');
+        const startFramePrompt = buildShotFramePromptFromVideoBase(stableShot, 'start', techNotes, legacyStartPrompt);
+        const endFramePrompt = buildShotFramePromptFromVideoBase(stableShot, 'end', techNotes, legacyEndPrompt);
+        const rawStartPrompt = startFramePrompt.text;
+        const rawEndPrompt = endFramePrompt.text;
 
-        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
-        if (['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
+        const normalizedEndPrompt = String(legacyEndPrompt || '').trim().toUpperCase();
+        if (endFramePrompt.source !== 'video' && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt)) {
             throw new Error('End frame is configured to reuse the start frame, so joint start/end generation is unavailable');
         }
 
@@ -4029,7 +4110,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setShotGeneratingState(targetShotId, 'start', false);
             setShotGeneratingState(targetShotId, 'end', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, awaitShotGenerationEntities, buildEntityNegativePrompt, getGlobalContextStr, injectEntityFeatures, onLog, project?.global_info, projectId, resolveJointShotDiptychRefs, resolvedPromptSubmitLang, setPendingJointDiptychImageJob, setShotGeneratingState, showNotification, t]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, awaitShotGenerationEntities, buildEntityNegativePrompt, buildShotFramePromptFromVideoBase, getGlobalContextStr, injectEntityFeatures, onLog, project?.global_info, projectId, resolveJointShotDiptychRefs, resolvedPromptSubmitLang, setPendingJointDiptychImageJob, setShotGeneratingState, showNotification, t]);
 
     const handleManualEndFrameInputChange = (nextValue) => {
         if (!editingShot) return;
@@ -6440,10 +6521,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
-        const rawPrompt = promptOverride
-            || (resolvedPromptSubmitLang === 'cn'
+        const legacyStartPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnStartPrompt || shotSnapshot.start_frame || shotSnapshot.video_content || "A cinematic shot")
-            : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || "A cinematic shot"));
+            : (shotSnapshot.start_frame || cnStartPrompt || shotSnapshot.video_content || "A cinematic shot");
+        const rawPrompt = promptOverride
+            || buildShotFramePromptFromVideoBase(shotSnapshot, 'start', techNotes, legacyStartPrompt).text;
         const isManual = techNotes.manual_start_frame === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
@@ -6551,10 +6633,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
         const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
+        const legacyEndPrompt = resolvedPromptSubmitLang === 'cn'
+            ? (cnEndPrompt || shotSnapshot.end_frame || "End frame")
+            : (shotSnapshot.end_frame || cnEndPrompt || "End frame");
         const rawPrompt = promptOverride
-            || (resolvedPromptSubmitLang === 'cn'
-                ? (cnEndPrompt || shotSnapshot.end_frame || "End frame")
-                : (shotSnapshot.end_frame || cnEndPrompt || "End frame"));
+            || buildShotFramePromptFromVideoBase(shotSnapshot, 'end', techNotes, legacyEndPrompt).text;
         const isManual = techNotes.manual_end_frame === true;
 
         const { text: submitPrompt } = injectEntityFeatures(rawPrompt, isManual, resolvedEntities);
@@ -7840,16 +7923,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const cnStartPrompt = String(techNotes.start_frame_cn || '').trim();
         const cnEndPrompt = String(techNotes.end_frame_cn || '').trim();
-        const rawStartPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyStartPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnStartPrompt || workingShot.start_frame || workingShot.video_content || 'A cinematic shot')
             : (workingShot.start_frame || cnStartPrompt || workingShot.video_content || 'A cinematic shot');
-        const rawEndPrompt = resolvedPromptSubmitLang === 'cn'
+        const legacyEndPrompt = resolvedPromptSubmitLang === 'cn'
             ? (cnEndPrompt || workingShot.end_frame || 'End frame')
             : (workingShot.end_frame || cnEndPrompt || 'End frame');
+        const startFramePrompt = buildShotFramePromptFromVideoBase(workingShot, 'start', techNotes, legacyStartPrompt);
+        const endFramePrompt = buildShotFramePromptFromVideoBase(workingShot, 'end', techNotes, legacyEndPrompt);
+        const rawStartPrompt = startFramePrompt.text;
+        const rawEndPrompt = endFramePrompt.text;
 
-        const normalizedEndPrompt = String(rawEndPrompt || '').trim().toUpperCase();
-        const endPromptIsNoLike = ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
-        const startPromptIsInherited = isStartFrameInheritPrompt(rawStartPrompt);
+        const normalizedEndPrompt = String(legacyEndPrompt || '').trim().toUpperCase();
+        const endPromptIsNoLike = endFramePrompt.source !== 'video' && ['NO', 'N/A', 'NONE', 'NULL', 'NA'].includes(normalizedEndPrompt);
+        const startPromptIsInherited = isStartFrameInheritPrompt(legacyStartPrompt);
         const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
         const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
 
@@ -7967,7 +8054,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setShotGeneratingState(stableShotId, 'end', false);
     setShotGeneratingState(stableShotId, 'cropping', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));

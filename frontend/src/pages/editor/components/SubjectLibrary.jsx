@@ -115,6 +115,7 @@ import RefineControl from '../../../components/RefineControl.jsx';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
+import MarkdownHelpModal from './MarkdownHelpModal';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -220,6 +221,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 4;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
     const functionApiConfigs = useFunctionApis();
+    const [manualModalOpen, setManualModalOpen] = useState(false);
     const createSubjectBatchTaskState = useCallback(() => ({
         running: false,
         progress: null,
@@ -5452,6 +5454,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     return (
         <div className="p-6 h-full flex flex-col w-full relative">
+            <MarkdownHelpModal
+                open={manualModalOpen}
+                initialDocKey="assets"
+                onClose={() => setManualModalOpen(false)}
+                uiLang={uiLang}
+            />
             {subjectNotification && (
                 <div className={`absolute top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-md ${subjectNotification.type === 'error' ? 'bg-red-500/90 border-red-300/40 text-white' : subjectNotification.type === 'warning' ? 'bg-amber-500/90 border-amber-300/40 text-black' : subjectNotification.type === 'info' ? 'bg-sky-500/90 border-sky-300/40 text-white' : 'bg-emerald-500/90 border-emerald-300/40 text-white'}`}>
                     {subjectNotification.message}
@@ -5495,6 +5503,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </select>
                         </div>
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setManualModalOpen(true)}
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 transition-colors whitespace-nowrap flex items-center gap-1.5"
+                                title={t('查看资产页面操作手册', 'View assets manual')}
+                            >
+                                <Info size={14} />
+                                <span>{t('操作手册', 'Manual')}</span>
+                            </button>
                              <button 
                                 onClick={handleBatchGenerateEntities}
                                 disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
