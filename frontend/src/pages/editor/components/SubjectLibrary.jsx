@@ -786,6 +786,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const subjectHistoryJobPresenceRef = useRef({});
     const subjectImageJobPollingRef = useRef(false);
     const subjectImageJobPollTokenRef = useRef(0);
+    const recentlyCompletedSubjectImageUrlsRef = useRef({});
+    const RECENT_SUBJECT_IMAGE_URL_TTL_MS = 1000 * 60 * 10;
     const subjectImageJobTerminalLogRef = useRef(new Set());
     const subjectBatchGenerateStopRequestedRef = useRef(false);
     const subjectBatchGenerateSessionRef = useRef('');
@@ -1921,6 +1923,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableImageUrl = String(imageUrl || '').trim();
         if (!stableEntityId || !stableImageUrl || !isMountedRef.current) return;
 
+        brokenMediaUrls.delete(stableImageUrl);
+        rememberWarmMediaUrl(stableImageUrl);
+        recentlyCompletedSubjectImageUrlsRef.current = {
+            ...(recentlyCompletedSubjectImageUrlsRef.current || {}),
+            [stableEntityId]: {
+                imageUrl: stableImageUrl,
+                updatedAt: Date.now(),
+            },
+        };
+
         setAllEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
         setEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
         setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
@@ -2712,10 +2724,26 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 include_project_null_episode: true,
             });
             const processedData = Array.isArray(data) ? data.map(item => {
-                if (item.type === 'environment' && (item.name === '封面海报' || item.name_en === 'Cover Poster')) {
-                    return { ...item, type: 'poster' };
+                const stableEntityId = String(item?.id || '').trim();
+                const recentImage = recentlyCompletedSubjectImageUrlsRef.current?.[stableEntityId] || null;
+                const recentImageUrl = String(recentImage?.imageUrl || '').trim();
+                const recentUpdatedAt = Number(recentImage?.updatedAt || 0) || 0;
+                const backendImageUrl = String(item?.image_url || '').trim();
+                const keepRecentImage = Boolean(
+                    stableEntityId
+                    && recentImageUrl
+                    && recentUpdatedAt > 0
+                    && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
+                    && !backendImageUrl
+                );
+                if (stableEntityId && recentImageUrl && backendImageUrl === recentImageUrl) {
+                    delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
                 }
-                return item;
+                const nextItem = keepRecentImage ? { ...item, image_url: recentImageUrl } : item;
+                if (nextItem.type === 'environment' && (nextItem.name === '封面海报' || nextItem.name_en === 'Cover Poster')) {
+                    return { ...nextItem, type: 'poster' };
+                }
+                return nextItem;
             }) : [];
             setAllEntities(processedData);
             return processedData;
