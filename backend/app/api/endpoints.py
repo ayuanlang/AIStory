@@ -10474,9 +10474,28 @@ _SHOT_REQUIRED_ROW_FIELD_GROUPS: List[Tuple[str, List[str]]] = [
     ("Video Content or Video Content (CN)", [
         "Video Content", "video_content", "视频内容",
         "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
+        "中文视频提示词内容", "中文视频提示词", "视频提示词内容", "视频提示词", "中文动态视频提示词",
         "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
+        "prompt_preview_cn",
     ]),
 ]
+
+
+def _shot_row_technical_notes_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    for key in ("technical_notes", "technicalNotes"):
+        raw_notes = row.get(key)
+        if isinstance(raw_notes, dict):
+            return raw_notes
+        if isinstance(raw_notes, str) and raw_notes.strip():
+            try:
+                parsed = json.loads(raw_notes)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+    return {}
 
 
 def _pick_shot_cell(row: Dict[str, Any], aliases: List[str], default: str = "") -> str:
@@ -10485,7 +10504,49 @@ def _pick_shot_cell(row: Dict[str, Any], aliases: List[str], default: str = "") 
     for key in aliases:
         if key in row and row.get(key) is not None:
             return str(row.get(key) or "").strip()
+    normalized_aliases = {_normalize_shot_markdown_col_key(key) for key in aliases}
+    for raw_key, raw_value in row.items():
+        if _normalize_shot_markdown_col_key(raw_key) in normalized_aliases and raw_value is not None:
+            return str(raw_value or "").strip()
+    notes = _shot_row_technical_notes_dict(row)
+    if notes:
+        for key in aliases:
+            if key in notes and notes.get(key) is not None:
+                return str(notes.get(key) or "").strip()
+        for raw_key, raw_value in notes.items():
+            if _normalize_shot_markdown_col_key(raw_key) in normalized_aliases and raw_value is not None:
+                return str(raw_value or "").strip()
     return default
+
+
+def _pick_shot_video_prompt_cell(row: Dict[str, Any]) -> str:
+    direct_value = _pick_shot_cell(row, [
+        "Video Content (CN)", "video_content_cn", "video_prompt_cn", "视频内容（中文）",
+        "中文视频提示词内容", "中文视频提示词", "视频提示词内容", "视频提示词", "中文动态视频提示词",
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
+        "Video Content", "video_content", "视频内容",
+        "prompt_preview_cn",
+    ], "")
+    if direct_value:
+        return direct_value
+
+    for source in (row, _shot_row_technical_notes_dict(row)):
+        if not isinstance(source, dict):
+            continue
+        for raw_key, raw_value in source.items():
+            value = str(raw_value or "").strip()
+            if not value:
+                continue
+            key_text = str(raw_key or "").strip().lower()
+            normalized_key = _normalize_shot_markdown_col_key(raw_key)
+            if (
+                ("video" in key_text and "cn" in key_text)
+                or "videopromptcn" in normalized_key
+                or "videocontentcn" in normalized_key
+                or ("视频" in str(raw_key or "") and ("中文" in str(raw_key or "") or "提示词" in str(raw_key or "") or "内容" in str(raw_key or "")))
+            ):
+                return value
+    return ""
 
 
 def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
@@ -10494,6 +10555,10 @@ def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
         if not _pick_shot_cell(row, aliases, ""):
             missing_fields.append(label)
     for label, aliases in _SHOT_REQUIRED_ROW_FIELD_GROUPS:
+        if label == "Video Content or Video Content (CN)":
+            if not _pick_shot_video_prompt_cell(row):
+                missing_fields.append(label)
+            continue
         if not _pick_shot_cell(row, aliases, ""):
             missing_fields.append(label)
     return missing_fields
