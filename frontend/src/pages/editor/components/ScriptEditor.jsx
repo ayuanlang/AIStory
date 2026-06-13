@@ -208,6 +208,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
+    const zeroCountAutoRerunRef = useRef({ reportKey: '', attempted: new Set(), running: false });
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
@@ -362,6 +363,95 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         return source;
     }, [extractAnalysisSections]);
+
+    const normalizeSubjectIndexTypeForAssetTask = useCallback((rawType) => {
+        const type = String(rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+        if (!type) return '';
+        if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(type)) return 'character';
+        if (['prop', 'props', 'item', 'items', 'object', 'objects', '道具', '物件'].includes(type)) return 'prop';
+        if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(type)) return 'environment';
+        if (['cover_poster', 'coverposter', 'poster', 'posters', 'cover', 'covers', '封面', '封面海报', '海报'].includes(type)) return 'cover_poster';
+        return type;
+    }, []);
+
+    const getSubjectIndexTypesForAssetTask = useCallback((assetTaskKey) => {
+        const key = String(assetTaskKey || '').trim().toLowerCase();
+        if (key === 'characters') return new Set(['character']);
+        if (key === 'props') return new Set(['prop']);
+        if (key === 'environments' || key === 'posters' || key === 'covers') return new Set(['environment', 'cover_poster']);
+        return null;
+    }, []);
+
+    const detectSubjectIndexLineType = useCallback((line) => {
+        const rawLine = String(line || '');
+        const trimmed = rawLine.trim();
+        if (!trimmed) return { isSubjectRow: false, type: '' };
+
+        const keyValueTypeMatch = trimmed.match(/\bsubject_type\s*=\s*([^|`\n]+)/i);
+        const keyValueSubjectMatch = trimmed.match(/\bsubject_no\s*=\s*([^|`\n]+)/i);
+        if (keyValueTypeMatch && (keyValueSubjectMatch || /\bsubject_name_(?:zh|en|exact)\s*=/i.test(trimmed))) {
+            return {
+                isSubjectRow: true,
+                type: normalizeSubjectIndexTypeForAssetTask(keyValueTypeMatch[1]),
+            };
+        }
+
+        const normalizedPipeLine = trimmed.replace(/^\s*>\s*/, '').replace(/^[-*+]\s+/, '').trim();
+        if (normalizedPipeLine.includes('|')) {
+            const cells = normalizedPipeLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+            const firstCell = String(cells[0] || '').trim();
+            const secondCell = String(cells[1] || '').trim();
+            const isHeaderOrSeparator = /subject_no/i.test(firstCell)
+                || /subject_type/i.test(secondCell)
+                || /^:?-{2,}:?$/.test(firstCell)
+                || /^:?-{2,}:?$/.test(secondCell);
+            if (isHeaderOrSeparator) return { isSubjectRow: false, type: '' };
+            if (/^S\d+\b/i.test(firstCell) && secondCell) {
+                return {
+                    isSubjectRow: true,
+                    type: normalizeSubjectIndexTypeForAssetTask(secondCell),
+                };
+            }
+        }
+
+        return { isSubjectRow: false, type: '' };
+    }, [normalizeSubjectIndexTypeForAssetTask]);
+
+    const filterSubjectIndexTextForAssetTask = useCallback((subjectIndexSourceText, assetTaskKey, targetEntityTypes = null) => {
+        const source = String(subjectIndexSourceText || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+        let allowedTypes = getSubjectIndexTypesForAssetTask(assetTaskKey);
+        const requestedTargets = Array.isArray(targetEntityTypes)
+            ? Array.from(new Set(targetEntityTypes.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)))
+            : [];
+        if (String(assetTaskKey || '').trim().toLowerCase() === 'environments' && requestedTargets.length > 0) {
+            const scopedTypes = new Set();
+            if (requestedTargets.some((item) => ['environment', 'environments', 'env', 'scene', 'scenes'].includes(item))) scopedTypes.add('environment');
+            if (requestedTargets.some((item) => ['poster', 'posters', 'cover', 'covers', 'cover_poster'].includes(item))) scopedTypes.add('cover_poster');
+            if (scopedTypes.size > 0) allowedTypes = scopedTypes;
+        }
+        if (!source || !allowedTypes) {
+            return { text: source, totalRows: 0, keptRows: 0 };
+        }
+
+        let totalRows = 0;
+        let keptRows = 0;
+        const filteredLines = source.split('\n').filter((line) => {
+            const detected = detectSubjectIndexLineType(line);
+            if (!detected.isSubjectRow) return true;
+            totalRows += 1;
+            if (allowedTypes.has(detected.type)) {
+                keptRows += 1;
+                return true;
+            }
+            return false;
+        });
+
+        return {
+            text: filteredLines.join('\n').trim(),
+            totalRows,
+            keptRows,
+        };
+    }, [detectSubjectIndexLineType, getSubjectIndexTypesForAssetTask]);
 
     const isSplitStage1Prompt = useCallback((promptText) => {
         const text = String(promptText || '');
@@ -589,6 +679,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         groupLabelZh: '',
         groupLabelEn: '',
         item: null,
+    });
+    const [phase2RerunModal, setPhase2RerunModal] = useState({
+        open: false,
+        mode: 'all',
+        category: 'characters',
+        subjectKey: '',
+        query: '',
     });
     const [coreCoverageReport, setCoreCoverageReport] = useState(null);
     const [coreCoverageResultText, setCoreCoverageResultText] = useState('');
@@ -4389,6 +4486,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let targetFilters = Array.isArray(options.targetEntityTypes)
             ? Array.from(new Set(options.targetEntityTypes.map(normalizeTargetEntityTypeKey).filter(Boolean)))
             : null;
+        const requestedTargetFilters = targetFilters ? [...targetFilters] : null;
 
 
         if (targetFilters && (targetFilters.includes('posters') || targetFilters.includes('covers')) && !targetFilters.includes('environments')) {
@@ -4526,12 +4624,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     payload.covers = Array.isArray(input.covers) ? input.covers : [];
                 }
 
-                if (Array.isArray(targetFilters) && targetFilters.length > 0) {
+                const payloadTargetFilters = Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
+                    ? requestedTargetFilters
+                    : targetFilters;
+                if (Array.isArray(payloadTargetFilters) && payloadTargetFilters.length > 0) {
                     const filtered = { characters: [], environments: [], props: [], posters: [], covers: [] };
-                    if (targetFilters.includes('characters')) filtered.characters = payload.characters;
-                    if (targetFilters.includes('props')) filtered.props = payload.props;
-                    if (targetFilters.includes('environments')) filtered.environments = payload.environments;
-                    if (targetFilters.includes('posters') || targetFilters.includes('covers')) {
+                    if (payloadTargetFilters.includes('characters')) filtered.characters = payload.characters;
+                    if (payloadTargetFilters.includes('props')) filtered.props = payload.props;
+                    if (payloadTargetFilters.includes('environments')) filtered.environments = payload.environments;
+                    if (payloadTargetFilters.includes('posters') || payloadTargetFilters.includes('covers')) {
                         filtered.posters = payload.posters;
                         filtered.covers = payload.covers;
                     }
@@ -4549,45 +4650,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.(`[Stage 3 Asset Design] Subtask submit key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'info');
 
                     let specificSubjectIndexText = finalSubjectIndexText;
-                    
-                    // Strip LLM think blocks
-                    specificSubjectIndexText = specificSubjectIndexText.replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
 
-                    // Filter by target entity type so each LLM only sees its own entities
-                    if (pData.key) {
-                        const targetTypeKey = pData.key;
-                        let allowedKeywords = [];
-                        if (targetTypeKey === 'characters') allowedKeywords = ['character', '角色', '人物'];
-                        else if (targetTypeKey === 'props') allowedKeywords = ['prop', '道具', '物件'];
-                        else if (targetTypeKey === 'environments') allowedKeywords = ['environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
-
-                        const allEntityKeywords = ['character', '角色', '人物', 'prop', '道具', '物件', 'environment', 'env', '场景', '环境', 'poster', 'cover_poster', 'cover', '海报', '封面'];
-
-                        const lines = specificSubjectIndexText.split('\n');
-                        const filteredLines = [];
-
-                        for (let line of lines) {
-                            const lineTrim = line.trim();
-                            const isRowItem = /^(?:\||[+\-*]\s*?\[[a-zA-Z0-9_-]+\]|[A-Za-z0-9_-]+\s*\|)/.test(lineTrim);
-                            if (isRowItem) {
-                                const lowerLine = line.toLowerCase();
-                                const isEntityRow = allEntityKeywords.some(kw => lowerLine.includes(kw));
-                                
-                                if (isEntityRow) {
-                                    const matchesTarget = allowedKeywords.some(kw => lowerLine.includes(kw));
-                                    if (matchesTarget) {
-                                        filteredLines.push(line);
-                                    }
-                                } else {
-                                    // Likely a header row, keep it
-                                    filteredLines.push(line);
-                                }
-                            } else {
-                                // Normal text, project context, table separators, etc. keep it.
-                                filteredLines.push(line);
-                            }
-                        }
-                        specificSubjectIndexText = filteredLines.join('\n').trim();
+                    const filteredSubjectIndex = filterSubjectIndexTextForAssetTask(specificSubjectIndexText, pData.key, requestedTargetFilters);
+                    specificSubjectIndexText = filteredSubjectIndex.text;
+                    if (filteredSubjectIndex.totalRows > 0) {
+                        onLog?.(`[Stage 3 Asset Design] Subject Index filtered key=${pData.key || `slot${index + 1}`} kept=${filteredSubjectIndex.keptRows}/${filteredSubjectIndex.totalRows}`, 'info');
                     }
 
                     return awaitAnalyzeSceneWithRecovery(
@@ -4631,10 +4698,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const subtaskPayload = buildSubtaskSubjectsPayload(pData.key, bJson || {});
                         let subtaskImportReport = null;
                         let subtaskImportError = '';
-                        if (hasAnySubjects(subtaskPayload)) {
+                        const subtaskHasImportableSubjects = hasAnySubjects(subtaskPayload);
+                        if (subtaskHasImportableSubjects) {
                             const subtaskTargetTypes = (() => {
                                 if (pData.key === 'characters') return ['characters'];
                                 if (pData.key === 'props') return ['props'];
+                                if (pData.key === 'environments' && Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0) {
+                                    return requestedTargetFilters.filter((item) => ['environments', 'posters', 'covers'].includes(item));
+                                }
                                 if (pData.key === 'environments') return ['environments', 'posters', 'covers'];
                                 if (pData.key === 'posters') return ['posters', 'covers'];
                                 return undefined;
@@ -4674,6 +4745,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             result: res,
                             analysisText: aText,
                             subjectsJson: bJson,
+                            hasImportableSubjects: subtaskHasImportableSubjects,
                             subtaskImportReport,
                             subtaskImportError,
                         };
@@ -4777,14 +4849,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const fallbackKey = promptsData[idx]?.key || `slot${idx + 1}`;
                         const fallbackTraceId = `${phase2BatchTraceId}-${fallbackKey}`;
                         if (item.status === 'fulfilled' && item.value) {
+                            const created = Number(item.value.subtaskImportReport?.createdSubjectItems?.length || 0);
+                            const skipped = Number(item.value.subtaskImportReport?.skippedSubjectItems?.length || 0);
+                            const hasImportableSubjects = Boolean(item.value.hasImportableSubjects);
+                            const status = item.value.subtaskImportError
+                                ? 'import_failed'
+                                : (hasImportableSubjects || created > 0 || skipped > 0 ? 'ok' : 'incomplete_return');
+                            const recommendation = status === 'incomplete_return'
+                                ? `LLM 已返回但未解析到可入库的 ${fallbackKey} 资产。建议点击“重跑失败路由”，仅重跑缺失资产类型：${fallbackKey}。`
+                                : '';
                             return {
                                 key: item.value.key || fallbackKey,
                                 traceId: item.value.traceId || fallbackTraceId,
                                 importSessionId: item.value.importSessionId || `import-${fallbackTraceId}`,
-                                status: item.value.subtaskImportError ? 'import_failed' : 'ok',
-                                created: Number(item.value.subtaskImportReport?.createdSubjectItems?.length || 0),
-                                skipped: Number(item.value.subtaskImportReport?.skippedSubjectItems?.length || 0),
+                                status,
+                                created,
+                                skipped,
                                 error: String(item.value.subtaskImportError || ''),
+                                recommendation,
                             };
                         }
                         return {
@@ -4809,20 +4891,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const createdItems = completedReports.flatMap((report) => Array.isArray(report?.createdSubjectItems) ? report.createdSubjectItems : []);
                     const skippedItems = completedReports.flatMap((report) => Array.isArray(report?.skippedSubjectItems) ? report.skippedSubjectItems : []);
 
+                    const failedSubtaskItems = subtaskReports
+                        .filter((x) => x.status !== 'ok')
+                        .map((x) => ({
+                            key: x.key,
+                            traceId: x.traceId,
+                            importSessionId: x.importSessionId,
+                            reason: x.error || x.recommendation || x.status,
+                            recommendation: x.recommendation || '',
+                        }));
                     const createdLen = createdItems.length;
                     const matchedLen = skippedItems.length;
                     onLog?.(`[Stage 3 Asset Design] Independent subtask imports completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                    if (failedSubtaskItems.length > 0) {
+                        const retryTypes = failedSubtaskItems.map((x) => x.key).filter(Boolean).join(', ');
+                        onLog?.(`[Stage 3 Asset Design] Incomplete subtask result detected. Retry missing asset type(s): ${retryTypes || 'unknown'}.`, 'warning');
+                    }
 
                     return {
                         checkedSceneCount: importedSceneRows.length,
                         missingSceneCount: 0,
-                        missingItemCount: createdLen + matchedLen,
+                        missingItemCount: createdLen + matchedLen + failedSubtaskItems.length,
                         supplementReport: {
                             createdItems,
                             skippedItems,
-                            failedItems: subtaskReports
-                                .filter((x) => x.status !== 'ok')
-                                .map((x) => ({ key: x.key, traceId: x.traceId, importSessionId: x.importSessionId, reason: x.error || x.status })),
+                            failedItems: failedSubtaskItems,
                         },
                         importedSubjectCounts: mergedCounts,
                         subtaskReports,
@@ -4844,7 +4937,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery, adaptationText,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
-        project, extractPureSubjectIndexText
+        project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask
     ]);
 
     
@@ -8357,6 +8450,326 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    const assetRerunCategoryOptions = useMemo(() => ([
+        { key: 'characters', labelZh: '角色', labelEn: 'Characters', targetEntityTypes: ['characters'] },
+        { key: 'props', labelZh: '道具', labelEn: 'Props', targetEntityTypes: ['props'] },
+        { key: 'environments', labelZh: '环境', labelEn: 'Environments', targetEntityTypes: ['environments'] },
+        { key: 'posters', labelZh: '封面/海报', labelEn: 'Posters/Covers', targetEntityTypes: ['posters', 'covers'] },
+    ]), []);
+
+    const resolveSubjectIndexTextForAssetRerun = useCallback(() => {
+        const direct = extractPureSubjectIndexText(String(
+            subjectIndexText
+            || activeEpisode?.ai_scene_analysis_subject_index
+            || getStageOutputContent('stage2', 'subject_index')
+            || ''
+        ).trim());
+        if (direct) return direct;
+
+        const fallbackSections = extractAnalysisSections(String(llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || ''));
+        return extractPureSubjectIndexText(String(fallbackSections?.subjectIndexText || '').trim());
+    }, [
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        extractAnalysisSections,
+        extractPureSubjectIndexText,
+        getStageOutputContent,
+        llmRawResultContent,
+        llmResultContent,
+        subjectIndexText,
+    ]);
+
+    const mapSubjectIndexTypeToRerunTarget = useCallback((rawType) => {
+        const normalizedType = normalizeSubjectIndexTypeForAssetTask(rawType);
+        if (normalizedType === 'character') return { category: 'characters', targetEntityTypes: ['characters'] };
+        if (normalizedType === 'prop') return { category: 'props', targetEntityTypes: ['props'] };
+        if (normalizedType === 'environment') return { category: 'environments', targetEntityTypes: ['environments'] };
+        if (normalizedType === 'cover_poster') return { category: 'posters', targetEntityTypes: ['posters', 'covers'] };
+        return { category: '', targetEntityTypes: [] };
+    }, [normalizeSubjectIndexTypeForAssetTask]);
+
+    const parseSubjectIndexEntriesForAssetRerun = useCallback((sourceText) => {
+        const source = String(sourceText || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+        if (!source) return [];
+
+        const cleanHeaderKey = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_');
+        const pickHeaderIndex = (headers, patterns) => {
+            const normalizedHeaders = (headers || []).map(cleanHeaderKey);
+            return normalizedHeaders.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
+        };
+        const cleanCell = (value) => String(value || '').replace(/<br\s*\/?>/gi, ' ').trim();
+        const getKeyValue = (line, name) => {
+            const match = String(line || '').match(new RegExp(`\\b${name}\\s*=\\s*([^|\\n\`]*)`, 'i'));
+            return String(match?.[1] || '').trim();
+        };
+
+        const entries = [];
+        const seen = new Set();
+        const pushEntry = ({ rawType, subjectNo, name, sourceLine, sourceBlock, rowIndex }) => {
+            const mapped = mapSubjectIndexTypeToRerunTarget(rawType);
+            if (!mapped.category || !mapped.targetEntityTypes.length) return;
+            const displayName = String(name || subjectNo || '').trim();
+            if (!displayName || isDummySubject(displayName)) return;
+            const key = `${mapped.category}:${normalizeSubjectKey(displayName) || displayName}:${subjectNo || rowIndex || entries.length}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            entries.push({
+                key,
+                subjectNo: String(subjectNo || '').trim(),
+                name: displayName,
+                type: normalizeSubjectIndexTypeForAssetTask(rawType),
+                category: mapped.category,
+                targetEntityTypes: mapped.targetEntityTypes,
+                sourceText: String(sourceBlock || sourceLine || '').trim(),
+                sourceLine: String(sourceLine || sourceBlock || '').trim(),
+            });
+        };
+
+        const parsed = parseMarkdownTable(source);
+        if (parsed?.headers?.length && parsed?.rows?.length) {
+            const headers = parsed.headers;
+            const typeIdx = pickHeaderIndex(headers, [/subject_?type/, /^type$/, /类型/, /类别/]);
+            const noIdx = pickHeaderIndex(headers, [/subject_?no/, /^id$/, /编号/]);
+            const nameIdx = pickHeaderIndex(headers, [/subject_?name_?exact/, /subject_?name_?zh/, /subject_?name/, /^name$/, /名称/, /名字/]);
+            if (typeIdx >= 0) {
+                parsed.rows.forEach((row, idx) => {
+                    const rawType = cleanCell(row[typeIdx]);
+                    const subjectNo = noIdx >= 0 ? cleanCell(row[noIdx]) : '';
+                    const name = nameIdx >= 0 ? cleanCell(row[nameIdx]) : cleanCell(row.find((cell, cellIdx) => cellIdx !== typeIdx && cellIdx !== noIdx && String(cell || '').trim()) || '');
+                    pushEntry({
+                        rawType,
+                        subjectNo,
+                        name,
+                        sourceLine: `| ${row.map(cleanCell).join(' | ')} |`,
+                        sourceBlock: buildMarkdownTable(headers, [row]),
+                        rowIndex: idx,
+                    });
+                });
+            }
+        }
+
+        source.split('\n').forEach((line, idx) => {
+            const detected = detectSubjectIndexLineType(line);
+            if (!detected.isSubjectRow) return;
+            const normalizedLine = String(line || '').replace(/^\s*>\s*/, '').replace(/^[-*+]\s+/, '').trim();
+            const cells = normalizedLine.includes('|')
+                ? normalizedLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+                : [];
+            const rawType = getKeyValue(normalizedLine, 'subject_type') || detected.type || cells[1] || '';
+            const subjectNo = getKeyValue(normalizedLine, 'subject_no') || cells[0] || '';
+            const name = getKeyValue(normalizedLine, 'subject_name_exact')
+                || getKeyValue(normalizedLine, 'subject_name_zh')
+                || getKeyValue(normalizedLine, 'subject_name_en')
+                || cells.slice(2).find((cell) => cell && !/^subject_/i.test(cell))
+                || '';
+            pushEntry({ rawType, subjectNo, name, sourceLine: line, sourceBlock: line, rowIndex: idx });
+        });
+
+        return entries;
+    }, [buildMarkdownTable, detectSubjectIndexLineType, mapSubjectIndexTypeToRerunTarget, normalizeSubjectIndexTypeForAssetTask]);
+
+    const phase2RerunSubjectEntries = useMemo(
+        () => parseSubjectIndexEntriesForAssetRerun(resolveSubjectIndexTextForAssetRerun()),
+        [parseSubjectIndexEntriesForAssetRerun, resolveSubjectIndexTextForAssetRerun]
+    );
+
+    const filteredPhase2RerunSubjectEntries = useMemo(() => {
+        const category = String(phase2RerunModal.category || '').trim();
+        const query = String(phase2RerunModal.query || '').trim().toLowerCase();
+        return phase2RerunSubjectEntries.filter((item) => {
+            if (category && item.category !== category) return false;
+            if (!query) return true;
+            return [item.subjectNo, item.name, item.type, item.sourceLine]
+                .some((value) => String(value || '').toLowerCase().includes(query));
+        });
+    }, [phase2RerunModal.category, phase2RerunModal.query, phase2RerunSubjectEntries]);
+
+    const openPhase2RerunModal = useCallback((patch = {}) => {
+        const nextCategory = String(patch.category || phase2RerunModal.category || 'characters').trim();
+        const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === nextCategory) || phase2RerunSubjectEntries[0];
+        setPhase2RerunModal((prev) => ({
+            ...prev,
+            open: true,
+            mode: patch.mode || prev.mode || 'all',
+            category: nextCategory,
+            subjectKey: patch.subjectKey || prev.subjectKey || firstSubject?.key || '',
+            query: patch.query ?? prev.query ?? '',
+        }));
+    }, [phase2RerunModal.category, phase2RerunSubjectEntries]);
+
+    const confirmPhase2RerunSelection = useCallback(async () => {
+        const mode = String(phase2RerunModal.mode || 'all');
+        const sourceText = resolveSubjectIndexTextForAssetRerun();
+        if (!sourceText) {
+            alert(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'));
+            return;
+        }
+
+        let retryOptions = {};
+        if (mode === 'category') {
+            const option = assetRerunCategoryOptions.find((item) => item.key === phase2RerunModal.category) || assetRerunCategoryOptions[0];
+            retryOptions = { targetEntityTypes: option.targetEntityTypes };
+        } else if (mode === 'single') {
+            const selected = filteredPhase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey)
+                || filteredPhase2RerunSubjectEntries[0]
+                || phase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey);
+            if (!selected?.sourceText) {
+                alert(t('请选择一个资产清单实体后再重跑。', 'Select one subject-index entity before rerunning.'));
+                return;
+            }
+            retryOptions = {
+                targetEntityTypes: selected.targetEntityTypes,
+                explicitSubjectIndexText: selected.sourceText,
+                rerunSubject: {
+                    subjectNo: selected.subjectNo,
+                    name: selected.name,
+                    type: selected.type,
+                },
+            };
+        }
+
+        setPhase2RerunModal((prev) => ({ ...prev, open: false }));
+        await handleRetryPhase2(retryOptions);
+    }, [
+        assetRerunCategoryOptions,
+        filteredPhase2RerunSubjectEntries,
+        handleRetryPhase2,
+        phase2RerunModal.category,
+        phase2RerunModal.mode,
+        phase2RerunModal.subjectKey,
+        phase2RerunSubjectEntries,
+        resolveSubjectIndexTextForAssetRerun,
+        t,
+    ]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        if (isAnalyzing || isRetryingPhase2 || analysisRunInFlightRef.current || phase2GenerationInFlightRef.current) return;
+
+        const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
+        if (reportStatus !== 'completed') return;
+
+        const reportKey = `${activeEpisode.id}:${Number(analysisUiReport?.startedAt || 0) || 'latest'}`;
+        if (zeroCountAutoRerunRef.current.reportKey !== reportKey) {
+            zeroCountAutoRerunRef.current = { reportKey, attempted: new Set(), running: false };
+        }
+        if (zeroCountAutoRerunRef.current.running) return;
+
+        const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
+            ? analysisUiReport.importReport
+            : {};
+        const scenePostReport = (importReport.sceneSubjectPostImportReport && typeof importReport.sceneSubjectPostImportReport === 'object')
+            ? importReport.sceneSubjectPostImportReport
+            : {};
+
+        const firstFiniteNumber = (...values) => {
+            for (const value of values) {
+                const numberValue = Number(value);
+                if (Number.isFinite(numberValue)) return numberValue;
+            }
+            return null;
+        };
+
+        const counts = {
+            scenes: firstFiniteNumber(
+                importReport?.dbPersistedCounts?.scenes?.currentEpisode,
+                scenePostReport?.checkedSceneCount,
+                importReport?.importStats?.scenesCreated,
+                importReport?.dbRunInsertedCounts?.scenes?.created
+            ),
+            characters: firstFiniteNumber(
+                importReport?.dbPersistedCounts?.entities?.character,
+                importReport?.importedSubjectCounts?.character,
+                importReport?.dbRunInsertedCounts?.entities?.character
+            ),
+            props: firstFiniteNumber(
+                importReport?.dbPersistedCounts?.entities?.prop,
+                importReport?.importedSubjectCounts?.prop,
+                importReport?.dbRunInsertedCounts?.entities?.prop
+            ),
+            environments: firstFiniteNumber(
+                importReport?.dbPersistedCounts?.entities?.environment,
+                importReport?.importedSubjectCounts?.environment,
+                importReport?.dbRunInsertedCounts?.entities?.environment
+            ),
+            posters: firstFiniteNumber(
+                importReport?.dbPersistedCounts?.entities?.poster,
+                importReport?.dbPersistedCounts?.entities?.cover,
+                importReport?.importedSubjectCounts?.poster,
+                importReport?.dbRunInsertedCounts?.entities?.poster,
+                importReport?.dbRunInsertedCounts?.entities?.cover
+            ),
+        };
+
+        const subjectCategories = new Set((phase2RerunSubjectEntries || []).map((item) => item.category).filter(Boolean));
+        const pendingAssetTargets = [];
+        const pendingLabels = [];
+        const addAssetTargetIfZero = (key, labelZh, targets) => {
+            if (counts[key] !== 0) return;
+            if (!subjectCategories.has(key)) return;
+            const attemptKey = `asset:${key}`;
+            if (zeroCountAutoRerunRef.current.attempted.has(attemptKey)) return;
+            zeroCountAutoRerunRef.current.attempted.add(attemptKey);
+            pendingLabels.push(labelZh);
+            pendingAssetTargets.push(...targets);
+        };
+
+        addAssetTargetIfZero('characters', '角色', ['characters']);
+        addAssetTargetIfZero('props', '道具', ['props']);
+        addAssetTargetIfZero('environments', '场景/环境', ['environments']);
+        addAssetTargetIfZero('posters', '封面/海报', ['posters', 'covers']);
+
+        const shouldRerunScenes = counts.scenes === 0
+            && !zeroCountAutoRerunRef.current.attempted.has('scene_beats')
+            && Boolean(buildStage1RestartSourceText())
+            && Boolean(resolveSubjectIndexTextForAssetRerun());
+
+        if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
+
+        zeroCountAutoRerunRef.current.running = true;
+        if (shouldRerunScenes) zeroCountAutoRerunRef.current.attempted.add('scene_beats');
+
+        (async () => {
+            try {
+                if (shouldRerunScenes) {
+                    onLog?.('[Auto Zero Report Rerun] scenes count is 0, rerunning scene beats once.', 'warning');
+                    setAnalysisFlowStatus({
+                        phase: 'scene_beats',
+                        message: t('检查报告发现“场景”为 0，正在自动单独重排场景一次...', 'Report found scenes=0. Auto-rerunning scene beats once...'),
+                    });
+                    await handleRerunSceneBeatsOnly();
+                }
+
+                if (pendingAssetTargets.length > 0) {
+                    const targetEntityTypes = Array.from(new Set(pendingAssetTargets));
+                    onLog?.(`[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')}.`, 'warning');
+                    setAnalysisFlowStatus({
+                        phase: 'assets_gen',
+                        message: t(`检查报告发现 ${pendingLabels.join('、')} 为 0，正在自动单独重跑对应资产类型一次...`, `Report found zero-count asset categories (${pendingLabels.join(', ')}). Auto-rerunning once...`),
+                    });
+                    await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
+                }
+            } catch (error) {
+                const detail = String(error?.message || error || 'unknown error');
+                onLog?.(`[Auto Zero Report Rerun] failed: ${detail}`, 'warning');
+            } finally {
+                zeroCountAutoRerunRef.current.running = false;
+            }
+        })();
+    }, [
+        activeEpisode?.id,
+        analysisUiReport,
+        buildStage1RestartSourceText,
+        handleRetryPhase2,
+        handleRerunSceneBeatsOnly,
+        isAnalyzing,
+        isRetryingPhase2,
+        onLog,
+        phase2RerunSubjectEntries,
+        resolveSubjectIndexTextForAssetRerun,
+        t,
+    ]);
+
     const phase1AnalysisReport = useMemo(() => {
         if (!analysisUiReport) return null;
         if (analysisFlowStatus?.phase === 'analysis' || analysisFlowStatus?.phase === 'scene') {
@@ -8566,9 +8979,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
                 {
                     key: 'restart-stage3-card',
-                    label: t('重跑全部', 'Rerun All'),
+                    label: t('选择重跑', 'Choose Rerun'),
                     icon: 'play',
-                    onClick: () => handleRetryPhase2({}),
+                    onClick: () => openPhase2RerunModal({ mode: 'all' }),
                     disabled: isAnalyzing || isRetryingPhase2 || !(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index')),
                     loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
                 }
@@ -8635,7 +9048,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         return cards;
-    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, t]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_subject_index, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
@@ -8783,14 +9196,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {!!getStageOutputContent('stage3', 'asset_design_json') ? (
                                     <div className="flex items-center gap-1">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors flex items-center gap-1">
+                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors flex items-center gap-1">
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('重跑', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
                                     !!getStageOutputContent('stage2', 'scene_markdown') ? (
-                                         <button onClick={() => handleRetryPhase2({})} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                         <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('可重跑', 'Ready')}
                                         </button>
@@ -8990,7 +9403,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                         ? t('成功', 'OK')
                                                         : (status === 'import_failed'
                                                             ? t('导入失败', 'Import Failed')
-                                                            : t('LLM失败', 'LLM Failed'));
+                                                            : (status === 'incomplete_return'
+                                                                ? t('返回不完整', 'Incomplete Return')
+                                                                : t('LLM失败', 'LLM Failed')));
                                                     return (
                                                         <div
                                                             key={`${String(item?.traceId || item?.key || 'subtask')}-${idx}`}
@@ -9011,6 +9426,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             {String(item?.error || '').trim() && (
                                                                 <div className="mt-1 text-red-200/90 break-words">
                                                                     {t('错误', 'Error')}: {String(item.error).trim()}
+                                                                </div>
+                                                            )}
+                                                            {String(item?.recommendation || '').trim() && (
+                                                                <div className="mt-1 text-amber-100/95 break-words">
+                                                                    {t('处理建议', 'Suggestion')}: {String(item.recommendation).trim()}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -9136,6 +9556,165 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         
                 </div>
             </div>
+
+            {phase2RerunModal.open && (
+                <div
+                    className="fixed inset-0 z-[59] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                >
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-3xl max-h-[84vh] shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <RefreshCw className="w-5 h-5 text-purple-400" />
+                                {t('资产生成重跑选择', 'Asset Generation Rerun')}
+                            </h3>
+                            <button
+                                onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white"
+                            >
+                                {t('退出', 'Exit')}
+                            </button>
+                        </div>
+
+                        <div className="p-4 overflow-y-auto custom-scrollbar space-y-4 text-sm">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                {[
+                                    { key: 'all', labelZh: '全部重跑', labelEn: 'Rerun All' },
+                                    { key: 'category', labelZh: '分类重跑', labelEn: 'Rerun Category' },
+                                    { key: 'single', labelZh: '单实体重跑', labelEn: 'Rerun One Entity' },
+                                ].map((mode) => {
+                                    const active = phase2RerunModal.mode === mode.key;
+                                    return (
+                                        <button
+                                            key={mode.key}
+                                            type="button"
+                                            onClick={() => {
+                                                const category = phase2RerunModal.category || 'characters';
+                                                const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === category) || phase2RerunSubjectEntries[0];
+                                                setPhase2RerunModal((prev) => ({
+                                                    ...prev,
+                                                    mode: mode.key,
+                                                    subjectKey: prev.subjectKey || firstSubject?.key || '',
+                                                }));
+                                            }}
+                                            className={`rounded-lg border px-3 py-2 text-sm font-bold transition-colors ${active ? 'border-purple-300/60 bg-purple-500/25 text-purple-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/75'}`}
+                                        >
+                                            {t(mode.labelZh, mode.labelEn)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {phase2RerunModal.mode === 'all' && (
+                                <div className="rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-emerald-100">
+                                    <div className="font-semibold">{t('将重新生成全部资产类型', 'All asset types will be regenerated')}</div>
+                                    <div className="mt-1 text-xs text-emerald-100/75">
+                                        {t('包括角色、道具、环境与封面/海报。', 'Includes characters, props, environments, posters and covers.')}
+                                    </div>
+                                </div>
+                            )}
+
+                            {(phase2RerunModal.mode === 'category' || phase2RerunModal.mode === 'single') && (
+                                <div className="space-y-2">
+                                    <div className="text-xs font-bold text-white/55 uppercase tracking-wide">{t('资产类型', 'Asset Type')}</div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                        {assetRerunCategoryOptions.map((option) => {
+                                            const active = phase2RerunModal.category === option.key;
+                                            return (
+                                                <button
+                                                    key={option.key}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === option.key);
+                                                        setPhase2RerunModal((prev) => ({
+                                                            ...prev,
+                                                            category: option.key,
+                                                            subjectKey: firstSubject?.key || '',
+                                                        }));
+                                                    }}
+                                                    className={`rounded-lg border px-3 py-2 text-xs font-bold transition-colors ${active ? 'border-sky-300/60 bg-sky-500/25 text-sky-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/75'}`}
+                                                >
+                                                    {t(option.labelZh, option.labelEn)}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {phase2RerunModal.mode === 'category' && (
+                                <div className="rounded-lg border border-sky-400/25 bg-sky-500/10 px-3 py-3 text-sky-100">
+                                    <div className="font-semibold">
+                                        {t('将仅重跑所选分类', 'Only the selected category will be regenerated')}
+                                    </div>
+                                    <div className="mt-1 text-xs text-sky-100/75">
+                                        {t('系统会从当前 Subject Index 中筛出该分类，再进入资产设计。', 'The current Subject Index will be filtered to this category before asset design.')}
+                                    </div>
+                                </div>
+                            )}
+
+                            {phase2RerunModal.mode === 'single' && (
+                                <div className="space-y-3">
+                                    <input
+                                        value={phase2RerunModal.query || ''}
+                                        onChange={(event) => setPhase2RerunModal((prev) => ({ ...prev, query: event.target.value }))}
+                                        placeholder={t('搜索编号或实体名...', 'Search subject number or name...')}
+                                        className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none focus:border-purple-400/50"
+                                    />
+                                    <div className="rounded-lg border border-white/10 bg-black/20 max-h-[280px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
+                                        {filteredPhase2RerunSubjectEntries.length > 0 ? filteredPhase2RerunSubjectEntries.map((item) => {
+                                            const active = phase2RerunModal.subjectKey === item.key;
+                                            return (
+                                                <button
+                                                    key={item.key}
+                                                    type="button"
+                                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, subjectKey: item.key }))}
+                                                    className={`w-full text-left px-3 py-2.5 transition-colors ${active ? 'bg-purple-500/25 text-purple-50' : 'hover:bg-white/5 text-white/80'}`}
+                                                >
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <span className="font-bold">{item.name}</span>
+                                                        {item.subjectNo && <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/10 text-white/65">{item.subjectNo}</span>}
+                                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-100">{item.type}</span>
+                                                    </div>
+                                                    <div className="mt-1 text-[11px] text-white/45 truncate">{item.sourceLine}</div>
+                                                </button>
+                                            );
+                                        }) : (
+                                            <div className="px-3 py-6 text-center text-sm text-white/45">
+                                                {t('当前分类下没有可选择的 Subject Index 实体。', 'No selectable Subject Index entity in this category.')}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
+                            <div className="text-xs text-white/45">
+                                {t(`可选实体：${phase2RerunSubjectEntries.length} 个`, `${phase2RerunSubjectEntries.length} selectable entities`)}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white border border-white/10"
+                                >
+                                    {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={confirmPhase2RerunSelection}
+                                    disabled={isRetryingPhase2 || isAnalyzing || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || isAnalyzing || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
+                                >
+                                    {isRetryingPhase2 ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                    {t('确认重跑', 'Confirm Rerun')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {jsonEntityDetailModal.open && (
                 <div
