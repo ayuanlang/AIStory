@@ -101,6 +101,9 @@
 #### 3.1.5 变体与正反环境逻辑
 - **上游衍生环境衔接**：来自 Stage 1/2 的衍生环境名称若为“主环境名 + 空格 + 衍生类型/观察区域/可见方向”，本阶段不得重新命名、拆分或合并；必须在上游环境清单中匹配“最长同名主环境前缀 + 单个空格”，用该主环境回挂 base environment，再设计当前衍生视角。禁止简单截取第一个空格前文本，避免误伤本身带空格的主环境名。若找不到同名主环境 Subject，不得擅自补造基准环境，标记 `dependency_strategy.logic="上游待补（回流 Stage 2）：缺少同名主环境"` 并保留原名。
 - **衍生环境生成策略**：衍生环境的 `description_cn` 与 `generation_prompt_cn` 必须先写明继承的主环境共同锚点，如地面、墙面、门窗、柱列、桌椅、光源、通道、主舞台方向；再写当前衍生类型/观察区域/可见方向的 Delta。禁止把衍生环境生成成完全不同的空间，也禁止只写“正反打/屏幕内/门外/桌面区域”而不回扣主环境。
+- **共同锚点与视角轴线**：正反、内外、桌两侧、门两侧等成组衍生环境必须选定一个可见且稳定的空间锚点作为 180 度翻转轴，如长桌中线、门槛/门框、柜台边、走廊轴线、窗墙、屏风或柱列。`description_cn` 与 `generation_prompt_cn` 必须写清 Viewpoint Anchor 位于锚点哪一侧、Viewing Direction 朝向哪一侧，以及该视角相对基准环境是顺向、反向、左侧、右侧、向内或向外。
+- **180 度互补覆盖**：正反视角通常不是两个相似构图，而是围绕同一锚点分别看向相反半空间；两条衍生环境合并后应能形成主环境的 360 度空间理解。每条只展示当前镜头可见的半圈空间，必须说明与配对视角互补的对面背景、入口/出口、墙面、窗面、家具背面或通道，不得把同一背景重复给正反双方。
+- **方向性物体朝向同步翻转**：椅子、沙发、床头、书桌、柜台、门扇、窗扇、屏风正背面、招牌、讲台、祭案、车头等具有正面/背面/开合方向/使用朝向的物体，必须随 Viewpoint Anchor 与 Viewing Direction 改变而明确改写可见面与朝向。例如椅背在反向视角可能变为椅面或椅背背面，门应写清向里开/向外开及门扇位于画面哪侧，桌前/桌后与左/右关系需按镜头方向重新判定；禁止沿用基准描述导致物体朝向自相矛盾。
 - **环境组传承**：同组衍生环境（正反、内外、状态差异）保留宏观共性，只放大当前视角需要的差异化物理要素。
 - **共同可见锚点严格一致**：衍生环境中任何共同可见部分必须逐项完全一致描述，禁止只写“相似/同风格/延续”。尤其是地面地毯、长桌、屋顶、门框、柱列、隔断、窗墙、楼梯、走廊转角，以及作为锚点分割前后环境或内外环境的固定部分，材质、颜色、纹理、尺度、位置关系、朝向、光照状态必须与基准环境严格一致；当前视角只补新增可见面和 Delta 差异。
 - **依赖显式交代**：有 `dependency_strategy` 时，`generation_prompt_cn` 写继承的 base environment 共性锚点与当前新增视角/状态/构图差异。变体坚持 Delta-only。
@@ -113,6 +116,8 @@
 ### 3.2 对话正反打与 OTS
 - OTS/正反打同场时，沿用上游“主环境名 + 空格 + 衍生类型/观察区域/可见方向”的环境名，例如 `ENV:[侯府正厅 男主视线反向环境]`、`ENV:[侯府正厅 女主视线正向环境]`；禁止改写为 `_OTS_A`、`_OTS_B`、`A面/B面` 或其他编号名。
 - OTS/正反环境仅呈现正反方位的物理对立结构，并继承主环境共同锚点；当前视角只改变可见背景、阻隔物、光源方向、通道与构图 Delta。
+- 正反打必须通过同一空间锚点建立镜头轴线，正向环境写从 A 侧越过锚点看 B 侧，反向环境写从 B 侧越过同一锚点看 A 侧；两者约为 180 度互补，合在一起补足桌前/桌后、门内/门外、走廊来向/去向等 360 度方位信息。
+- 每个 OTS/正反环境必须重判方向性物体的面向：椅背朝向、桌椅前后、门窗开合方向、屏风正背、牌匾文字面、柜台内外、台阶上行/下行方向都按当前机位书写；若锚点共同可见，其材质、尺度、位置与光照保持一致，但可见面和左右关系按 180 度反向更新。
 - OTS 继承 Clean Plate；严禁前景肩膀、人影、角色残留。
 
 ## 五、特殊资产规范 (Special Assets)
@@ -168,6 +173,26 @@
       "dependency_strategy": {
         "type": "Original",
         "logic": "Original project environment."
+      }
+    },
+    {
+      "subject_no": "S005",
+      "name": "港口办公室 反向 中景 夜",
+      "name_en": "Harbor Office Reverse Mid Night",
+      "base_name_en": "Harbor Office",
+      "atmosphere": "Rainy tense night with the same noir anchor seen from the opposite half of the room",
+      "visual_params": "Mid/Interior/Night/Reverse",
+      "description_cn": "港口办公区反向夜景。继承港口办公室的旧木地板、实木办公桌、黄铜台灯、金属百叶窗与半开实木门框，以办公桌中线和半开门框作为共同锚点；机位从办公桌内侧反向看向门外走廊，补足正向环境不可见的入口半空间。Key Light 仍来自桌面黄铜台灯，照亮桌沿和椅背背面；Fill Light 来自走廊冷蓝雨夜反射，保留门外通道细节。",
+      "generation_prompt_cn": "电影级写实衍生环境，50mm 自然焦距，胸口高度，镜头水平。从办公桌内侧靠窗一侧作为 Viewpoint Anchor，沿办公桌中线反向看向半开实木门框和门外走廊，Viewing Direction 与基准正向环境约 180 度相反。继承基准环境共同锚点：旧木地板为深褐色磨损纹理，实木办公桌位于 MG 中央，黄铜台灯在桌面左后角，金属百叶窗仍在机位后方不可作当前背景，半开实木门框保持同一木纹、尺度和暖光边缘。FG 为桌面文件边缘和台灯暖光反射；MG 为办公桌内侧与两把空转椅的椅背背面，椅背朝向门外、椅面朝向机位，桌前/桌后关系按反向机位重新判定；BG 为半开门扇与门外冷蓝走廊，门扇向办公室内侧开启并停在画面右侧。黄铜台灯作暖色 Key Light，从画面左中部照亮桌沿、椅背背面和门框内缘；走廊冷蓝雨夜反射作 Fill Light，分离门外深处与室内暗部；门框边缘形成柔弱 Backlight。中等景深，办公桌与门框锐利，走廊远端略软。色彩继承旧木褐、煤灰蓝、琥珀暖光与冷白雨痕反射，当前 Delta 只强化入口半空间、椅背背面、向内开启门扇和走廊来向。Clean Plate，无人物、无肩膀、无可识别人脸。",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "specific characters, clear faces, foreground shoulders, duplicated front-view background, wrong chair direction, wrong door swing, blocked doorway",
+      "anchor_description": "reverse desk axis, inward-swinging wood door, chair backs, cold corridor beyond doorway",
+      "visual_dependencies": [
+        "ENV:[港口办公室 正向 中景 夜]"
+      ],
+      "dependency_strategy": {
+        "type": "Type A",
+        "logic": "Derived reverse environment inheriting the base office anchors and showing the opposite 180-degree half-space across the shared desk and doorway axis."
       }
     }
   ],

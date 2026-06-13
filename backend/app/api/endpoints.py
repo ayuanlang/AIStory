@@ -7122,14 +7122,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
         if is_subject_index_consumer_stage and persisted_subject_index_for_prompt:
-            derived_assets = _extract_reuse_assets_from_subject_index(persisted_subject_index_for_prompt)
-            if derived_assets:
-                reuse_subject_assets = derived_assets
+            if isinstance(reuse_subject_assets, list) and reuse_subject_assets:
                 logger.info(
-                    "[analyze_scene] override reuse_subject_assets from persisted subject index count=%s episode_id=%s",
-                    len(derived_assets),
+                    "[analyze_scene] skipped reusable subject assets injection because persisted subject index is already injected episode_id=%s request_asset_count=%s",
                     getattr(request, "episode_id", None),
+                    len(reuse_subject_assets),
                 )
+            reuse_subject_assets = []
         elif subject_index_allowed_types_for_request and isinstance(reuse_subject_assets, list):
             original_reuse_count = len(reuse_subject_assets)
             reuse_subject_assets = [
@@ -17780,6 +17779,104 @@ def _build_shot_prompts(
     
     logger.info(f"[_build_shot_prompts] Relevant Names from Scene (cleaned): {relevant_names}")
 
+    def _scene_subject_compare_key(value: Any) -> str:
+        normalized = normalize_entity_token(value)
+        normalized = re.sub(r"(?i)^(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*", "", normalized).strip()
+        normalized = normalized.strip("[](){}@#：: ").strip()
+        return re.sub(r"\s+", "", normalized).lower()
+
+    def _add_scene_subject_candidate(value: Any, target: set) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = _scene_subject_compare_key(text)
+        if key:
+            target.add(key)
+
+    def _extract_scene_subject_candidates() -> set:
+        candidates: set = set()
+        for value in [scene.linked_characters, scene.key_props, scene.environment_name]:
+            for part in re.split(r"[,，、;；\n]+", str(value or "")):
+                _add_scene_subject_candidate(part, candidates)
+
+        source_text = "\n".join([
+            str(scene.linked_characters or ""),
+            str(scene.key_props or ""),
+            str(scene.environment_name or ""),
+            str(scene.core_scene_info or ""),
+        ])
+        for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", source_text):
+            _add_scene_subject_candidate(match.group(1), candidates)
+        return candidates
+
+    def _build_filtered_scene_subject_index() -> str:
+        scene_subject_keys = _extract_scene_subject_candidates()
+        if not scene_subject_keys:
+            return ""
+
+        episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+        subject_index_text = sanitize_subject_index_text(
+            getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
+        )
+        if not subject_index_text and episode:
+            subject_index_text = sanitize_subject_index_text(getattr(episode, "ai_scene_analysis_result", None))
+        if not subject_index_text:
+            return ""
+
+        header_lines: List[str] = []
+        separator_lines: List[str] = []
+        kept_rows: List[str] = []
+        seen_rows: set = set()
+
+        for raw_line in str(subject_index_text).splitlines():
+            line = str(raw_line or "")
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            normalized_line = stripped.strip("|").strip()
+            parts = [part.strip() for part in normalized_line.split("|")]
+            is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 4
+            if is_subject_row:
+                row_candidates = [parts[0], parts[2], parts[3]]
+                if any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates):
+                    row_key = re.sub(r"\s+", "", stripped).lower()
+                    if row_key not in seen_rows:
+                        kept_rows.append(line)
+                        seen_rows.add(row_key)
+                continue
+
+            is_table_header = "|" in stripped and re.search(r"(?i)subject_no|subject_type|subject_name|name_zh|name_en", stripped)
+            is_table_separator = bool(re.match(r"^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$", stripped))
+            if is_table_header:
+                header_lines = [line]
+                continue
+            if is_table_separator:
+                separator_lines = [line]
+
+        if not kept_rows:
+            logger.info(
+                "[_build_shot_prompts] filtered scene subject index has no matching rows scene_id=%s candidate_count=%s",
+                getattr(scene, "id", None),
+                len(scene_subject_keys),
+            )
+            return ""
+
+        lines = [
+            "# Scene Subject Index",
+            "Authoritative filtered Subject Index for this scene only. Use this as the single asset/entity list; do not infer or reuse subjects outside this list.",
+        ]
+        lines.extend(header_lines)
+        lines.extend(separator_lines if header_lines else [])
+        lines.extend(kept_rows)
+        logger.info(
+            "[_build_shot_prompts] injected filtered scene subject index scene_id=%s candidates=%s rows=%s",
+            getattr(scene, "id", None),
+            len(scene_subject_keys),
+            len(kept_rows),
+        )
+        return "\n".join(lines).strip() + "\n"
+
     env_narrative = ""
     env_narratives_map = {}
 
@@ -17946,18 +18043,7 @@ def _build_shot_prompts(
             parts.append(f"[{name}]: {desc}")
         env_narrative = "\n".join(parts)
     
-    entity_section = ""
-    if entity_descriptions:
-        entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
-
-    subject_packet_section = ""
-    if subject_packets:
-        subject_packet_section = (
-            "# Relevant Subject Packets\n"
-            "Authoritative upstream subject descriptions for this scene. For each shot, first decide Associated Entities, then inherit only the matching subject packets into Shot Logic, Start Frame, Video Content, Keyframes, and End Frame. Preserve stable identity/state/dependency semantics; do not rename or reinvent them.\n"
-            + "\n".join(subject_packets)
-            + "\n"
-        )
+    scene_subject_index_section = _build_filtered_scene_subject_index()
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -17994,9 +18080,7 @@ def _build_shot_prompts(
 | **Key Props** | {scene.key_props or ''} |
 | **Core Goal** | {core_goal_text} |
 
-{subject_packet_section}
-
-{entity_section}
+{scene_subject_index_section}
 
 # Instruction
 1. Analyze the script and break it down into shots.

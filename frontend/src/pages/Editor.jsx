@@ -314,8 +314,41 @@ const Editor = ({
         }).catch(() => {});
     }, [id]);
 
+    const resolveEpisodeOrderNumber = useCallback((episode) => {
+        const info = episode?.episode_info && typeof episode.episode_info === 'object' ? episode.episode_info : {};
+        const candidates = [
+            episode?.episode_number,
+            info?.episode_script_episode_number,
+            info?.story_dna_episode_number,
+            info?.e_global_info?.episode_script_episode_number,
+            info?.e_global_info?.story_dna_episode_number,
+            parseEpisodeNumberFromText(episode?.title),
+            episode?.id,
+        ];
+
+        for (const candidate of candidates) {
+            const parsed = Number(candidate);
+            if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+        return 0;
+    }, []);
+
+    const sortEpisodesForEditor = useCallback((eps) => {
+        return (Array.isArray(eps) ? [...eps] : []).sort((a, b) => {
+            const numberDiff = resolveEpisodeOrderNumber(b) - resolveEpisodeOrderNumber(a);
+            if (numberDiff !== 0) return numberDiff;
+            return String(b?.id || '').localeCompare(String(a?.id || ''), undefined, { numeric: true });
+        });
+    }, [resolveEpisodeOrderNumber]);
+
+    const resolveEpisodeDisplayNumber = useCallback((episode) => {
+        const directNumber = Number(episode?.episode_number);
+        if (Number.isFinite(directNumber) && directNumber > 0) return directNumber;
+        return parseEpisodeNumberFromText(episode?.title);
+    }, []);
+
     const hydrateEpisodesState = useCallback((eps) => {
-        const normalized = Array.isArray(eps) ? eps : [];
+        const normalized = sortEpisodesForEditor(eps);
         setEpisodes(normalized);
         if (normalized.length > 0) {
             setActiveEpisodeId((prev) => {
@@ -326,7 +359,7 @@ const Editor = ({
             setActiveEpisodeId(null);
         }
         return normalized;
-    }, []);
+    }, [sortEpisodesForEditor]);
 
     const refreshEpisodesForEditor = useCallback(async () => {
         if (!id) return [];
@@ -565,7 +598,7 @@ const Editor = ({
     const handleUpdateEpisodeInfo = async (epId, data) => {
         try {
             const updatedEp = await updateEpisode(epId, data);
-            setEpisodes(prev => prev.map(e => e.id === epId ? updatedEp : e));
+            setEpisodes(prev => sortEpisodesForEditor(prev.map(e => e.id === epId ? updatedEp : e)));
             return updatedEp;
         } catch (e) {
             console.error("Episode Info Update Failed:", e);
@@ -596,7 +629,7 @@ const Editor = ({
         if (!await confirmUiMessage("Delete this episode? This action will permanently delete its script content, scenes, shots, episode assets, and related episode entities.")) return;
          try {
             await deleteEpisode(epId);
-            const remaining = episodes.filter(ep => ep.id !== epId);
+            const remaining = sortEpisodesForEditor(episodes.filter(ep => ep.id !== epId));
             setEpisodes(remaining);
             if (activeEpisodeId === epId) {
                 setActiveEpisodeId(remaining.length > 0 ? remaining[0].id : null);
@@ -2634,7 +2667,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
             
             // Always refresh episodes to show new scripts/scenes
             const fresh = await fetchEpisodes(id);
-            setEpisodes(fresh);
+            const sortedFresh = sortEpisodesForEditor(fresh);
+            setEpisodes(sortedFresh);
 
             if (reloadRequired) {
                 // Force Overview refresh if needed
@@ -2647,7 +2681,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                         const newScenes = await fetchScenes(activeEpisodeId);
                         // Accessing SceneManager via ref or forcing a global refresh is intricate.
                         // Ideally, we just update the 'activeEpisode' reference which triggers SceneManager useEffect.
-                        // But activeEpisode is derived from 'episodes'. 'setEpisodes(fresh)' does that.
+                        // But activeEpisode is derived from 'episodes'. 'setEpisodes(sortedFresh)' does that.
                         // HOWEVER, SceneManager uses [activeEpisode, projectId] dependency.
                         // If 'fresh' episode object is identical (by reference or value), it might not trigger.
                         // Let's force a window reload as a last resort fallback, or better:
@@ -3204,21 +3238,25 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
         if (!ep) return;
         if (!ep._fullLoaded) {
             fetchEpisode(activeEpisodeId).then(fullEp => {
-                setEpisodes(prev => prev.map(e => e.id === activeEpisodeId ? { ...fullEp, _fullLoaded: true } : e));
+                setEpisodes(prev => sortEpisodesForEditor(prev.map(e => e.id === activeEpisodeId ? { ...fullEp, _fullLoaded: true } : e)));
             }).catch(err => {
                 console.error("Failed to fetch full episode", err);
             });
         }
-    }, [activeEpisodeId, episodes]);
+    }, [activeEpisodeId, episodes, sortEpisodesForEditor]);
 
     const activeEpisode = episodes.find(e => e.id === activeEpisodeId) || null;
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
+    const getEpisodeDisplayFallbackNumber = useCallback((index) => {
+        return index >= 0 ? episodes.length - index : null;
+    }, [episodes.length]);
+    const getEpisodeDropdownLabel = useCallback((episode, index) => buildEpisodeDisplayLabel({
+        episodeNumber: resolveEpisodeDisplayNumber(episode),
+        title: episode?.title,
+        fallbackNumber: getEpisodeDisplayFallbackNumber(index),
+    }), [getEpisodeDisplayFallbackNumber, resolveEpisodeDisplayNumber]);
     const activeEpisodeLabel = activeEpisode
-        ? buildEpisodeDisplayLabel({
-            episodeNumber: activeEpisode?.episode_number,
-            title: activeEpisode?.title,
-            fallbackNumber: activeEpisodeIndex >= 0 ? activeEpisodeIndex + 1 : null,
-        })
+        ? getEpisodeDropdownLabel(activeEpisode, activeEpisodeIndex)
         : t('选择剧集', 'Select Episode');
 
     const MENU_ITEMS = [
@@ -3335,14 +3373,14 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                             key={ep.id}
                                             className={`px-3 py-2 text-xs flex justify-between items-center group cursor-pointer ${activeEpisodeId === ep.id ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-white'}`}
                                             onClick={() => {
-                                                trackMenuAction('editor.episode.select', buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 }), () => {
+                                                trackMenuAction('editor.episode.select', getEpisodeDropdownLabel(ep, index), () => {
                                                     setActiveEpisodeId(ep.id);
                                                     setIsEpisodeMenuOpen(false);
                                                 });
                                             }}
                                         >
-                                            <span className="truncate flex-1 pr-2" title={buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 })}>
-                                                {buildEpisodeDisplayLabel({ episodeNumber: ep?.episode_number, title: ep?.title, fallbackNumber: index + 1 })}
+                                            <span className="truncate flex-1 pr-2" title={getEpisodeDropdownLabel(ep, index)}>
+                                                {getEpisodeDropdownLabel(ep, index)}
                                             </span>
                                             <button 
                                                 onClick={(e) => handleDeleteEpisode(e, ep.id)}
