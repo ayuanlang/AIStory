@@ -77,9 +77,12 @@
 - **分割线强制规则（新增）**：在输出 `Subject Index` 之前，必须先单独输出一行且仅一行如下分割标记：
     `----------------*****--------------`
     该行之前出现的任何文本都将被下游程序视为无效并直接丢弃。
-- 此表每一行必须严格基于竖线 `|` 构建，是后续渲染骨架。必须遵守以下防崩溃校验：
-    1. 只能使用 `character`、`prop`、`environment`、`cover_poster`（唯一且置尾）。
-    2. 其他类型名一概作废。
+- `### Subject Index` 下方必须输出**标准 Markdown table**，且只能输出一张完整表：
+    1. 第一行固定为表头：`| subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |`
+    2. 第二行固定为分隔行：`| :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
+    3. 第三行起为实体数据行；每一行必须以 `|` 开头并以 `|` 结尾，7 列齐全，禁止拆成多行、禁止空行、禁止单独输出孤立的 `|`。
+    4. `subject_type` 只能使用 `character`、`prop`、`environment`、`cover_poster`（`cover_poster` 只能用于唯一且置尾的封面海报）。其他类型名一概作废。
+    5. 表格之外不得追加解释、总结、JSON、编号列表或代码围栏。
 
 ----------------*****--------------
 

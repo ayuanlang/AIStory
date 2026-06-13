@@ -6129,7 +6129,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # Supports rows like:
             # S001 | prop | 中文名 | English Name | ...
             for line in raw.splitlines():
-                stripped = str(line or "").strip()
+                stripped = str(line or "").replace("\ufeff", "").strip()
+                stripped = re.sub(r"^\s*>\s*", "", stripped)
+                stripped = re.sub(r"^\s*[-*+]\s+", "", stripped).strip()
                 if not stripped:
                     continue
                 if not re.match(r"^\|?\s*S\d+\s*\|", stripped, flags=re.IGNORECASE):
@@ -6161,7 +6163,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return records
 
             for line in raw.splitlines():
-                stripped = str(line or "").strip()
+                stripped = str(line or "").replace("\ufeff", "").strip()
+                stripped = re.sub(r"^\s*>\s*", "", stripped)
+                stripped = re.sub(r"^\s*[-*+]\s+", "", stripped).strip()
                 if not stripped:
                     continue
                 if not re.match(r"^\|?\s*S\d+\s*\|", stripped, flags=re.IGNORECASE):
@@ -6891,7 +6895,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         kept_subject_rows += 1
                     continue
 
-                normalized_line = stripped.strip("|").strip()
+                normalized_line = stripped.replace("\ufeff", "").strip()
+                normalized_line = re.sub(r"^\s*>\s*", "", normalized_line)
+                normalized_line = re.sub(r"^\s*[-*+]\s+", "", normalized_line).strip()
+                normalized_line = normalized_line.strip("|").strip()
                 parts = [p.strip() for p in normalized_line.split("|")]
                 is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 2
                 if is_subject_row:
@@ -6985,7 +6992,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 is_scene_beats_stage,
             )
         else:
-            user_content = f"Script to Analyze:\n\n{request.text}"
+            request_text_for_prompt = str(request.text or "")
+            if is_subject_index_consumer_stage and subject_index_allowed_types_for_request:
+                request_text_for_prompt = _filter_subject_index_text_by_types(
+                    request_text_for_prompt,
+                    subject_index_allowed_types_for_request,
+                )
+            user_content = f"Script to Analyze:\n\n{request_text_for_prompt}"
 
         def _extract_reuse_assets_from_subject_index(subject_index_text: str) -> List[Dict[str, Any]]:
             assets: List[Dict[str, Any]] = []
@@ -6993,7 +7006,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if not text:
                 return assets
             for raw_line in str(text).splitlines():
-                line = str(raw_line or "").strip()
+                line = str(raw_line or "").replace("\ufeff", "").strip()
+                line = re.sub(r"^\s*>\s*", "", line)
+                line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
                 if not re.match(r"^\|?\s*S\d+\s*\|", line, flags=re.IGNORECASE):
                     continue
                 normalized_line = line.strip("|").strip()
@@ -10072,7 +10087,6 @@ def sanitize_subject_index_text(text: Any) -> str:
         r"(?i)^\s*(i\s+am\s+now|i\s+will|let\s+me|let's|analysis|reasoning|thought\s+process|"
         r"我将|我会|下面|推理|思路)\b"
     )
-    header_noise_re = re.compile(r"(?i)subject_no.*subject_type.*subject_name")
     filtered_lines: List[str] = []
     for line in block_lines:
         stripped = line.strip()
@@ -10084,10 +10098,8 @@ def sanitize_subject_index_text(text: Any) -> str:
             continue
         if "finalizing index" in stripped.lower() or "output is finalized" in stripped.lower():
             continue
-        if header_noise_re.search(stripped) and not row_token_re.search(stripped):
-            continue
         # Compact outputs may glue header + first row in one line; keep only row part.
-        if header_noise_re.search(stripped) and row_token_re.search(stripped):
+        if re.search(r"(?i)subject_no.*subject_type.*subject_name", stripped) and row_token_re.search(stripped):
             m = row_token_re.search(stripped)
             if m:
                 line = stripped[m.start():]
@@ -17242,6 +17254,126 @@ class AIShotRegenerateRequest(BaseModel):
     system_api_id: Optional[int] = None
 
 
+def _strip_ai_shots_reasoning_prefix_lines(response_content: Any, *, context: str) -> str:
+    reasoning_prefix_terms = [
+        "i will",
+        "let me",
+        "let's",
+        "analysis",
+        "reasoning",
+        "thought process",
+        "分析",
+        "思路",
+        "推理",
+        "我将",
+        "我认为",
+        "我認為",
+    ]
+    try:
+        escaped_terms = [re.escape(term) for term in reasoning_prefix_terms if str(term or "").strip()]
+        reasoning_line_re = re.compile(
+            r"^\s*(?:" + "|".join(escaped_terms) + r")\b",
+            flags=re.IGNORECASE,
+        )
+    except re.error as re_err:
+        logger.warning("[%s] reasoning regex compile failed, fallback used: %s", context, re_err)
+        reasoning_line_re = re.compile(r"^\s*(?:analysis|reasoning)\b", flags=re.IGNORECASE)
+
+    cleaned_lines = []
+    for line in str(response_content or "").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("|") and reasoning_line_re.match(stripped):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
+def _build_ai_shots_response_validator(
+    *,
+    context: str,
+    scene_id: int,
+    user_id: int,
+    source_label: str,
+    strip_reasoning_prefixes: bool = False,
+    validate_regenerate_markers: bool = False,
+):
+    def _validator(response_dict: Dict[str, Any], candidate_config: Dict[str, Any]):
+        provider = str((candidate_config or {}).get("provider") or "").strip()
+        model = str((candidate_config or {}).get("model") or "").strip()
+        response_content_raw = response_dict.get("content", "") if isinstance(response_dict, dict) else ""
+        raw_str = str(response_content_raw or "").strip()
+        route_label = f"{provider}/{model}" if provider or model else "unknown provider"
+
+        if str(response_content_raw).startswith("Error:"):
+            return False, str(response_content_raw), None
+        if not raw_str:
+            return False, "LLM returned empty response", None
+
+        response_content = sanitize_llm_markdown_output(response_content_raw)
+        if _is_provider_moderation_block_response(raw_str, response_content):
+            return False, f"Provider moderation blocked {source_label.lower()} (PROHIBITED_CONTENT)", None
+
+        if strip_reasoning_prefixes:
+            response_content = _strip_ai_shots_reasoning_prefix_lines(response_content, context=context)
+
+        response_content = sanitize_shots_markdown_table_text(response_content)
+        if not response_content:
+            return False, "LLM response became empty after sanitize", None
+
+        headers, rows, table_line_count = parse_shots_markdown_table(response_content)
+        if not rows:
+            raw_preview = response_content.replace("\n", " ")[:300]
+            return False, f"{source_label} returned 0 parsed rows; raw preview: {raw_preview}", None
+        if table_line_count >= 4 and len(rows) > 0 and (len(rows) * 2) <= table_line_count:
+            return False, f"{source_label} output may have lost rows during markdown parsing", None
+
+        validated_rows = rows
+        if validate_regenerate_markers:
+            try:
+                validated_rows = _validate_shot_rows_or_raise(
+                    rows,
+                    source_label="Regenerated shot diff table",
+                    status_code=502,
+                )
+            except HTTPException as exc:
+                return False, str(exc.detail or "Regenerated shot diff table validation failed"), None
+
+            marker_errors: List[str] = []
+            for idx, row in enumerate(validated_rows, start=1):
+                shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
+                shot_logic = _pick_shot_cell(row, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+                marker_mode, _ = _extract_shot_regenerate_marker(shot_logic)
+                if marker_mode not in {"update", "add"}:
+                    marker_errors.append(f"row {idx} ({shot_id or 'unknown shot'}) missing required Shot Logic marker")
+                    continue
+                if marker_mode == "add" and not re.search(r"_\d+$", str(shot_id or "")):
+                    marker_errors.append(f"row {idx} ({shot_id or 'unknown shot'}) add-shot id must use _1/_2 style suffix")
+
+            if marker_errors:
+                detail = "; ".join(marker_errors[:5])
+                if len(marker_errors) > 5:
+                    detail += f"; and {len(marker_errors) - 5} more rows"
+                return False, f"Regenerated shot diff failed marker validation: {detail}", None
+
+        logger.info(
+            "[%s] postprocess validation passed scene_id=%s user_id=%s route=%s parsed_rows=%s",
+            context,
+            scene_id,
+            user_id,
+            route_label,
+            len(validated_rows),
+        )
+        return True, "", {
+            "raw_text_original": str(response_content_raw or ""),
+            "response_content": response_content,
+            "headers": headers,
+            "rows": validated_rows,
+            "table_line_count": table_line_count,
+        }
+
+    return _validator
+
+
 class ShotGenerationRoutePreviewRequest(BaseModel):
     scene_id: int
     shot_generation_mode: Optional[str] = None
@@ -18691,7 +18823,18 @@ async def ai_generate_shots(
             billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_generate_shots_llm_call")
-        response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
+        response_dict = await llm_service.generate_content_with_fallback(
+            user_input,
+            system_prompt,
+            llm_config,
+            response_validator=_build_ai_shots_response_validator(
+                context="ai_generate_shots",
+                scene_id=scene_id,
+                user_id=current_user_id,
+                source_label="Generate Shots",
+                strip_reasoning_prefixes=True,
+            ),
+        )
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 
@@ -18703,7 +18846,8 @@ async def ai_generate_shots(
         if str(response_content_raw).startswith("Error:"):
             if reservation_tx_id is not None:
                 billing_service.cancel_reservation(db, reservation_tx_id, str(response_content_raw))
-            raise HTTPException(status_code=500, detail=str(response_content_raw))
+            status_code = 502 if bool(response_dict.get("_postprocess_validation_failed")) else 500
+            raise HTTPException(status_code=status_code, detail=str(response_content_raw))
 
         raw_str = str(response_content_raw or "").strip()
         if not raw_str:
@@ -19004,14 +19148,26 @@ async def ai_regenerate_shots(
             billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
         _release_db_connection(db, "ai_regenerate_shots_llm_call")
-        response_dict = await llm_service.generate_content_with_fallback(user_input, system_prompt, llm_config)
+        response_dict = await llm_service.generate_content_with_fallback(
+            user_input,
+            system_prompt,
+            llm_config,
+            response_validator=_build_ai_shots_response_validator(
+                context="ai_regenerate_shots",
+                scene_id=scene_id,
+                user_id=current_user_id,
+                source_label="Regenerate Shots",
+                validate_regenerate_markers=True,
+            ),
+        )
         response_content_raw = response_dict.get("content", "")
         usage = response_dict.get("usage", {})
 
         if str(response_content_raw).startswith("Error:"):
             if reservation_tx_id is not None:
                 billing_service.cancel_reservation(db, reservation_tx_id, str(response_content_raw))
-            raise HTTPException(status_code=500, detail=str(response_content_raw))
+            status_code = 502 if bool(response_dict.get("_postprocess_validation_failed")) else 500
+            raise HTTPException(status_code=status_code, detail=str(response_content_raw))
 
         raw_str = str(response_content_raw or "").strip()
         if not raw_str:

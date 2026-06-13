@@ -3751,6 +3751,7 @@ class LLMService:
         user_id: int = None,
         category: str = "LLM",
         modality: Optional[str] = None,
+        response_validator: Any = None,
     ) -> Dict[str, Any]:
         """generate_content with active-config×2 retry + 3 fallback candidates."""
         from app.services.agent_service import agent_service
@@ -3760,6 +3761,31 @@ class LLMService:
                 return True
             content_text = str(result_dict.get("content") or "").strip()
             return content_text == ""
+
+        def _validate_response(result_dict: Dict[str, Any], candidate_config: Dict[str, Any]) -> Tuple[bool, str]:
+            if response_validator is None:
+                return True, ""
+            try:
+                validation = response_validator(result_dict, candidate_config)
+                payload = None
+                if isinstance(validation, tuple):
+                    ok = bool(validation[0]) if len(validation) >= 1 else False
+                    reason = str(validation[1] if len(validation) >= 2 else "").strip()
+                    payload = validation[2] if len(validation) >= 3 else None
+                elif isinstance(validation, dict):
+                    ok = bool(validation.get("ok"))
+                    reason = str(validation.get("reason") or validation.get("error") or "").strip()
+                    payload = validation.get("payload")
+                else:
+                    ok = bool(validation)
+                    reason = ""
+                if ok:
+                    if payload is not None and isinstance(result_dict, dict):
+                        result_dict["_postprocess_payload"] = payload
+                    return True, ""
+                return False, reason or "response postprocess validation failed"
+            except Exception as exc:
+                return False, str(exc) or "response postprocess validation failed"
 
         active_cfg_obj = dict((config.get('config') or {}))
         active_setting_id = active_cfg_obj.get("__resolved_setting_id")
@@ -3772,15 +3798,25 @@ class LLMService:
             active_retry_attempts = 2
         active_retry_attempts = max(1, min(5, active_retry_attempts))
         last_err = ""
+        last_failure_kind = "upstream"
 
         # ── active config attempts ──
         for attempt in range(1, active_retry_attempts + 1):
             result = await self.generate_content(user_prompt, system_prompt, config, image_urls, video_urls)
             content = str(result.get("content") or "")
+            validation_failed_this_attempt = False
             if not content.startswith("Error:") and not _is_empty_success(result):
-                return self._attach_routing_metadata(result, config)
+                validation_ok, validation_error = _validate_response(result, config)
+                if validation_ok:
+                    return self._attach_routing_metadata(result, config)
+                content = f"Error: {validation_error}"
+                last_failure_kind = "postprocess"
+                validation_failed_this_attempt = True
             if not content.startswith("Error:") and _is_empty_success(result):
                 content = "Error: Empty LLM response"
+                last_failure_kind = "upstream"
+            if content.startswith("Error:") and not validation_failed_this_attempt:
+                last_failure_kind = "upstream"
             last_err = content
             if self._is_runtime_shutdown_text(content):
                 logger.warning(
@@ -3810,10 +3846,19 @@ class LLMService:
             )
             result = await self.generate_content(user_prompt, system_prompt, fb_cfg, image_urls, video_urls)
             content = str(result.get("content") or "")
+            validation_failed_this_attempt = False
             if not content.startswith("Error:") and not _is_empty_success(result):
-                return self._attach_routing_metadata(result, fb_cfg)
+                validation_ok, validation_error = _validate_response(result, fb_cfg)
+                if validation_ok:
+                    return self._attach_routing_metadata(result, fb_cfg)
+                content = f"Error: {validation_error}"
+                last_failure_kind = "postprocess"
+                validation_failed_this_attempt = True
             if not content.startswith("Error:") and _is_empty_success(result):
                 content = "Error: Empty LLM response"
+                last_failure_kind = "upstream"
+            if content.startswith("Error:") and not validation_failed_this_attempt:
+                last_failure_kind = "upstream"
             last_err = content
             if self._is_runtime_shutdown_text(content):
                 logger.warning(
@@ -3826,7 +3871,12 @@ class LLMService:
                 idx, len(fallbacks), fb_cfg.get("provider"), fb_cfg.get("model"), content[:200],
             )
 
-        return self._attach_routing_metadata({"content": last_err, "usage": {}, "finish_reason": None}, config)
+        return self._attach_routing_metadata({
+            "content": last_err,
+            "usage": {},
+            "finish_reason": None,
+            "_postprocess_validation_failed": last_failure_kind == "postprocess",
+        }, config)
 
     async def chat_completion_with_fallback(
         self,
