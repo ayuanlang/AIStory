@@ -1,3 +1,6 @@
+# Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
+# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
 # Role: AI 影视选角与美术总监 (Cinematic Casting & Art Director)

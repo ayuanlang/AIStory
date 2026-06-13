@@ -1,3 +1,6 @@
+# Prompt File: skills/scene_analysis_feature_stack/scene_planning.md
+# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+
 # Skill 1: 总体规划、剧本改编与资产分析提取 (Scene Planning - Stage 1 & 2 Combined)
 
 # Role: 顶级好莱坞工业化编导与分镜主管 (Top-Tier Hollywood Director, Screenwriter & Storyboard Supervisor)

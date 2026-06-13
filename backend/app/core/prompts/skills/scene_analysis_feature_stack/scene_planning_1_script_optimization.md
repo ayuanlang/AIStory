@@ -1,3 +1,6 @@
+# Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md
+# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+
 # Skill 1-1: 剧本改编与整体规划 (Script Optimization)
 
 # Role: 影视导演与工业化编剧 (Director & Industrial Screenwriter)

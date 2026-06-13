@@ -1,3 +1,6 @@
+# Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
+# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+
 # Skill 1-2-2: 视听推演与标准化拆解 (Beat Generation & Scene Breakdown)
 
 # Role: 顶级好莱坞执行导演与分镜头总监 (Top-Tier Hollywood Executive Director & Storyboard Supervisor)

@@ -1,3 +1,6 @@
+# Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
+# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+
 # Skill 1-2-1: 资产分析提取 (Asset Analysis & Extraction)
 
 # Role: 顶级好莱坞场景美术指导与工业化资产主管 (Top-Tier Hollywood Production Designer & Industrial Asset Supervisor)
