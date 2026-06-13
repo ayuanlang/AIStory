@@ -2155,17 +2155,41 @@ Output ONLY the JSON object now."""
         results: List[Dict[str, Any]] = []
         try:
             with SessionLocal() as session:
+                from app.api.settings import DEFAULTS
+
                 rows = session.query(SystemAPISetting).filter(SystemAPISetting.id.in_(ids)).all()
                 row_map = {row.id: row for row in rows}
                 for i in ids:
                     row = row_map.get(i)
                     if not row: continue
-                    cfg = dict(row.config or {})
+                    default = DEFAULTS.get(row.provider, {})
+                    cfg = self._promote_runtime_endpoint(
+                        row.category,
+                        row.provider,
+                        row.config or default.get("config", {}) or {},
+                    )
                     if self._is_deprecated_system_config(cfg, getattr(row, "deprecated", None)):
                         continue
-                    if self._is_apikey_missing(cfg):
+                    api_key = self._pick_runtime_api_key(
+                        cfg,
+                        row.api_key,
+                        session=session,
+                        provider_name=row.provider,
+                    )
+                    if not api_key:
                         continue
-                    results.append(self._build_legacy_agent_api_structure(row, cfg))
+                    merged_config = dict(cfg)
+                    merged_config["__resolved_setting_id"] = row.id
+                    merged_config["__resolved_source"] = f"dropdown_or_override:{row.provider}/{row.model}->{row.id}"
+                    merged_config["__resolved_category"] = row.category
+                    merged_config.setdefault("__selection_source", "dropdown_or_override")
+                    results.append({
+                        "provider": row.provider,
+                        "api_key": api_key,
+                        "base_url": row.base_url or default.get("base_url"),
+                        "model": self._resolve_runtime_model(row, default),
+                        "config": merged_config,
+                    })
         except Exception as e:
             logger.error(f"[get_fallback_configs_by_ids] err={e}")
         return results
