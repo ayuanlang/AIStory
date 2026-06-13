@@ -4216,6 +4216,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const phase2GenerationInFlightRef = useRef(false);
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const analysisStopRequestedRef = useRef(false);
+    const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
@@ -4232,6 +4233,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (code === 499) return true;
         const text = String(error?.message || error?.response?.data?.detail || '').toLowerCase();
         return text.includes('cancel') || text.includes('取消');
+    }, []);
+
+    const createAnalysisCanceledError = useCallback(() => {
+        const error = new Error(t('用户已中断剧本分析任务。', 'Script analysis was stopped by the user.'));
+        error.isCanceled = true;
+        error.errorCode = 499;
+        return error;
+    }, [t]);
+
+    const throwIfAnalysisStopped = useCallback(() => {
+        if (analysisStopRequestedRef.current) {
+            throw createAnalysisCanceledError();
+        }
+    }, [createAnalysisCanceledError]);
+
+    const registerActiveAnalysisTask = useCallback((taskId) => {
+        const stableTaskId = String(taskId || '').trim();
+        if (!stableTaskId) return '';
+        activeAnalysisTaskIdsRef.current.add(stableTaskId);
+        setActiveAnalysisTaskId(stableTaskId);
+        return stableTaskId;
     }, []);
 
     const getAnalysisTaskStorageKey = useCallback((episodeId) => {
@@ -4274,17 +4296,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: Number(marker?.phase || 1),
             };
             window.localStorage.setItem(key, JSON.stringify(payload));
-            setActiveAnalysisTaskId(taskId);
+            registerActiveAnalysisTask(taskId);
         } catch (_) {
             // Ignore localStorage failures.
         }
-    }, [getAnalysisTaskStorageKey]);
+    }, [getAnalysisTaskStorageKey, registerActiveAnalysisTask]);
 
     const clearAnalysisTaskMarker = useCallback((episodeId) => {
         try {
             const key = getAnalysisTaskStorageKey(episodeId);
             if (!key || !window?.localStorage) return;
             window.localStorage.removeItem(key);
+            activeAnalysisTaskIdsRef.current.clear();
             setActiveAnalysisTaskId('');
         } catch (_) {
             // Ignore localStorage failures.
@@ -4294,8 +4317,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handleStopAnalysisTask = useCallback(async () => {
         if (!activeEpisode?.id) return;
         const marker = loadAnalysisTaskMarker(activeEpisode.id);
-        const taskId = String(activeAnalysisTaskId || marker?.taskId || '').trim();
-        if (!taskId) {
+        const taskIds = Array.from(new Set([
+            ...Array.from(activeAnalysisTaskIdsRef.current || []),
+            String(activeAnalysisTaskId || '').trim(),
+            String(marker?.taskId || '').trim(),
+        ].filter(Boolean)));
+        if (taskIds.length <= 0) {
+            if (isAnalyzing || isRetryingPhase2 || phase2GenerationInFlightRef.current || analysisRunInFlightRef.current) {
+                analysisStopRequestedRef.current = true;
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                phase2GenerationInFlightRef.current = false;
+                analysisRunInFlightRef.current = false;
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('已请求停止当前剧本分析流程。', 'Stop requested for the current script analysis flow.'),
+                });
+                if (onLog) onLog('Scene analysis stop requested before backend task id was available.', 'warning');
+                return;
+            }
             setAnalysisFlowStatus({
                 phase: 'warning',
                 message: t('当前没有正在运行的场景推演任务需要被终止。', 'No running analysis task found to stop.'),
@@ -4306,13 +4346,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsStoppingAnalysisTask(true);
         analysisStopRequestedRef.current = true;
         try {
-            await stopAsyncTask(taskId);
+            const stopResults = await Promise.allSettled(taskIds.map((taskId) => stopAsyncTask(taskId)));
+            const failedStops = stopResults.filter((item) => item.status === 'rejected');
             clearAnalysisTaskMarker(activeEpisode.id);
             setAnalysisFlowStatus({
                 phase: 'warning',
-                message: t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.'),
+                message: failedStops.length > 0
+                    ? t(`已请求停止当前剧本分析任务；${failedStops.length} 个子任务停止请求未确认。`, `Stop requested for the current script analysis task; ${failedStops.length} subtask stop request(s) were not confirmed.`)
+                    : t('已请求停止当前剧本分析任务。', 'Stop requested for the current scene analysis task.'),
             });
-            if (onLog) onLog(`Scene analysis stop requested: task_id=${taskId}`, 'warning');
+            if (onLog) onLog(`Scene analysis stop requested: task_ids=${taskIds.join(',')}`, failedStops.length > 0 ? 'warning' : 'info');
         } catch (e) {
             setAnalysisFlowStatus({
                 phase: 'warning',
@@ -4327,7 +4370,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase2GenerationInFlightRef.current = false;
             analysisRunInFlightRef.current = false;
         }
-    }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, loadAnalysisTaskMarker, onLog, t]);
+    }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
         if (!projectId || !activeEpisode?.id) return;
         try {
@@ -4390,6 +4433,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [projectId, activeEpisode?.id]);
 
     const awaitAnalyzeSceneWithRecovery = useCallback(async (invokeAnalyze, { startedAt = Date.now(), baselineText = '', resultField = 'ai_scene_analysis_result' } = {}) => {
+        throwIfAnalysisStopped();
         let settled = false;
         let resolvedValue = null;
         let resolvedError = null;
@@ -4409,6 +4453,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const actualStartedAt = Date.now(); 
         const deadline = actualStartedAt + 60 * 60 * 1000;
         while (!settled && Date.now() < deadline) {
+            throwIfAnalysisStopped();
             const recoveredText = await waitForEpisodeAnalysisResultUpdate({
                 baselineText,
                 timeoutMs: 8000,
@@ -4436,10 +4481,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             throw new Error('AI Script Analysis timed out while waiting for async task result (resume deadline reached).');
         }
         await analyzePromise;
+        throwIfAnalysisStopped();
         if (resolvedError) throw resolvedError;
         if (settled) return resolvedValue;
         throw new Error('AI Script Analysis timed out while waiting for async task result.');
-    }, [onLog, t, waitForEpisodeAnalysisResultUpdate]);
+    }, [onLog, t, throwIfAnalysisStopped, waitForEpisodeAnalysisResultUpdate]);
 
     const selectedReuseSubjectAssets = useMemo(() => {
         if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
@@ -4567,6 +4613,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         phase2GenerationInFlightRef.current = true;
+        if (options?.isRetryPhase2) {
+            setIsRetryingPhase2(true);
+        }
 
 
 
@@ -4637,6 +4686,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
         try {
+            throwIfAnalysisStopped();
 
 
             onLog?.(`[Stage 3 Asset Design] Preparing to fetch ${targetAssetsCount} entity_design prompts`);
@@ -4665,6 +4715,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const isUserSuper = isSuperuser || isSuperuserRef.current;
             if (isUserSuper) {
+                throwIfAnalysisStopped();
                 const confirmed = await new Promise((resolve, reject) => {
                     const previous = superuserModalMutexRef.current;
                     superuserModalMutexRef.current = previous.then(async () => {
@@ -4757,6 +4808,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         // Run them concurrently
             const results = await Promise.allSettled(
                 promptsData.map(async (pData, index) => {
+                    throwIfAnalysisStopped();
                     const isPrimary = index === 0;
                     const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}`;
                     const subtaskImportSessionId = `import-${subtaskTraceId}`;
@@ -4789,8 +4841,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             {
                                 onTaskCreated: (taskId) => {
                                     onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${taskId}`, 'info');
-                                    if (isPrimary) {
-                                        setActiveAnalysisTaskId(String(taskId || '').trim());
+                                    const registeredTaskId = registerActiveAnalysisTask(taskId);
+                                    if (isPrimary && registeredTaskId) {
                                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: phase2StartedAt, phase: 2 });
                                     }
                                 },
@@ -4808,6 +4860,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
                     ).then(async (res) => {
                         const responseTraceId = String(res?.meta?.analysis_trace_id || res?.analysis_trace_id || '').trim();
+                        throwIfAnalysisStopped();
                         const aText = extractAnalysisTextFromResult(res);
                         const bJson = (res?.subjects_json && typeof res.subjects_json === 'object')
                             ? res.subjects_json
@@ -4825,6 +4878,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         let subtaskImportError = '';
                         const subtaskHasImportableSubjects = hasAnySubjects(subtaskPayload);
                         if (subtaskHasImportableSubjects) {
+                            throwIfAnalysisStopped();
                             const subtaskTargetTypes = (() => {
                                 if (pData.key === 'characters') return ['characters'];
                                 if (pData.key === 'props') return ['props'];
@@ -4877,6 +4931,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     });
                 })
             );
+
+            throwIfAnalysisStopped();
 
             // Merge results
             let mergedBackendSubjectsJson = { characters: [], environments: [], props: [], posters: [], covers: [] };
@@ -4959,6 +5015,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             if (canonicalAssetDesignText) {
+                throwIfAnalysisStopped();
                 // Safeguard: make sure we are not importing plain text phase 1 by mistake
                 const hasValidSubjectJsonBlock = /"characters"\s*:\s*\[|"props"\s*:\s*\[|"environments"\s*:\s*\[|"posters"\s*:\s*\[|"covers"\s*:\s*\[/i.test(canonicalAssetDesignText);
                 
@@ -5050,10 +5107,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         } catch (error) {
             console.error("Stage 3 asset design step failed:", error);
+            if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
+                onLog?.('Stage 3 asset design stopped by user.', 'warning');
+                throw createAnalysisCanceledError();
+            }
             onLog?.(`Stage 3 asset design failed: ${error.message}`);
             throw error;
         } finally {
             phase2GenerationInFlightRef.current = false;
+            if (options?.isRetryPhase2) {
+                setIsRetryingPhase2(false);
+            }
         }
 
         return emptyReport;
@@ -5062,7 +5126,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery, adaptationText,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
-        project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask
+        project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask,
+        throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError
     ]);
 
     
@@ -8505,6 +8570,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ));
         if (!confirmed) return;
 
+        analysisStopRequestedRef.current = false;
+        activeAnalysisTaskIdsRef.current.clear();
+        setActiveAnalysisTaskId('');
         setIsRetryingPhase2(true);
         setAnalysisFlowStatus({
             phase: 'assets_gen',
@@ -8599,6 +8667,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             onLog?.(`Failed-route rerun completed: targets=${targetEntityTypes.join(',')} created=${created} skipped=${skipped} failed=${failed}`, failed > 0 ? 'warning' : 'success');
         } catch (error) {
+            if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('已中断失败路由重跑。', 'Failed-route rerun was stopped.'),
+                });
+                onLog?.('Failed-route rerun stopped by user.', 'warning');
+                return;
+            }
             const detail = String(error?.message || error || 'unknown error');
             setAnalysisFlowStatus({
                 phase: 'failed',
@@ -8607,12 +8683,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`Failed-route rerun failed: ${detail}`, 'error');
             alert(t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`));
         } finally {
+            clearAnalysisTaskMarker(activeEpisode?.id);
             setIsRetryingPhase2(false);
         }
     }, [
         isAnalyzing,
         analysisUiReport,
+        activeEpisode?.id,
         activeEpisode?.ai_scene_analysis_subject_index,
+        clearAnalysisTaskMarker,
         llmRawResultContent,
         llmResultContent,
         onLog,
@@ -8621,6 +8700,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractAnalysisSections,
         confirmUiMessage,
         runPostImportSceneSubjectPipeline,
+        isTaskCanceledError,
     ]);
 
 
@@ -8629,6 +8709,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const handleRetryPhase2 = async (options = {}) => {
         if (!activeEpisode?.id) return;
         phase2RetryOptionsRef.current = options;
+        analysisStopRequestedRef.current = false;
+        activeAnalysisTaskIdsRef.current.clear();
+        setActiveAnalysisTaskId('');
         setIsRetryingPhase2(true);
         // Reset the duplicate execution marker in case it was stuck
         phase2GenerationInFlightRef.current = false;
@@ -8698,6 +8781,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 onLog?.('Stage 3 asset design retry completed.', 'success');
             }
         } catch (error) {
+            if (isTaskCanceledError(error) || analysisStopRequestedRef.current) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('已中断资产重跑。', 'Asset rerun was stopped.'),
+                });
+                onLog?.('Stage 3 asset design retry stopped by user.', 'warning');
+                return;
+            }
             console.error("Retry Stage 3 asset design failed:", error);
             onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
             alert(`Retry Stage 3 asset design failed: ${error.message}`);
