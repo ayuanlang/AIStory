@@ -594,6 +594,16 @@ class MediaGenerationService:
             cleaned_refs = [item for item in ref_image if str(item or "").strip()]
             ref_image = cleaned_refs[0] if cleaned_refs else None
             extra_ref_images = cleaned_refs[1:] if len(cleaned_refs) > 1 else []
+
+        configured_video_refs = self._normalize_str_list(
+            tool_conf.get("reference_video_urls")
+            or tool_conf.get("ref_video_urls")
+            or tool_conf.get("referenceVideoUrls")
+            or []
+        )
+        for video_ref in configured_video_refs:
+            if video_ref and video_ref not in extra_ref_images and video_ref != ref_image:
+                extra_ref_images.append(video_ref)
             
         if not ref_image:
             return {"error": "seedance 2.0 requires an image reference"}
@@ -1172,6 +1182,25 @@ class MediaGenerationService:
         extra_metadata = {"provider": "ark-seedance", "model": model_id}
         callback_enabled = bool(callback_url and callback_url != "-1")
         pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                provider_payload_callback(
+                    {
+                        "provider": "ark-seedance",
+                        "type": "video",
+                        "method": "POST",
+                        "url": task_endpoint,
+                        "model": model_id,
+                        "payload": task_payload,
+                    }
+                )
+            except Exception as callback_err:
+                logger.warning(
+                    "Ark Seedance provider payload callback failed | model=%s error=%s",
+                    model_id,
+                    callback_err,
+                )
         
         first_result = await self._submit_and_poll_video(
             url=task_endpoint,
@@ -8469,6 +8498,25 @@ class MediaGenerationService:
             "tenant_id": tenant_id,
             "payload_mode": "first-last" if payload.get("frame_mode") == "first-last" else "multi-reference",
         }
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                provider_payload_callback(
+                    {
+                        "provider": "pixelmove",
+                        "type": "video",
+                        "method": "POST",
+                        "url": endpoint,
+                        "model": base_metadata.get("model"),
+                        "payload": payload,
+                    }
+                )
+            except Exception as callback_err:
+                logger.warning(
+                    "Pixelmove provider payload callback failed | model=%s error=%s",
+                    base_metadata.get("model"),
+                    callback_err,
+                )
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -9838,6 +9886,26 @@ class MediaGenerationService:
                 len(payload.get("tools") or []) if isinstance(payload.get("tools"), list) else 0,
                 len(content_payload),
             )
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if callable(provider_payload_callback):
+            try:
+                provider_payload_callback(
+                    {
+                        "provider": "zlhub",
+                        "type": "video",
+                        "method": "POST",
+                        "url": submit_url,
+                        "model": model,
+                        "payload": payload,
+                    }
+                )
+            except Exception as callback_err:
+                logger.warning(
+                    "ZLHub provider payload callback failed | model=%s trace_id=%s error=%s",
+                    model,
+                    zlhub_trace_id,
+                    callback_err,
+                )
         with open('last_payload.txt', 'w') as fh:
             import json
             fh.write(json.dumps(payload, indent=2))

@@ -4381,8 +4381,6 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("第一阶段缺少 Project Visual Backfill JSON，结果不完整")
     if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID" in codes:
         reasons_cn.append("第一阶段 Project Visual Backfill JSON 损坏，无法安全解析")
-    if "ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING" in codes:
-        reasons_cn.append("Subject Index 缺少封面海报行，结果不完整")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
         reasons_cn.append("第一阶段未解析到 Subject Index 区块")
     if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
@@ -5745,41 +5743,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
 
         def _is_stage1_script_optimization_request() -> bool:
-            try:
-                mode_text = str(effective_scene_analysis_mode or "").strip().lower()
-            except Exception:
-                mode_text = ""
-
-            function_text = str(getattr(request, "function_name", "") or "").strip().lower()
-            prompt_text = str(getattr(request, "prompt_file", "") or "").strip().lower()
-            has_inline_system_prompt = bool(str(getattr(request, "system_prompt", "") or "").strip())
-
-            # Pydantic gives AnalyzeSceneRequest a Stage-1 default prompt_file even
-            # when callers submit an inline system_prompt for Stage 2 / entity design.
-            # In that case the default prompt_file is not the active template and must
-            # not make asset JSON fail Stage-1 backfill checks.
-            if has_inline_system_prompt:
-                prompt_text = ""
-
-            stage2_or_subject_consumer_markers = (
-                "scene_planning_2_1",
-                "scene_planning_2_2",
-                "entity_design",
-                "subject_generation",
-                "beats_generation",
-                "scene_planning_beats",
-                "scene_beats_only",
-                "2_pass_generate_assets",
-            )
-            stage_source = " ".join([prompt_text, function_text, mode_text])
-            if any(marker in stage_source for marker in stage2_or_subject_consumer_markers):
-                return False
-
             source = " ".join([
-                prompt_text,
+                str(getattr(request, "prompt_file", "") or ""),
                 str(template_signature.get("template_source") or ""),
-                function_text,
-                mode_text,
+                str(getattr(request, "function_name", "") or ""),
             ]).lower()
             return bool(
                 "scene_planning_1_script_optimization" in source
@@ -6479,9 +6446,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     sample_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip()
                     if sample_name and len(missing_samples) < 12:
                         missing_samples.append(sample_name)
-                    placeholder = _build_subject_placeholder(record)
-                    reconciled[target_bucket].append(placeholder)
-                    filled_missing += 1
                     continue
 
                 ref_idx = int(match.get("ref_idx"))
@@ -6631,7 +6595,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": set(),
                 "environments": set(),
                 "covers": set(),
-                "posters": set(),
             }
 
             for bucket in ("characters", "props", "environments", "covers", "posters"):
@@ -6699,94 +6662,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "missing_by_bucket": missing_by_bucket,
                 "warning_codes": warning_codes,
                 "warnings": warnings,
-            }
-
-        def _is_stage2_subject_index_request() -> bool:
-            try:
-                mode_text = str(effective_scene_analysis_mode or "").strip().lower()
-            except Exception:
-                mode_text = ""
-            function_text = str(getattr(request, "function_name", "") or "").strip().lower()
-            prompt_text = str(getattr(request, "prompt_file", "") or "").strip().lower()
-            template_text = str(template_signature.get("template_source") or "").strip().lower()
-            source = " ".join([mode_text, function_text, prompt_text, template_text])
-            stage2_beats_markers = (
-                "scene_planning_2_2",
-                "script_analysis_stage_2_2",
-                "beats_generation",
-                "scene_beats_only",
-                "scene_planning_beats",
-            )
-            if any(marker in source for marker in stage2_beats_markers):
-                return False
-            return bool(
-                "scene_planning_2_1" in source
-                or "assets_extraction" in source
-                or mode_text in {"subject_index", "assets_extraction", "scene_planning_assets"}
-                or function_text in {"script_analysis_stage_2_1_assets", "script_analysis_stage_2_1_subject_index"}
-            )
-
-        def _detect_subject_index_poster_row_integrity(output_text: Any) -> Dict[str, Any]:
-            if not _is_stage2_subject_index_request():
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": []}
-
-            text = str(output_text or "")
-            expected_meta = _extract_expected_subjects_from_subject_index(text)
-            expected = expected_meta.get("expected") or {}
-            expected_total = int(expected_meta.get("total") or 0)
-            has_poster_row = any(bool((expected.get(bucket) or {})) for bucket in ("covers", "posters"))
-
-            if expected_total > 0 and not has_poster_row:
-                return {
-                    "ok": False,
-                    "expected_posters": [],
-                    "missing_posters": ["Subject Index cover_poster row"],
-                    "warning_codes": ["ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING"],
-                    "warnings": ["Subject Index 未返回 cover_poster/poster 行；第二阶段资产清单必须包含唯一且置尾的封面海报条目。"],
-                }
-
-            return {
-                "ok": True,
-                "expected_posters": ["Subject Index poster row"] if has_poster_row else [],
-                "missing_posters": [],
-                "warning_codes": [],
-                "warnings": [],
-            }
-
-        def _detect_fallback_blocking_integrity(output_text: Any) -> Dict[str, Any]:
-            checks = [
-                _detect_stage1_script_optimization_integrity(output_text),
-                _detect_subject_index_poster_row_integrity(output_text),
-            ]
-            warning_codes: List[str] = []
-            warnings: List[str] = []
-            missing_sections: List[str] = []
-            details: Dict[str, Any] = {}
-            for check in checks:
-                if bool(check.get("ok", True)):
-                    continue
-                for code in (check.get("warning_codes") or []):
-                    code_text = str(code or "").strip()
-                    if code_text and code_text not in warning_codes:
-                        warning_codes.append(code_text)
-                for warning in (check.get("warnings") or []):
-                    warning_text = str(warning or "").strip()
-                    if warning_text and warning_text not in warnings:
-                        warnings.append(warning_text)
-                for section in (check.get("missing_sections") or []):
-                    section_text = str(section or "").strip()
-                    if section_text and section_text not in missing_sections:
-                        missing_sections.append(section_text)
-                for key in ("expected_posters", "actual_poster_count", "missing_posters", "incomplete_posters"):
-                    if key in check:
-                        details[key] = check.get(key)
-
-            return {
-                "ok": not warning_codes,
-                "warning_codes": warning_codes,
-                "warnings": warnings,
-                "missing_sections": missing_sections,
-                **details,
             }
 
         def _collect_subject_keys_by_bucket(payload: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
@@ -7868,8 +7743,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
 
-        fallback_blocking_meta = _detect_fallback_blocking_integrity(result_content)
-        if not bool(fallback_blocking_meta.get("ok", True)) and dropdown_fallback_ids:
+        stage1_integrity_meta = _detect_stage1_script_optimization_integrity(result_content)
+        if not bool(stage1_integrity_meta.get("ok", True)) and dropdown_fallback_ids:
             fallback_configs = agent_service.get_fallback_configs_by_ids(dropdown_fallback_ids)
             for fallback_idx, fallback_config in enumerate(fallback_configs, 1):
                 if not fallback_config or not fallback_config.get("api_key"):
@@ -7878,22 +7753,20 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 fallback_cfg_obj["auto_continue_on_length"] = False
                 fallback_config["config"] = fallback_cfg_obj
                 logger.warning(
-                    "[analyze_scene] blocking_integrity_failed_try_fallback episode_id=%s fallback_idx=%s provider=%s model=%s codes=%s missing_posters=%s incomplete_posters=%s",
+                    "[analyze_scene] stage1_visual_backfill_json_incomplete_try_fallback episode_id=%s fallback_idx=%s provider=%s model=%s codes=%s",
                     getattr(request, "episode_id", None),
                     fallback_idx,
                     fallback_config.get("provider"),
                     fallback_config.get("model"),
-                    fallback_blocking_meta.get("warning_codes") or [],
-                    fallback_blocking_meta.get("missing_posters") or [],
-                    fallback_blocking_meta.get("incomplete_posters") or [],
+                    stage1_integrity_meta.get("warning_codes") or [],
                 )
 
                 fallback_loop_res = await _run_loop(messages, fallback_config)
                 fallback_result = fallback_loop_res.get("result_content", "")
                 if not is_entity_design_phase and script_hash:
                     fallback_result = f"<!-- script_hash: {script_hash} -->\n" + fallback_result
-                fallback_blocking_attempt_meta = _detect_fallback_blocking_integrity(fallback_result)
-                if bool(fallback_blocking_attempt_meta.get("ok", True)):
+                fallback_stage1_meta = _detect_stage1_script_optimization_integrity(fallback_result)
+                if bool(fallback_stage1_meta.get("ok", True)):
                     result_content = fallback_result
                     loop1_res = fallback_loop_res
                     segments_meta = loop1_res.get("segments_meta", [])
@@ -7910,7 +7783,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
                     llm_fallback_warnings = list(set([
                         *list(loop1_res.get("llm_fallback_warnings", []) or []),
-                        f"Fallback {fallback_idx} ({fallback_config.get('provider')}/{fallback_config.get('model')}) used because analysis output failed blocking integrity checks.",
+                        f"Fallback {fallback_idx} ({fallback_config.get('provider')}/{fallback_config.get('model')}) used because first-stage Project Visual Backfill JSON was incomplete.",
                     ]))
                     usage = usage_total
                     integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
@@ -7919,27 +7792,27 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     model = (config or {}).get("model")
                     break
 
-                fallback_blocking_meta = fallback_blocking_attempt_meta
+                stage1_integrity_meta = fallback_stage1_meta
             else:
-                for code in (fallback_blocking_meta.get("warning_codes") or []):
+                for code in (stage1_integrity_meta.get("warning_codes") or []):
                     code_text = str(code or "").strip()
                     if code_text and code_text not in (integrity_meta.get("warning_codes") or []):
                         integrity_meta.setdefault("warning_codes", []).append(code_text)
-                for warning in (fallback_blocking_meta.get("warnings") or []):
+                for warning in (stage1_integrity_meta.get("warnings") or []):
                     warning_text = str(warning or "").strip()
                     if warning_text and warning_text not in (integrity_meta.get("warnings") or []):
                         integrity_meta.setdefault("warnings", []).append(warning_text)
 
                 failure_detail = _build_scene_analysis_blocking_failure_detail(
-                    list(fallback_blocking_meta.get("warning_codes") or []),
-                    list(fallback_blocking_meta.get("warnings") or []),
+                    list(stage1_integrity_meta.get("warning_codes") or []),
+                    list(stage1_integrity_meta.get("warnings") or []),
                     [],
                 )
                 raise HTTPException(status_code=502, detail=failure_detail)
-        elif not bool(fallback_blocking_meta.get("ok", True)):
+        elif not bool(stage1_integrity_meta.get("ok", True)):
             failure_detail = _build_scene_analysis_blocking_failure_detail(
-                list(fallback_blocking_meta.get("warning_codes") or []),
-                list(fallback_blocking_meta.get("warnings") or []),
+                list(stage1_integrity_meta.get("warning_codes") or []),
+                list(stage1_integrity_meta.get("warnings") or []),
                 [],
             )
             raise HTTPException(status_code=502, detail=failure_detail)
@@ -18103,10 +17976,6 @@ def _build_shot_prompts(
         normalized = normalized.strip("[](){}@#：: ").strip()
         return re.sub(r"\s+", "", normalized).lower()
 
-    def _normalize_markdown_cell(value: Any) -> str:
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
-        return text.replace("|", "／")
-
     def _add_scene_subject_candidate(value: Any, target: set) -> None:
         text = str(value or "").strip()
         if not text:
@@ -18130,96 +17999,6 @@ def _build_shot_prompts(
         for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", source_text):
             _add_scene_subject_candidate(match.group(1), candidates)
         return candidates
-
-    def _entity_custom_attrs(entity: Entity) -> Dict[str, Any]:
-        attrs = getattr(entity, "custom_attributes", None)
-        if isinstance(attrs, str):
-            try:
-                attrs = json.loads(attrs)
-            except Exception:
-                attrs = {}
-        return attrs if isinstance(attrs, dict) else {}
-
-    def _build_scene_entity_lookup() -> Dict[str, Entity]:
-        lookup: Dict[str, Entity] = {}
-        for entity in project_entities:
-            attrs = _entity_custom_attrs(entity)
-            aliases = [
-                getattr(entity, "name", None),
-                getattr(entity, "name_en", None),
-                getattr(entity, "base_name_en", None),
-                attrs.get("subject_no"),
-                attrs.get("subjectNo"),
-                attrs.get("subject_name_zh"),
-                attrs.get("subject_name_en"),
-            ]
-            for alias in aliases:
-                key = _scene_subject_compare_key(alias)
-                if key and key not in lookup:
-                    lookup[key] = entity
-        return lookup
-
-    entity_lookup = _build_scene_entity_lookup()
-
-    def _find_entity_for_subject_row(parts: List[str]) -> Optional[Entity]:
-        for candidate in [
-            parts[0] if len(parts) > 0 else "",
-            parts[2] if len(parts) > 2 else "",
-            parts[3] if len(parts) > 3 else "",
-        ]:
-            entity = entity_lookup.get(_scene_subject_compare_key(candidate))
-            if entity:
-                return entity
-        return None
-
-    def _append_entity_description_to_subject_row(parts: List[str], entity: Optional[Entity]) -> List[str]:
-        next_parts = list(parts)
-        while len(next_parts) < 7:
-            next_parts.append("")
-        if not entity:
-            return next_parts
-
-        normalized_type = _normalize_subject_entity_type(getattr(entity, "type", None)) or "entity"
-        detail_parts: List[str] = []
-        if getattr(entity, "anchor_description", None):
-            detail_parts.append(f"asset_anchor:{_trim_packet_text(entity.anchor_description, 220)}")
-
-        primary_description = getattr(entity, "narrative_description", None) or getattr(entity, "description", None)
-        if primary_description:
-            detail_parts.append(f"asset_description:{_trim_packet_text(primary_description, 320)}")
-
-        if normalized_type == "character":
-            if getattr(entity, "appearance_cn", None):
-                detail_parts.append(f"appearance_cn:{_trim_packet_text(entity.appearance_cn, 220)}")
-            if getattr(entity, "clothing", None):
-                detail_parts.append(f"clothing:{_trim_packet_text(entity.clothing, 180)}")
-            if getattr(entity, "action_characteristics", None):
-                detail_parts.append(f"action_characteristics:{_trim_packet_text(entity.action_characteristics, 180)}")
-            if getattr(entity, "role", None):
-                detail_parts.append(f"role:{_trim_packet_text(entity.role, 120)}")
-            if getattr(entity, "archetype", None):
-                detail_parts.append(f"archetype:{_trim_packet_text(entity.archetype, 120)}")
-        elif normalized_type in {"prop", "environment", "cover"}:
-            if getattr(entity, "visual_params", None):
-                detail_parts.append(f"visual_params:{_trim_packet_text(entity.visual_params, 220)}")
-            if getattr(entity, "atmosphere", None):
-                detail_parts.append(f"atmosphere:{_trim_packet_text(entity.atmosphere, 180)}")
-
-        if getattr(entity, "generation_prompt_cn", None):
-            detail_parts.append(f"generation_prompt_cn:{_trim_packet_text(entity.generation_prompt_cn, 420)}")
-        if getattr(entity, "visual_dependencies", None):
-            detail_parts.append(f"visual_dependencies:{_trim_packet_text(json.dumps(entity.visual_dependencies, ensure_ascii=False), 220)}")
-        if getattr(entity, "dependency_strategy", None):
-            detail_parts.append(f"dependency_strategy:{_trim_packet_text(json.dumps(entity.dependency_strategy, ensure_ascii=False), 220)}")
-
-        if not detail_parts:
-            return next_parts
-
-        existing_attributes = str(next_parts[5] or "").strip()
-        injected_details = "；".join(_normalize_markdown_cell(item) for item in detail_parts if str(item or "").strip())
-        if injected_details and injected_details not in existing_attributes:
-            next_parts[5] = f"{existing_attributes}；{injected_details}" if existing_attributes else injected_details
-        return next_parts
 
     def _build_filtered_scene_subject_index() -> str:
         scene_subject_keys = _extract_scene_subject_candidates()
@@ -18252,12 +18031,9 @@ def _build_shot_prompts(
             if is_subject_row:
                 row_candidates = [parts[0], parts[2], parts[3]]
                 if any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates):
-                    matched_entity = _find_entity_for_subject_row(parts)
-                    enriched_parts = _append_entity_description_to_subject_row(parts, matched_entity)
-                    enriched_line = "| " + " | ".join(_normalize_markdown_cell(part) for part in enriched_parts[:7]) + " |"
-                    row_key = re.sub(r"\s+", "", enriched_line).lower()
+                    row_key = re.sub(r"\s+", "", stripped).lower()
                     if row_key not in seen_rows:
-                        kept_rows.append(enriched_line)
+                        kept_rows.append(line)
                         seen_rows.add(row_key)
                 continue
 
@@ -34923,7 +34699,6 @@ def _append_video_api_ref_mapping(
         or provider_text in {"ark-seedance", "pixelmove"}
         or (provider_text == "zlhub" and not model_text)
     )
-    original_use_prev_video = use_prev_video
     if is_seedance:
         use_prev_video = True
 
@@ -35040,7 +34815,7 @@ def _append_video_api_ref_mapping(
         updated_source = str(source_text or "").strip()
         if not updated_source:
             return updated_source
-        if not (reference_video_urls and is_seedance):
+        if not reference_video_urls:
             return updated_source
 
         if use_prev_video:

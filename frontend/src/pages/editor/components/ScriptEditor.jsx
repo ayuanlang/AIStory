@@ -4272,16 +4272,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             const taskId = String(parsed?.taskId || '').trim();
+            const taskIds = Array.isArray(parsed?.taskIds)
+                ? Array.from(new Set(parsed.taskIds.map((item) => String(item || '').trim()).filter(Boolean)))
+                : [];
             const startedAt = Number(parsed?.startedAt || 0);
             const phase = Number(parsed?.phase || 1);
             if (!taskId) return null;
-            if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, startedAt: Date.now(), phase };
+            if (!Number.isFinite(startedAt) || startedAt <= 0) return { taskId, taskIds: taskIds.length ? taskIds : [taskId], startedAt: Date.now(), phase };
             // Align marker TTL with task polling timeout to avoid endless resume loops after reload.
             if ((Date.now() - startedAt) > ANALYSIS_TASK_MARKER_TTL_MS) {
                 window.localStorage.removeItem(key);
                 return null;
             }
-            return { taskId, startedAt, phase };
+            return { taskId, taskIds: taskIds.length ? taskIds : [taskId], startedAt, phase };
         } catch (_) {
             return null;
         }
@@ -4293,8 +4296,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!key || !window?.localStorage) return;
             const taskId = String(marker?.taskId || '').trim();
             if (!taskId) return;
+            let existingTaskIds = [];
+            try {
+                const existing = JSON.parse(window.localStorage.getItem(key) || '{}');
+                existingTaskIds = Array.isArray(existing?.taskIds)
+                    ? existing.taskIds.map((item) => String(item || '').trim()).filter(Boolean)
+                    : [];
+                if (existing?.taskId) existingTaskIds.push(String(existing.taskId || '').trim());
+            } catch (_) {
+                existingTaskIds = [];
+            }
+            const taskIds = Array.from(new Set([
+                ...existingTaskIds,
+                ...Array.from(activeAnalysisTaskIdsRef.current || []),
+                taskId,
+            ].filter(Boolean)));
             const payload = {
                 taskId,
+                taskIds,
                 startedAt: Number(marker?.startedAt || Date.now()),
                 phase: Number(marker?.phase || 1),
             };
@@ -4317,6 +4336,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [getAnalysisTaskStorageKey]);
 
+    const canStopAnalysisTask = useMemo(() => {
+        if (isAnalyzing || isRetryingPhase2 || isStoppingAnalysisTask) return true;
+        if (String(activeAnalysisTaskId || '').trim()) return true;
+        return Boolean(loadAnalysisTaskMarker(activeEpisode?.id)?.taskId);
+    }, [activeAnalysisTaskId, activeEpisode?.id, isAnalyzing, isRetryingPhase2, isStoppingAnalysisTask, loadAnalysisTaskMarker]);
+
     const handleStopAnalysisTask = useCallback(async () => {
         if (!activeEpisode?.id) return;
         const marker = loadAnalysisTaskMarker(activeEpisode.id);
@@ -4324,6 +4349,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ...Array.from(activeAnalysisTaskIdsRef.current || []),
             String(activeAnalysisTaskId || '').trim(),
             String(marker?.taskId || '').trim(),
+            ...(Array.isArray(marker?.taskIds) ? marker.taskIds.map((item) => String(item || '').trim()) : []),
         ].filter(Boolean)));
         if (taskIds.length <= 0) {
             if (isAnalyzing || isRetryingPhase2 || phase2GenerationInFlightRef.current || analysisRunInFlightRef.current) {
@@ -4845,7 +4871,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 onTaskCreated: (taskId) => {
                                     onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${taskId}`, 'info');
                                     const registeredTaskId = registerActiveAnalysisTask(taskId);
-                                    if (isPrimary && registeredTaskId) {
+                                    if (registeredTaskId) {
                                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt: phase2StartedAt, phase: 2 });
                                     }
                                 },
@@ -5146,10 +5172,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const startedAt = (Number.isFinite(markerStartedAt) && markerStartedAt > 0) ? markerStartedAt : Date.now();
         const elapsedMs = Math.max(0, Date.now() - startedAt);
         const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
+        const markerTaskIds = Array.from(new Set([
+            String(marker?.taskId || '').trim(),
+            ...(Array.isArray(marker?.taskIds) ? marker.taskIds.map((item) => String(item || '').trim()) : []),
+        ].filter(Boolean)));
+        markerTaskIds.forEach((taskId) => activeAnalysisTaskIdsRef.current.add(taskId));
         if (marker?.phase === 2) {
             setIsAnalyzing(false);
             setIsRetryingPhase2(true);
-            setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
+            setActiveAnalysisTaskId(markerTaskIds[markerTaskIds.length - 1] || String(marker?.taskId || '').trim());
             setAnalysisUiReport({
                 status: 'running',
                 startedAt,
@@ -5279,7 +5310,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importWarningMessage = '';
 
         setIsAnalyzing(true);
-        setActiveAnalysisTaskId(String(marker?.taskId || '').trim());
+        setActiveAnalysisTaskId(markerTaskIds[markerTaskIds.length - 1] || String(marker?.taskId || '').trim());
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'script_opt',
@@ -9455,18 +9486,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </>
                                 )}
                             </button>
-                            {isAnalyzing && (
-                                <button
-                                    onClick={handleStopAnalysisTask}
-                                    disabled={isStoppingAnalysisTask}
-                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
-                                    title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
-                                >
-                                    {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                                    {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
-                                </button>
-                            )}
                         </>
+                    )}
+                    {canStopAnalysisTask && (
+                        <button
+                            onClick={handleStopAnalysisTask}
+                            disabled={isStoppingAnalysisTask}
+                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
+                            title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
+                        >
+                            {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
+                        </button>
                     )}
                     {!isRawMode && (
                         <button 
@@ -9692,7 +9723,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                     )}
 
-                    {isAnalyzing && (
+                    {canStopAnalysisTask && (
                         <div className="mb-2">
                             <button
                                 onClick={handleStopAnalysisTask}
@@ -10241,7 +10272,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                         
                         <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
-                            {isAnalyzing && (
+                            {canStopAnalysisTask && (
                                 <button
                                     onClick={handleStopAnalysisTask}
                                     disabled={isStoppingAnalysisTask}
