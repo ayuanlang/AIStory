@@ -18120,6 +18120,10 @@ def _build_shot_prompts(
         normalized = normalized.strip("[](){}@#：: ").strip()
         return re.sub(r"\s+", "", normalized).lower()
 
+    def _normalize_markdown_cell(value: Any) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text.replace("|", "／")
+
     def _add_scene_subject_candidate(value: Any, target: set) -> None:
         text = str(value or "").strip()
         if not text:
@@ -18143,6 +18147,96 @@ def _build_shot_prompts(
         for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", source_text):
             _add_scene_subject_candidate(match.group(1), candidates)
         return candidates
+
+    def _entity_custom_attrs(entity: Entity) -> Dict[str, Any]:
+        attrs = getattr(entity, "custom_attributes", None)
+        if isinstance(attrs, str):
+            try:
+                attrs = json.loads(attrs)
+            except Exception:
+                attrs = {}
+        return attrs if isinstance(attrs, dict) else {}
+
+    def _build_scene_entity_lookup() -> Dict[str, Entity]:
+        lookup: Dict[str, Entity] = {}
+        for entity in project_entities:
+            attrs = _entity_custom_attrs(entity)
+            aliases = [
+                getattr(entity, "name", None),
+                getattr(entity, "name_en", None),
+                getattr(entity, "base_name_en", None),
+                attrs.get("subject_no"),
+                attrs.get("subjectNo"),
+                attrs.get("subject_name_zh"),
+                attrs.get("subject_name_en"),
+            ]
+            for alias in aliases:
+                key = _scene_subject_compare_key(alias)
+                if key and key not in lookup:
+                    lookup[key] = entity
+        return lookup
+
+    entity_lookup = _build_scene_entity_lookup()
+
+    def _find_entity_for_subject_row(parts: List[str]) -> Optional[Entity]:
+        for candidate in [
+            parts[0] if len(parts) > 0 else "",
+            parts[2] if len(parts) > 2 else "",
+            parts[3] if len(parts) > 3 else "",
+        ]:
+            entity = entity_lookup.get(_scene_subject_compare_key(candidate))
+            if entity:
+                return entity
+        return None
+
+    def _append_entity_description_to_subject_row(parts: List[str], entity: Optional[Entity]) -> List[str]:
+        next_parts = list(parts)
+        while len(next_parts) < 7:
+            next_parts.append("")
+        if not entity:
+            return next_parts
+
+        normalized_type = _normalize_subject_entity_type(getattr(entity, "type", None)) or "entity"
+        detail_parts: List[str] = []
+        if getattr(entity, "anchor_description", None):
+            detail_parts.append(f"asset_anchor:{_trim_packet_text(entity.anchor_description, 220)}")
+
+        primary_description = getattr(entity, "narrative_description", None) or getattr(entity, "description", None)
+        if primary_description:
+            detail_parts.append(f"asset_description:{_trim_packet_text(primary_description, 320)}")
+
+        if normalized_type == "character":
+            if getattr(entity, "appearance_cn", None):
+                detail_parts.append(f"appearance_cn:{_trim_packet_text(entity.appearance_cn, 220)}")
+            if getattr(entity, "clothing", None):
+                detail_parts.append(f"clothing:{_trim_packet_text(entity.clothing, 180)}")
+            if getattr(entity, "action_characteristics", None):
+                detail_parts.append(f"action_characteristics:{_trim_packet_text(entity.action_characteristics, 180)}")
+            if getattr(entity, "role", None):
+                detail_parts.append(f"role:{_trim_packet_text(entity.role, 120)}")
+            if getattr(entity, "archetype", None):
+                detail_parts.append(f"archetype:{_trim_packet_text(entity.archetype, 120)}")
+        elif normalized_type in {"prop", "environment", "cover"}:
+            if getattr(entity, "visual_params", None):
+                detail_parts.append(f"visual_params:{_trim_packet_text(entity.visual_params, 220)}")
+            if getattr(entity, "atmosphere", None):
+                detail_parts.append(f"atmosphere:{_trim_packet_text(entity.atmosphere, 180)}")
+
+        if getattr(entity, "generation_prompt_cn", None):
+            detail_parts.append(f"generation_prompt_cn:{_trim_packet_text(entity.generation_prompt_cn, 420)}")
+        if getattr(entity, "visual_dependencies", None):
+            detail_parts.append(f"visual_dependencies:{_trim_packet_text(json.dumps(entity.visual_dependencies, ensure_ascii=False), 220)}")
+        if getattr(entity, "dependency_strategy", None):
+            detail_parts.append(f"dependency_strategy:{_trim_packet_text(json.dumps(entity.dependency_strategy, ensure_ascii=False), 220)}")
+
+        if not detail_parts:
+            return next_parts
+
+        existing_attributes = str(next_parts[5] or "").strip()
+        injected_details = "；".join(_normalize_markdown_cell(item) for item in detail_parts if str(item or "").strip())
+        if injected_details and injected_details not in existing_attributes:
+            next_parts[5] = f"{existing_attributes}；{injected_details}" if existing_attributes else injected_details
+        return next_parts
 
     def _build_filtered_scene_subject_index() -> str:
         scene_subject_keys = _extract_scene_subject_candidates()
@@ -18175,9 +18269,12 @@ def _build_shot_prompts(
             if is_subject_row:
                 row_candidates = [parts[0], parts[2], parts[3]]
                 if any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates):
-                    row_key = re.sub(r"\s+", "", stripped).lower()
+                    matched_entity = _find_entity_for_subject_row(parts)
+                    enriched_parts = _append_entity_description_to_subject_row(parts, matched_entity)
+                    enriched_line = "| " + " | ".join(_normalize_markdown_cell(part) for part in enriched_parts[:7]) + " |"
+                    row_key = re.sub(r"\s+", "", enriched_line).lower()
                     if row_key not in seen_rows:
-                        kept_rows.append(line)
+                        kept_rows.append(enriched_line)
                         seen_rows.add(row_key)
                 continue
 
