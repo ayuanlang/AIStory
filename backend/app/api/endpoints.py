@@ -4377,6 +4377,14 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("返回内容疑似被截断，结果不完整")
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
+    if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_MISSING" in codes:
+        reasons_cn.append("第一阶段缺少 Project Visual Backfill JSON，结果不完整")
+    if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID" in codes:
+        reasons_cn.append("第一阶段 Project Visual Backfill JSON 损坏，无法安全解析")
+    if "ANALYSIS_POSTER_CONTENT_MISSING" in codes:
+        reasons_cn.append("资产清单缺少封面海报内容，结果不完整")
+    if "ANALYSIS_POSTER_CONTENT_INCOMPLETE" in codes:
+        reasons_cn.append("资产清单封面海报内容不完整，结果不可靠")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
         reasons_cn.append("第一阶段未解析到 Subject Index 区块")
     if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
@@ -5728,11 +5736,104 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
             found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
             # Disable forced structural continuation to support decoupled Phase 1 / Phase 2 prompts.
-            missing_sections = [] 
+            missing_sections = []
+            stage1_meta = _detect_stage1_script_optimization_integrity(text) if text.strip() else {"ok": True}
+            if not bool(stage1_meta.get("ok", True)):
+                missing_sections.extend([str(x) for x in (stage1_meta.get("missing_sections") or []) if str(x)])
             return {
                 "found_sections": found_sections,
                 "missing_sections": missing_sections,
-                "structure_incomplete": False,
+                "structure_incomplete": bool(missing_sections),
+            }
+
+        def _is_stage1_script_optimization_request() -> bool:
+            source = " ".join([
+                str(getattr(request, "prompt_file", "") or ""),
+                str(template_signature.get("template_source") or ""),
+                str(getattr(request, "function_name", "") or ""),
+            ]).lower()
+            return bool(
+                "scene_planning_1_script_optimization" in source
+                or "script_optimization" in source
+                or "stage_1" in source
+                or "stage1" in source
+            )
+
+        def _extract_project_visual_backfill_json(text_value: Any) -> Tuple[Optional[Dict[str, Any]], str]:
+            text = str(text_value or "")
+            if not text.strip() or "project_visual_backfill" not in text.lower():
+                return None, "missing"
+
+            candidates: List[str] = []
+            try:
+                fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+                for match in fence_re.finditer(text):
+                    candidate = str(match.group(1) or "").strip()
+                    if "project_visual_backfill" in candidate.lower():
+                        candidates.append(candidate)
+            except Exception:
+                pass
+
+            marker_match = re.search(r'\{\s*"project_visual_backfill"\s*:', text, flags=re.IGNORECASE)
+            if marker_match:
+                start = int(marker_match.start())
+                depth = 0
+                in_string = False
+                escape = False
+                for idx in range(start, len(text)):
+                    char = text[idx]
+                    if in_string:
+                        if escape:
+                            escape = False
+                        elif char == "\\":
+                            escape = True
+                        elif char == '"':
+                            in_string = False
+                        continue
+                    if char == '"':
+                        in_string = True
+                    elif char == "{":
+                        depth += 1
+                    elif char == "}":
+                        depth -= 1
+                        if depth == 0:
+                            candidates.append(text[start:idx + 1].strip())
+                            break
+
+            saw_invalid = False
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict) and isinstance(parsed.get("project_visual_backfill"), dict):
+                        return parsed, "valid"
+                except Exception:
+                    saw_invalid = True
+
+            return None, "invalid" if saw_invalid or candidates else "missing"
+
+        def _detect_stage1_script_optimization_integrity(output_text: Any) -> Dict[str, Any]:
+            if not _is_stage1_script_optimization_request():
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
+
+            parsed_backfill, status = _extract_project_visual_backfill_json(output_text)
+            if parsed_backfill:
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
+
+            if status == "invalid":
+                return {
+                    "ok": False,
+                    "warning_codes": ["ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID"],
+                    "warnings": ["第一阶段 Project Visual Backfill JSON 未完整返回或无法解析，当前结果不能作为完整剧本分析使用。"],
+                    "missing_sections": ["Project Visual Backfill JSON"],
+                }
+
+            return {
+                "ok": False,
+                "warning_codes": ["ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_MISSING"],
+                "warnings": ["第一阶段未返回 Project Visual Backfill JSON，当前结果不完整，需触发 fallback 或重新分析。"],
+                "missing_sections": ["Project Visual Backfill JSON"],
             }
 
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
@@ -5829,6 +5930,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     + ", ".join([str(x) for x in missing_sections])
                     + "."
                 )
+
+            stage1_meta = _detect_stage1_script_optimization_integrity(text)
+            if not bool(stage1_meta.get("ok", True)):
+                stage1_missing = [str(x) for x in (stage1_meta.get("missing_sections") or []) if str(x)]
+                missing_sections = list(dict.fromkeys([*missing_sections, *stage1_missing]))
+                structure_incomplete = True
+                truncation_suspected = True
+                for code in (stage1_meta.get("warning_codes") or []):
+                    code_text = str(code or "").strip()
+                    if code_text and code_text not in warning_codes:
+                        warning_codes.append(code_text)
+                for warning in (stage1_meta.get("warnings") or []):
+                    warning_text = str(warning or "").strip()
+                    if warning_text and warning_text not in warnings:
+                        warnings.append(warning_text)
 
             return {
                 "truncation_detected": had_length_finish,
@@ -6483,6 +6599,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "props": set(),
                 "environments": set(),
                 "covers": set(),
+                "posters": set(),
             }
 
             for bucket in ("characters", "props", "environments", "covers", "posters"):
@@ -6550,6 +6667,143 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "missing_by_bucket": missing_by_bucket,
                 "warning_codes": warning_codes,
                 "warnings": warnings,
+            }
+
+        def _detect_poster_content_integrity(output_text: Any) -> Dict[str, Any]:
+            if _is_stage1_script_optimization_request():
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
+
+            try:
+                allowed_types = subject_index_allowed_types_for_request
+            except Exception:
+                allowed_types = set()
+            if allowed_types and not ({"cover", "environment"} & set(allowed_types)):
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
+
+            text = str(output_text or "")
+            expected_meta = _extract_expected_subjects_from_subject_index(text)
+            expected = expected_meta.get("expected") or {}
+            expected_total = int(expected_meta.get("total") or 0)
+            expected_posters: Dict[str, str] = {}
+            for bucket in ("covers", "posters"):
+                for key, display in (expected.get(bucket) or {}).items():
+                    if key and key not in expected_posters:
+                        expected_posters[key] = display
+
+            if expected_total > 0 and not expected_posters:
+                return {
+                    "ok": False,
+                    "expected_posters": [],
+                    "actual_poster_count": 0,
+                    "missing_posters": ["封面海报"],
+                    "incomplete_posters": [],
+                    "warning_codes": ["ANALYSIS_POSTER_CONTENT_MISSING"],
+                    "warnings": ["资产清单未返回封面海报条目（cover_poster/poster/封面海报），当前资产清单不完整。"],
+                }
+
+            if not expected_posters:
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_posters": [], "incomplete_posters": []}
+
+            raw_payload = _extract_entities_from_json_candidates(text)
+            poster_items = [
+                item
+                for bucket in ("covers", "posters")
+                for item in (raw_payload.get(bucket) or [])
+                if isinstance(item, dict)
+            ]
+
+            poster_by_key: Dict[str, Dict[str, Any]] = {}
+            for item in poster_items:
+                for raw_name in (item.get("name"), item.get("name_en")):
+                    key = _normalize_subject_compare_key(raw_name)
+                    if key and key not in poster_by_key:
+                        poster_by_key[key] = item
+
+            missing_posters: List[str] = []
+            incomplete_posters: List[str] = []
+            required_text_fields = [
+                "name",
+                "name_en",
+                "description_cn",
+                "generation_prompt_cn",
+                "generation_prompt_en",
+                "negative_prompt_en",
+                "anchor_description",
+            ]
+            for expected_key, display in expected_posters.items():
+                item = poster_by_key.get(expected_key)
+                if not item:
+                    missing_posters.append(display)
+                    continue
+                missing_fields = [field for field in required_text_fields if not str(item.get(field) or "").strip()]
+                visual_dependencies = item.get("visual_dependencies")
+                dependency_strategy = item.get("dependency_strategy")
+                if not isinstance(visual_dependencies, list):
+                    missing_fields.append("visual_dependencies")
+                if not isinstance(dependency_strategy, dict) or not str(dependency_strategy.get("logic") or "").strip():
+                    missing_fields.append("dependency_strategy.logic")
+                if missing_fields:
+                    incomplete_posters.append(f"{display}({', '.join(missing_fields[:6])})")
+
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            if missing_posters:
+                warning_codes.append("ANALYSIS_POSTER_CONTENT_MISSING")
+                warnings.append(
+                    "资产清单缺少封面海报 JSON 内容。缺失: "
+                    + ", ".join([str(x or "").strip() for x in missing_posters[:8] if str(x or "").strip()])
+                )
+            if incomplete_posters:
+                warning_codes.append("ANALYSIS_POSTER_CONTENT_INCOMPLETE")
+                warnings.append(
+                    "资产清单封面海报 JSON 内容不完整。示例: "
+                    + ", ".join([str(x or "").strip() for x in incomplete_posters[:5] if str(x or "").strip()])
+                )
+
+            return {
+                "ok": not warning_codes,
+                "expected_posters": list(expected_posters.values()),
+                "actual_poster_count": len(poster_items),
+                "missing_posters": missing_posters,
+                "incomplete_posters": incomplete_posters,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+            }
+
+        def _detect_fallback_blocking_integrity(output_text: Any) -> Dict[str, Any]:
+            checks = [
+                _detect_stage1_script_optimization_integrity(output_text),
+                _detect_poster_content_integrity(output_text),
+            ]
+            warning_codes: List[str] = []
+            warnings: List[str] = []
+            missing_sections: List[str] = []
+            details: Dict[str, Any] = {}
+            for check in checks:
+                if bool(check.get("ok", True)):
+                    continue
+                for code in (check.get("warning_codes") or []):
+                    code_text = str(code or "").strip()
+                    if code_text and code_text not in warning_codes:
+                        warning_codes.append(code_text)
+                for warning in (check.get("warnings") or []):
+                    warning_text = str(warning or "").strip()
+                    if warning_text and warning_text not in warnings:
+                        warnings.append(warning_text)
+                for section in (check.get("missing_sections") or []):
+                    section_text = str(section or "").strip()
+                    if section_text and section_text not in missing_sections:
+                        missing_sections.append(section_text)
+                for key in ("expected_posters", "actual_poster_count", "missing_posters", "incomplete_posters"):
+                    if key in check:
+                        details[key] = check.get(key)
+
+            return {
+                "ok": not warning_codes,
+                "warning_codes": warning_codes,
+                "warnings": warnings,
+                "missing_sections": missing_sections,
+                **details,
             }
 
         def _collect_subject_keys_by_bucket(payload: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
@@ -7418,7 +7672,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     return inc_l[len(c):]
             return incoming
 
-        async def _run_loop(target_messages):
+        async def _run_loop(target_messages, loop_config: Optional[Dict[str, Any]] = None):
+            active_loop_config = loop_config or config
             result_parts_loop: List[str] = []
             segments_meta_loop: List[Dict[str, Any]] = []
             usage_total_loop: Dict[str, Any] = {}
@@ -7440,7 +7695,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 system_only_messages = []
 
             for seg_idx in range(1, max_segments + 1):
-                llm_resp = await _await_analyze_scene_segment(current_messages, config)
+                llm_resp = await _await_analyze_scene_segment(current_messages, active_loop_config)
                 current_routing = _extract_llm_routing_metadata(llm_resp)
                 if current_routing:
                     resolved_llm_routing_loop = current_routing
@@ -7491,8 +7746,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     logger.warning(
                         "[analyze_scene] safety_output_cap_reached episode_id=%s provider=%s model=%s chars=%s cap=%s segments=%s",
                         getattr(request, "episode_id", None),
-                        (config or {}).get("provider"),
-                        (config or {}).get("model"),
+                        (active_loop_config or {}).get("provider"),
+                        (active_loop_config or {}).get("model"),
                         len(accumulated),
                         _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
                         len(segments_meta_loop or []),
@@ -7629,6 +7884,82 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+
+        fallback_blocking_meta = _detect_fallback_blocking_integrity(result_content)
+        if not bool(fallback_blocking_meta.get("ok", True)) and dropdown_fallback_ids:
+            fallback_configs = agent_service.get_fallback_configs_by_ids(dropdown_fallback_ids)
+            for fallback_idx, fallback_config in enumerate(fallback_configs, 1):
+                if not fallback_config or not fallback_config.get("api_key"):
+                    continue
+                fallback_cfg_obj = fallback_config.get("config") if isinstance(fallback_config.get("config"), dict) else {}
+                fallback_cfg_obj["auto_continue_on_length"] = False
+                fallback_config["config"] = fallback_cfg_obj
+                logger.warning(
+                    "[analyze_scene] blocking_integrity_failed_try_fallback episode_id=%s fallback_idx=%s provider=%s model=%s codes=%s missing_posters=%s incomplete_posters=%s",
+                    getattr(request, "episode_id", None),
+                    fallback_idx,
+                    fallback_config.get("provider"),
+                    fallback_config.get("model"),
+                    fallback_blocking_meta.get("warning_codes") or [],
+                    fallback_blocking_meta.get("missing_posters") or [],
+                    fallback_blocking_meta.get("incomplete_posters") or [],
+                )
+
+                fallback_loop_res = await _run_loop(messages, fallback_config)
+                fallback_result = fallback_loop_res.get("result_content", "")
+                if not is_entity_design_phase and script_hash:
+                    fallback_result = f"<!-- script_hash: {script_hash} -->\n" + fallback_result
+                fallback_blocking_attempt_meta = _detect_fallback_blocking_integrity(fallback_result)
+                if bool(fallback_blocking_attempt_meta.get("ok", True)):
+                    result_content = fallback_result
+                    loop1_res = fallback_loop_res
+                    segments_meta = loop1_res.get("segments_meta", [])
+                    usage_total = loop1_res.get("usage_total", {})
+                    resolved_llm_routing = loop1_res.get("resolved_llm_routing", {}) or {
+                        "provider": fallback_config.get("provider"),
+                        "model": fallback_config.get("model"),
+                    }
+                    finish_reason = loop1_res.get("finish_reason", "stop")
+                    continuation_stopped_by_max_segments = loop1_res.get("continuation_stopped_by_max_segments", False)
+                    output_char_cap_reached = loop1_res.get("output_char_cap_reached", False)
+                    continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
+                    continuation_by_structure = loop1_res.get("continuation_by_structure", 0)
+                    provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
+                    llm_fallback_warnings = list(set([
+                        *list(loop1_res.get("llm_fallback_warnings", []) or []),
+                        f"Fallback {fallback_idx} ({fallback_config.get('provider')}/{fallback_config.get('model')}) used because analysis output failed blocking integrity checks.",
+                    ]))
+                    usage = usage_total
+                    integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+                    config = fallback_config
+                    provider = (config or {}).get("provider")
+                    model = (config or {}).get("model")
+                    break
+
+                fallback_blocking_meta = fallback_blocking_attempt_meta
+            else:
+                for code in (fallback_blocking_meta.get("warning_codes") or []):
+                    code_text = str(code or "").strip()
+                    if code_text and code_text not in (integrity_meta.get("warning_codes") or []):
+                        integrity_meta.setdefault("warning_codes", []).append(code_text)
+                for warning in (fallback_blocking_meta.get("warnings") or []):
+                    warning_text = str(warning or "").strip()
+                    if warning_text and warning_text not in (integrity_meta.get("warnings") or []):
+                        integrity_meta.setdefault("warnings", []).append(warning_text)
+
+                failure_detail = _build_scene_analysis_blocking_failure_detail(
+                    list(fallback_blocking_meta.get("warning_codes") or []),
+                    list(fallback_blocking_meta.get("warnings") or []),
+                    [],
+                )
+                raise HTTPException(status_code=502, detail=failure_detail)
+        elif not bool(fallback_blocking_meta.get("ok", True)):
+            failure_detail = _build_scene_analysis_blocking_failure_detail(
+                list(fallback_blocking_meta.get("warning_codes") or []),
+                list(fallback_blocking_meta.get("warnings") or []),
+                [],
+            )
+            raise HTTPException(status_code=502, detail=failure_detail)
 
         raw_total_chars = 0
         dedup_total_chars = 0
@@ -7785,7 +8116,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
         source_subject_index_text = sanitize_subject_index_text(result_content)
-        if not is_entity_design_phase:
+        should_require_subject_index = bool(
+            (not is_entity_design_phase)
+            and (not _is_stage1_script_optimization_request())
+        )
+        if should_require_subject_index:
             has_subject_section = bool(
                 re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
                 or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
@@ -34500,7 +34835,14 @@ def _append_video_api_ref_mapping(
     provider: str = "",
     model: str = "",
 ) -> str:
-    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
+    provider_text = str(provider or "").strip().lower()
+    model_text = str(model or "").strip().lower()
+    is_seedance = bool(
+        "seedance" in provider_text
+        or "seedance" in model_text
+        or provider_text in {"ark-seedance", "pixelmove"}
+        or (provider_text == "zlhub" and not model_text)
+    )
     original_use_prev_video = use_prev_video
     if is_seedance:
         use_prev_video = True
@@ -34621,7 +34963,7 @@ def _append_video_api_ref_mapping(
         if not (reference_video_urls and is_seedance):
             return updated_source
 
-        if original_use_prev_video:
+        if use_prev_video:
             vid_tag = "@Video 1"
             vid_tag_nospace = "@Video1"
             has_continuation_instruction = bool(

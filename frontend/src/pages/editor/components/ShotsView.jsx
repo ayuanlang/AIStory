@@ -517,6 +517,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
+    const readStoredUsePrevVideo = useCallback(() => {
+        try {
+            return localStorage.getItem('aiStory_usePrevVideo') === 'true';
+        } catch {
+            return false;
+        }
+    }, []);
     const [usePrevVideo, setUsePrevVideo] = useState(() => {
         try {
             return localStorage.getItem('aiStory_usePrevVideo') === 'true';
@@ -545,10 +552,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const _getInMemorySortedShots = () => sortShotsForContinuation(shots || []);
 
-    const findPrevContinuationShot = useCallback((shotId) => {
-        const stableShotId = String(shotId || '').trim();
-        if (!stableShotId) return null;
-
+    const resolveContinuationShotPool = useCallback(() => {
         const merged = new Map();
         (Array.isArray(allEpisodeShotsRef.current) ? allEpisodeShotsRef.current : []).forEach((shot) => {
             const id = String(shot?.id || '').trim();
@@ -563,12 +567,38 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (editingShot?.id) {
             merged.set(String(editingShot.id), editingShot);
         }
+        return Array.from(merged.values());
+    }, [editingShot, shots]);
 
-        const sortedAllShots = sortShotsForContinuation(Array.from(merged.values()));
+    const isFirstShotInOwnScene = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return false;
+        const shotPool = resolveContinuationShotPool();
+        const currentShot = shotPool.find((shot) => String(shot?.id || '').trim() === stableShotId);
+        const sceneId = String(currentShot?.scene_id || '').trim();
+        if (!currentShot || !sceneId) return false;
+
+        const sortedSceneShots = sortShotsForContinuation(
+            shotPool.filter((shot) => String(shot?.scene_id || '').trim() === sceneId)
+        );
+        return String(sortedSceneShots[0]?.id || '').trim() === stableShotId;
+    }, [resolveContinuationShotPool, sortShotsForContinuation]);
+
+    useEffect(() => {
+        const stableEditingShotId = String(editingShot?.id || '').trim();
+        if (!stableEditingShotId) return;
+        setUsePrevVideo(isFirstShotInOwnScene(stableEditingShotId) ? false : readStoredUsePrevVideo());
+    }, [editingShot?.id, isFirstShotInOwnScene, readStoredUsePrevVideo]);
+
+    const findPrevContinuationShot = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return null;
+
+        const sortedAllShots = sortShotsForContinuation(resolveContinuationShotPool());
         const currentIdx = sortedAllShots.findIndex((shot) => String(shot?.id || '').trim() === stableShotId);
         if (currentIdx <= 0) return null;
         return sortedAllShots[currentIdx - 1] || null;
-    }, [shots, editingShot, sortShotsForContinuation]);
+    }, [resolveContinuationShotPool, sortShotsForContinuation]);
 
     const resolvePrevContinuationVideoRefs = useCallback((shotId) => {
         if (!usePrevVideo) return [];

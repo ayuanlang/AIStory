@@ -4540,18 +4540,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Persist authoritative Stage 2 outputs so Stage 3 uses the optimized script and asset index as inputs.
+        // Asset reruns must treat the Subject Index as read-only input: category/single reruns often pass a filtered
+        // index, and writing that back would shrink the persisted Stage 2 asset manifest.
           if (subjectIndexText.trim() || adaptationBodyText.trim()) {
-              if (subjectIndexText.trim()) setSubjectIndexText(extractPureSubjectIndexText(subjectIndexText));
-              if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
-              const updatePayload = {};
-              if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = extractPureSubjectIndexText(subjectIndexText).trim();
-              if (adaptationBodyText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationBodyText.trim();
-              
-              try {
-                  await updateEpisode(activeEpisode.id, updatePayload);
-                  onLog?.(`[Stage 2 Outputs] Saved asset index and optimized script (asset_index_len=${subjectIndexText.length}, optimized_script_len=${adaptationBodyText.length})`);
-              } catch (error) {
-                  onLog?.(`[Stage 2 Outputs] Warning: Failed to save asset index / optimized script: ${error.message}`);
+              if (options?.isRetryPhase2) {
+                  onLog?.(`[Stage 2 Outputs] Asset rerun uses read-only asset index; skipped Stage 2 writeback (asset_index_len=${subjectIndexText.length}, optimized_script_len=${adaptationBodyText.length})`, 'info');
+              } else {
+                  if (subjectIndexText.trim()) setSubjectIndexText(extractPureSubjectIndexText(subjectIndexText));
+                  if (adaptationBodyText.trim()) setAdaptationText(adaptationBodyText);
+                  const updatePayload = {};
+                  if (subjectIndexText.trim()) updatePayload.ai_scene_analysis_subject_index = extractPureSubjectIndexText(subjectIndexText).trim();
+                  if (adaptationBodyText.trim()) updatePayload.ai_scene_analysis_adaptation = adaptationBodyText.trim();
+                  
+                  try {
+                      await updateEpisode(activeEpisode.id, updatePayload);
+                      onLog?.(`[Stage 2 Outputs] Saved asset index and optimized script (asset_index_len=${subjectIndexText.length}, optimized_script_len=${adaptationBodyText.length})`);
+                  } catch (error) {
+                      onLog?.(`[Stage 2 Outputs] Warning: Failed to save asset index / optimized script: ${error.message}`);
+                  }
               }
           }
 
