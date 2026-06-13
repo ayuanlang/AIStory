@@ -708,6 +708,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return `${(value / 1000).toFixed(1)}s`;
     }, []);
 
+    const analysisAssetCounts = useMemo(() => {
+        const importReport = analysisUiReport?.importReport || {};
+        const toCount = (value) => {
+            const count = Number(value);
+            return Number.isFinite(count) && count > 0 ? count : 0;
+        };
+        const insertedEntityCount = (type) => {
+            const dbRunCount = toCount(importReport?.dbRunInsertedCounts?.entities?.[type]);
+            if (dbRunCount > 0) return dbRunCount;
+            return toCount(importReport?.importedSubjectCounts?.[type]);
+        };
+        const totalEntityCount = (type) => {
+            const dbPersistedCount = toCount(importReport?.dbPersistedCounts?.entities?.[type]);
+            if (dbPersistedCount > 0) return dbPersistedCount;
+            return toCount(importReport?.importedSubjectCounts?.[type]);
+        };
+
+        return {
+            inserted: {
+                character: insertedEntityCount('character'),
+                environment: insertedEntityCount('environment'),
+                prop: insertedEntityCount('prop'),
+            },
+            total: {
+                character: totalEntityCount('character'),
+                environment: totalEntityCount('environment'),
+                prop: totalEntityCount('prop'),
+            },
+        };
+    }, [analysisUiReport]);
+
     const computeAnalysisPhaseTimings = useCallback((marks) => {
         const toNumber = (v) => {
             const n = Number(v || 0);
@@ -9592,14 +9623,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
                                 <div>
                                     <span className="font-medium">✨ {t('资产入库统计', 'Asset Insert Stats')}:</span> {t('本次新增', 'Inserted this run')}
-                                    <span className="text-purple-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.character ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.character ?? analysisUiReport.importReport?.importedSubjectCounts?.character ?? 0} </span>{t('位角色', 'characters')}、
-                                    <span className="text-emerald-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.environment ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.environment ?? analysisUiReport.importReport?.importedSubjectCounts?.environment ?? 0} </span>{t('个空镜', 'environments')}、
-                                    <span className="text-amber-300 font-semibold"> {analysisUiReport.importReport?.dbRunInsertedCounts?.entities?.prop ?? analysisUiReport.importReport?.dbPersistedCounts?.entities?.prop ?? analysisUiReport.importReport?.importedSubjectCounts?.prop ?? 0} </span>{t('个道具', 'props')}
+                                    <span className="text-purple-300 font-semibold"> {analysisAssetCounts.inserted.character} </span>{t('位角色', 'characters')}、
+                                    <span className="text-emerald-300 font-semibold"> {analysisAssetCounts.inserted.environment} </span>{t('个空镜', 'environments')}、
+                                    <span className="text-amber-300 font-semibold"> {analysisAssetCounts.inserted.prop} </span>{t('个道具', 'props')}
                                     <span className="ml-1 text-white/70">(
                                         {t('当前总量', 'Current total')}:
-                                        <span className="text-purple-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.character ?? analysisUiReport.importReport?.importedSubjectCounts?.character ?? 0} </span>{t('角色', 'characters')}、
-                                        <span className="text-emerald-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.environment ?? analysisUiReport.importReport?.importedSubjectCounts?.environment ?? 0} </span>{t('空镜', 'environments')}、
-                                        <span className="text-amber-200 font-semibold"> {analysisUiReport.importReport?.dbPersistedCounts?.entities?.prop ?? analysisUiReport.importReport?.importedSubjectCounts?.prop ?? 0} </span>{t('道具', 'props')}
+                                        <span className="text-purple-200 font-semibold"> {analysisAssetCounts.total.character} </span>{t('角色', 'characters')}、
+                                        <span className="text-emerald-200 font-semibold"> {analysisAssetCounts.total.environment} </span>{t('空镜', 'environments')}、
+                                        <span className="text-amber-200 font-semibold"> {analysisAssetCounts.total.prop} </span>{t('道具', 'props')}
                                     )</span>。
                                 </div>
                                 <div>

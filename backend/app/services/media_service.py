@@ -13741,6 +13741,28 @@ class MediaGenerationService:
         if not task_id:
             return {"error": "No taskId from KIE", "details": data, "submit_failed": True, "runtime_model": submitted_model}
 
+        if callable(provider_payload_callback) and isinstance(submit_payload, dict):
+            try:
+                provider_payload_callback(
+                    {
+                        "provider": "kie",
+                        "type": "audio" if gen_type == "audio" else ("video" if gen_type == "video" else "image"),
+                        "method": "POST",
+                        "url": submit_url,
+                        "model": submit_payload.get("model"),
+                        "payload": _strip_base64_from_log(submit_payload),
+                        "final_submit": True,
+                        "provider_task_id": str(task_id),
+                    }
+                )
+            except Exception as callback_err:
+                logger.warning(
+                    "KIE final provider payload callback failed | model=%s task_id=%s error=%s",
+                    submit_payload.get("model"),
+                    task_id,
+                    callback_err,
+                )
+
         callback_enabled = bool(callback_url and callback_url != "-1")
         pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         callback_assisted_job = bool(

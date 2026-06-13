@@ -1530,6 +1530,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!stableShotId) return;
         clearPendingVideoJob(stableShotId);
         setShotGeneratingState(stableShotId, 'video', false);
+        setVideoStatuses(prev => { const n = { ...prev }; delete n[stableShotId]; return n; });
     }, [clearPendingVideoJob, setShotGeneratingState]);
 
     const clearPendingVideoJobsByJobId = useCallback((jobId) => {
@@ -1564,10 +1565,48 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             matchedShotIds.forEach((shotId) => {
                 setShotGeneratingState(shotId, 'video', false);
             });
+            setVideoStatuses(prevStatuses => {
+                const nextStatuses = { ...prevStatuses };
+                matchedShotIds.forEach((shotId) => {
+                    delete nextStatuses[shotId];
+                });
+                return nextStatuses;
+            });
         }
 
         clearPendingVideoJobsByJobId(stableJobId);
     }, [clearPendingVideoJobsByJobId, readVideoJobStateStorage, setShotGeneratingState]);
+
+    const releaseShotVideoUi = useCallback(({ shotId, jobId } = {}) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableJobId = String(jobId || '').trim();
+        const pending = stableJobId ? readVideoJobStateStorage() : {};
+        const matchedShotIds = stableJobId
+            ? Object.entries(pending)
+                .filter(([, payload]) => String(payload?.jobId || '').trim() === stableJobId)
+                .map(([pendingShotId]) => String(pendingShotId || '').trim())
+                .filter(Boolean)
+            : [];
+        const shotIds = Array.from(new Set([stableShotId, ...matchedShotIds].filter(Boolean)));
+
+        shotIds.forEach((id) => {
+            setShotGeneratingState(id, 'video', false);
+            clearPendingVideoJob(id);
+        });
+        if (stableJobId) {
+            clearPendingVideoJobsByJobId(stableJobId);
+            delete pausedResumeVideoJobsRef.current[stableJobId];
+        }
+        if (shotIds.length > 0) {
+            setVideoStatuses(prevStatuses => {
+                const nextStatuses = { ...prevStatuses };
+                shotIds.forEach((id) => {
+                    delete nextStatuses[id];
+                });
+                return nextStatuses;
+            });
+        }
+    }, [clearPendingVideoJob, clearPendingVideoJobsByJobId, readVideoJobStateStorage, setShotGeneratingState]);
 
     const getPendingVideoJobId = useCallback((shotId) => {
         const stableShotId = String(shotId || '').trim();
@@ -4822,10 +4861,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                 }
-                                delete pausedResumeVideoJobsRef.current[jobId];
-                                clearPendingVideoJobsByJobId(jobId);
-                                setShotGeneratingState(stableShotId, 'video', false);
-                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
+                                releaseShotVideoUi({ shotId: stableShotId, jobId });
                                 refreshShotAssetsMeta();
                                 await refreshShots();
                                 break;
@@ -4842,18 +4878,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     }
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                                    delete pausedResumeVideoJobsRef.current[jobId];
-                                    clearPendingVideoJobsByJobId(jobId);
-                                    setShotGeneratingState(stableShotId, 'video', false);
-                                    setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
+                                    releaseShotVideoUi({ shotId: stableShotId, jobId });
                                     refreshShotAssetsMeta();
                                     await refreshShots();
                                     break;
                                 }
 
-                                clearPendingVideoJobsByJobId(jobId);
-                                setShotGeneratingState(stableShotId, 'video', false);
-                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
+                                releaseShotVideoUi({ shotId: stableShotId, jobId });
                                 const errMsg = String(status?.error || 'unknown error');
                                 const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
                                 onLog?.(`Recovered video generation failed for shot ${stableShotId}: ${errMsg}`, tone);
@@ -4863,9 +4894,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             const detail = e?.response?.data?.detail || e?.message || '';
                             const detailLower = String(detail).toLowerCase();
                             if (detailLower.includes('job not found')) {
-                                clearPendingVideoJobsByJobId(jobId);
-                                setShotGeneratingState(stableShotId, 'video', false);
-                                setVideoStatuses(prev => { const n = {...prev}; delete n[stableShotId]; return n; });
+                                releaseShotVideoUi({ shotId: stableShotId, jobId });
                                 onLog?.(`Recovered video job missing for shot ${stableShotId}; cleared pending state.`, 'warning');
                                 break;
                             }
@@ -4905,12 +4934,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         };
     }, [
         activeEpisode?.id,
-        clearPendingVideoJobsByJobId,
+        clearPendingVideoJob,
         forceClearShotVideoJob,
         normalizeGenerationPhase,
         onLog,
         onUpdateShot,
         readVideoJobStateStorage,
+        releaseShotVideoUi,
         refreshShots,
         setEditingShot,
         setPendingVideoJob,
@@ -7661,7 +7691,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
                 } catch(e) {}
 
-                clearPendingVideoJob(targetShotId);
+                releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                 const newData = { video_url: res.url, prompt: rawPrompt };
                 
                 // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
@@ -7699,12 +7729,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         showNotification('Video job continues in background.', 'info');
                         keepRunningUi = true;
                     } else {
-                        clearPendingVideoJob(targetShotId);
+                        releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                         onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                         showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                     }
                 } else {
-                    clearPendingVideoJob(targetShotId);
+                    releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                     onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                     showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                 }
@@ -7722,12 +7752,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                      showNotification('Video job continues in background.', 'info');
                      keepRunningUi = true;
                  } else {
-                     clearPendingVideoJob(targetShotId);
+                     releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                      onLog?.(`Generation failed: ${e.message}`, 'error');
                      showNotification(`Generation failed: ${e.message}`, 'error');
                  }
              } else {
-                 clearPendingVideoJob(targetShotId);
+                 releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                  onLog?.(`Generation failed: ${e.message}`, 'error');
                  showNotification(`Generation failed: ${e.message}`, 'error');
              }

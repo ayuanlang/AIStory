@@ -31952,6 +31952,11 @@ async def _run_generate_video_job(
     def _on_provider_payload(payload_snapshot: Any) -> None:
         if not isinstance(payload_snapshot, dict):
             return
+        try:
+            import copy as _copy
+            payload_snapshot = _copy.deepcopy(payload_snapshot)
+        except Exception:
+            payload_snapshot = dict(payload_snapshot)
         patch_generation_task_payload(
             job_id,
             {
