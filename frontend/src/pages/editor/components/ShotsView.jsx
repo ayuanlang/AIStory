@@ -3360,6 +3360,53 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return normalizeMediaRefList(refs);
     };
 
+    const isVideoMediaRefUrl = (url) => {
+        const rawUrl = String(url || '').trim();
+        if (!rawUrl) return false;
+
+        let pathname = rawUrl;
+        try {
+            pathname = new URL(rawUrl, window.location.origin).pathname || rawUrl;
+        } catch {
+            pathname = rawUrl.split('?')[0].split('#')[0];
+        }
+
+        return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(String(pathname || '').toLowerCase());
+    };
+
+    const normalizeImageRefList = (refs = []) => normalizeMediaRefList(refs).filter((url) => !isVideoMediaRefUrl(url));
+
+    const resolveShotVideoImageRefs = useCallback((shotSnapshot, resolvedEntities = null) => {
+        if (!shotSnapshot) return [];
+
+        let tech = {};
+        try {
+            tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+            if (!tech || typeof tech !== 'object') tech = {};
+        } catch {
+            tech = {};
+        }
+
+        const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
+        const effectiveVideoMode = resolveUnifiedVideoMode(tech);
+        const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+            promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
+            entityPool,
+        });
+        const refs = Array.isArray(tech.video_ref_image_urls)
+            ? tech.video_ref_image_urls
+            : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
+
+        return normalizeImageRefList(refs);
+    }, [entities]);
+
+    const mergeVideoImageRefs = useCallback((shotSnapshot, fallbackRefs = [], resolvedEntities = null) => {
+        return normalizeImageRefList([
+            ...resolveShotVideoImageRefs(shotSnapshot, resolvedEntities),
+            ...(Array.isArray(fallbackRefs) ? fallbackRefs : []),
+        ]);
+    }, [resolveShotVideoImageRefs]);
+
     const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
         const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
         const startPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
@@ -3376,10 +3423,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
 
         return normalizeMediaRefList([
+            ...resolveShotVideoImageRefs(shotSnapshot, entityPool),
             ...startPromptEntityRefs,
             ...endPromptEntityRefs,
         ]);
-    }, [entities]);
+    }, [entities, resolveShotVideoImageRefs]);
 
     const cropGeneratedPanelToBlob = useCallback(async ({
         image,
@@ -6537,7 +6585,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  onLog?.('Start Frame generation stopped by user.', 'warning');
                  return;
              }
-                const refs = resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities);
+                const refs = mergeVideoImageRefs(
+                    shotSnapshot,
+                    resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities),
+                    resolvedEntities,
+                );
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     refs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
@@ -6650,7 +6702,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  return;
              }
                 const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
-                const uniqueRefs = getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities);
+                const uniqueRefs = mergeVideoImageRefs(
+                    shotSnapshot,
+                    getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities),
+                    resolvedEntities,
+                );
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     uniqueRefs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
@@ -7200,7 +7256,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const isManual = techNotes.manual_video_prompt === true;
 
             const { text: submitPrompt } = injectEntityFeatures(rawVideoPrompt, isManual, resolvedEntities);
-            let refs = resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities);
+            let refs = mergeVideoImageRefs(
+                shotSnapshot,
+                resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities),
+                resolvedEntities,
+            );
 
             const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
             const activePresetKey = normalizeMultiPanelPresetKey(multiPanelPresetKey);
@@ -7959,7 +8019,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!startUrl && !startPromptIsInherited) {
                 const isManualStart = techNotes.manual_start_frame === true;
                 const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
-                const startRefs = resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities);
+                const startRefs = mergeVideoImageRefs(
+                    workingShot,
+                    resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities),
+                    resolvedEntities,
+                );
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(startSubmitPrompt) });
                 const finalStartPrompt = isManualStart ? startSubmitPrompt : (startSubmitPrompt + globalCtx);
                 const startResult = await generateImage(finalStartPrompt, null, startRefs.length > 0 ? startRefs : null, { function_name: 'generate_shot_images',
@@ -8002,7 +8066,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 } else {
                     const isManualEnd = techNotes.manual_end_frame === true;
                     const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
-                    const endRefs = getEndFrameVisibleRefs({ ...workingShot, image_url: startUrl || workingShot.image_url }, rawEndPrompt, resolvedEntities);
+                    const endShotContext = { ...workingShot, image_url: startUrl || workingShot.image_url };
+                    const endRefs = mergeVideoImageRefs(
+                        endShotContext,
+                        getEndFrameVisibleRefs(endShotContext, rawEndPrompt, resolvedEntities),
+                        resolvedEntities,
+                    );
                     const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(endSubmitPrompt) });
                     const finalEndPrompt = isManualEnd ? endSubmitPrompt : (endSubmitPrompt + globalCtx);
                     const endResult = await generateImage(finalEndPrompt, null, endRefs.length > 0 ? endRefs : null, { function_name: 'generate_shot_images',
@@ -8054,7 +8123,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setShotGeneratingState(stableShotId, 'end', false);
     setShotGeneratingState(stableShotId, 'cropping', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, mergeVideoImageRefs, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));

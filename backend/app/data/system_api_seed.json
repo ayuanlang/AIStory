@@ -2007,7 +2007,11 @@
           "unit_type": "per_million_tokens",
           "cost": 800,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 8.0,
         "ref_cost_cny_per_million_tokens_online": 16.0,
@@ -2041,7 +2045,11 @@
           "unit_type": "per_million_tokens",
           "cost": 400,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 4.0,
         "ref_cost_cny_per_million_tokens_online": 8.0,
@@ -2075,7 +2083,11 @@
           "unit_type": "per_million_tokens",
           "cost": 800,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 8.0,
         "ref_cost_cny_per_million_tokens_online": 16.0,
@@ -2110,7 +2122,11 @@
           "unit_type": "per_million_tokens",
           "cost": 400,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 4.0,
         "ref_cost_cny_per_million_tokens_online": 8.0,
@@ -2144,7 +2160,11 @@
           "unit_type": "per_million_tokens",
           "cost": 750,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 7.5,
         "ref_cost_cny_per_million_tokens_online": 15.0,
@@ -2177,7 +2197,11 @@
           "unit_type": "per_million_tokens",
           "cost": 210,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 2.1,
         "ref_cost_cny_per_million_tokens_online": 4.2,
@@ -2210,7 +2234,11 @@
           "unit_type": "per_million_tokens",
           "cost": 500,
           "cost_input": 0,
-          "cost_output": 0
+          "cost_output": 0,
+          "extra_conditions": {
+            "seedance_draft_price_multiplier": 0.7,
+            "seedance_continuation_price_multiplier": 1.5
+          }
         },
         "ref_cost_cny_per_million_tokens": 5.0,
         "ref_cost_cny_per_million_tokens_online": 10.0,

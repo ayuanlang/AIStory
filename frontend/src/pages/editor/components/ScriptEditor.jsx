@@ -3471,7 +3471,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim());
 
-        let stage2SceneMarkdown = String(normalizeLlmMarkdownTable(resolvedStage2RawText || resolvedAnalysisRawText || '') || '').trim();
+        const stage2SceneMarkdownFromAnalysis = String(normalizeLlmMarkdownTable(resolvedAnalysisRawText || '') || '').trim();
+        const stage2SceneMarkdownFromStage2 = String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim();
+        let stage2SceneMarkdown = String(stage2SceneMarkdownFromAnalysis || stage2SceneMarkdownFromStage2 || '').trim();
         if (parsedSceneArrangementText) {
             if (stage2SceneMarkdown) {
                 stage2SceneMarkdown = `${parsedSceneArrangementText}\n\n${stage2SceneMarkdown}`;
@@ -3656,12 +3658,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                  }
              }
         }
-        if (persisted) return persisted;
+        if (persisted) {
+            const liveSceneMarkdown = String(normalizeLlmMarkdownTable(
+                llmRawResultContent
+                || llmResultContent
+                || activeEpisode?.ai_scene_analysis_result
+                || ''
+            ) || '').trim();
+            if (liveSceneMarkdown) {
+                if (!persisted.stages) persisted.stages = {};
+                if (!persisted.stages.stage2) persisted.stages.stage2 = { key: 'stage2', outputs: {} };
+                if (!persisted.stages.stage2.outputs) persisted.stages.stage2.outputs = {};
+                if (!persisted.stages.stage2.outputs.scene_markdown) {
+                    persisted.stages.stage2.outputs.scene_markdown = {
+                        key: 'scene_markdown',
+                        kind: 'markdown',
+                        title: '场景分析结果',
+                        content: '',
+                    };
+                }
+                const persistedSceneMarkdown = String(persisted.stages.stage2.outputs.scene_markdown.content || '').trim();
+                if (!persistedSceneMarkdown) {
+                    persisted.stages.stage2.outputs.scene_markdown.content = liveSceneMarkdown;
+                }
+            }
+            return persisted;
+        }
         return buildStageOutputsObject({
             analysisRawText: llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '',
             assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
         });
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, llmResultContent, normalizeLlmMarkdownTable, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -5214,12 +5241,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                    const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(analyzedText || '', {
+                        reason: importWarningMessage,
+                        source: 'resume-analysis-empty-import',
+                    });
+                    if (sceneRegenStarted) {
+                        importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                    }
                 }
             } catch (importErr) {
                 importWarningMessage = t(
                     `自动导入失败：${importErr?.message || importErr}`,
                     `Auto-import failed: ${importErr?.message || importErr}`
                 );
+                const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(analyzedText || '', {
+                    reason: importWarningMessage,
+                    source: 'resume-analysis-import-error',
+                });
+                if (sceneRegenStarted) {
+                    importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                }
                 setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
@@ -6227,6 +6268,91 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    async function triggerSceneArrangementRegenerationTask(analysisText, options = {}) {
+        const stableEpisodeId = activeEpisode?.id;
+        if (!stableEpisodeId) return false;
+
+        const sourceText = String(analysisText || '').trim();
+        const sceneCheck = validateAutoSceneTableImport(sourceText);
+        const normalizedSceneTable = String(normalizeLlmMarkdownTable(sourceText || '') || '').trim();
+        const hasSceneArrangementPayload = Boolean(
+            (sceneCheck?.ok && String(sceneCheck?.tableText || '').trim())
+            || (normalizedSceneTable && /(?:Scene\s*ID|场景\s*ID|场景ID|Scene\s*No\.?|场次|场景名|场景名称)/i.test(normalizedSceneTable))
+        );
+
+        if (!hasSceneArrangementPayload) {
+            onLog?.(`Scene arrangement regeneration skipped: import issue is not tied to a parseable scene table. source=${options?.source || 'unknown'}`, 'info');
+            return false;
+        }
+
+        if (sceneGenStartInFlightRef.current || sceneGenGenerating || isStoppingSceneGen) {
+            onLog?.('Scene arrangement regeneration skipped: a scene generation task is already starting or stopping.', 'warning');
+            return false;
+        }
+
+        const latest = await getEpisodeScenesGenerationStatus(stableEpisodeId).catch(() => null);
+        if (latest?.running) {
+            onLog?.('Scene arrangement regeneration skipped: a scene generation task is already running.', 'warning');
+            return false;
+        }
+
+        const reasonText = String(options?.reason || 'Scene arrangement import failed').trim();
+        const sourceLabel = String(options?.source || 'script-analysis-import').trim();
+        const tableText = String(sceneCheck?.tableText || normalizedSceneTable || sourceText).trim();
+        const cappedTableText = tableText.length > 12000 ? `${tableText.slice(0, 12000)}\n...[truncated]` : tableText;
+        const scriptContext = String(adaptationText || activeEpisode?.ai_scene_analysis_adaptation || activeEpisode?.script_content || rawContent || '').trim();
+        const cappedScriptContext = scriptContext.length > 12000 ? `${scriptContext.slice(0, 12000)}\n...[truncated]` : scriptContext;
+        const extraNotes = [
+            '【自动恢复任务】剧本分析检测到场景编排导入错误，请单独重新生成并入库场景编排。',
+            `触发来源：${sourceLabel}`,
+            `导入错误：${reasonText}`,
+            '要求：基于下方场景编排/剧本分析结果重新生成完整场景列表；保留原剧情顺序、角色出场关系、场景入口/出口状态；生成后替换当前分集旧场景。',
+            cappedScriptContext ? `【原始/优化后剧本】\n\n${cappedScriptContext}` : '',
+            '【原场景编排/分析结果】',
+            cappedTableText,
+        ].filter(Boolean).join('\n\n');
+
+        sceneGenStartInFlightRef.current = true;
+        setSceneGenGenerating(true);
+        setSceneGenStatus((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            running: true,
+            status: 'starting',
+            message: t('检测到场景编排导入异常，正在启动单独重排任务...', 'Scene arrangement import failed. Starting a separate regeneration task...'),
+        }));
+
+        try {
+            onLog?.(`Scene arrangement import issue detected. Starting separate regeneration task. source=${sourceLabel}`, 'warning');
+            await startEpisodeScenesGeneration(stableEpisodeId, {
+                scene_count: null,
+                extra_notes: extraNotes,
+                replace_existing_scenes: true,
+            });
+            if (sceneGenStatusTimerRef.current) {
+                clearInterval(sceneGenStatusTimerRef.current);
+                sceneGenStatusTimerRef.current = null;
+            }
+            sceneGenStatusTimerRef.current = setInterval(pollSceneGenStatus, 3000);
+            await pollSceneGenStatus();
+            onLog?.('Scene arrangement regeneration task started automatically after import failure.', 'success');
+            return true;
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || String(e);
+            setSceneGenGenerating(false);
+            setSceneGenStatus((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                running: false,
+                status: 'failed',
+                message: t('场景编排自动重排任务启动失败。', 'Failed to start the automatic scene arrangement regeneration task.'),
+                error: String(detail || ''),
+            }));
+            onLog?.(`Scene arrangement regeneration task start failed: ${detail}`, 'error');
+            return false;
+        } finally {
+            sceneGenStartInFlightRef.current = false;
+        }
+    }
+
     const handleGenerateCanon = async () => {
         if (!activeEpisode?.id) return;
         if (episodeCanonGenerationInFlightRef.current || canonGenerating) return;
@@ -6508,7 +6634,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let decision = 'phase1';
         if (hasSceneMarkdown && hasSubjectIndex && hasCompleteSubjectsJson) {
             decision = 'completed';
-        } else if (hasSceneMarkdown && hasSubjectIndex) {
+        } else if (hasSubjectIndex) {
             decision = 'phase2';
         }
 
@@ -6615,7 +6741,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatus({
             phase: 'completed',
-                message: '🚀 检测到场景分析结果与资产清单已完整，直接进入资产设计...',
+            message: '🚀 检测到资产清单已完整，直接进入资产设计...',
         });
 
         try {
@@ -6890,6 +7016,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result. Check import config or response format.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                    const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(analyzedText, {
+                        reason: importWarningMessage,
+                        source: 'standard-analysis-empty-import',
+                    });
+                    if (sceneRegenStarted) {
+                        importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                    }
                 }
             } catch (importErr) {
                 importWarningMessage = t(
@@ -6897,6 +7030,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `Auto-import failed: ${importErr?.message || importErr}`
                 );
                 if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+                const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(analyzedText, {
+                    reason: importWarningMessage,
+                    source: 'standard-analysis-import-error',
+                });
+                if (sceneRegenStarted) {
+                    importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                }
                 setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
@@ -7600,10 +7740,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (!importReport) {
                     importWarningMessage = t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result.');
                     setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
+                    const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(importSourceText || finalAnalysisText || '', {
+                        reason: importWarningMessage,
+                        source: 'advanced-analysis-empty-import',
+                    });
+                    if (sceneRegenStarted) {
+                        importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                    }
                 }
             } catch (importErr) {
                 importWarningMessage = t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`);
                 if (onLog) onLog(`Auto-import failed (checks will continue): ${importErr?.message || importErr}`, 'warning');
+                const sceneRegenStarted = await triggerSceneArrangementRegenerationTask(importSourceText || finalAnalysisText || '', {
+                    reason: importWarningMessage,
+                    source: 'advanced-analysis-import-error',
+                });
+                if (sceneRegenStarted) {
+                    importWarningMessage = `${importWarningMessage}；${t('已自动发起单独场景编排任务。', 'Started a separate scene arrangement task automatically.')}`;
+                }
                 setAnalysisFlowStatus({ phase: 'warning', message: importWarningMessage });
             } finally {
                 phaseMarks.importFinishedAt = Date.now();
@@ -7994,14 +8148,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 throw new Error('Stage 2.2 镜头节拍生成已返回，但未检测到有效分镜表格。原始返回已回写，请检查后重试。');
             }
 
-            importReport = await runAutoImportAndSwitchToScenes(finalAnalysisText, {
-                switchToScenes: false,
-                importOptions: {
-                    autoSupplementSceneSubjects: false,
-                    suppressAlerts: true,
-                    subjectsJson: stage2Result?.subjects_json || null,
-                },
-            });
+            try {
+                importReport = await runAutoImportAndSwitchToScenes(finalAnalysisText, {
+                    switchToScenes: false,
+                    importOptions: {
+                        autoSupplementSceneSubjects: false,
+                        suppressAlerts: true,
+                        subjectsJson: stage2Result?.subjects_json || null,
+                    },
+                });
+                if (!importReport) {
+                    await triggerSceneArrangementRegenerationTask(finalAnalysisText, {
+                        reason: t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result.'),
+                        source: 'stage2-restart-empty-import',
+                    });
+                }
+            } catch (importErr) {
+                await triggerSceneArrangementRegenerationTask(finalAnalysisText, {
+                    reason: t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`),
+                    source: 'stage2-restart-import-error',
+                });
+                throw importErr;
+            }
             importReport = await ensureSubjectsImportedBeforePostChecks(stage2Result, importReport);
             maybeAlertIncompleteSubjectsImport(stage2Result, finalAnalysisText);
 
@@ -8430,11 +8598,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             resetAutoSubjectsImportCache();
             onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'}`, 'process');
-            // Re-run the second pass with the (potentially edited) subjectIndexText
+            const resolvedSubjectIndexText = extractPureSubjectIndexText(String(
+                options.explicitSubjectIndexText
+                || subjectIndexText
+                || activeEpisode?.ai_scene_analysis_subject_index
+                || getStageOutputContent('stage2', 'subject_index')
+                || ''
+            ).trim());
+            if (!resolvedSubjectIndexText) {
+                throw new Error(t('缺少第二阶段资产清单，无法重跑资产生成。', 'Missing Stage 2 subject index. Cannot rerun asset generation.'));
+            }
+
+            // Re-run the second pass with the resolved asset index text.
             // It will also bust deduplication cache by using sceneAnalysisMode = "2_pass_generate_assets" internally
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
                 analysisUiReport?.importReport || {},
-                subjectIndexText,
+                resolvedSubjectIndexText,
                 { isRetryPhase2: true, ...options }
             );
             
@@ -8836,6 +9015,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { status: analysisUiReport.status, error: analysisUiReport.error, warning: analysisUiReport.warning };
     }, [analysisUiReport, analysisFlowStatus]);
 
+    const hasAssetGenerationPrerequisite = Boolean(resolveSubjectIndexTextForAssetRerun());
+
     const stage1StageCards = useMemo(() => {
         const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
         const visualBackfillJson = getStageOutputContent('stage1', 'project_visual_backfill');
@@ -9023,7 +9204,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: t('选择重跑', 'Choose Rerun'),
                     icon: 'play',
                     onClick: () => openPhase2RerunModal({ mode: 'all' }),
-                    disabled: isAnalyzing || isRetryingPhase2 || !(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index')),
+                    disabled: isAnalyzing || isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                     loading: isRetryingPhase2 && (!phase2RetryOptionsRef.current?.targetEntityTypes),
                 }
             ],
@@ -9080,7 +9261,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         label: t(cat.btnZh, cat.btnEn),
                         icon: 'repeat',
                         onClick: () => handleRetryPhase2({ targetEntityTypes: [cat.key] }),
-                        disabled: isAnalyzing || isRetryingPhase2 || !(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index')),
+                        disabled: isAnalyzing || isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                         loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key),
                     }
                 ],
@@ -9089,7 +9270,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         return cards;
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_subject_index, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, t]);
+    }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, t]);
 
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
@@ -9243,7 +9424,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage2', 'scene_markdown') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (hasAssetGenerationPrerequisite ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
                                 {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 4}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
@@ -9257,13 +9438,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         </button>
                                     </div>
                                 ) : (
-                                    !!getStageOutputContent('stage2', 'scene_markdown') ? (
+                                    hasAssetGenerationPrerequisite ? (
                                          <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('可重跑', 'Ready')}
                                         </button>
                                     ) : (
-                                        <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S3')}</span>
+                                        <span className="text-[10px] text-white/30">{t('缺资产清单', 'Needs Assets')}</span>
                                     )
                                 )}
                             </div>

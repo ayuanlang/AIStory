@@ -1429,6 +1429,14 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                     cost = _nni(ap.get("cost", cfg.get("billing_cost", 0)))
                     cost_input = _nni(ap.get("cost_input", cfg.get("billing_cost_input", 0)))
                     cost_output = _nni(ap.get("cost_output", cfg.get("billing_cost_output", 0)))
+                    extra_conditions = {"rule_kind": "base_pricing"}
+                    ap_extra = ap.get("extra_conditions") if isinstance(ap.get("extra_conditions"), dict) else None
+                    cfg_extra = cfg.get("billing_rule_extra_conditions") if isinstance(cfg.get("billing_rule_extra_conditions"), dict) else None
+                    if cfg_extra:
+                        extra_conditions.update(cfg_extra)
+                    if ap_extra:
+                        extra_conditions.update(ap_extra)
+                    extra_conditions["rule_kind"] = "base_pricing"
                     if cost <= 0 and cost_input <= 0 and cost_output <= 0:
                         continue
 
@@ -1448,7 +1456,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                         billing_cost_input=cost_input,
                         billing_cost_output=cost_output,
                         charge_multiplier=2.0,
-                        extra_conditions={"rule_kind": "base_pricing"},
+                        extra_conditions=extra_conditions,
                         created_at=now_iso,
                         updated_at=now_iso,
                     ))

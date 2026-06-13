@@ -2807,12 +2807,14 @@ def _upsert_base_billing_rule(
         "cost_output": _non_negative_int(_pick_cost_value(raw_billing, "cost_output", "billing_cost_output"), 0),
     }
     charge_multiplier = _normalize_rule_charge_multiplier(raw_billing.get("charge_multiplier"), default=2.0)
+    raw_extra = raw_billing.get("extra_conditions") if isinstance(raw_billing.get("extra_conditions"), dict) else {}
     flags = _category_to_mode_flags(category)
     rule = _get_base_billing_rule(db, system_api_id, include_inactive=True)
     now_iso = now_bj_iso()
 
     if rule:
         extra = _rule_extra_conditions(rule)
+        extra.update(raw_extra)
         extra["rule_kind"] = _BASE_BILLING_RULE_KIND
         rule.name = "Base Pricing"
         rule.description = "Base pricing rule generated from system API setting."
@@ -2871,7 +2873,7 @@ def _upsert_base_billing_rule(
         billing_cost_input=normalized["cost_input"],
         billing_cost_output=normalized["cost_output"],
         charge_multiplier=charge_multiplier,
-        extra_conditions={"rule_kind": _BASE_BILLING_RULE_KIND},
+        extra_conditions={**raw_extra, "rule_kind": _BASE_BILLING_RULE_KIND},
         created_at=now_iso,
         updated_at=now_iso,
     )

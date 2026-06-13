@@ -31124,6 +31124,10 @@ async def _run_generate_video(
         if reserve_system_api_id is not None:
             reserve_details["system_api_id"] = reserve_system_api_id
             reserve_details["resolved_system_api_id"] = reserve_system_api_id
+        reserve_details["draft_mode"] = bool(req.draft_mode)
+        reserve_details["draft"] = bool(req.draft_mode)
+        reserve_details["use_prev_video"] = bool(getattr(req, "use_prev_video", False))
+        reserve_details["shot_continuation"] = bool(getattr(req, "use_prev_video", False))
 
         reserve_provider_arg = reserve_provider or req.provider
         reserve_model_arg = reserve_model or req.model
@@ -31620,6 +31624,10 @@ async def _run_generate_video(
                         "status": "SETTLED",
                         "billing_mode": "ESTIMATE_CALLBACK_PENDING",
                         "token_source": "estimate_callback_pending",
+                        "draft_mode": bool(req.draft_mode),
+                        "draft": bool(req.draft_mode),
+                        "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                        "shot_continuation": bool(getattr(req, "use_prev_video", False)),
                     }
                 else:
                     settle_details = {
@@ -31627,6 +31635,10 @@ async def _run_generate_video(
                         "duration_seconds": req.duration,
                         "status": "SETTLED",
                         "billing_mode": "CALLBACK_PENDING",
+                        "draft_mode": bool(req.draft_mode),
+                        "draft": bool(req.draft_mode),
+                        "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                        "shot_continuation": bool(getattr(req, "use_prev_video", False)),
                     }
                 billing_service.settle_reservation(db, reservation_tx_id, settle_details)
                 reservation_tx = None
@@ -31760,12 +31772,20 @@ async def _run_generate_video(
                     "status": "SETTLED",
                     "billing_mode": "ACTUAL",
                     "token_source": "api_usage" if int(usage.get("total_tokens", 0) or 0) > 0 else "estimate",
+                    "draft_mode": bool(req.draft_mode),
+                    "draft": bool(req.draft_mode),
+                    "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                    "shot_continuation": bool(getattr(req, "use_prev_video", False)),
                 }
             else:
                 settle_details = {
                     "duration": req.duration,
                     "duration_seconds": req.duration,
                     "status": "SETTLED",
+                    "draft_mode": bool(req.draft_mode),
+                    "draft": bool(req.draft_mode),
+                    "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                    "shot_continuation": bool(getattr(req, "use_prev_video", False)),
                 }
 
                 raw_meta = final_meta.get("raw") if isinstance(final_meta.get("raw"), dict) else {}

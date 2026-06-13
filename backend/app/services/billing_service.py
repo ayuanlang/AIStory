@@ -57,6 +57,8 @@ class BillingService:
         "llm_chat": 1,
     }
     KIE_STANDARD_PROVIDER = "kie"
+    DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER = 0.7
+    DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER = 1.5
 
     @staticmethod
     def _system_setting_query(db: Session):
@@ -1421,6 +1423,15 @@ class BillingService:
 
         has_audio_raw = payload.get("has_audio")
         has_audio = None if has_audio_raw is None else bool(has_audio_raw)
+        draft_mode = bool(
+            BillingService._normalize_bool_value(payload.get("draft_mode"))
+            or BillingService._normalize_bool_value(payload.get("draft"))
+        )
+        use_prev_video = bool(
+            BillingService._normalize_bool_value(payload.get("use_prev_video"))
+            or BillingService._normalize_bool_value(payload.get("shot_continuation"))
+            or BillingService._normalize_bool_value(payload.get("continuation_mode"))
+        )
 
         return {
             "input_tokens": max(0, input_tokens),
@@ -1440,6 +1451,8 @@ class BillingService:
             "input_format": input_format,
             "output_format": output_format,
             "has_audio": has_audio,
+            "draft_mode": draft_mode,
+            "use_prev_video": use_prev_video,
         }
 
     @staticmethod
@@ -1772,22 +1785,65 @@ class BillingService:
         # Requirement: null/negative multiplier falls back to 2.0
         charge_multiplier = 2.0 if parsed_multiplier < 0 else parsed_multiplier
 
+        runtime_multiplier = 1.0
+        runtime_adjustments: Dict[str, Any] = {}
+        is_seedance_video = bool(usage.get("is_seedance_video"))
+        runtime_enabled = extra.get("seedance_runtime_price_adjustment_enabled")
+        runtime_enabled = True if runtime_enabled is None else bool(BillingService._normalize_bool_value(runtime_enabled))
+        if is_seedance_video and runtime_enabled:
+            if bool(usage.get("draft_mode")):
+                draft_multiplier = BillingService._first_positive_float(
+                    extra,
+                    [
+                        "seedance_draft_price_multiplier",
+                        "draft_price_multiplier",
+                        "seedance_draft_discount_multiplier",
+                    ],
+                    BillingService.DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER,
+                )
+                runtime_multiplier *= draft_multiplier
+                runtime_adjustments["seedance_draft_price_multiplier"] = draft_multiplier
+            if bool(usage.get("use_prev_video")):
+                continuation_multiplier = BillingService._first_positive_float(
+                    extra,
+                    [
+                        "seedance_continuation_price_multiplier",
+                        "continuation_price_multiplier",
+                        "use_prev_video_price_multiplier",
+                    ],
+                    BillingService.DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER,
+                )
+                runtime_multiplier *= continuation_multiplier
+                runtime_adjustments["seedance_continuation_price_multiplier"] = continuation_multiplier
+
         import math
         base_cost = int(max(0, math.ceil(amount))) if amount > 0 else 0
-        final_charged_val = float(amount) * float(charge_multiplier)
+        final_charged_val = float(amount) * float(charge_multiplier) * float(runtime_multiplier)
         charged_cost = int(max(0, math.ceil(final_charged_val))) if final_charged_val > 0 else 0
         effective_cfg = BillingService._normalize_api_pricing_config({
             "unit_type": raw_cfg["unit_type"],
-            "cost": int(max(0, round(float(raw_cfg["cost"]) * float(charge_multiplier)))),
-            "cost_input": int(max(0, round(float(raw_cfg["cost_input"]) * float(charge_multiplier)))),
-            "cost_output": int(max(0, round(float(raw_cfg["cost_output"]) * float(charge_multiplier)))),
+            "cost": int(max(0, round(float(raw_cfg["cost"]) * float(charge_multiplier) * float(runtime_multiplier)))),
+            "cost_input": int(max(0, round(float(raw_cfg["cost_input"]) * float(charge_multiplier) * float(runtime_multiplier)))),
+            "cost_output": int(max(0, round(float(raw_cfg["cost_output"]) * float(charge_multiplier) * float(runtime_multiplier)))),
         })
         return {
             "cost": charged_cost,
             "base_cost": base_cost,
             "charge_multiplier": float(charge_multiplier),
+            "runtime_price_multiplier": float(runtime_multiplier),
+            "runtime_price_adjustments": runtime_adjustments,
             "config": effective_cfg,
         }
+
+    @staticmethod
+    def _first_positive_float(source: Dict[str, Any], keys: List[str], default: float) -> float:
+        for key in keys:
+            if key not in source:
+                continue
+            parsed = BillingService._safe_float(source.get(key), default)
+            if parsed > 0:
+                return float(parsed)
+        return float(default)
 
     @staticmethod
     def _select_best_matching_rule(
@@ -1881,6 +1937,8 @@ class BillingService:
             },
             "pricing": dict(pricing_config or {}),
             "rule_charge_multiplier": float((pricing_payload or {}).get("charge_multiplier", getattr(rule, "charge_multiplier", 2.0)) or 0.0),
+            "runtime_price_multiplier": float((pricing_payload or {}).get("runtime_price_multiplier", 1.0) or 1.0),
+            "runtime_price_adjustments": (pricing_payload or {}).get("runtime_price_adjustments") or {},
             "computed_base_cost": int((pricing_payload or {}).get("base_cost", 0) or 0),
             "computed_cost": int((pricing_payload or {}).get("cost", 0) or 0),
             "specificity_score": int(specificity or 0),
@@ -1944,6 +2002,19 @@ class BillingService:
         if system_row:
             provider_text = str(getattr(system_row, "provider", "") or provider_text).strip()
             model_text = str(getattr(system_row, "model", "") or model_text).strip()
+
+        if mode == "video":
+            identity_text = " ".join(
+                str(part or "")
+                for part in [
+                    provider_text,
+                    model_text,
+                    getattr(system_row, "name", "") if system_row else "",
+                ]
+            ).lower()
+            usage["is_seedance_video"] = "seedance" in identity_text
+            if usage.get("is_seedance_video"):
+                usage["seedance_billing_adjustable"] = True
 
         if (
             system_row
