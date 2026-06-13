@@ -5722,6 +5722,54 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     total[k] = v
             return total
 
+        def _get_scene_analysis_validation_profile() -> Dict[str, Any]:
+            mode_source = str(effective_scene_analysis_mode or "").strip().lower()
+            prompt_source = " ".join([
+                str(getattr(request, "prompt_file", "") or ""),
+                str(template_signature.get("template_source") or ""),
+            ]).lower()
+            prompt_content_source = str(system_instruction or "").lower()
+            function_source = str(getattr(request, "function_name", "") or "").strip().lower()
+            source = " ".join([mode_source, prompt_source, prompt_content_source[:2000], function_source])
+
+            stage_id = "generic"
+            if mode_source == "entity_design" or mode_source.startswith("2_pass_generate_assets"):
+                stage_id = "entity_design"
+            elif (
+                mode_source in {"assets_extraction", "scene_assets_only"}
+                or "scene_planning_2_1_assets_extraction" in prompt_source
+                or "scene_planning_2_1_assets_extraction" in prompt_content_source
+                or "assets_extraction" in prompt_source
+                or "assets_extraction" in prompt_content_source
+            ):
+                stage_id = "assets_extraction"
+            elif (
+                mode_source in {"beats_generation", "scene_planning_beats", "scene_beats_only"}
+                or "scene_planning_2_2_beats_generation" in prompt_source
+                or "scene_planning_2_2_beats_generation" in prompt_content_source
+                or "beats_generation" in prompt_source
+                or "beats_generation" in prompt_content_source
+            ):
+                stage_id = "beats_generation"
+            elif "scene_planning_1_script_optimization" in prompt_source or "scene_planning_1_script_optimization" in prompt_content_source:
+                stage_id = "script_optimization"
+            elif any(marker in function_source for marker in ("script_optimization", "stage_1", "stage1")):
+                stage_id = "script_optimization"
+
+            return {
+                "stage_id": stage_id,
+                "mode_source": mode_source,
+                "prompt_source": prompt_source,
+                "function_source": function_source,
+                "requires_stage1_visual_backfill": stage_id == "script_optimization",
+                "requires_subject_index": stage_id == "assets_extraction",
+                "requires_beats_table": stage_id == "beats_generation",
+                "runs_entity_design_json_checks": stage_id == "entity_design",
+                "runs_subject_index_alignment": stage_id == "entity_design",
+                "runs_prompt_template_syntax": stage_id == "entity_design",
+                "diagnostic_source": source,
+            }
+
         def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
             text = str(output_text or "")
             checks = {
@@ -5736,6 +5784,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             stage1_meta = _detect_stage1_script_optimization_integrity(text) if text.strip() else {"ok": True}
             if not bool(stage1_meta.get("ok", True)):
                 missing_sections.extend([str(x) for x in (stage1_meta.get("missing_sections") or []) if str(x)])
+            beats_meta = _detect_beats_generation_integrity(text) if text.strip() else {"ok": True}
+            if not bool(beats_meta.get("ok", True)):
+                missing_sections.extend([str(x) for x in (beats_meta.get("missing_sections") or []) if str(x)])
             return {
                 "found_sections": found_sections,
                 "missing_sections": missing_sections,
@@ -5743,17 +5794,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
 
         def _is_stage1_script_optimization_request() -> bool:
-            source = " ".join([
-                str(getattr(request, "prompt_file", "") or ""),
-                str(template_signature.get("template_source") or ""),
-                str(getattr(request, "function_name", "") or ""),
-            ]).lower()
-            return bool(
-                "scene_planning_1_script_optimization" in source
-                or "script_optimization" in source
-                or "stage_1" in source
-                or "stage1" in source
-            )
+            return bool((_get_scene_analysis_validation_profile() or {}).get("requires_stage1_visual_backfill"))
 
         def _extract_project_visual_backfill_json(text_value: Any) -> Tuple[Optional[Dict[str, Any]], str]:
             text = str(text_value or "")
@@ -5830,6 +5871,26 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "warning_codes": ["ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_MISSING"],
                 "warnings": ["第一阶段未返回 Project Visual Backfill JSON，当前结果不完整，需触发 fallback 或重新分析。"],
                 "missing_sections": ["Project Visual Backfill JSON"],
+            }
+
+        def _detect_beats_generation_integrity(output_text: Any) -> Dict[str, Any]:
+            if not validation_profile.get("requires_beats_table"):
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
+
+            text = str(output_text or "").strip()
+            has_table = bool(
+                re.search(r"(?im)^\s*\|\s*Episode\s+ID\s*\|\s*Scene\s+ID\s*\|", text)
+                or re.search(r"(?im)^\s*\|\s*Scene\s+No\.?\s*\|", text)
+                or ("Equivalent Duration" in text and "Adapted Script Text" in text and "Environment" in text)
+            )
+            if has_table:
+                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
+
+            return {
+                "ok": False,
+                "warning_codes": ["ANALYSIS_STAGE2_BEATS_TABLE_MISSING"],
+                "warnings": ["场景编排阶段未返回可识别的 Scene Beats 表格，请检查 Stage 2.2 提示词输出。"],
+                "missing_sections": ["Scene Beats Table"],
             }
 
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
@@ -5938,6 +5999,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     if code_text and code_text not in warning_codes:
                         warning_codes.append(code_text)
                 for warning in (stage1_meta.get("warnings") or []):
+                    warning_text = str(warning or "").strip()
+                    if warning_text and warning_text not in warnings:
+                        warnings.append(warning_text)
+
+            beats_meta = _detect_beats_generation_integrity(text)
+            if not bool(beats_meta.get("ok", True)):
+                beats_missing = [str(x) for x in (beats_meta.get("missing_sections") or []) if str(x)]
+                missing_sections = list(dict.fromkeys([*missing_sections, *beats_missing]))
+                structure_incomplete = True
+                truncation_suspected = True
+                for code in (beats_meta.get("warning_codes") or []):
+                    code_text = str(code or "").strip()
+                    if code_text and code_text not in warning_codes:
+                        warning_codes.append(code_text)
+                for warning in (beats_meta.get("warnings") or []):
                     warning_text = str(warning or "").strip()
                     if warning_text and warning_text not in warnings:
                         warnings.append(warning_text)
@@ -6806,6 +6882,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 [item.get("skill_id") for item in (feature_bundle.get("combo_matches") or [])],
             )
 
+        validation_profile = _get_scene_analysis_validation_profile()
+        logger.info(
+            "[analyze_scene] validation_profile stage=%s mode=%s function=%s requires_stage1_backfill=%s requires_subject_index=%s runs_entity_json_checks=%s",
+            validation_profile.get("stage_id"),
+            validation_profile.get("mode_source"),
+            validation_profile.get("function_source"),
+            validation_profile.get("requires_stage1_visual_backfill"),
+            validation_profile.get("requires_subject_index"),
+            validation_profile.get("runs_entity_design_json_checks"),
+        )
+
         include_negative_prompt = getattr(request, "include_negative_prompt", True)
         
         is_asset_json_stage = "asset_design" in str(getattr(request, "system_api_id", "")) or "subject" in str(getattr(request, "system_api_id", "")) or "planning_1_stage_1_main" in str(getattr(request, "prompt_file", ""))
@@ -7378,6 +7465,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "request_text_chars": len((request.text or "")),
             "system_prompt_tokens_est": _estimate_tokens(system_instruction or ""),
             "user_prompt_tokens_est": _estimate_tokens(user_content or ""),
+            "validation_profile": validation_profile,
         }
         if template_signature:
             debug_meta.update(template_signature)
@@ -7973,8 +8061,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_subject_warnings: List[str] = []
         source_subject_index_text = sanitize_subject_index_text(result_content)
         should_require_subject_index = bool(
-            (not is_entity_design_phase)
-            and (not _is_stage1_script_optimization_request())
+            validation_profile.get("requires_subject_index")
         )
         if should_require_subject_index:
             has_subject_section = bool(
@@ -8086,11 +8173,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
 
-        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
-        subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
-        subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
-        subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
-        subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
+        if validation_profile.get("runs_subject_index_alignment"):
+            subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
+            subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
+            subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
+            subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
+            subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
+        else:
+            subject_index_reconcile_meta = {"skipped": True, "reason": "validation_profile_disabled"}
+            subject_index_reconcile_warning_codes = []
+            subject_index_reconcile_warnings = []
 
         response_payload["subjects_json"] = subjects_json
         response_payload["subjects_json_count"] = {
@@ -8101,19 +8193,40 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "posters": len(subjects_json.get("posters") or []),
         }
 
-        extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
+        if validation_profile.get("runs_entity_design_json_checks"):
+            extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
+        else:
+            extraction_gap_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": [], "missing_total": 0}
         debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
 
-        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
+        if validation_profile.get("runs_entity_design_json_checks"):
+            subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
+        else:
+            subject_index_coverage_meta = {
+                "skipped": True,
+                "reason": "validation_profile_disabled",
+                "expected_total": 0,
+                "expected_by_bucket": {},
+                "missing_total": 0,
+                "missing_by_bucket": {},
+                "warning_codes": [],
+                "warnings": [],
+            }
         debug_meta["subject_index_coverage"] = subject_index_coverage_meta
         debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
-        subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
+        if validation_profile.get("runs_entity_design_json_checks"):
+            subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
+        else:
+            subject_consistency_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": []}
         debug_meta["subject_consistency"] = subject_consistency_meta
 
         prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
 
-        prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+        if validation_profile.get("runs_prompt_template_syntax"):
+            prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+        else:
+            prompt_template_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": [], "mismatch_count": 0}
         debug_meta["prompt_template_syntax"] = prompt_template_meta
 
         diagnosis_hints: List[str] = []
