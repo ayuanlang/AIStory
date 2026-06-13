@@ -120,7 +120,7 @@ You MUST use all of them together.
 - Environment Name must reflect the correct reusable environment anchor or required new environment variant.
 - Core Scene Info must preserve the scene's core visual guidance and action logic from `Original Script Grounding`; if the existing row is materially incomplete or obviously wrong, rewrite the row patch to restore those facts.
 - No floating entities: a generated missing subject must also be reflected through the scene row patch where relevant, especially in Environment Name, Linked Characters, or Key Props.
-- Beat-to-shot subject budgeting applies here as well: even when the current scene contains many valid entities, any beat intended to map cleanly into one shot should budget only 1-3 core shot-facing subjects for the downstream Start/End frame, while other entities stay as support/background coverage.
+- Beat-to-shot subject budgeting applies here as well: even when the current scene contains many valid entities, any beat intended to map cleanly into one shot should budget only 1-3 core shot-facing subjects for the downstream video prompt, while other entities stay as support/background coverage.
 - Beat-to-shot relief by extra shots also applies here: when a regenerated scene patch would otherwise overload one downstream shot with more than 3 core shot-facing subjects, prefer adding beats/shots over cramming all of them into one focal frame.
 
 ## Character Rules

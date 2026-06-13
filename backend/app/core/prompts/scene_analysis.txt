@@ -179,7 +179,7 @@
 #### {Scene Subjects}（场景实体先抽取，Mandatory）
 - 每个 Scene 在写 `{Beats}` 前必须先完成该场景实体抽取，形成“实体清单 + 实体落点”闭环。
 - 抽取范围必须覆盖：人物/人化实体、可识别非人实体、environments与关键空间构件；不得只抽主角或主道具。
-- **Shot-facing 焦点压缩**：Scene 级实体抽取仍必须保持**全量完整**，不得漏实体；但在为下游 Shot 做 `{Beats}` 规划时，**每一个准备落成单个 shot 的 beat** 默认只允许指定 **1-3 个核心 shot-facing subjects**（角色 + 关键道具合计，不含环境锚点）进入该 beat 的首尾帧主承载。若核心 subjects 超过 3 个，优先策略必须是**拆成多个 Beat / 多个 Shot**，而不是继续压进单镜。其余实体应保留在 Scene Subjects / Subject Index / Part 2 的全量闭环里，但在该 beat 中降级为背景群体、环境组成或非主承载对象，避免下游 Start/End Frame 过载。
+- **Shot-facing 焦点压缩**：Scene 级实体抽取仍必须保持**全量完整**，不得漏实体；但在为下游 Shot 做 `{Beats}` 规划时，**每一个准备落成单个 shot 的 beat** 默认只允许指定 **1-3 个核心 shot-facing subjects**（角色 + 关键道具合计，不含环境锚点）进入该 beat 的视频动态主承载。若核心 subjects 超过 3 个，优先策略必须是**拆成多个 Beat / 多个 Shot**，而不是继续压进单镜。其余实体应保留在 Scene Subjects / Subject Index / Part 2 的全量闭环里，但在该 beat 中降级为背景群体、环境组成或非主承载对象，避免下游视频提示词过载。
 - 环境覆盖剧本实体：当剧本实体属于场景组成物（如桌子、墙面挂钟、窗帘）且不需要独立 `prop` 资产时，允许并鼓励由 `environment` 实体承接覆盖，但必须在 Subject Index 的 `script_entity_coverage` 中逐项标注。
 - 物体级抽取强制：实体抽取必须落到“具体物体层级”，不得只写抽象类别；例如桌子、杯子、电脑、门、窗、灯、手机、键盘等应作为可识别实体被抽取。
 - 若文本或动作中出现具体物体名，该物体必须进入 Scene 实体清单并标注落点；禁止以“家具/器材/道具若干”等笼统词替代。
@@ -276,7 +276,7 @@
 - 闪回过渡硬规则：凡剧本存在闪回、回忆、记忆触发、过去时空插入或从当下切入往事，`{Beats}` 必须显式设计过渡 Beat 或过渡镜头语义，通过视线承接、物体特写、动作延续、声音桥、镜面/窗面/灯光/构图呼应、焦点漂移、时间线索物放大等方式完成切镜过渡；禁止把"现在 -> 闪回"直接写成无桥接的硬切。
 - 闪回回切硬规则：闪回结束回到当下时，同样必须写明回切桥接，不得只写"回到现实/回到现在"。必须交代由哪个画面锚点、动作余势、声音残响或相似构图把过去时空重新接回当前 Scene。
 - 正反打穿插特写全景：在beat里，不能连续出现反复正反打（不超过3次），要穿插特写、全景等作为穿插的beat。
-- 起止状态态需稳定（便于 Start/End Frame）。
+- 起止状态态需稳定（便于下游生成动态视频提示词）。
 - 可补特写/全景以提升覆盖。
 
 #### Full Script Coverage
@@ -378,7 +378,7 @@
 
 - 禁止角色信息：严禁出现任何角色名、角色代号（注：仅普通环境适用，封面海报特殊资产可豁免此限制）、`CHAR:[@...]`、人称指代（如“他/她/他们”）及人物身份词（如警察、记者、保安、母亲等）。
 - 禁止剧情信息：严禁出现剧情推进语句（如“因为…所以…”、“进入/离开/追逐/躲藏/对峙”等事件描述）（同理，封面海报特殊资产仅可展现凝固的情感关系，普通环境严禁任何剧情动作）与时间线动作指令。
-- 剧情可视化承载规则：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Start Frame / Video Content / End Frame`，不能写入 Environment prompt。
+- 剧情可视化承载规则：情节必须继续通过画面体现，以便支持情节发展与剧情推进；但其承载通道只能是 `Core Scene Info / {Observer View} / {Beats}` 与下游 Shot 的 `Video Content`，不能写入 Environment prompt。
 - 模板示例统一收口：Environment 的长 prompt 示例与正反环境完整写法统一以下文 Part 2C 的 JSON 示例为准；本节只保留规则与字段骨架，不再重复放长示例。
 - 正反环境补充约束：除“边界共同瞄定物/固定锚点集合”必须保持一致外，Front 与 Reverse 应尽量避免重复出现同类大件主体物（如床、整组沙发、大型柜体）作为两侧主构图锚点；应通过主次锚点重排体现视角差异。
 - 正反环境唯一大件例外：若剧本语义明确该大件为场景唯一且不可替代（例如单床病房、集体宿舍统一床位编排、剧情指定唯一舞台装置），可在正反两侧重复出现，但必须在 Delta 的 `Background Set Change/Framing Change` 中写明“唯一大件复用原因 + 其余差异锚点”。
@@ -493,7 +493,7 @@
 ### 3.2 对话正反打与 OTS (Reverse Shots / Over-the-Shoulder)
 - OTS 去人物化总规则：凡涉及 OTS/正反方向的描述（包含 `{Observer View}`、`{Beats}`、`generation_prompt_cn/en`、`Environment Delta`），必须是**纯环境描述**，禁止出现任何人物语义。
 - OTS 环境隔离规则：凡服务于 OTS/正反打的 `ENV:[..._OTS_A]` / `ENV:[..._OTS_B]`（或等价 Front/Reverse 变体），一律视为该方向下专门服务剧情空间与调度结构的 **clean plate / 纯环境资产**。环境提示词只负责交付空间结构、构图层级、光照关系、材质响应与关键道具/空位状态态；人物信息与剧情信息都必须与环境资产完全隔离，不得把任何角色、人体局部、人物倒影、人物影子或人物遮挡残留进环境资产。
-- OTS 前景遮挡禁令：OTS 场景的 Environment prompt 中，`FG/MG/BG` 全层都不得出现 `肩膀前景虚化`、`后脑勺遮挡`、`手臂入画`、`发丝边缘`、`人物衣角`、`镜中人物反射`、`地面人物投影`、`doorway human silhouette` 等任何人物残留。即使分镜最终需要 OTS 肩部遮挡，该遮挡也只能存在于 Shot 级 `Start Frame / Video Content / End Frame`，不得回写进 Environment。
+- OTS 前景遮挡禁令：OTS 场景的 Environment prompt 中，`FG/MG/BG` 全层都不得出现 `肩膀前景虚化`、`后脑勺遮挡`、`手臂入画`、`发丝边缘`、`人物衣角`、`镜中人物反射`、`地面人物投影`、`doorway human silhouette` 等任何人物残留。即使分镜最终需要 OTS 肩部遮挡，该遮挡也只能存在于 Shot 级 `Video Content`，不得回写进 Environment。
 - OTS 污染防护：上述字段中出现 `over shoulder / over-the-shoulder / A over B / B over A / shoulder silhouette / behind head / CHAR:[@...] / person / people / crowd / human / humanoid / avatar / virtual person / mannequin / silhouette of someone` 任一词，判为无效并重写。
 - OTS 环境生成顺序：若某 Shot 计划采用 OTS，生成顺序必须固定为：先完成角色分镜与 OTS 关系，再单独抽取该视角下承载剧情空间的 **纯环境 clean plate**，最后仅在 Shot 级叠加角色肩部/头部/动作信息。禁止反向操作成“先写带人物关系或事件关系的 OTS 画面，再把人物/剧情信息回填进 Environment”。
 - 对话与 OTS 拆 Beat 扩容规则：不仅是（A 看 B → B 看 A，或者 A 的单人镜头 → B 的单人镜头）的对方视角切换，**只要角色有转身，或发生背影背面到正面的视角切换，两人对话或相继动作的交代，一定要有正反环境的建立并拆分为多个 Beat**；绝不可以单 Beat 混合双向视角。这里的 OTS 是指“有正反环境的对立视角逻辑”，不要求必须拍肩膀遮挡，可以是各自的中景或特写。

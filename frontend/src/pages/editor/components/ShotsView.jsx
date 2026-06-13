@@ -364,7 +364,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
     }, [promptSubmitLangPref, uiLang, tempPromptSubmitLang]);
     const effectivePromptSubmitLang = resolvedPromptSubmitLang;
-    const shotPromptDisplayLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
+    const shotPromptDisplayLang = 'cn';
 
     const getShotCardPromptPreview = useCallback((shot) => {
         if (!shot || typeof shot !== 'object') return '';
@@ -2822,6 +2822,62 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, []);
 
+    const normalizeShotPromptDefaults = useCallback((shot) => {
+        if (!shot || typeof shot !== 'object') return shot;
+
+        const techObj = parseTechnicalNotesSafe(shot.technical_notes);
+        const videoPromptCn = String(
+            techObj.video_prompt_cn ||
+            shot.video_prompt_cn ||
+            shot.video_content_cn ||
+            shot.prompt_cn ||
+            ''
+        ).trim();
+
+        if (!videoPromptCn) return shot;
+
+        const next = { ...shot };
+        let changed = false;
+        let techChanged = false;
+
+        if (!String(next.start_frame || '').trim()) {
+            next.start_frame = videoPromptCn;
+            changed = true;
+        }
+
+        if (!String(next.end_frame || '').trim()) {
+            next.end_frame = videoPromptCn;
+            changed = true;
+        }
+
+        if (!String(next.video_content || '').trim()) {
+            next.video_content = videoPromptCn;
+            changed = true;
+        }
+
+        if (!String(next.prompt || '').trim()) {
+            next.prompt = videoPromptCn;
+            changed = true;
+        }
+
+        if (!String(techObj.start_frame_cn || '').trim()) {
+            techObj.start_frame_cn = videoPromptCn;
+            techChanged = true;
+        }
+
+        if (!String(techObj.end_frame_cn || '').trim()) {
+            techObj.end_frame_cn = videoPromptCn;
+            techChanged = true;
+        }
+
+        if (techChanged) {
+            next.technical_notes = JSON.stringify(techObj);
+            changed = true;
+        }
+
+        return changed ? next : shot;
+    }, [parseTechnicalNotesSafe]);
+
     const mergeLiveSyncTechnicalNotes = useCallback((currentRaw, latestRaw) => {
         const currentNotes = parseTechnicalNotesSafe(currentRaw);
         const latestNotes = parseTechnicalNotesSafe(latestRaw);
@@ -4267,11 +4323,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 scene_code: normalizedSceneCode || undefined,
                 shot_id: normalizedShotId || undefined,
             });
-            allEpisodeShotsRef.current = Array.isArray(allShots) ? allShots : [];
+            const normalizedAllShots = Array.isArray(allShots) ? allShots.map(normalizeShotPromptDefaults) : [];
+            allEpisodeShotsRef.current = normalizedAllShots;
 
             let filtered = selectedSceneId === 'all'
-                ? allShots
-                : allShots.filter(s => String(s.scene_id) === String(selectedSceneId));
+                ? normalizedAllShots
+                : normalizedAllShots.filter(s => String(s.scene_id) === String(selectedSceneId));
 
             if (normalizedSceneCode) {
                 filtered = filtered.filter((shot) => {
@@ -4308,7 +4365,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 setIsShotsLoading(false);
             }
         }
-    }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+    }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter, normalizeShotPromptDefaults]);
 
     useEffect(() => {
         setHasShotInitialLoadCompleted(false);
@@ -5554,6 +5611,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     const keyframesCnRaw = String(s.keyframes_cn || '').trim();
                     const endFrameCnRaw = String(s.end_frame_cn || '').trim();
                     const combinedFallback = splitCombinedCnPrompt(promptCnRaw);
+                    const videoPromptCnFallback = videoPromptCnRaw || combinedFallback.video_prompt_cn;
 
                     if (promptCnRaw || startFrameCnRaw || videoPromptCnRaw || keyframesCnRaw || endFrameCnRaw) {
                         let techObj = {};
@@ -5563,10 +5621,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         } catch (e) {
                             techObj = {};
                         }
-                        const finalStartCn = startFrameCnRaw || combinedFallback.start_frame_cn;
-                        const finalVideoCn = videoPromptCnRaw || combinedFallback.video_prompt_cn;
+                        const finalVideoCn = videoPromptCnFallback;
+                        const finalStartCn = startFrameCnRaw || combinedFallback.start_frame_cn || finalVideoCn;
                         const finalKeyframesCn = keyframesCnRaw || combinedFallback.keyframes_cn;
-                        const finalEndCn = endFrameCnRaw || combinedFallback.end_frame_cn;
+                        const finalEndCn = endFrameCnRaw || combinedFallback.end_frame_cn || finalVideoCn;
+
+                        if (finalVideoCn) {
+                            if (!String(s.start_frame || '').trim()) s.start_frame = finalVideoCn;
+                            if (!String(s.end_frame || '').trim()) s.end_frame = finalVideoCn;
+                            if (!String(s.video_content || '').trim()) s.video_content = finalVideoCn;
+                            if (!String(s.prompt || '').trim()) s.prompt = finalVideoCn;
+                        }
 
                         if (finalStartCn) techObj.start_frame_cn = finalStartCn;
                         if (finalVideoCn) techObj.video_prompt_cn = finalVideoCn;
@@ -5608,7 +5673,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 try {
                     const sceneSpecific = await fetchShots(selectedSceneId);
                     if (sceneSpecific && sceneSpecific.length > 0) {
-                        setShots(sceneSpecific);
+                        setShots(sceneSpecific.map(normalizeShotPromptDefaults));
                     }
                 } catch(e) { console.error("Post-import fetch failed", e); }
 

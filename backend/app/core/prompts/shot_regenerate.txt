@@ -14,11 +14,11 @@ you must output ONLY the shot rows that need to change.
 1. Return ONLY a markdown table. No prose, no explanations, no code fences.
 2. Return ONLY changed or newly inserted shots. Do NOT repeat unchanged rows.
 3. Every returned row must include all required shot columns so it can be imported directly.
-4. Every regenerated `Start Frame` / `End Frame` must keep an explicit focal length or equivalent lens description in the main shot sentence. Do not replace it with vague wording like `cinematic lens`, `wide feel`, `zoomed-in look`, or `dramatic compression`.
-5. If a regenerated `Video Content` changes lens strategy, write the focal-length transition explicitly as a start-to-end movement that can be inferred from the shot, such as `35mm push-in resolving into 50mm close pressure`; if lens strategy stays the same, keep that continuity readable rather than silently drifting.
+4. Regenerated rows must put the usable prompt payload entirely in `Video Content` / `Video Content (CN)`; all other prompt columns are compatibility columns and must stay empty.
+5. If a regenerated `Video Content` changes lens strategy, write the focal-length transition explicitly as a dynamic movement that can be inferred from the shot, such as `35mm push-in resolving into 50mm close pressure`; if lens strategy stays the same, keep that continuity readable rather than silently drifting.
 6. Preserve exact upstream entity names. Do not rename characters, props, or environments.
 6.1 Preserve the upstream beat contract. If the current staged row or scene context already implies a `Source Beat` / beat mapping, keep the regenerated shot anchored to that same beat meaning. Do not silently merge multiple high-information beats into one updated shot.
-6.2 Regenerated `Start Frame` + `Video Content` + `End Frame` must still fully cover the source beat's key information, including action, dialogue, emotion reaction, appearance/clothing state, prop state, environment result, subtitle/on-screen text, V.O./O.S., and language-switch events when present.
+6.2 Regenerated `Video Content` / `Video Content (CN)` must still fully cover the source beat's key information, including action, dialogue, emotion reaction, appearance/clothing state, prop state, environment result, subtitle/on-screen text, V.O./O.S., and language-switch events when present.
 6.3 If the regenerated shot is an entry-to-flashback or return-from-flashback shot, preserve an explicit bridge anchor and soft transition method in the regenerated fields. Do not rewrite it into a hard cut.
 7. For modified existing shots:
    - keep the original Shot ID exactly unchanged

@@ -87,7 +87,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 - Character/subject references use `CHAR:[@Name]` consistently; missing `@` on characters is invalid.
 - Environment/prop references remain `[Name]` without `@`; `[@Env]` / `[@Prop]` are invalid.
 - Entity typing is explicit and consistent: `CHAR:[@Name]`, `ENV:[Name]`, `PROP:[Name]`.
-- Video prompt environment anchor is mandatory: `Start Frame`, `Video Content`, and `End Frame` must explicitly contain `ENV:[Environment Anchor]`; `Video Content` cannot rely on downstream auto-injection.
+- Video prompt environment anchor is mandatory: `Video Content` must explicitly contain `ENV:[Environment Anchor]`; it cannot rely on downstream auto-injection.
 - Video Content compliant example: `**{Viewpoint Movement}**: Along ENV:[Environment Anchor] corridor floor line, viewpoint trucks left slowly...`.
 - Video Content non-compliant example: `**{Viewpoint Movement}**: viewpoint trucks left slowly...` (missing `ENV:[Environment Anchor]`).
 - `anchor_description` is English-only for all entity types (Character/Prop/Environment); no Chinese or mixed-language output.

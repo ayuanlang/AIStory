@@ -1795,15 +1795,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [createSubjectBatchTaskState, emitSubjectBatchRuntime]);
 
     const resolvedPromptSubmitLang = useMemo(() => {
-        return resolvePromptSubmitLanguage(uiLang, promptSubmitLangPref);
-    }, [promptSubmitLangPref, uiLang]);
+        return 'cn';
+    }, []);
 
     const effectivePromptSubmitLang = useMemo(() => {
-        if (tempPromptSubmitLang === 'cn' || tempPromptSubmitLang === 'en') {
-            return tempPromptSubmitLang;
-        }
-        return resolvedPromptSubmitLang;
-    }, [tempPromptSubmitLang, resolvedPromptSubmitLang]);
+        return 'cn';
+    }, []);
 
     const promptLangText = useCallback((lang) => {
         return lang === 'cn' ? t('中文', 'Chinese') : t('英文', 'English');
@@ -3703,10 +3700,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         
         const cnPrompt = buildProcessedEntityPrompt(entity, 'cn');
         const enPrompt = buildProcessedEntityPrompt(entity, 'en');
-        const openingLang = resolvedPromptSubmitLang === 'cn' ? 'cn' : 'en';
 
         setPromptDrafts({ cn: cnPrompt, en: enPrompt });
-        setPrompt(openingLang === 'cn' ? cnPrompt : enPrompt);
+        setPrompt(cnPrompt);
         setShowImageModal(true); // Show AFTER setting everything
 
         setRefImage(null);
@@ -3716,10 +3712,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     useEffect(() => {
         if (!showImageModal || imageModalTab !== 'generate') return;
-        const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
-        const currentDraft = String(promptDrafts?.[currentLang] || '').trim();
+        const currentDraft = String(promptDrafts?.cn || '').trim();
         setPrompt(currentDraft);
-    }, [effectivePromptSubmitLang, imageModalTab, showImageModal, promptDrafts]);
+    }, [imageModalTab, showImageModal, promptDrafts]);
 
     useEffect(() => {
         if (!showImageModal) return;
@@ -4677,9 +4672,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const targetEntityId = Number(activeEntity?.id || 0);
         if (!Number.isFinite(targetEntityId) || targetEntityId <= 0) return;
         const targetEntityName = String(activeEntity?.name || activeEntity?.name_en || targetEntityId);
-        const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
-        const selectedLangPrompt = getEntityPromptByLang(activeEntity, currentLang);
-        const draftPrompt = String(promptDrafts?.[currentLang] || '').trim();
+        const selectedLangPrompt = getEntityPromptByLang(activeEntity, 'cn');
+        const draftPrompt = String(promptDrafts?.cn || '').trim();
         const promptToUse = customPrompt || String(draftPrompt || selectedLangPrompt || '').trim();
         if (!promptToUse) return;
         setGenerating(true);
@@ -4698,7 +4692,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setPrompt(finalPrompt);
         setPromptDrafts(prev => ({
             ...prev,
-            [currentLang]: finalPrompt,
+            cn: finalPrompt,
         }));
 
         try {
@@ -6123,16 +6117,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
                                                 />
                                             </div>
-                                            <div>
-                                                <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
-                                                <textarea
-                                                    value={viewingEntity.generation_prompt_en || ''}
-                                                    onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
-                                                    onBlur={(e) => handleFieldUpdate('generation_prompt_en', e.target.value)}
-                                                    className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
-                                                    placeholder="Enter English generation prompt..."
-                                                />
-                                            </div>
                                         </div>
                                     </div>
 
@@ -6749,16 +6733,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
                                                         />
                                                     </div>
-                                                    <div>
-                                                        <div className="text-[10px] font-bold uppercase text-muted-foreground mb-1">{t('英文提示词', 'English Prompt')}</div>
-                                                        <textarea
-                                                            value={viewingEntity.generation_prompt_en || ''}
-                                                            onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_en: e.target.value }))}
-                                                            onBlur={(e) => handleFieldUpdate('generation_prompt_en', e.target.value)}
-                                                            className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
-                                                            placeholder="Enter English generation prompt..."
-                                                        />
-                                                    </div>
                                                 </div>
                                             </div>
 
@@ -6989,48 +6963,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                      )}
                                             </div>
 
-                                            <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                                                <div className="text-[11px] text-muted-foreground">
-                                                    {t('提交语种：', 'Submit lang: ')}
-                                                    {tempPromptSubmitLang
-                                                        ? `${promptLangText(tempPromptSubmitLang)} (${t('临时', 'Temp')})`
-                                                        : `${promptLangPrefText(promptSubmitLangPref)}`
-                                                    }
-                                                    {` ${t(' -> 生效: ', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
-                                                </div>
-                                                <div className="relative">
-                                                    <button
-                                                        onClick={() => setShowPromptLangMenu(prev => !prev)}
-                                                        disabled={generating}
-                                                        className="px-3 py-1.5 rounded-md border border-white/15 bg-black/40 text-xs font-bold text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50 flex items-center gap-1"
-                                                    >
-                                                        {t('切换语种', 'Switch Lang')} <ChevronDown size={14} />
-                                                    </button>
-                                                    {showPromptLangMenu && (
-                                                        <div className="absolute right-0 bottom-full mb-2 w-48 rounded-lg border border-white/10 bg-[#121212] shadow-2xl z-20 overflow-hidden">
-                                                            <button
-                                                                onClick={() => { setTempPromptSubmitLang(''); setShowPromptLangMenu(false); }}
-                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
-                                                            >
-                                                                {t('跟随全局', 'Follow config')}
-                                                            </button>
-                                                            <button
-                                                                onClick={() => { setTempPromptSubmitLang('en'); setShowPromptLangMenu(false); }}
-                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
-                                                            >
-                                                                {t('临时英文', 'Temp English')}
-                                                            </button>
-                                                            <button
-                                                                onClick={() => { setTempPromptSubmitLang('cn'); setShowPromptLangMenu(false); }}
-                                                                className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
-                                                            >
-                                                                {t('临时中文', 'Temp Chinese')}
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-
                                             <div className="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div>
@@ -7118,18 +7050,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     onClick={async () => {
                                                         setIsAdvancedLocalModifying(true);
                                                         try {
-                                                            const base = viewingEntity?.generation_prompt_en || "";
+                                                            const base = viewingEntity?.generation_prompt_cn || "";
                                                             const appended = advancedInstruction.trim();
                                                             const finalPrompt = base ? `${base}. ${appended}, keeping everything else unchanged.` : appended;
                                                             
-                                                            const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
-                                                            setPromptDrafts(prev => ({ ...prev, [currentLang]: finalPrompt }));
+                                                            setPromptDrafts(prev => ({ ...prev, cn: finalPrompt }));
                                                             setPrompt(finalPrompt);
 
                                                             // Update Entity
-                                                            const updated = { ...viewingEntity, generation_prompt_en: finalPrompt };
+                                                            const updated = { ...viewingEntity, generation_prompt_cn: finalPrompt };
                                                             setViewingEntity(updated);
-                                                            updateEntity(updated.id, { generation_prompt_en: finalPrompt });
+                                                            updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
 
                                                             const autoRefs = [];
                                                             if (viewingEntity?.image_url) {
@@ -7164,18 +7095,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         setIsAdvancedOptimizing(true);
                                                         if (onLog) onLog(t('正在通过大模型优化提示词...', 'Optimizing prompt using LLM...'), 'process');
                                                         try {
-                                                            const base = viewingEntity?.generation_prompt_en || "";
+                                                            const base = viewingEntity?.generation_prompt_cn || "";
                                                             const res = await refinePrompt(base, advancedInstruction, 'image');
                                                             if (res && res.refined_prompt) {
                                                                 const optimized = res.refined_prompt;
-                                                                const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
-                                                                setPromptDrafts(prev => ({ ...prev, [currentLang]: optimized }));
+                                                                setPromptDrafts(prev => ({ ...prev, cn: optimized }));
                                                                 setPrompt(optimized);
 
                                                                 // Update Entity
-                                                                const updated = { ...viewingEntity, generation_prompt_en: optimized };
+                                                                const updated = { ...viewingEntity, generation_prompt_cn: optimized };
                                                                 setViewingEntity(updated);
-                                                                updateEntity(updated.id, { generation_prompt_en: optimized });
+                                                                updateEntity(updated.id, { generation_prompt_cn: optimized });
 
                                                                 const autoRefs = [];
                                                                 if (viewingEntity?.image_url) {
@@ -7525,11 +7455,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         </div>
                                         <div className="flex-1">
                                             <RefineControl 
-                                                originalText={selectedEntity?.generation_prompt_en || ""}
+                                                originalText={selectedEntity?.generation_prompt_cn || ""}
                                                 onUpdate={(txt) => {
-                                                    const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
                                                     setPrompt(txt);
-                                                    setPromptDrafts(prev => ({ ...prev, [currentLang]: txt }));
+                                                    setPromptDrafts(prev => ({ ...prev, cn: txt }));
                                                 }}
                                                 currentImage={selectedEntity?.image_url}
                                                 onImageUpdate={updateEntityImage}
@@ -7583,9 +7512,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             value={prompt}
                                             onChange={(e) => {
                                                 const nextText = e.target.value;
-                                                const currentLang = effectivePromptSubmitLang === 'cn' ? 'cn' : 'en';
                                                 setPrompt(nextText);
-                                                setPromptDrafts(prev => ({ ...prev, [currentLang]: nextText }));
+                                                setPromptDrafts(prev => ({ ...prev, cn: nextText }));
                                             }}
                                             placeholder="Describe the image you want to generate. Use [Global Style] for episode style. Prefer CHAR:[@Name] (or [@Name]) to reference subjects."
                                             className="w-full h-32 bg-black/40 border border-white/10 rounded-lg p-4 text-sm focus:border-primary/50 outline-none resize-none mb-4"
@@ -7765,19 +7693,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                  )}
                                         </div>
 
-                                        <div className="mb-3 text-[11px] text-muted-foreground">
-                                            {t('当前提交语言：', 'Current submit language: ')}
-                                            {tempPromptSubmitLang
-                                                ? `${promptLangText(tempPromptSubmitLang)} (${t('手动临时', 'Temporary')})`
-                                                : `${promptLangPrefText(promptSubmitLangPref)}${promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''}`
-                                            }
-                                            {` ${t('→ 生效：', '-> Effective: ')}${promptLangText(effectivePromptSubmitLang)}`}
-                                        </div>
-
                                         <div className="flex justify-end items-center gap-2">
                                             <button
                                                 onClick={handleGenerate}
-                                                disabled={generating || selectedEntityHasRunningImageJob || !String((effectivePromptSubmitLang === 'cn' ? promptDrafts.cn : promptDrafts.en) || getEntityPromptByLang(selectedEntity, effectivePromptSubmitLang) || '').trim()}
+                                                disabled={generating || selectedEntityHasRunningImageJob || !String(promptDrafts.cn || getEntityPromptByLang(selectedEntity, 'cn') || '').trim()}
                                                 className="flex items-center space-x-2 bg-primary text-black px-6 py-2 rounded-lg font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                                             >
                                                 {generating || selectedEntityHasRunningImageJob ? (
@@ -7787,47 +7706,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 )}
                                                 <span>{(generating || selectedEntityHasRunningImageJob) ? t('生成中...', 'Generating...') : t('生成图片', 'Generate Image')}</span>
                                             </button>
-                                            <div className="relative">
-                                                <button
-                                                    onClick={() => setShowPromptLangMenu(prev => !prev)}
-                                                    disabled={generating || selectedEntityHasRunningImageJob}
-                                                    className="h-full px-2 py-2 rounded-lg border border-white/15 bg-black/30 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50"
-                                                    title={t('临时切换本次提交语种', 'Temporarily switch submit language for this generation')}
-                                                >
-                                                    <ChevronDown size={16} />
-                                                </button>
-                                                {showPromptLangMenu && (
-                                                    <div className="absolute right-0 mt-2 w-48 rounded-lg border border-white/10 bg-[#121212] shadow-2xl z-20 overflow-hidden">
-                                                        <button
-                                                            onClick={() => {
-                                                                setTempPromptSubmitLang('');
-                                                                setShowPromptLangMenu(false);
-                                                            }}
-                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === '' ? 'text-primary' : 'text-white/80'}`}
-                                                        >
-                                                            {t('跟随设置默认', 'Follow settings default')} ({promptLangPrefText(promptSubmitLangPref)}{promptSubmitLangPref === 'auto' ? ` -> ${promptLangText(resolvedPromptSubmitLang)}` : ''})
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                setTempPromptSubmitLang('en');
-                                                                setShowPromptLangMenu(false);
-                                                            }}
-                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'en' ? 'text-primary' : 'text-white/80'}`}
-                                                        >
-                                                            {t('临时改为英文提交', 'Temporarily submit in English')}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => {
-                                                                setTempPromptSubmitLang('cn');
-                                                                setShowPromptLangMenu(false);
-                                                            }}
-                                                            className={`w-full text-left px-3 py-2 text-xs hover:bg-white/10 ${tempPromptSubmitLang === 'cn' ? 'text-primary' : 'text-white/80'}`}
-                                                        >
-                                                            {t('临时改为中文提交', 'Temporarily submit in Chinese')}
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
                                         </div>
 
                                         <div className="mt-4 rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
