@@ -3424,8 +3424,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         })();
 
+        const isSceneMarkdownTableText = (candidateText) => {
+            const candidate = String(candidateText || '');
+            if (!candidate.trim()) return false;
+            return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
+                || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
+        };
+        const hasExplicitAdaptedScriptSection = (candidateText) => /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script|Adapted\s*Script\s*[-(（])/i.test(String(candidateText || ''));
+
+        const stage1AdaptedSource = resolvedStage1RawText
+            || (hasExplicitAdaptedScriptSection(resolvedAnalysisRawText) && !isSceneMarkdownTableText(resolvedAnalysisRawText) ? resolvedAnalysisRawText : '');
+        const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+        const safePersistedAdaptationText = isSceneMarkdownTableText(persistedAdaptationText) ? '' : persistedAdaptationText;
+
         const stage1AdaptedScript = String(
-            extractStage1AdaptedScriptBody(resolvedStage1RawText || resolvedAnalysisRawText) || activeEpisode?.ai_scene_analysis_adaptation || ''
+            (stage1AdaptedSource ? extractStage1AdaptedScriptBody(stage1AdaptedSource) : '') || safePersistedAdaptationText || ''
         ).trim();
         const stage1VisualBackfillJson = String(
             extractProjectVisualBackfillJsonText(resolvedStage1RawText || resolvedAnalysisRawText) || ''
@@ -3607,6 +3620,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const currentStageOutputs = useMemo(() => {
         const persisted = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        if (persisted?.stages?.stage1?.outputs?.adapted_script) {
+            const isSceneMarkdownTableText = (candidateText) => {
+                const candidate = String(candidateText || '');
+                if (!candidate.trim()) return false;
+                return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
+                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
+            };
+            const adaptedOutput = persisted.stages.stage1.outputs.adapted_script;
+            const adaptedContent = String(adaptedOutput.content || '').trim();
+            if (isSceneMarkdownTableText(adaptedContent)) {
+                const stage1RawText = String(persisted.stages.stage1.outputs.raw_text?.content || '').trim();
+                const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+                const recoveredAdaptedScript = stage1RawText && !isSceneMarkdownTableText(stage1RawText)
+                    ? String(extractStage1AdaptedScriptBody(stage1RawText) || '').trim()
+                    : (isSceneMarkdownTableText(persistedAdaptationText) ? '' : persistedAdaptationText);
+                adaptedOutput.content = recoveredAdaptedScript;
+            }
+        }
         if (persisted && persisted?.stages?.stage2?.outputs?.subject_index) {
              let subjOutput = persisted.stages.stage2.outputs.subject_index.content || '';
              let sceneOutput = persisted.stages.stage2.outputs.scene_markdown.content || '';
@@ -3628,7 +3659,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisRawText: llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '',
             assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
         });
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, llmAssetRawResultContent, llmRawResultContent, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -4039,6 +4070,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (options?.stage2_1Text !== undefined) {
                     latestStage2_1TextRef.current = options.stage2_1Text;
                 }
+                const isStage1ResultWrite = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
+                const effectiveStage1RawText = String(options?.stage1RawText || (isStage1ResultWrite ? nextContent : '') || '').trim();
+                if (effectiveStage1RawText) {
+                    latestStage1RawTextRef.current = effectiveStage1RawText;
+                }
                 const extractedSections = extractAnalysisSections(nextContent);
                 let subjectIndexValue = extractedSections?.hasStructuredSubjectIndex
                     ? String(extractedSections.subjectIndexText || '').trim()
@@ -4046,10 +4082,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (options?.stage2_1Text !== undefined) {
                     subjectIndexValue = String(options.stage2_1Text || '').trim();
                 }
-                const looksLikeAdaptedScript = /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(nextContent);
-                const adaptationValue = looksLikeAdaptedScript
-                    ? String(extractStage1AdaptedScriptBody(nextContent) || '').trim()
+                const adaptationSourceText = effectiveStage1RawText || nextContent;
+                const hasExplicitAdaptedScriptSection = /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script|Adapted\s*Script\s*[-(（])/i.test(adaptationSourceText);
+                const looksLikeSceneMarkdownTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(adaptationSourceText)
+                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(adaptationSourceText);
+                const canExtractStage1Adaptation = hasExplicitAdaptedScriptSection || (Boolean(effectiveStage1RawText) && !looksLikeSceneMarkdownTable);
+                const extractedAdaptationValue = canExtractStage1Adaptation
+                    ? String(extractStage1AdaptedScriptBody(adaptationSourceText) || '').trim()
                     : '';
+                const persistedAdaptationValue = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+                const persistedAdaptationLooksLikeSceneTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(persistedAdaptationValue)
+                    || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(persistedAdaptationValue);
+                const adaptationValue = extractedAdaptationValue || (persistedAdaptationLooksLikeSceneTable ? '' : persistedAdaptationValue);
 
                 const normalizedSubjectIndexValue = extractPureSubjectIndexText(subjectIndexValue);
                 updatePayload.ai_scene_analysis_subject_index = normalizedSubjectIndexValue;
@@ -4057,7 +4101,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: nextContent,
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
-                    stage1RawText: options?.stage1RawText || '',
+                    stage1RawText: effectiveStage1RawText,
                     stage2RawText: options?.stage2RawText || '',
                     stage2_1Text: options?.stage2_1Text !== undefined ? extractPureSubjectIndexText(options.stage2_1Text) : extractPureSubjectIndexText(latestStage2_1TextRef.current || normalizedSubjectIndexValue),
                 }), null, 2);
@@ -4068,6 +4112,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: latestAnalysisRawTextRef.current || activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
                     assetRawText: nextContent,
+                    stage1RawText: latestStage1RawTextRef.current || '',
                     stage2_1Text: latestStage2_1TextRef.current || undefined
                 }), null, 2);
 
@@ -4079,6 +4124,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: latestAnalysisRawTextRef.current || activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    stage1RawText: latestStage1RawTextRef.current || '',
                     stage2_1Text: normalizedSubjectIndexValue,
                 }), null, 2);
 
@@ -4099,6 +4145,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const lastLoadedAnalysisRef = useRef(null);
     const latestAssetRawTextRef = useRef('');
     const latestAnalysisRawTextRef = useRef('');
+    const latestStage1RawTextRef = useRef('');
     const latestStage2_1TextRef = useRef('');
 
     const llmRawAutoSaveTimerRef = useRef(null);
