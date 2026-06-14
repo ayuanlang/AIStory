@@ -4788,7 +4788,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const promptsData = await Promise.all(
                 promptFiles.map(async p => ({
                     ...p,
-                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(`skills/${p.folder}/${p.key}`).catch(() => null))?.content || "")
+                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(p.path).catch(() => null))?.content || "")
                 }))
             );
 
@@ -4816,7 +4816,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             
                             onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
                             const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            await new Promise(r => setTimeout(r, 200));
+                            
                             resolve(res);
                         } catch (err) {
                             reject(err);
@@ -7775,7 +7775,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (onLog) onLog('Superuser Stage 2.1 submit: prompt preview opened before submission.', 'info');
             
                                 const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            await new Promise(r => setTimeout(r, 200));
+                            
                             resolve(res);
                             } catch (err) {
                                 reject(err);
@@ -7859,7 +7859,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
                                     
                                     const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            await new Promise(r => setTimeout(r, 200));
+                            
                             resolve(res);
                                 } catch (err) {
                                     reject(err);
@@ -8318,7 +8318,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
                                     
                                     const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            await new Promise(r => setTimeout(r, 200));
+                            
                             resolve(res);
                                 } catch (err) {
                                     reject(err);
@@ -8596,7 +8596,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (onLog) onLog('Superuser scene-only Stage 2.2 submit: prompt preview opened before submission.', 'info');
 
                             const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            await new Promise(r => setTimeout(r, 200));
+                            
                             resolve(res);
                         } catch (err) {
                             reject(err);

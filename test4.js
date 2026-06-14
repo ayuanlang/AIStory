@@ -1,0 +1,1 @@
+const myP = new Promise((resolve) => { const prev = Promise.resolve(); prev.then(async () => { const res = await new Promise(r => setTimeout(() => r(1), 100)); await new Promise(r => setTimeout(r, 200)); resolve(res); }); }); myP.then(console.log);

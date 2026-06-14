@@ -1,0 +1,1 @@
+const myPromise = new Promise((resolve, reject) => { Promise.resolve().then(async () => { await new Promise(r => setTimeout(r, 200)); resolve(123); }) }); myPromise.then(console.log);
