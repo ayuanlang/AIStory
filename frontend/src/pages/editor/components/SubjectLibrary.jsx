@@ -2493,17 +2493,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             try {
                                 await updateEntity(Number(entityId), { image_url: generatedUrl });
                             } catch {
-                                // Best effort; local refresh still updates UX.
+                                // Best effort. We still wait for durable URL from fetchEntities.
                             }
-                        }
-                        if (canPersistGeneratedUrl && currentJob) {
-                            clearLocalSubjectImageJobState(entityId);
-                            applySubjectEntityImageLocally(entityId, generatedUrl);
-                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'success') && onLog) {
-                                onLog(t(`主体生成完成：${job?.entityName || entityId}`, `Subject generation completed: ${job?.entityName || entityId}`), 'success');
-                            }
-                            refreshSubjectAssetsAfterImageCompletion(entityId);
-                            continue;
                         }
 
                         let recoveredUrl = '';
@@ -2539,20 +2530,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             );
                         }
 
-                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
-                            if (getCurrentJobEntry(entityId, jobId)) {
-                                clearLocalSubjectImageJobState(entityId);
-                            }
-                            if (isActivePoll() && onLog) {
-                                onLog(
-                                    t(
-                                        `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
-                                        `Subject job finished, but no durable image URL was available before the persistence wait timed out: ${job?.entityName || entityId}`
-                                    ),
-                                    'warning'
-                                );
-                            }
-                            continue;
+                        const nextPersistLogAt = (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt;
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog && nextPersistLogAt === now) {
+                            onLog(
+                                t(
+                                    `主体任务等待落库时间较长，继续等待稳定图片地址：${job?.entityName || entityId}`,
+                                    `Subject job is still waiting for durable image persistence; continuing to wait: ${job?.entityName || entityId}`
+                                ),
+                                'warning'
+                            );
                         }
 
                         statusUpdates[String(entityId)] = {
@@ -2561,7 +2547,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             statusFailureCount: 0,
                             lastStatusError: '',
                             persistWaitStartedAt,
-                            lastPersistWaitLogAt: now,
+                            lastPersistWaitLogAt: nextPersistLogAt,
                         };
                         continue;
                     }
@@ -2623,20 +2609,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             );
                         }
 
-                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
-                            if (getCurrentJobEntry(entityId, jobId)) {
-                                clearLocalSubjectImageJobState(entityId);
-                            }
-                            if (isActivePoll() && onLog) {
-                                onLog(
-                                    t(
-                                        `主体任务状态为完成，但等待稳定图片超时：${job?.entityName || entityId}`,
-                                        `Subject job reported completed, but timed out waiting for a durable image URL: ${job?.entityName || entityId}`
-                                    ),
-                                    'warning'
-                                );
-                            }
-                            continue;
+                        const nextPersistLogAt = (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt;
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog && nextPersistLogAt === now) {
+                            onLog(
+                                t(
+                                    `主体任务已完成但仍未落库，继续等待稳定图片地址：${job?.entityName || entityId}`,
+                                    `Subject job reported completed but durable image persistence is still pending; continuing to wait: ${job?.entityName || entityId}`
+                                ),
+                                'warning'
+                            );
                         }
 
                         statusUpdates[String(entityId)] = {
@@ -2645,7 +2626,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             statusFailureCount: 0,
                             lastStatusError: '',
                             persistWaitStartedAt,
-                            lastPersistWaitLogAt: now,
+                            lastPersistWaitLogAt: nextPersistLogAt,
                         };
                         continue;
                     }
@@ -5680,7 +5661,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                         : isBatchPending
                                             ? t('排队中', 'Queued')
                                         : String(trackedJob?.status || '').toLowerCase() === 'persisting'
-                                            ? t('同步中', 'Syncing')
+                                            ? t('待文件落库', 'Persisting')
                                         : String(trackedJob?.status || '').toLowerCase() === 'running'
                                             ? t('运行中', 'Running')
                                             : String(trackedJob?.status || '').toLowerCase() === 'queued'
@@ -6060,7 +6041,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 {stoppingSubjectImageJobs[String(viewingEntity.id)]
                                                     ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
                                                     : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'persisting'
-                                                        ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                        ? t('该主体已完成生成，待文件落库后会自动加载稳定图片地址。', 'This subject finished generation and is waiting for file persistence. The stable image URL will load automatically once ready.')
                                                     : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'running'
                                                         ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
                                                         : String(subjectImageJobs[String(viewingEntity.id)]?.status || '').toLowerCase() === 'queued'
@@ -7535,7 +7516,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     {stoppingSubjectImageJobs[String(selectedEntity.id)]
                                                         ? t('该主体停止请求发送中，请稍候。', 'Stop request is being sent for this subject. Please wait.')
                                                         : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'persisting'
-                                                            ? t('该主体已完成生成，正在等待稳定图片同步到素材库。', 'This subject finished generating and is waiting for the durable image to sync back into the library.')
+                                                            ? t('该主体已完成生成，待文件落库后会自动加载稳定图片地址。', 'This subject finished generation and is waiting for file persistence. The stable image URL will load automatically once ready.')
                                                         : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'running'
                                                             ? t('该主体正在运行中，即使关闭窗口也会继续。', 'This subject is running in background and will continue even if you close this window.')
                                                             : String(subjectImageJobs[String(selectedEntity.id)]?.status || '').toLowerCase() === 'queued'
