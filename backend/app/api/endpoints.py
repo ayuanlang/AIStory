@@ -6978,11 +6978,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # Subject Index as canonical source to avoid request text contamination.
             if is_scene_beats_stage:
                 canonical_stage_text = _strip_embedded_subject_index_from_stage_text(request.text)
+                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             elif is_subject_index_consumer_stage:
-                canonical_stage_text = persisted_subject_index_for_prompt
+                canonical_stage_text = str(request.text or "")
+                user_content = canonical_stage_text
             else:
                 canonical_stage_text = str(request.text or "")
-            user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
+                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             logger.info(
                 "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
                 getattr(request, "episode_id", None),

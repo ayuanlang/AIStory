@@ -972,8 +972,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const normalized = stable.toLowerCase();
-        if (normalized.includes('prohibited_content')) {
-            return '出现供应商政策不允许内容';
+        if (normalized.includes('prohibited_content') || normalized.includes('prohibited content') || normalized.includes('供应商政策不允许')) {
+            return t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
         }
         if (stable.includes('未解析到完整的 Subject Index 区块') || stable.includes('未解析到完整的资产清单区块') || stable.includes('第一阶段返回未完成或被截断') || stable.includes('第二阶段返回未完成或被截断')) {
             return t('第二阶段返回未完成或被截断，缺少完整资产清单；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 2 returned incomplete or truncated output and is missing a complete asset index. The current result cannot be used. Please retry, and switch models if needed.');
@@ -1035,6 +1035,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!raw) return false;
         return (
             raw.includes('prohibited_content')
+            || raw.includes('prohibited content')
             || raw.includes('供应商政策不允许')
             || raw.includes('policy')
         );
@@ -4787,7 +4788,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const promptsData = await Promise.all(
                 promptFiles.map(async p => ({
                     ...p,
-                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(p.path).catch(() => null))?.content || "")
+                    content: commonPromptContent + "\n\n" + ((await fetchPrompt(`skills/${p.folder}/${p.key}`).catch(() => null))?.content || "")
                 }))
             );
 
@@ -4815,6 +4816,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             
                             onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
                             const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                            await new Promise(r => setTimeout(r, 200));
                             resolve(res);
                         } catch (err) {
                             reject(err);
@@ -7206,7 +7208,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setLlmRawResultContent(analyzedText || "");
             setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
             lastLoadedAnalysisRef.current = analyzedText || "";
-            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
+            if (analyzedText && (analyzedText.includes("PROHIBITED_CONTENT") || analyzedText.toLowerCase().includes("prohibited content"))) {
+                const msg = t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
+                alert('⚠️ ' + msg);
                 throw new Error("出现供应商政策不允许内容");
             }
             llmReturned = true;
@@ -7670,7 +7674,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!splitStage1Flow) setLlmRawResultContent(analyzedText || '');
             if (!splitStage1Flow) setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ''));
             if (!splitStage1Flow) lastLoadedAnalysisRef.current = analyzedText || '';
-            if (analyzedText && analyzedText.includes("PROHIBITED_CONTENT")) {
+            if (analyzedText && (analyzedText.includes("PROHIBITED_CONTENT") || analyzedText.toLowerCase().includes("prohibited content"))) {
+                const msg = t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
+                alert('⚠️ ' + msg);
                 throw new Error("出现供应商政策不允许内容");
             }
             llmReturned = true;
@@ -7769,7 +7775,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (onLog) onLog('Superuser Stage 2.1 submit: prompt preview opened before submission.', 'info');
             
                                 const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                                resolve(res);
+                            await new Promise(r => setTimeout(r, 200));
+                            resolve(res);
                             } catch (err) {
                                 reject(err);
                             }
@@ -7852,7 +7859,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
                                     
                                     const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                                    resolve(res);
+                            await new Promise(r => setTimeout(r, 200));
+                            resolve(res);
                                 } catch (err) {
                                     reject(err);
                                 }
@@ -8310,7 +8318,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
                                     
                                     const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                                    resolve(res);
+                            await new Promise(r => setTimeout(r, 200));
+                            resolve(res);
                                 } catch (err) {
                                     reject(err);
                                 }
@@ -8587,6 +8596,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             if (onLog) onLog('Superuser scene-only Stage 2.2 submit: prompt preview opened before submission.', 'info');
 
                             const res = await new Promise(r => { phase2ResolverRef.current = r; });
+                            await new Promise(r => setTimeout(r, 200));
                             resolve(res);
                         } catch (err) {
                             reject(err);
