@@ -4487,8 +4487,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [projectId, activeEpisode?.id, llmAssetRawResultContent, llmRawResultContent, normalizeLlmMarkdownTable]);
 
     const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500, resultField = 'ai_scene_analysis_result', expectedResultKind = '' } = {}) => {
-        if (!projectId || !activeEpisode?.id) return '';
-        if (resultField === 'none') return '';
+        const sleepMs = Math.max(1500, Number(intervalMs || 3500));
+        if (!projectId || !activeEpisode?.id) {
+            await new Promise(r => setTimeout(r, sleepMs));
+            return '';
+        }
+        if (resultField === 'none') {
+            await new Promise(r => setTimeout(r, sleepMs));
+            return '';
+        }
         const base = String(baselineText || '').trim();
         const deadline = Date.now() + Math.max(30000, Number(timeoutMs || 600000));
 
