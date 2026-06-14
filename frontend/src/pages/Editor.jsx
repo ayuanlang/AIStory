@@ -2357,7 +2357,7 @@ const Editor = ({
                                     scene_name: getSceneVal(['scenename', 'title', 'scene_name', '场景名称'], isNewSceneFormat ? 3 : 1),
                                     equivalent_duration: getSceneVal(['equivalentduration', 'duration', 'equivalent_duration'], isNewSceneFormat ? 4 : 2),
                                     core_scene_info: getSceneVal(['coresceneinfo', 'coregoal', 'core_scene_info'], isNewSceneFormat ? 5 : 3),
-                                    original_script_text: getSceneVal(['originalscripttext', 'description', 'original_script_text'], isNewSceneFormat ? 6 : 4),
+                                    original_script_text: getSceneVal(['originalscripttext', 'description', 'original_script_text', 'adaptedscripttext', '改编剧本', '改编剧本文本'], isNewSceneFormat ? 6 : 4),
                                     environment_name: getSceneVal(['environmentname', 'environment', 'environment_name', '环境名称', '环境', '环境锚点'], isNewSceneFormat ? 7 : 5),
                                     linked_characters: getSceneVal(['linkedcharacters', 'linked_characters', '关联角色', '角色', 'characters'], isNewSceneFormat ? 11 : 6),
                                     key_props: getSceneVal(['keyprops', 'key_props', '关键道具', '道具', 'props'], isNewSceneFormat ? 12 : 7)

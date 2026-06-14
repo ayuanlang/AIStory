@@ -56,6 +56,10 @@ from app.services.project_cost_service import (
     normalize_project_cost_estimation_config,
     extract_project_create_options,
 )
+from app.services.script_analysis_flow import (
+    SCRIPT_ANALYSIS_FLOW_CONFIG_KEY,
+    normalize_script_analysis_flow_config,
+)
 from app.schemas.settings import (
     APISettingOut,
     APISettingUpdate,
@@ -88,6 +92,8 @@ from app.schemas.settings import (
     AssetImageRatioConfigUpdate,
     SceneAnalysisSystemConfigOut,
     SceneAnalysisSystemConfigUpdate,
+    ScriptAnalysisFlowConfigOut,
+    ScriptAnalysisFlowConfigUpdate,
     ProjectCostEstimationConfigOut,
     ProjectCostEstimationConfigUpdate,
     ProjectCreateOptionsConfigOut,
@@ -188,6 +194,7 @@ _BILLING_RESET_CONFIG_KEY = "billing_rule_reset_config"
 _SORA_MENTION_CONFIG_KEY = "sora_mention_config"
 _ASSET_IMAGE_RATIO_CONFIG_KEY = "asset_image_ratio_config"
 _SCENE_ANALYSIS_SYSTEM_CONFIG_KEY = "scene_analysis_system_config"
+_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY = SCRIPT_ANALYSIS_FLOW_CONFIG_KEY
 _PROJECT_COST_ESTIMATION_CONFIG_KEY = "project_cost_estimation_config"
 _PROJECT_CREATE_OPTIONS_CONFIG_KEY = "project_create_options_config"
 _BILLING_RESET_MAX_INCREASE_DEFAULT = 50
@@ -689,6 +696,16 @@ def get_scene_analysis_system_config(db: Session) -> Dict[str, Any]:
     cfg = _safe_json_dict(row.config)
     normalized = _normalize_scene_analysis_system_config(cfg.get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
     cfg[_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY] = normalized
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    return normalized
+
+
+def get_script_analysis_flow_config(db: Session) -> Dict[str, Any]:
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    normalized = normalize_script_analysis_flow_config(cfg.get(_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY, {}))
+    cfg[_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY] = normalized
     row.config = cfg
     _persist_agent_policy_row_config(db, row.id, row.config)
     return normalized
@@ -6279,6 +6296,19 @@ def get_scene_analysis_manage_config(
     return SceneAnalysisSystemConfigOut(**cfg)
 
 
+@router.get("/settings/system/manage/script-analysis-flow-config", response_model=ScriptAnalysisFlowConfigOut)
+def get_script_analysis_flow_manage_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage script analysis flow config")
+
+    cfg = get_script_analysis_flow_config(db)
+    db.commit()
+    return ScriptAnalysisFlowConfigOut(**cfg)
+
+
 @router.get("/settings/system/manage/project-cost-estimation-config", response_model=ProjectCostEstimationConfigOut)
 def get_project_cost_estimation_manage_config(
     db: Session = Depends(get_db),
@@ -6416,6 +6446,29 @@ def update_scene_analysis_manage_config(
 
     normalized = _normalize_scene_analysis_system_config(_safe_json_dict(row.config).get(_SCENE_ANALYSIS_SYSTEM_CONFIG_KEY, {}))
     return SceneAnalysisSystemConfigOut(**normalized)
+
+
+@router.put("/settings/system/manage/script-analysis-flow-config", response_model=ScriptAnalysisFlowConfigOut)
+def update_script_analysis_flow_manage_config(
+    payload: ScriptAnalysisFlowConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not _can_manage_system_settings(current_user):
+        raise HTTPException(status_code=403, detail="Only system/admin users can manage script analysis flow config")
+
+    row = _get_or_create_agent_policy_row(db)
+    cfg = _safe_json_dict(row.config)
+    current_cfg = normalize_script_analysis_flow_config(cfg.get(_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY, {}))
+    patch = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    merged_cfg = {**current_cfg, **_safe_json_dict(patch)}
+    cfg[_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY] = normalize_script_analysis_flow_config(merged_cfg)
+    row.config = cfg
+    _persist_agent_policy_row_config(db, row.id, row.config)
+    db.commit()
+
+    normalized = normalize_script_analysis_flow_config(_safe_json_dict(row.config).get(_SCRIPT_ANALYSIS_FLOW_CONFIG_KEY, {}))
+    return ScriptAnalysisFlowConfigOut(**normalized)
 
 
 @router.put("/settings/system/manage/project-cost-estimation-config", response_model=ProjectCostEstimationConfigOut)

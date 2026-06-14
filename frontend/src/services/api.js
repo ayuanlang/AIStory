@@ -3276,6 +3276,80 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
     return data;
 };
 
+export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
+    let defaultApiId = systemApiId;
+    if (!defaultApiId && functionName) {
+        defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
+    }
+    const analyze_payload = {
+        text: scriptText,
+        system_prompt: systemPrompt,
+        include_negative_prompt: true,
+        function_name: functionName,
+        system_api_id: defaultApiId,
+    };
+    if (sceneAnalysisMode) analyze_payload.scene_analysis_mode = sceneAnalysisMode;
+    if (projectId) analyze_payload.project_id = projectId;
+    if (episodeId) analyze_payload.episode_id = episodeId;
+    if (projectMetadata) analyze_payload.project_metadata = projectMetadata;
+    if (analysisAttentionNotes && String(analysisAttentionNotes).trim()) {
+        analyze_payload.analysis_attention_notes = String(analysisAttentionNotes).trim();
+    }
+    if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
+        analyze_payload.reuse_subject_assets = reuseSubjectAssets;
+    }
+    const analysisTraceId = String(runtimeHooks?.analysisTraceId || runtimeHooks?.requestId || '').trim();
+    if (analysisTraceId) analyze_payload.analysis_trace_id = analysisTraceId;
+    if (runtimeHooks?.analysisFeatures && typeof runtimeHooks.analysisFeatures === 'object') {
+        analyze_payload.scene_analysis_features = runtimeHooks.analysisFeatures;
+    }
+
+    const submitTimeoutRaw = Number(import.meta?.env?.VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS || 600000);
+    const submitTimeout = Number.isFinite(submitTimeoutRaw)
+        ? Math.max(30000, Math.min(600000, Math.floor(submitTimeoutRaw)))
+        : 600000;
+
+    let data = {};
+    try {
+        data = (await asyncLLMPost('/prompts/scene-analysis/flow/run-node', {
+            node_key: nodeKey,
+            project_id: projectId || null,
+            episode_id: episodeId || null,
+            function_name: functionName,
+            system_api_id: defaultApiId,
+            analyze_payload,
+        }, {
+            timeout: submitTimeout,
+            onTaskCreated: runtimeHooks?.onTaskCreated,
+            pollOptions: {
+                interval: 1200,
+                timeout: LLM_POLL_TIMEOUT,
+            },
+        })) ?? {};
+    } catch (error) {
+        const noResponse = !error?.response;
+        const timeout = String(error?.code || '') === 'ECONNABORTED';
+        const detail = buildApiErrorMessage(error);
+        if (timeout || noResponse) {
+            throw new Error(`Script analysis workflow submit/poll no response (${submitTimeout}ms): ${detail}`);
+        }
+        throw new Error(detail || 'Script analysis workflow failed');
+    }
+
+    const result = data?.result && typeof data.result === 'object' ? data.result : data;
+    if (!result || typeof result !== 'object') {
+        throw new Error('Script analysis workflow returned an invalid response format.');
+    }
+    const explicitSuccess = typeof result?.success === 'boolean' ? result.success : null;
+    const statusText = String(result?.status || '').trim().toLowerCase();
+    if (explicitSuccess === false || statusText === 'error' || statusText === 'failed' || statusText === 'fail') {
+        const detail = result?.detail || result?.message || result?.error || result?.reason || 'Script analysis workflow failed';
+        throw new Error(String(detail));
+    }
+    try { window.dispatchEvent(new CustomEvent('aistory:generation-complete', { detail: { type: 'analysis' } })); } catch {}
+    return result;
+};
+
 export const fetchProjectSubjectInventoryPrompt = async (projectId) => {
     try {
         const response = await api.get(`/projects/${projectId}/subject_inventory_prompt`);
@@ -3436,6 +3510,29 @@ export const getAssetImageRatioConfigManage = async () => (await api.get('/setti
 export const updateAssetImageRatioConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/asset-image-ratio-config', payload || {})).data;
 export const getSceneAnalysisConfigManage = async () => (await api.get('/settings/system/manage/scene-analysis-config')).data;
 export const updateSceneAnalysisConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/scene-analysis-config', payload || {})).data;
+export const getScriptAnalysisFlowConfigManage = async () => (await api.get('/settings/system/manage/script-analysis-flow-config')).data;
+export const updateScriptAnalysisFlowConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/script-analysis-flow-config', payload || {})).data;
+export const getSceneAnalysisFlowRegistry = async () => (await api.get('/prompts/scene-analysis/flow-registry')).data;
+export const previewSceneAnalysisFlowPlan = async (payload = {}) => (await api.post('/prompts/scene-analysis/flow-plan', payload || {})).data;
+export const runSceneAnalysisFlowNode = async (payload = {}) => {
+    const enrichedPayload = { ...(payload || {}) };
+    enrichedPayload.function_name = enrichedPayload.function_name || 'script_analysis';
+    if (!enrichedPayload.system_api_id) {
+        enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
+    const apiContextStr = localStorage.getItem('__function_api_context');
+    if (apiContextStr) {
+        try {
+            const ctx = JSON.parse(apiContextStr);
+            if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
+                enrichedPayload.system_api_id = ctx['script_analysis'].system_api_id;
+            }
+        } catch (e) {
+            console.warn('[API] runSceneAnalysisFlowNode: Failed to parse function API context', e);
+        }
+    }
+    return (await api.post('/prompts/scene-analysis/flow/run-node', enrichedPayload)).data;
+};
 export const getProjectCostEstimationConfigManage = async () => (await api.get('/settings/system/manage/project-cost-estimation-config')).data;
 export const updateProjectCostEstimationConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-cost-estimation-config', payload || {})).data;
 export const updateProjectCreateOptionsConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-create-options', payload || {})).data;

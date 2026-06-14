@@ -76,7 +76,7 @@ import {
     generateProjectEpisodeScripts,
     getProjectEpisodeScriptsStatus,
     stopProjectEpisodeScripts,
-    startSceneAiShotsBatch,
+    runSceneAnalysisFlowNode,
     getSceneAiShotsBatchStatus,
     stopSceneAiShotsBatch,
     startEpisodeScenesGeneration,
@@ -2202,7 +2202,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             else if (n.includes("scenename") || n.includes("title")) headerMap['scene_name'] = idx;
             else if (n.includes("equivalentduration")) headerMap['equivalent_duration'] = idx;
             else if (n.includes("coresceneinfo") || n.includes("coregoal")) headerMap['core_scene_info'] = idx;
-            else if (n.includes("originalscripttext") || n.includes("description")) headerMap['original_script_text'] = idx;
+            else if (n.includes("originalscripttext") || n.includes("description") || n.includes("adaptedscripttext") || n.includes("改编剧本")) headerMap['original_script_text'] = idx;
             else if (n.includes("environmentname") || n.includes("environment")) headerMap['environment_name'] = idx;
             else if (n.includes("environmentrelation")) headerMap['environment_relation'] = idx;
             else if (n.includes("entrystate")) headerMap['entry_state'] = idx;
@@ -4021,9 +4021,13 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
         if (!await confirmUiMessage(confirmText)) return;
 
         try {
-            const started = await startSceneAiShotsBatch(activeEpisode.id, {
+            const workflowStarted = await runSceneAnalysisFlowNode({
+                node_key: 'storyboard_generation',
+                project_id: projectId,
+                episode_id: activeEpisode.id,
                 scene_ids: targets.map((s) => s.id),
             });
+            const started = workflowStarted?.batch_status || workflowStarted || {};
             batchAiShotsStartupGuardUntilRef.current = Date.now() + 12000;
             batchAiShotsBootstrapUntilRef.current = Date.now() + 15000;
             setBatchAiShotsProgress((prev) => ({
@@ -4038,7 +4042,7 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                 message: started?.message || t('批量任务已启动...', 'Batch task started...'),
                 errors: Array.isArray(started?.errors) ? started.errors : [],
             }));
-            onLog?.(`SceneManager: Batch AI Shots started. total=${targets.length}, skipped_unsaved=${skipped}`, 'info');
+            onLog?.(`SceneManager: Workflow storyboard_generation started. total=${targets.length}, skipped_unsaved=${skipped}`, 'info');
 
             if (batchAiShotsStatusTimerRef.current) {
                 clearInterval(batchAiShotsStatusTimerRef.current);

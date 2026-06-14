@@ -104,6 +104,8 @@ import {
     markReviewThreadRead,
     recordSystemLogAction,
     rebindShotMediaAssets,
+    getSceneAnalysisFlowRegistry,
+    runScriptAnalysisFlowAnalyzeNode,
     getCachedUserPreferences,
     fetchProjectSubjectInventoryPrompt,
     recomputeEpisodeCostEstimation,
@@ -656,15 +658,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
-    const [subjectRecoveryModal, setSubjectRecoveryModal] = useState({
-        open: false,
-        status: 'idle',
-        missing: [],
-        message: '',
-        details: '',
-    });
-    const [isRecoveringMissingSubjects, setIsRecoveringMissingSubjects] = useState(false);
-    const [isCheckingCoreCoverage, setIsCheckingCoreCoverage] = useState(false);
     const [isCheckingSubjectConsistency, setIsCheckingSubjectConsistency] = useState(false);
     const [isImportingEntities, setIsImportingEntities] = useState(false);
     const [activeAnalysisTaskId, setActiveAnalysisTaskId] = useState('');
@@ -689,8 +682,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         subjectKey: '',
         query: '',
     });
-    const [coreCoverageReport, setCoreCoverageReport] = useState(null);
-    const [coreCoverageResultText, setCoreCoverageResultText] = useState('');
     const [postAnalysisCheckModal, setPostAnalysisCheckModal] = useState({
         open: false,
         status: 'idle',
@@ -967,36 +958,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const localizeAnalysisFailureMessage = useCallback((rawMessage) => {
         const stable = String(rawMessage || '').trim();
-        if (!stable) {
-            return t('剧本分析返回告警：结果需要人工复核，但已允许继续加载。', 'Scene analysis returned warnings: the result needs manual review, but loading can continue.');
-        }
-
         const normalized = stable.toLowerCase();
-        if (normalized.includes('prohibited_content') || normalized.includes('prohibited content') || normalized.includes('供应商政策不允许')) {
-            return t('剧本含有敏感信息（如色情或血腥内容，特别是针对少儿），触发了模型拦截。建议您换用 DeepSeek、豆包等模型重试。', 'Script contains sensitive information (like pornographic or violent content, especially involving minors) triggering policy block. We recommend retrying with DeepSeek or Doubao.');
-        }
-        if (stable.includes('未解析到完整的 Subject Index 区块') || stable.includes('未解析到完整的资产清单区块') || stable.includes('第一阶段返回未完成或被截断') || stable.includes('第二阶段返回未完成或被截断')) {
-            return t('第二阶段返回未完成或被截断，缺少完整资产清单；当前结果不能继续使用。请重试，必要时切换其他模型。', 'Stage 2 returned incomplete or truncated output and is missing a complete asset index. The current result cannot be used. Please retry, and switch models if needed.');
-        }
-        if (
-            normalized.includes('剧本分析结果不可用')
-            || normalized.includes('请直接重新执行 ai 剧本分析')
-            || normalized.includes('please directly rerun AI script analysis')
-        ) {
-            return t(
-                '剧本分析返回告警：结果需要人工复核，但不再阻断原文、Markdown 与 JSON 的加载。',
-                'Scene analysis returned warnings: the result needs manual review, but no longer blocks loading raw text, markdown, or JSON.'
-            );
-        }
-        if (
-            normalized.includes('analysis_structure_incomplete')
-            || normalized.includes('scene analysis output failed structural consistency checks')
-            || normalized.includes('missing required sections')
-        ) {
-            return t(
-                '剧本分析返回告警：本次返回缺少部分必要结构段，请人工复核；系统仍会继续加载已返回的原文、Markdown 与 JSON。',
-                'Scene analysis returned warnings: some required sections are missing. Please review manually; the system will still load returned raw text, markdown, and JSON.'
-            );
+        if (!normalized) {
+            return '';
         }
         if (
             normalized.includes('analysis_output_truncated')
@@ -1876,7 +1840,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const sceneNameIdx = findCol(['scenename', '场景名']);
         const coreInfoIdx = findCol(['coresceneinfo', '核心场景信息']);
-        const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'original']);
+        const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'original', 'adaptedscripttext', '改编剧本', '改编剧本文本']);
 
         const hitRows = [];
         for (const row of parsed.rows) {
@@ -1917,15 +1881,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return unique.map((s, i) => `# Missing Subject Scene ${i + 1}\n${s}`).join('\n\n');
     };
 
-    const buildSubjectOnlyRecoveryPrompt = (basePrompt = '') => {
-        const recoveryMode = `\n\n[Subject Recovery Mode - Mandatory]\n` +
-            `You must only generate missing subject-related entities from the provided missing-scene snippets.\n` +
-            `Do NOT regenerate script/scene table content.\n` +
-            `Output only Part 2A/2B/2C JSON in the same schema as the first pass.\n` +
-            `Focus on entities referenced by missing markdown subjects and keep strict name consistency.`;
-        return `${String(basePrompt || '').trim()}${recoveryMode}`;
-    };
-
     const buildIssueDrivenSupplementPrompt = (basePrompt = '', issues = []) => {
         const normalizedIssues = Array.from(new Set((issues || []).map(v => String(v || '').trim()).filter(Boolean)));
         const issueBlock = normalizedIssues.length > 0
@@ -1935,7 +1890,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const supplementMode = `\n\n[Issue-driven Supplement Mode - Mandatory]\n` +
             `Use the provided text as the current generated analysis draft (NOT original screenplay).\n` +
             `You MUST patch missing entities/structure/problems according to the issue list below.\n` +
-            `Comprehensively audit missing content and entities using [Last Generated Analysis Output] plus the three optional sections ([Subject Check Result], [Core Coverage Check Result], [Episode 1 AI Script Analysis Attention Notes]); prioritize explicitly identified gaps and regenerate the output parts accordingly.\n` +
+            `Comprehensively audit missing content and entities using [Last Generated Analysis Output] plus the optional sections ([Subject Check Result], [Episode 1 AI Script Analysis Attention Notes]); prioritize explicitly identified gaps and regenerate the output parts accordingly.\n` +
             `Do NOT output explanations, apologies, or meta commentary.\n` +
             `Return a fully corrected final output in the required scene_analysis format.\n` +
             `Issue List:\n${issueBlock}`;
@@ -1999,12 +1954,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
     };
 
-    const saveCoreCoverageCheckResultValue = async (nextText) => {
-        await saveEpisodeInfoFields({
-            core_coverage_check_result: String(nextText || '').trim(),
-        });
-    };
-
     const persistFirstPassIssuesToAttentionNotes = async (subjectReport, warnings = [], extraIssues = []) => {
         const followupIssues = collectFollowupIssues(subjectReport, warnings, extraIssues);
         if (followupIssues.length === 0) return [];
@@ -2023,10 +1972,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return followupIssues;
     };
 
-    const buildSupplementSubmissionInput = ({ generatedContent = '', subjectCheckText = '', coreCoverageText = '', attentionNotes = '' }) => {
+    const buildSupplementSubmissionInput = ({ generatedContent = '', subjectCheckText = '', attentionNotes = '' }) => {
         const base = String(generatedContent || '').trim();
         const subject = String(subjectCheckText || '').trim();
-        const core = String(coreCoverageText || '').trim();
         const notes = String(attentionNotes || '').trim();
 
         const projectInfo = (project?.global_info && typeof project.global_info === 'object')
@@ -2073,7 +2021,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (projectBasicInfoBlock) sections.push(projectBasicInfoBlock);
 
         if (subject) sections.push('[Subject Check Result]\n' + subject);
-        if (core) sections.push('[Core Coverage Check Result]\n' + core);
         if (notes) sections.push('[Episode 1 AI Script Analysis Attention Notes]\n' + notes);
 
         return sections.join('\n\n');
@@ -2193,152 +2140,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return `${projectContextSection}\n\nScript to Analyze:\n\n${scriptText}`;
     }, [project?.global_info]);
 
-    const mergeEntitiesPayload = (basePayload, patchPayload) => {
-        const base = basePayload || { characters: [], props: [], environments: [] };
-        const patch = patchPayload || { characters: [], props: [], environments: [] };
-
-        const mergeBy = (a, b, keyOf) => {
-            const out = [];
-            const seen = new Set();
-            for (const item of [...(a || []), ...(b || [])]) {
-                const key = keyOf(item);
-                if (!key || seen.has(key)) continue;
-                seen.add(key);
-                out.push(item);
-            }
-            return out;
-        };
-
-        return {
-            characters: mergeBy(base.characters, patch.characters, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
-            props: mergeBy(base.props, patch.props, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
-            environments: mergeBy(base.environments, patch.environments, (item) => normalizeSubjectKey(item?.subject_name_exact || item?.name || item?.subject_name || item?.name_en || item?.name_zh || '')),
-        };
-    };
-
-    const autoRecoverMissingSubjects = async (rawText, missingSubjects) => {
-        if (!activeEpisode?.id || isRecoveringMissingSubjects) return null;
-        const normalizedMissing = Array.from(new Set((missingSubjects || []).map(v => String(v || '').trim()).filter(Boolean)));
-        if (normalizedMissing.length === 0) return null;
-
-        setIsRecoveringMissingSubjects(true);
-        setSubjectRecoveryModal({
-            open: true,
-            status: 'running',
-            missing: normalizedMissing,
-            message: t('自动提取资产缺失时增加责成卡片', 'Add an action card when auto-extracted assets are missing.'),
-            details: '',
-        });
-
-        try {
-            const markdownSource = normalizeLlmMarkdownTable(rawText || llmResultContent || '');
-            const recoveryScript = buildRecoveryScriptFromMissingSubjects(markdownSource, normalizedMissing);
-
-            let promptContent = '';
-            try {
-                const promptRefs = [
-                    'skills/scene_analysis_feature_stack/entity_design_common.md',
-                    'skills/scene_analysis_feature_stack/entity_design_character.md',
-                    'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md',
-                    'skills/scene_analysis_feature_stack/entity_design_prop.md',
-                ];
-                const promptParts = await Promise.all(promptRefs.map((ref) => fetchPrompt(ref).catch(() => null)));
-                promptContent = promptParts.map((res) => String(res?.content || '').trim()).filter(Boolean).join('\n\n');
-            } catch {
-                try {
-                    const fallbackRes = await fetchPrompt('scene_analysis_subject_recovery_lite.txt');
-                    promptContent = fallbackRes?.content || '';
-                } catch {
-                    try {
-                        const fallbackRes2 = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
-                        promptContent = fallbackRes2?.content || '';
-                    } catch {
-                        promptContent = '';
-                    }
-                }
-            }
-            const recoveryPrompt = buildSubjectOnlyRecoveryPrompt(promptContent);
-
-            if (onLog) onLog(`Auto recovery started for missing subjects: [${normalizedMissing.join(', ')}]`, 'process');
-            const recoveryResult = await analyzeScene(
-                recoveryScript,
-                recoveryPrompt,
-                null,
-                activeEpisode.id,
-                analysisAttentionNotes,
-                selectedReuseSubjectAssets,
-                null,
-                projectId,
-                null,
-                selectedScriptAnalysisApiId
-            );
-
-            const recoveryText = recoveryResult?.result || recoveryResult?.analysis || (typeof recoveryResult === 'string' ? recoveryResult : JSON.stringify(recoveryResult, null, 2));
-            const baseEntities = getAnalysisEntitiesPayloadFromJsonText(rawText || llmRawResultContent || llmResultContent) || { characters: [], props: [], environments: [] };
-            const patchEntities = getAnalysisEntitiesPayloadFromJsonText(recoveryText || '');
-
-            if (!patchEntities) {
-                setSubjectRecoveryModal({
-                    open: true,
-                    status: 'failed',
-                    missing: normalizedMissing,
-                    message: t('自动补全未返回可解析的实体 JSON。', 'Auto recovery returned no parseable entities JSON.'),
-                    details: '',
-                });
-                if (onLog) onLog('Auto recovery failed: no parseable entities JSON.', 'warning');
-                return null;
-            }
-
-            const mergedEntities = mergeEntitiesPayload(baseEntities, patchEntities);
-
-            const mergedRawSections = [];
-            if (markdownSource) mergedRawSections.push(markdownSource);
-            mergedRawSections.push(JSON.stringify(mergedEntities, null, 2));
-            const mergedRaw = mergedRawSections.join('\n\n');
-
-            setLlmRawResultContent(mergedRaw);
-            setLlmResultContent(normalizeLlmMarkdownTable(mergedRaw));
-            lastLoadedAnalysisRef.current = mergedRaw;
-            await persistLlmResultContent(mergedRaw);
-
-            const rerun = buildSubjectConsistencyReport(mergedRaw);
-            setSubjectConsistencyReport(rerun);
-
-            if (rerun.ok) {
-                setSubjectRecoveryModal({
-                    open: true,
-                    status: 'success',
-                    missing: normalizedMissing,
-                    message: t('缺失 Subject 已自动补全并通过复检。', 'Missing subjects were auto-recovered and passed re-check.'),
-                    details: '',
-                });
-                if (onLog) onLog('Auto recovery completed and consistency re-check passed.', 'success');
-            } else {
-                setSubjectRecoveryModal({
-                    open: true,
-                    status: 'partial',
-                    missing: rerun.missing || [],
-                    message: t('自动补全完成，但复检仍有缺失 Subject。', 'Auto recovery finished, but re-check still has missing subjects.'),
-                    details: (rerun.missing || []).join(', '),
-                });
-                if (onLog) onLog(`Auto recovery finished with remaining missing subjects: [${(rerun.missing || []).join(', ')}]`, 'warning');
-            }
-            return rerun;
-        } catch (error) {
-            setSubjectRecoveryModal({
-                open: true,
-                status: 'failed',
-                missing: normalizedMissing,
-                message: t('自动补全失败。', 'Auto recovery failed.'),
-                details: String(error?.message || ''),
-            });
-            if (onLog) onLog(`Auto recovery failed: ${error.message}`, 'error');
-            return null;
-        } finally {
-            setIsRecoveringMissingSubjects(false);
-        }
-    };
-
     const runSubjectConsistencyCheck = (rawText = null, options = {}) => {
         const silent = Boolean(options?.silent);
         const persist = options?.persist !== false;
@@ -2455,318 +2256,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }, 1400);
         } finally {
             setIsImportingEntities(false);
-        }
-    };
-
-    const parseCoreCoverageReport = (rawText) => {
-        const dedupeMissingPoints = (points) => {
-            const seen = new Set();
-            const out = [];
-            for (const item of points || []) {
-                const text = String(item || '').trim();
-                if (!text) continue;
-                const key = text.toLowerCase();
-                if (seen.has(key)) continue;
-                seen.add(key);
-                out.push(text);
-            }
-            return out;
-        };
-
-        const formatMissingPoint = (value) => {
-            if (value == null) return '';
-            if (typeof value === 'string') return value.trim();
-            if (Array.isArray(value)) {
-                return value.map(item => formatMissingPoint(item)).filter(Boolean).join(' | ');
-            }
-            if (typeof value === 'object') {
-                const sceneId = String(
-                    value.scene_id ?? value.sceneId ?? value['Scene ID'] ?? value['场景ID'] ?? value['场景id'] ?? ''
-                ).trim();
-                const detailRaw =
-                    value.missing_detail
-                    ?? value.missing_point
-                    ?? value.missing_points
-                    ?? value.missing_items
-                    ?? value.detail
-                    ?? value.reason
-                    ?? value.issue
-                    ?? value.desc
-                    ?? value.description
-                    ?? value['缺失点']
-                    ?? value['未覆盖点']
-                    ?? value['说明']
-                    ?? '';
-
-                let detail = '';
-                if (Array.isArray(detailRaw)) {
-                    detail = detailRaw.map(v => String(v || '').trim()).filter(Boolean).join(' | ');
-                } else if (detailRaw && typeof detailRaw === 'object') {
-                    try {
-                        detail = JSON.stringify(detailRaw);
-                    } catch {
-                        detail = '';
-                    }
-                } else {
-                    detail = String(detailRaw || '').trim();
-                }
-
-                if (sceneId && detail) return `${sceneId}: ${detail}`;
-                if (detail) return detail;
-                if (sceneId) {
-                    return `${sceneId}: ${t('未提供具体缺失说明', 'No specific uncovered detail provided')}`;
-                }
-
-                try {
-                    return JSON.stringify(value);
-                } catch {
-                    return '';
-                }
-            }
-            return String(value).trim();
-        };
-
-        const text = String(rawText || '').trim();
-        const jsonText = extractJsonFromLlmText(text);
-        if (jsonText) {
-            try {
-                const parsed = JSON.parse(jsonText);
-                const normalized = String(parsed?.is_covered || parsed?.covered || parsed?.result || '').trim();
-                const isCovered = normalized === '是' || /^yes$/i.test(normalized) || normalized === 'true';
-                const missingPointsRaw = Array.isArray(parsed?.missing_points)
-                    ? parsed.missing_points.map(v => formatMissingPoint(v)).filter(Boolean)
-                    : [];
-                const missingPoints = dedupeMissingPoints(missingPointsRaw);
-                return {
-                    ok: true,
-                    isCovered,
-                    verdict: isCovered ? t('是', 'Yes') : t('否', 'No'),
-                    missingPoints,
-                    raw: text,
-                };
-            } catch {
-                // fall through
-            }
-        }
-
-        const isCovered = /(?:^|\b)(是|yes|true)(?:\b|$)/i.test(text) && !/(?:^|\b)(否|no|false)(?:\b|$)/i.test(text);
-        const lines = text.split('\n').map(v => String(v || '').trim()).filter(Boolean);
-        const missingPoints = dedupeMissingPoints(
-            lines.filter(line => {
-                if (!line) return false;
-                if (/缺失|未覆盖|missing/i.test(line)) return true;
-                if (/^[\-•\d]/.test(line)) return true;
-                // Common scene-id style rows: EP01_SC01: ...
-                if (/^[A-Za-z]{1,8}\d{1,3}_SC\d{1,3}\s*:/i.test(line)) return true;
-                return false;
-            })
-        );
-        return {
-            ok: Boolean(text),
-            isCovered,
-            verdict: isCovered ? t('是', 'Yes') : t('否', 'No'),
-            missingPoints,
-            raw: text,
-        };
-    };
-
-    const runCoreCoverageCheck = async (markdownText = null, options = {}) => {
-        const suppressAlert = Boolean(options?.suppressAlert);
-        const suppressLog = Boolean(options?.suppressLog);
-        const persist = options?.persist !== false;
-        const candidateSources = [
-            { label: 'input_markdown', text: markdownText },
-            { label: 'scene_list_workspace', text: llmMarkdownTableText },
-            { label: 'input_normalized', text: normalizeLlmMarkdownTable(markdownText || '') },
-            { label: 'raw_normalized', text: normalizeLlmMarkdownTable(llmRawResultContent || '') },
-            { label: 'input_scene_block', text: extractScenesTableBlock(markdownText || '') },
-            { label: 'raw_scene_block', text: extractScenesTableBlock(llmRawResultContent || '') },
-            { label: 'llm_result_text', text: llmResultContent },
-            { label: 'llm_raw_text', text: llmRawResultContent },
-        ];
-
-        let parsed = null;
-        let coreCoverageSource = '';
-        let sourceLabel = '';
-        for (const candidate of candidateSources) {
-            const text = String(candidate?.text || '').trim();
-            if (!text) continue;
-            const currentParsed = parseMarkdownTable(text);
-            if (!currentParsed) continue;
-            parsed = currentParsed;
-            coreCoverageSource = text;
-            sourceLabel = candidate.label;
-            break;
-        }
-
-        // Last fallback: if Scene List table is already rendered in workspace state, rebuild markdown from it.
-        if (!parsed && llmMarkdownTable && Array.isArray(llmMarkdownTable.headers) && Array.isArray(llmMarkdownTable.rows)) {
-            const rebuilt = buildMarkdownTable(llmMarkdownTable.headers, llmMarkdownTable.rows);
-            const rebuiltParsed = parseMarkdownTable(rebuilt);
-            if (rebuiltParsed) {
-                parsed = rebuiltParsed;
-                coreCoverageSource = rebuilt;
-                sourceLabel = 'scene_list_rebuilt';
-            }
-        }
-
-        if (!parsed || !Array.isArray(parsed.rows) || parsed.rows.length === 0) {
-            setCoreCoverageResultText(t(
-                '校验未执行：未检测到可解析的 Markdown 表格。',
-                'Check not executed: no parseable markdown table detected.'
-            ));
-            if (persist) {
-                void saveCoreCoverageCheckResultValue(t(
-                    '校验未执行：未检测到可解析的 Markdown 表格。',
-                    'Check not executed: no parseable markdown table detected.'
-                ));
-            }
-            if (!suppressAlert) {
-                alert(t('未检测到可解析的 Markdown 表格。', 'No parseable markdown table detected.'));
-            }
-            return null;
-        }
-
-        const norm = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
-        const findCol = (patterns) => parsed.headers.findIndex((h) => {
-            const n = norm(h);
-            return patterns.some(p => n.includes(p));
-        });
-
-        const episodeIdIdx = findCol(['episodeid', '集id', '集编号']);
-        const sceneIdIdx = findCol(['sceneid', '场景id']);
-        const sceneNoIdx = findCol(['sceneno', '场次']);
-        const coreInfoIdx = findCol(['coresceneinfo', '核心场景信息']);
-        const originalIdx = findCol(['originalscripttext', '原始剧本文本', 'scripttext', 'original']);
-
-        if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
-            setCoreCoverageResultText(t(
-                '校验未执行：表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。',
-                'Check not executed: missing required columns (Scene ID / Core Scene Info / Original Script Text).'
-            ));
-            if (persist) {
-                void saveCoreCoverageCheckResultValue(t(
-                    '校验未执行：表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。',
-                    'Check not executed: missing required columns (Scene ID / Core Scene Info / Original Script Text).'
-                ));
-            }
-            if (!suppressAlert) {
-                alert(t('表格缺少必要列（Scene ID / Core Scene Info / Original Script Text）。', 'Missing required columns (Scene ID / Core Scene Info / Original Script Text).'));
-            }
-            return null;
-        }
-
-        const rowsPayload = parsed.rows.map((row) => ({
-            episode_id: episodeIdIdx >= 0 ? String(row[episodeIdIdx] || '').trim() : '',
-            scene_id: String(row[sceneIdIdx] || '').trim(),
-            scene_no: sceneNoIdx >= 0 ? String(row[sceneNoIdx] || '').trim() : '',
-            core_scene_info: String(row[coreInfoIdx] || '').trim(),
-            original_script_text: String(row[originalIdx] || '').trim(),
-        })).filter(item => item.scene_id && (item.core_scene_info || item.original_script_text));
-
-        if (rowsPayload.length === 0) {
-            setCoreCoverageResultText(t(
-                '校验未执行：未找到可用于校验的场景行。',
-                'Check not executed: no scene rows available for coverage check.'
-            ));
-            if (persist) {
-                void saveCoreCoverageCheckResultValue(t(
-                    '校验未执行：未找到可用于校验的场景行。',
-                    'Check not executed: no scene rows available for coverage check.'
-                ));
-            }
-            if (!suppressAlert) {
-                alert(t('未找到可用于校验的场景行。', 'No scene rows available for coverage check.'));
-            }
-            return null;
-        }
-
-        const systemPrompt = [
-            'You are a strict coverage auditor for screenplay adaptation.',
-            'Task: Compare each row\'s Core Scene Info against Original Script Text and determine whether coverage is complete.',
-            'Output STRICT JSON only (no markdown, no explanation):',
-            '{"is_covered":"是|否","missing_points":["..."]}',
-            'Rules:',
-            '- Return "是" only when ALL rows are fully covered.',
-            '- If any gap exists, return "否" and list concrete missing points in missing_points.',
-            '- Each missing point should include scene_id and concise uncovered detail.',
-            '- If "是", missing_points must be [].',
-        ].join('\n');
-
-        const userPrompt = [
-            'Rows to audit:',
-            JSON.stringify(rowsPayload, null, 2),
-        ].join('\n\n');
-
-        setIsCheckingCoreCoverage(true);
-        setCoreCoverageReport(null);
-        setWorkspaceOpStatus({
-            running: true,
-            action: 'core_coverage',
-            progress: 30,
-            message: t('🔍 正在检查重要剧情是否都已涵盖...', 'Checking core coverage...'),
-        });
-        if (!suppressLog && onLog) {
-            onLog(`Core coverage source selected: ${sourceLabel || 'unknown'}`, 'info');
-        }
-        try {
-            // Coverage check is an auxiliary audit call and must not overwrite episode ai_scene_analysis_result.
-            const result = await analyzeScene(userPrompt, systemPrompt, null, null, null, null, null, projectId, null, selectedScriptAnalysisApiId);
-            const analyzedText = extractAnalysisTextFromResult(result);
-            const report = parseCoreCoverageReport(analyzedText);
-            setCoreCoverageReport(report);
-            const coverageText = [
-                `${t('覆盖结论', 'Coverage Verdict')}: ${report.verdict}`,
-                !report.isCovered && Array.isArray(report.missingPoints) && report.missingPoints.length > 0
-                    ? `${t('未覆盖点：', 'Missing Points:')}\n- ${report.missingPoints.join('\n- ')}`
-                    : '',
-                report.raw ? `${t('原始校验输出', 'Raw Check Output')}:\n${report.raw}` : '',
-            ].filter(Boolean).join('\n\n');
-            setCoreCoverageResultText(coverageText);
-            if (persist) {
-                void saveCoreCoverageCheckResultValue(coverageText);
-            }
-            setWorkspaceOpStatus({
-                running: false,
-                action: 'core_coverage',
-                progress: 100,
-                message: report.isCovered
-                    ? t('剧情要点已全部包含，完美！', 'Core coverage check passed.')
-                    : t('剧情核对完成，好像漏掉了一些细节。', 'Core coverage check completed with uncovered points.'),
-            });
-            setTimeout(() => {
-                setWorkspaceOpStatus(prev => (prev.action === 'core_coverage' ? { running: false, action: '', progress: 0, message: '' } : prev));
-            }, 1400);
-            if (!suppressLog && onLog) {
-                onLog(
-                    report.isCovered
-                        ? 'Core Scene Info coverage check: YES (fully covered).'
-                        : `Core Scene Info coverage check: NO (${report.missingPoints.length} missing points).`,
-                    report.isCovered ? 'success' : 'warning'
-                );
-            }
-            return report;
-        } catch (e) {
-            console.error(e);
-            setCoreCoverageResultText(
-                `${t('校验失败', 'Check failed')}: ${String(e?.message || 'Unknown error')}`
-            );
-            if (persist) {
-                void saveCoreCoverageCheckResultValue(`${t('校验失败', 'Check failed')}: ${String(e?.message || 'Unknown error')}`);
-            }
-            setWorkspaceOpStatus({
-                running: false,
-                action: 'core_coverage',
-                progress: 0,
-                message: t('Core 覆盖校验失败。', 'Core coverage check failed.'),
-            });
-            if (!suppressLog && onLog) onLog(`Core coverage check failed: ${e.message}`, 'error');
-            if (!suppressAlert) {
-                alert(t('Core Scene Info 覆盖校验失败：', 'Core Scene Info coverage check failed: ') + (e?.message || 'Unknown error'));
-            }
-            return null;
-        } finally {
-            setIsCheckingCoreCoverage(false);
         }
     };
 
@@ -2911,7 +2400,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const normalizedHeaders = headers.map(normalize);
             const sceneIdIdx = findColIdx(normalizedHeaders, ['sceneid', '场景id']);
             const coreInfoIdx = findColIdx(normalizedHeaders, ['coresceneinfo', '核心场景信息']);
-            const originalIdx = findColIdx(normalizedHeaders, ['originalscripttext', '原始剧本文本', 'scripttext']);
+            const originalIdx = findColIdx(normalizedHeaders, ['originalscripttext', '原始剧本文本', 'scripttext', 'adaptedscripttext', '改编剧本', '改编剧本文本']);
 
             if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
                 droppedTables += 1;
@@ -3960,7 +3449,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setLlmAssetRawResultContent(activeEpisode?.ai_entity_design_result || '');
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
-        setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
         const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
         if (Array.isArray(persistedIds)) {
             setSelectedReuseSubjectIds(persistedIds.map(x => String(x)));
@@ -4718,13 +4206,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const promptFilesRaw = [
 
 
-            { key: 'characters', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
+            { key: 'characters', nodeKey: 'asset_design_character', path: 'skills/scene_analysis_feature_stack/entity_design_character.md' },
 
 
-            { key: 'environments', path: 'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md' },
+            { key: 'environments', nodeKey: 'asset_design_environment', path: 'skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md' },
 
 
-            { key: 'props', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
+            { key: 'props', nodeKey: 'asset_design_prop', path: 'skills/scene_analysis_feature_stack/entity_design_prop.md' }
 
 
         ];
@@ -4757,7 +4245,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
 
-        const promptFiles = promptFilesRaw.filter(p => !targetFilters || targetFilters.includes(p.key));
+        let stage3AutoStart = {
+            asset_design_character: true,
+            asset_design_prop: true,
+            asset_design_environment: true,
+        };
+        if (!targetFilters) {
+            try {
+                const flowRegistry = await getSceneAnalysisFlowRegistry();
+                const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
+                stage3AutoStart = { ...stage3AutoStart, ...configured };
+                onLog?.(`[Stage 3 Asset Design] Loaded auto-start config: character=${stage3AutoStart.asset_design_character ? 'on' : 'off'}, prop=${stage3AutoStart.asset_design_prop ? 'on' : 'off'}, environment=${stage3AutoStart.asset_design_environment ? 'on' : 'off'}`, 'info');
+            } catch (flowErr) {
+                onLog?.(`[Stage 3 Asset Design] Failed to load flow auto-start config; using defaults. ${flowErr?.message || flowErr}`, 'warning');
+            }
+        }
+
+        const promptFiles = promptFilesRaw.filter(p => {
+            if (targetFilters) return targetFilters.includes(p.key);
+            return stage3AutoStart[p.nodeKey] !== false;
+        });
+
+        if (!targetFilters && promptFiles.length === 0) {
+            onLog?.('[Stage 3 Asset Design] All Stage 3 auto-start switches are disabled; skipping automatic asset design.', 'info');
+            return emptyReport;
+        }
 
 
         const targetAssetsCount = promptFiles.length;
@@ -4807,37 +4319,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (designProjectContextSection) {
                 finalSubjectIndexText = `${designProjectContextSection}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
-            }
-
-            const isUserSuper = isSuperuser || isSuperuserRef.current;
-            if (isUserSuper) {
-                throwIfAnalysisStopped();
-                const confirmed = await new Promise((resolve, reject) => {
-                    const previous = superuserModalMutexRef.current;
-                    superuserModalMutexRef.current = previous.then(async () => {
-                        try {
-                            setAnalysisModalMode('stage3');
-                            setSystemPrompt(promptsData[0].content); // Show character one as representative
-                            setUserPrompt(finalSubjectIndexText);
-                            setShowAnalysisModal(true);
-                            
-                            onLog?.(`[Stage 3 Asset Design] Waiting for superuser to confirm the asset-design prompt...`);
-                            const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            
-                            resolve(res);
-                        } catch (err) {
-                            reject(err);
-                        }
-                    }).catch(reject);
-                });
-                
-                if (!confirmed || typeof confirmed !== 'object') {
-                    onLog?.(`[Stage 3 Asset Design] Superuser aborted the asset-design stage.`);
-                    return emptyReport;
-                }
-                
-                promptsData[0].content = confirmed.systemPrompt || promptsData[0].content;
-                finalSubjectIndexText = confirmed.userPrompt || finalSubjectIndexText;
             }
 
             onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
@@ -4928,7 +4409,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneAnalysisModeForSubtask = `2_pass_generate_assets_${pData.key}${subtaskRequestedTargets.length ? `__targets_${subtaskRequestedTargets.join('_')}` : ''}`;
 
                     return awaitAnalyzeSceneWithRecovery(
-                        () => analyzeScene(
+                        () => runScriptAnalysisFlowAnalyzeNode(
+                            pData.nodeKey || (pData.key === 'characters' ? 'asset_design_character' : (pData.key === 'props' ? 'asset_design_prop' : 'asset_design_environment')),
                             specificSubjectIndexText,  
                             pData.content, 
                             null, 
@@ -5627,15 +5109,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            
+            const appendStoryboardNotice = (baseZh, baseEn) => {
+                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
+                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
+            };
+
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             clearAnalysisTaskMarker(activeEpisode.id);
@@ -5709,7 +5197,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setLlmRawResultContent(initial);
         setLlmResultContent(normalizeLlmMarkdownTable(initial));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
-        setCoreCoverageResultText(String(activeEpisode?.episode_info?.core_coverage_check_result || ''));
         setAnalysisRuntimeMeta(null);
         lastLoadedAnalysisRef.current = initial;
         if (!initial) {
@@ -6802,35 +6289,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const stage1Input = ensureStage1ProjectContextInjected(actualContent);
 
-        if (isSuperuser) {
-            // Fetch default prompt
-            try {
-                const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
-                setAnalysisModalMode('stage1');
-                setSystemPrompt(res.content);
-
-                setUserPrompt(stage1Input);
-                setShowAnalysisModal(true);
-                setIsAnalyzing(false); // Enable back since we are just showing the modal
-            } catch (e) {
-                console.error("Failed to fetch system prompt", e);
-                // Fallback if fails
-                setAnalysisModalMode('stage1');
-                setSystemPrompt("Error loading system prompt.");
-                setUserPrompt(stage1Input);
-                setShowAnalysisModal(true);
-                setIsAnalyzing(false);
-            }
-        } else {
-             // Normal user flow
-             try {
-                 const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
-                 executeAdvancedAnalysis(stage1Input, res.content, 0, true);
-             } catch (e) {
-                 console.error("Failed to fetch system prompt for normal user", e);
-                 // Fallback
-                 executeAnalysis(stage1Input, null, true);
-             }
+        try {
+            const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+            executeAdvancedAnalysis(stage1Input, res.content, 0, true);
+        } catch (e) {
+            console.error("Failed to fetch system prompt", e);
+            executeAnalysis(stage1Input, null, true);
         }
     };
 
@@ -7175,7 +6639,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             
             const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'script_optimization',
                     content,
                     customSystemPrompt,
                     metadata,
@@ -7397,6 +6862,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
             }
 
+            let aiShotsBatchStarted = false;
+            try {
+                const flowRegistry = await getSceneAnalysisFlowRegistry();
+                const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
+                const storyboardAutoStart = configured?.storyboard_generation !== false;
+                
+                if (storyboardAutoStart && Array.isArray(importReport?.scenes) && importReport.scenes.length > 0) {
+                    if (onLog) onLog('Auto-starting storyboard generation for newly imported scenes...', 'info');
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: t('🔄 正在启动分镜自动生成任务...', 'Starting automated storyboard generation...'),
+                    });
+                    
+                    const workflowStarted = await runSceneAnalysisFlowNode({
+                        node_key: 'storyboard_generation',
+                        project_id: projectId,
+                        episode_id: activeEpisode.id,
+                        scene_ids: importReport.scenes.map(s => s.id),
+                    });
+                    
+                    aiShotsBatchStarted = !!(workflowStarted?.batch_status || workflowStarted);
+                    if (onLog) onLog(`Storyboard generation automatically started.`, 'success');
+                }
+            } catch (err) {
+                if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
+            }
+
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
@@ -7420,15 +6912,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            
+            const appendStoryboardNotice = (baseZh, baseEn) => {
+                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
+                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
+            };
+
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             if (onLog) onLog("AI Analysis applied and saved.");
@@ -7528,21 +7026,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const supplementInput = buildSupplementSubmissionInput({
             generatedContent,
             subjectCheckText: subjectConsistencyResultText,
-            coreCoverageText: coreCoverageResultText,
             attentionNotes: analysisAttentionNotes,
         });
-
-        // Keep supplement submit behavior aligned with primary scene analysis:
-        // superuser previews/edits prompt first, then manually runs submission.
-        if (isSuperuser) {
-            setAnalysisFlowStatus({ phase: 'idle', message: '' });
-            setAnalysisModalMode('supplement');
-            setSystemPrompt(supplementPrompt);
-            setUserPrompt(supplementInput);
-            setShowAnalysisModal(true);
-            if (onLog) onLog('Superuser supplement submit: prompt preview opened before submission.', 'info');
-            return;
-        }
 
         if (onLog) onLog('Manual supplement submit started (input=generated analysis output).', 'start');
         await executeAnalysis(supplementInput, supplementPrompt, false);
@@ -7641,7 +7126,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const splitStage1Flow = isSplitStage1Prompt(customSystemPrompt);
             const result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'script_optimization',
                     userInput,
                     customSystemPrompt,
                     metadata,
@@ -7770,34 +7256,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 let finalStage2_1Prompt = stage2_1PromptRes?.content || '';
                 let finalStage2_1UserInput = stage2UserInput;
 
-                if (isSuperuser || isSuperuserRef.current) {
-                    const confirmedStage2_1 = await new Promise((resolve, reject) => {
-                        const previous = superuserModalMutexRef.current;
-                        superuserModalMutexRef.current = previous.then(async () => {
-                            try {
-                                setAnalysisModalMode('stage2');
-                                setSystemPrompt(finalStage2_1Prompt);
-                                setUserPrompt(finalStage2_1UserInput);
-                                setShowAnalysisModal(true);
-                                if (onLog) onLog('Superuser Stage 2.1 submit: prompt preview opened before submission.', 'info');
-            
-                                const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            
-                            resolve(res);
-                            } catch (err) {
-                                reject(err);
-                            }
-                        }).catch(reject);
-                    });
-
-                    if (!confirmedStage2_1 || typeof confirmedStage2_1 !== 'object') {
-                        throw new Error('Superuser canceled Stage 2.1 prompt confirmation.');
-                    }
-
-                    finalStage2_1Prompt = confirmedStage2_1.systemPrompt || finalStage2_1Prompt;
-                    finalStage2_1UserInput = confirmedStage2_1.userPrompt || finalStage2_1UserInput;
-                }
-                
                 if (onLog) onLog('Submitting Stage 2.1 (Asset Extraction)...', 'info');
 
                 setAnalysisFlowStatus({
@@ -7806,7 +7264,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
 
                 const stage2_1Result = await awaitAnalyzeSceneWithRecovery(
-                    () => analyzeScene(
+                    () => runScriptAnalysisFlowAnalyzeNode(
+                        'assets_extraction',
                         finalStage2_1UserInput,
                         finalStage2_1Prompt,
                         null,
@@ -7854,36 +7313,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
                     let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
-                    if (isSuperuser || isSuperuserRef.current) {
-                        const confirmedStage2_2 = await new Promise((resolve, reject) => {
-                            const previous = superuserModalMutexRef.current;
-                            superuserModalMutexRef.current = previous.then(async () => {
-                                try {
-                                    setAnalysisModalMode('stage2');
-                                    setSystemPrompt(finalStage2_2Prompt);
-                                    setUserPrompt(finalStage2_2UserInput);
-                                    setShowAnalysisModal(true);
-                                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
-                                    
-                                    const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            
-                            resolve(res);
-                                } catch (err) {
-                                    reject(err);
-                                }
-                            }).catch(reject);
-                        });
-
-                        if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
-                            throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
-                        }
-
-                        finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
-                        finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
-                    }
-
                     const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                        () => analyzeScene(
+                        () => runScriptAnalysisFlowAnalyzeNode(
+                            'scene_markdown',
                             finalStage2_2UserInput,
                             finalStage2_2Prompt,
                             null,
@@ -8123,6 +7555,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
             }
 
+            let aiShotsBatchStarted = false;
+            try {
+                const flowRegistry = await getSceneAnalysisFlowRegistry();
+                const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
+                const storyboardAutoStart = configured?.storyboard_generation !== false;
+                
+                if (storyboardAutoStart && Array.isArray(importReport?.scenes) && importReport.scenes.length > 0) {
+                    if (onLog) onLog('Auto-starting storyboard generation for newly imported scenes...', 'info');
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: t('🔄 正在启动分镜自动生成任务...', 'Starting automated storyboard generation...'),
+                    });
+                    
+                    const workflowStarted = await runSceneAnalysisFlowNode({
+                        node_key: 'storyboard_generation',
+                        project_id: projectId,
+                        episode_id: activeEpisode.id,
+                        scene_ids: importReport.scenes.map(s => s.id),
+                    });
+                    
+                    aiShotsBatchStarted = !!(workflowStarted?.batch_status || workflowStarted);
+                    if (onLog) onLog(`Storyboard generation automatically started.`, 'success');
+                }
+            } catch (err) {
+                if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
+            }
+
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
@@ -8146,15 +7605,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            
+            const appendStoryboardNotice = (baseZh, baseEn) => {
+                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
+                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
+            };
+
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
             });
 
             setShowAnalysisModal(false);
@@ -8276,7 +7741,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const stage2_1PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md');
             if (onLog) onLog('Restarting Stage 2.1 (Asset Extraction)...', 'info');
             const stage2_1Result = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'assets_extraction',
                     stage2UserInput,
                     stage2_1PromptRes?.content || '',
                     null,
@@ -8313,36 +7779,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
                     let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`; 
 
-                if (isSuperuser || isSuperuserRef.current) {
-                        const confirmedStage2_2 = await new Promise((resolve, reject) => {
-                            const previous = superuserModalMutexRef.current;
-                            superuserModalMutexRef.current = previous.then(async () => {
-                                try {
-                                    setAnalysisModalMode('stage2');
-                                    setSystemPrompt(finalStage2_2Prompt);
-                                    setUserPrompt(finalStage2_2UserInput);
-                                    setShowAnalysisModal(true);
-                                    if (onLog) onLog('Superuser Stage 2.2 submit: prompt preview opened before submission.', 'info');
-                                    
-                                    const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            
-                            resolve(res);
-                                } catch (err) {
-                                    reject(err);
-                                }
-                            }).catch(reject);
-                        });
-
-                        if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
-                            throw new Error('Superuser canceled Stage 2.2 prompt confirmation.');
-                        } 
-
-                    finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt; 
-                    finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput; 
-                } 
-
                                 const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                    () => analyzeScene( 
+                    () => runScriptAnalysisFlowAnalyzeNode( 
+                        'scene_markdown',
                         finalStage2_2UserInput, 
                         finalStage2_2Prompt, 
                         null, 
@@ -8533,6 +7972,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 warning: '',
                 error: friendlyError,
             });
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`第二阶段重跑失败：${friendlyError}`, `Stage 2 restart failed: ${friendlyError}`),
+            });
             onLog?.(`Stage 2 restart failed: ${friendlyError}`, 'error');
             alert(t(`第二阶段重跑失败：${friendlyError}`, `Stage 2 restart failed: ${friendlyError}`));
         } finally {
@@ -8591,36 +8034,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
             let finalStage2_2UserInput = `${stage2_2UserInputBody}\n\n### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}`;
 
-            if (isSuperuser || isSuperuserRef.current) {
-                const confirmedStage2_2 = await new Promise((resolve, reject) => {
-                    const previous = superuserModalMutexRef.current;
-                    superuserModalMutexRef.current = previous.then(async () => {
-                        try {
-                            setAnalysisModalMode('stage2');
-                            setSystemPrompt(finalStage2_2Prompt);
-                            setUserPrompt(finalStage2_2UserInput);
-                            setShowAnalysisModal(true);
-                            if (onLog) onLog('Superuser scene-only Stage 2.2 submit: prompt preview opened before submission.', 'info');
-
-                            const res = await new Promise(r => { phase2ResolverRef.current = r; });
-                            
-                            resolve(res);
-                        } catch (err) {
-                            reject(err);
-                        }
-                    }).catch(reject);
-                });
-
-                if (!confirmedStage2_2 || typeof confirmedStage2_2 !== 'object') {
-                    throw new Error('Superuser canceled scene-only Stage 2.2 prompt confirmation.');
-                }
-
-                finalStage2_2Prompt = confirmedStage2_2.systemPrompt || finalStage2_2Prompt;
-                finalStage2_2UserInput = confirmedStage2_2.userPrompt || finalStage2_2UserInput;
-            }
-
             const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                () => analyzeScene(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'scene_markdown',
                     finalStage2_2UserInput,
                     finalStage2_2Prompt,
                     null,
@@ -8686,8 +8102,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             });
 
-            setAnalysisUiReport((prev) => ({
-                ...(prev && typeof prev === 'object' ? prev : {}),
+            setAnalysisUiReport({
                 status: 'completed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
@@ -8696,7 +8111,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 runtimeMeta,
                 warning: '',
                 error: '',
-            }));
+                runTag: 'scene_beats_only_rerun',
+            });
 
             setAnalysisFlowStatus({
                 phase: 'completed',
@@ -8709,8 +8125,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'failed',
                 message: t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`),
             });
-            setAnalysisUiReport((prev) => ({
-                ...(prev && typeof prev === 'object' ? prev : {}),
+            setAnalysisUiReport({
                 status: 'failed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
@@ -8719,7 +8134,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 runtimeMeta,
                 warning: '',
                 error: friendlyError,
-            }));
+                runTag: 'scene_beats_only_rerun',
+            });
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`),
+            });
             onLog?.(`Scene beats-only rerun failed: ${friendlyError}`, 'error');
             alert(t(`场景单路重排失败：${friendlyError}`, `Scene-only rerun failed: ${friendlyError}`));
         } finally {
@@ -8897,6 +8317,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'failed',
                 message: t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`),
             });
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`),
+            });
             onLog?.(`Failed-route rerun failed: ${detail}`, 'error');
             alert(t(`失败路由重跑失败：${detail}`, `Failed-route rerun failed: ${detail}`));
         } finally {
@@ -9007,6 +8431,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
             console.error("Retry Stage 3 asset design failed:", error);
+            setAnalysisFlowStatus({
+                phase: 'failed',
+                message: t(`重跑资产生成失败：${error.message || String(error)}`, `Retry Stage 3 asset design failed: ${error.message || String(error)}`),
+            });
             onLog?.(`Retry Stage 3 asset design failed: ${error.message || String(error)}`, 'error');
             alert(`Retry Stage 3 asset design failed: ${error.message}`);
         } finally {
@@ -9212,6 +8640,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (isAnalyzing || isRetryingPhase2 || analysisRunInFlightRef.current || phase2GenerationInFlightRef.current) return;
 
         const reportStatus = String(analysisUiReport?.status || '').trim().toLowerCase();
+        const runTag = String(analysisUiReport?.runTag || '').trim().toLowerCase();
+        const isSceneBeatsOnlyRerun = runTag === 'scene_beats_only_rerun';
         if (reportStatus !== 'completed') return;
 
         const reportKey = `${activeEpisode.id}:${Number(analysisUiReport?.startedAt || 0) || 'latest'}`;
@@ -9306,6 +8736,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
 
                 if (pendingAssetTargets.length > 0) {
+                    if (isSceneBeatsOnlyRerun) {
+                        onLog?.('[Auto Zero Report Rerun] skipped asset auto-rerun for scene-beats-only rerun report.', 'info');
+                        return;
+                    }
                     const targetEntityTypes = Array.from(new Set(pendingAssetTargets));
                     onLog?.(`[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')}.`, 'warning');
                     setAnalysisFlowStatus({
@@ -9714,7 +9148,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {!!getStageOutputContent('stage1', 'adapted_script') ? (
                                     <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                 ) : (
-                                    <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
+                                    <span className={`text-[10px] ${isAnalyzing ? 'text-purple-300' : 'text-white/30'}`}>
+                                        {isAnalyzing ? (
+                                            <span className="flex items-center gap-1">
+                                                <Loader2 className="w-3 h-3 animate-spin"/>
+                                                {t('处理中', 'Processing')}
+                                            </span>
+                                        ) : t('等待中', 'Pending')}
+                                    </span>
                                 )}
                             </div>
                         </div>
@@ -9736,7 +9177,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     !!getStageOutputContent('stage1', 'adapted_script') ? (
                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                             {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {t('可重跑', 'Ready')}
+                                            {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                         </button>
                                     ) : (
                                         <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S1')}</span>
@@ -9760,7 +9201,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     !!getStageOutputContent('stage2', 'subject_index') ? (
-                                         <span className="text-[10px] text-purple-300">{t('处理中', 'Processing')}</span>
+                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                            {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                            {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                        </button>
                                     ) : (
                                         <span className="text-[10px] text-white/30">{t('缺前置', 'Needs S2')}</span>
                                     )
@@ -9786,7 +9230,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     hasAssetGenerationPrerequisite ? (
                                          <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {t('可重跑', 'Ready')}
+                                            {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                         </button>
                                     ) : (
                                         <span className="text-[10px] text-white/30">{t('缺资产清单', 'Needs Assets')}</span>
@@ -10404,13 +9848,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
                                 <Wand2 className="w-5 h-5 text-purple-500" />
-                                {phase2ResolverRef.current
-                                    ? (analysisModalMode === 'stage3'
-                                        ? t('第三阶段提示词预览（超级用户）', 'Stage 3 Prompt Preview (Superuser)')
-                                        : analysisModalMode === 'stage2'
-                                            ? t('第二阶段提示词预览（超级用户）', 'Stage 2 Prompt Preview (Superuser)')
-                                            : t('提示词预览（超级用户）', 'Prompt Preview (Superuser)'))
-                                    : t('高级 AI 剧本分析（超级用户）', 'Advanced AI Analysis (Superuser)')}
+                                {t('高级 AI 剧本分析', 'Advanced AI Analysis')}
                             </h3>
                             <button onClick={() => {
                                 if (phase2ResolverRef.current) {
@@ -10503,60 +9941,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 className="flex items-center gap-2 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                              >
                                 {(isAnalyzing && !phase2ResolverRef.current) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                                          {phase2ResolverRef.current ? t('确认并继续', 'Confirm & Continue') : t('开始执行第一阶段', 'Run Stage 1')}
+                                          {t('开始执行第一阶段', 'Run Stage 1')}
                              </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {subjectRecoveryModal.open && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
-                            <h3 className="text-lg font-bold flex items-center gap-2">
-                                {subjectRecoveryModal.status === 'running' ? (
-                                    <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
-                                ) : subjectRecoveryModal.status === 'success' ? (
-                                    <CheckCircle className="w-5 h-5 text-emerald-400" />
-                                ) : (
-                                    <Info className="w-5 h-5 text-amber-300" />
-                                )}
-                                {t('Subject 自动补全', 'Subject Auto Recovery')}
-                            </h3>
-                            <button
-                                onClick={() => {
-                                    if (subjectRecoveryModal.status !== 'running') {
-                                        setSubjectRecoveryModal(prev => ({ ...prev, open: false }));
-                                    }
-                                }}
-                                className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors ${subjectRecoveryModal.status === 'running' ? 'bg-white/5 text-white/30 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-                                disabled={subjectRecoveryModal.status === 'running'}
-                            >
-                                {t('退出', 'Exit')}
-                            </button>
-                        </div>
-                        <div className="p-4 space-y-3 text-sm">
-                            <div className="text-white/90">{subjectRecoveryModal.message}</div>
-                            {Array.isArray(subjectRecoveryModal.missing) && subjectRecoveryModal.missing.length > 0 && (
-                                <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
-                                    {t('缺失 Subject：', 'Missing subjects:')} {subjectRecoveryModal.missing.join(', ')}
-                                </div>
-                            )}
-                            {subjectRecoveryModal.details && (
-                                <div className="text-xs text-white/70 bg-white/5 border border-white/10 rounded-md px-3 py-2 whitespace-pre-wrap">
-                                    {subjectRecoveryModal.details}
-                                </div>
-                            )}
-                        </div>
-                        <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end gap-2">
-                            <button
-                                onClick={() => setSubjectRecoveryModal(prev => ({ ...prev, open: false }))}
-                                disabled={subjectRecoveryModal.status === 'running'}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold ${subjectRecoveryModal.status === 'running' ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white'}`}
-                            >
-                                {t('退出', 'Exit')}
-                            </button>
                         </div>
                     </div>
                 </div>

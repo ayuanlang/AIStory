@@ -372,18 +372,39 @@ class LLMService:
                 response_json = json.dumps(_strip_base64_from_log(payload), ensure_ascii=False)
 
             with SessionLocal() as db:
-                log_entry = LLMCallLog(
-                    tag=tag,
-                    provider=provider,
-                    model=model,
-                    api_url=api_url,
-                    payload_json=payload_json,
-                    response_json=response_json,
-                    error_msg=str(error_msg) if error_msg else None,
-                    latency_ms=latency_ms,
-                    request_id=payload.get('request_id')
-                )
-                db.add(log_entry)
+                request_id = payload.get('request_id')
+                log_entry = None
+                
+                if request_id and tag != "LLM_REQUEST":
+                    # Try to find the original request by request_id
+                    # Using order_by to get the latest just in case, but first() is fine
+                    log_entry = db.query(LLMCallLog).filter(LLMCallLog.request_id == request_id).order_by(LLMCallLog.id.desc()).first()
+
+                if log_entry:
+                    # Prevent overwriting an ERROR tag with a generic RESPONSE or SUMMARY unless it's a new error
+                    if log_entry.tag == "LLM_RESPONSE_ERROR" and tag in ("LLM_RESPONSE", "LLM_RESPONSE_SUMMARY", "LLM_RESPONSE_TRUNCATED", "LLM_EMPTY_OUTPUT"):
+                        pass
+                    else:
+                        log_entry.tag = tag
+                    if response_json:
+                        log_entry.response_json = response_json
+                    if error_msg:
+                        log_entry.error_msg = str(error_msg)
+                    if latency_ms is not None:
+                        log_entry.latency_ms = latency_ms
+                else:
+                    log_entry = LLMCallLog(
+                        tag=tag,
+                        provider=provider,
+                        model=model,
+                        api_url=api_url,
+                        payload_json=payload_json,
+                        response_json=response_json,
+                        error_msg=str(error_msg) if error_msg else None,
+                        latency_ms=latency_ms,
+                        request_id=request_id
+                    )
+                    db.add(log_entry)
                 db.commit()
         except Exception as e:
             logger.error(f"Failed to save LLMCallLog to DB: {e}")
@@ -873,7 +894,7 @@ class LLMService:
             )
             _debug_log(f"[DEBUG][LLM][KIE] Timeout before response: {exc}", "error")
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": "kie",
                 "category": "LLM",
                 "url": url,
@@ -892,7 +913,7 @@ class LLMService:
             )
             _debug_log(f"[DEBUG][LLM][KIE] Connection failed before response: {exc}", "error")
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": "kie",
                 "category": "LLM",
                 "request": {"url": url, "model": resolved_model, "payload": payload},
@@ -922,7 +943,7 @@ class LLMService:
                 response_text=resp.text[:500],
             )
             logger.warning("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": "kie",
                 "category": "LLM",
                 "request": {"url": url, "model": resolved_model, "payload": payload},
@@ -1737,7 +1758,7 @@ class LLMService:
                      response_text=response.text[:500],
                  )
                  logger.warning("%s", human_summary)
-                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                      "provider": "doubao",
                      "category": "LLM",
                      "request": {"url": url, "model": model, "payload": payload},
@@ -1782,7 +1803,7 @@ class LLMService:
             )
             logger.error(f"Doubao Multimodal failed: {e}")
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": "doubao",
                 "category": "LLM",
                 "request": {"url": url, "model": model, "payload": payload},
@@ -1824,7 +1845,7 @@ class LLMService:
              return {"content": content, "usage": usage}
         except Exception as e:
              logger.error(f"OpenAI Vision call failed: {e}")
-             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                  "provider": "openai",
                  "model": model,
                  "request": {"url": base_url, "messages": messages},
@@ -2089,7 +2110,7 @@ class LLMService:
             usage = full_response.get("usage", {})
             token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
             extraction_diagnostics = self._build_extraction_diagnostics(full_response)
-            self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "model": model,
                 "response": {
@@ -2111,7 +2132,7 @@ class LLMService:
             if str(provider or "").strip().lower() in {"kie", "n1n"} and self._is_ambiguous_submit_transport_error(e):
                 self._raise_ambiguous_submit_error(provider, model, e, base_url)
             logger.error(f"LLM Raw Completion failed: {e}")
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "model": model,
                 "request": {"url": base_url, "messages": messages, "config": extra_config},
@@ -2310,6 +2331,12 @@ class LLMService:
         finish_reason = "stop"
         parts_count = 0
 
+        import uuid
+        if extra_config is None:
+            extra_config = {}
+        if not extra_config.get("request_id"):
+            extra_config["request_id"] = uuid.uuid4().hex[:12]
+
         try:
             extra_config_stream = dict(extra_config or {})
             extra_config_stream["stream"] = True
@@ -2339,7 +2366,7 @@ class LLMService:
             parts_count, len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
         )
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
-        self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+        self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
             "category": str((extra_config or {}).get("__resolved_category") or "LLM").strip().upper(),
             "model": model,
@@ -2540,7 +2567,7 @@ class LLMService:
         except Exception as e:
              logger.error(f"Generate Content Error: {e}")
              provider = (extra_config or {}).get("__provider") or config.get("provider") or self._infer_provider(base_url, model)
-             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                  "provider": provider,
                  "model": model,
                  "error": str(e),
@@ -2553,6 +2580,11 @@ class LLMService:
         return self._extract_text_from_response(data)
 
     async def _raw_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        import uuid
+        if extra_config is None:
+            extra_config = {}
+        if not extra_config.get("request_id"):
+            extra_config["request_id"] = uuid.uuid4().hex[:12]
         original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"  # Default to OpenAI if not set
@@ -2752,7 +2784,7 @@ class LLMService:
             **headers,
             "Authorization": "Bearer ***REDACTED***",
         }
-        self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+        self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
             "category": resolved_category,
             "url": url,
@@ -2808,7 +2840,7 @@ class LLMService:
                 )
                 _debug_log(f"[DEBUG][LLM][{provider}] No-proxy retry ended with ambiguous transport failure: {e2}", "error")
                 logger.error("%s", human_summary)
-                self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+                self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                     "provider": provider,
                     "category": resolved_category,
                     "request": {"url": url, "model": model, "messages": messages},
@@ -2829,7 +2861,7 @@ class LLMService:
                 )
                 logger.error(f"No-proxy retry also failed: {e2}")
                 logger.error("%s", human_summary)
-                self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+                self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                     "provider": provider,
                     "category": resolved_category,
                     "request": {"url": url, "model": model, "messages": messages},
@@ -2850,7 +2882,7 @@ class LLMService:
             )
             _debug_log(f"[DEBUG][LLM][{provider}] Ambiguous transport failure before response; automatic retry disabled: {e}", "error")
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "request": {"url": url, "model": model, "messages": messages},
@@ -2887,7 +2919,7 @@ class LLMService:
                 response_text=response.text,
             )
             logger.warning("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "request": {"url": url, "model": model, "messages": messages, "config": extra_config},
@@ -2909,7 +2941,7 @@ class LLMService:
             resolved_source = (extra_config or {}).get("__resolved_source")
             human_summary = f"LLM provider '{provider}' returned an invalid JSON response (Status {response.status_code})."
             logger.warning("%s | Exception: %s | Raw body snippet: %s", human_summary, e, response.text[:200])
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "url": url,
@@ -2928,7 +2960,7 @@ class LLMService:
             data["_token_limit_hints"] = self._extract_provider_limit_hints(data, response.headers)
         except Exception:
             data["_token_limit_hints"] = []
-        self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+        self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
             "category": resolved_category,
             "url": url,
@@ -2971,6 +3003,7 @@ class LLMService:
             )
             logger.info("%s", human_summary)
             self._safe_log_json("LLM_RESPONSE_SUMMARY", {
+                "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "url": url,
@@ -2994,6 +3027,7 @@ class LLMService:
                     usage,
                 )
                 self._safe_log_json("LLM_RESPONSE_TRUNCATED", {
+                    "request_id": extra_config.get("request_id") if extra_config else None,
                     "provider": provider,
                     "category": resolved_category,
                     "url": url,
@@ -3021,6 +3055,7 @@ class LLMService:
                     usage,
                 )
                 self._safe_log_json("LLM_EMPTY_OUTPUT", {
+                    "request_id": extra_config.get("request_id") if extra_config else None,
                     "provider": provider,
                     "category": resolved_category,
                     "url": url,
@@ -3068,6 +3103,11 @@ class LLMService:
             {"type": "token", "content": "..."}   – text delta
             {"type": "done",  "usage": {...}}      – stream finished
         """
+        import uuid
+        if extra_config is None:
+            extra_config = {}
+        if not extra_config.get("request_id"):
+            extra_config["request_id"] = uuid.uuid4().hex[:12]
         original_base_url = base_url
         if not base_url:
             base_url = "https://api.openai.com/v1"
@@ -3210,7 +3250,7 @@ class LLMService:
                 if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
                     payload[k] = v
 
-        self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+        self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
             "category": resolved_category,
             "url": url,
@@ -3264,7 +3304,7 @@ class LLMService:
                             response_text=error_text,
                         )
                         logger.warning("%s", human_summary)
-                        self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+                        self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                             "provider": provider,
                             "category": resolved_category,
                             "request": {"url": url, "model": payload.get("model") or model, "messages": messages, "config": extra_config},
@@ -3454,7 +3494,7 @@ class LLMService:
                 error_text=exc,
             )
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
@@ -3475,7 +3515,7 @@ class LLMService:
                 error_text=exc,
             )
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "request": {"url": url, "model": payload.get("model") or model, "messages": messages},
@@ -3499,6 +3539,7 @@ class LLMService:
                 provider, model, len(token_batch_buf), exc,
             )
             self._safe_log_json("LLM_STREAM_INCOMPLETE", {
+                "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "url": url,
@@ -3521,7 +3562,7 @@ class LLMService:
                 error_text=exc,
             )
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if isinstance((globals().get("extra_config") or locals().get("extra_config")), dict) else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
                 "provider": provider,
                 "category": resolved_category,
                 "request": {"url": url, "model": payload.get("model") or model, "messages": messages},

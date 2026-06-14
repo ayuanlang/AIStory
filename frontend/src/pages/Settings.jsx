@@ -4,7 +4,7 @@ import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
 
-import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink } from '../services/api';
+import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink, getScriptAnalysisFlowConfigManage, updateScriptAnalysisFlowConfigManage } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 import { fetchGroups, createGroup, addGroupMember } from '../services/api';
@@ -208,6 +208,18 @@ const Settings = () => {
     const [advancedSeed, setAdvancedSeed] = useState('');
     const [advancedCfg, setAdvancedCfg] = useState('');
     const [advancedReasoningEffort, setAdvancedReasoningEffort] = useState('high');
+    const [scriptAnalysisFlowConfig, setScriptAnalysisFlowConfig] = useState({
+        enabled: true,
+        stage3_auto_start: {
+            storyboard_generation: true,
+            asset_design_character: true,
+            asset_design_prop: true,
+            asset_design_environment: true,
+        },
+        node_overrides: {},
+        version: 1,
+    });
+    const [isSavingScriptAnalysisFlow, setIsSavingScriptAnalysisFlow] = useState(false);
 
     // State for Tool Configs (Active inputs)
     const [imgToolKey, setImgToolKey] = useState("");
@@ -355,6 +367,10 @@ const Settings = () => {
     }, []);
 
     useEffect(() => {
+        loadScriptAnalysisFlowConfig();
+    }, []);
+
+    useEffect(() => {
         if (activeTab === 'api' || activeTab === 'prompts') {
             setActiveTab('api_settings');
         }
@@ -468,6 +484,56 @@ const Settings = () => {
         } catch (e) {
             console.warn('Failed to persist advanced model preferences', e);
             showNotification(t('高级模型参数保存失败', 'Failed to save advanced model preferences'), 'error');
+        }
+    };
+
+    const loadScriptAnalysisFlowConfig = async () => {
+        try {
+            const cfg = await getScriptAnalysisFlowConfigManage();
+            setScriptAnalysisFlowConfig(prev => ({
+                ...prev,
+                ...(cfg || {}),
+                stage3_auto_start: {
+                    ...(prev.stage3_auto_start || {}),
+                    ...((cfg && cfg.stage3_auto_start) || {}),
+                },
+            }));
+        } catch (e) {
+            console.warn('Failed to load script analysis flow config', e);
+        }
+    };
+
+    const handleStage3AutoStartChange = async (nodeKey, checked) => {
+        const previousConfig = scriptAnalysisFlowConfig;
+        const nextStage3AutoStart = {
+            ...(scriptAnalysisFlowConfig.stage3_auto_start || {}),
+            [nodeKey]: Boolean(checked),
+        };
+        const nextConfig = {
+            ...scriptAnalysisFlowConfig,
+            stage3_auto_start: nextStage3AutoStart,
+        };
+        setScriptAnalysisFlowConfig(nextConfig);
+        setIsSavingScriptAnalysisFlow(true);
+        try {
+            const saved = await updateScriptAnalysisFlowConfigManage({
+                stage3_auto_start: nextStage3AutoStart,
+            });
+            setScriptAnalysisFlowConfig(prev => ({
+                ...prev,
+                ...(saved || {}),
+                stage3_auto_start: {
+                    ...(prev.stage3_auto_start || {}),
+                    ...((saved && saved.stage3_auto_start) || nextStage3AutoStart),
+                },
+            }));
+            showNotification(t('剧本分析流程配置已保存', 'Script analysis flow config saved'), 'success');
+        } catch (e) {
+            setScriptAnalysisFlowConfig(previousConfig);
+            console.error('Failed to save script analysis flow config', e);
+            showNotification(t('剧本分析流程配置保存失败', 'Failed to save script analysis flow config'), 'error');
+        } finally {
+            setIsSavingScriptAnalysisFlow(false);
         }
     };
 
@@ -1699,6 +1765,33 @@ const Settings = () => {
                     <p className="text-[11px] text-muted-foreground">
                         {t('进入分镜和视频页面时，是否使用草稿以此设置为准。', 'Determines the default state of the draft mode when entering storyboard or video views.')}
                     </p>
+                    <div className="space-y-3 bg-white/5 p-3 rounded-lg border border-white/10">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-semibold text-white/90">{t('剧本分析流程节点自动启动', 'Script Analysis Flow Node Auto Start')}</h3>
+                                <p className="text-[11px] text-muted-foreground mt-1">
+                                    {t('控制场景编排完成后是否自动启动分镜，以及资产抽取完成后是否自动启动各类资产实现节点。手动重跑不受这些开关影响。', 'Controls whether storyboard generation auto-starts after scene planning and which asset-design nodes auto-start after asset extraction. Manual reruns are not affected.')}
+                                </p>
+                            </div>
+                            {isSavingScriptAnalysisFlow && <span className="text-[11px] text-muted-foreground">{t('保存中...', 'Saving...')}</span>}
+                        </div>
+                        {[
+                            { key: 'storyboard_generation', zh: '自动启动逐场景分镜生成', en: 'Auto-start Per-scene Storyboard Generation' },
+                            { key: 'asset_design_character', zh: '自动启动角色资产实现', en: 'Auto-start Character Asset Design' },
+                            { key: 'asset_design_prop', zh: '自动启动道具资产实现', en: 'Auto-start Prop Asset Design' },
+                            { key: 'asset_design_environment', zh: '自动启动场景/海报资产实现', en: 'Auto-start Environment/Poster Asset Design' },
+                        ].map((item) => (
+                            <label key={item.key} className="flex items-center gap-3 text-sm text-white bg-black/15 p-3 rounded-lg border border-white/10">
+                                <input
+                                    type="checkbox"
+                                    checked={scriptAnalysisFlowConfig?.stage3_auto_start?.[item.key] !== false}
+                                    disabled={isSavingScriptAnalysisFlow}
+                                    onChange={(e) => handleStage3AutoStartChange(item.key, e.target.checked)}
+                                />
+                                <span>{t(item.zh, item.en)}</span>
+                            </label>
+                        ))}
+                    </div>
                     <div className="space-y-2 bg-white/5 p-3 rounded-lg border border-white/10">
                         <div className="flex flex-wrap items-center gap-2 md:gap-3">
                             <label className="text-sm leading-6 text-white/90">{t('提示词提交语种', 'Prompt Submit Language')}</label>

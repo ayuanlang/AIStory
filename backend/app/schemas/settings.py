@@ -699,6 +699,19 @@ class SceneAnalysisSystemConfigUpdate(BaseModel):
     default_mode: Optional[str] = None
 
 
+class ScriptAnalysisFlowConfigOut(BaseModel):
+    enabled: bool = True
+    stage3_auto_start: Dict[str, bool] = Field(default_factory=dict)
+    node_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    version: int = 1
+
+
+class ScriptAnalysisFlowConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    stage3_auto_start: Optional[Dict[str, bool]] = None
+    node_overrides: Optional[Dict[str, Dict[str, Any]]] = None
+
+
 class ProjectCostEstimationConfigOut(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
 

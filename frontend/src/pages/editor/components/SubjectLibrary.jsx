@@ -2736,9 +2736,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
                     && !backendImageUrl
                 );
-                if (stableEntityId && recentImageUrl && backendImageUrl === recentImageUrl) {
-                    delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
-                }
                 const nextItem = keepRecentImage ? { ...item, image_url: recentImageUrl } : item;
                 if (nextItem.type === 'environment' && (nextItem.name === '封面海报' || nextItem.name_en === 'Cover Poster')) {
                     return { ...nextItem, type: 'poster' };
@@ -5633,6 +5630,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         const isBatchPending = !trackedJob && isBatchGeneratingEntities && !entity.image_url;
                         const imageActionLocked = isSubjectImageActionLocked(entity) || isBatchPending;
                         const hasRunningSubjectImageJob = Boolean(trackedJob) || isBatchPending;
+                        const stableEntityId = String(entity?.id || '').trim();
+                        const stableEntityImageUrl = String(entity?.image_url || '').trim();
+                        const recentImage = recentlyCompletedSubjectImageUrlsRef.current?.[stableEntityId] || null;
+                        const recentImageUrl = String(recentImage?.imageUrl || '').trim();
+                        const recentUpdatedAt = Number(recentImage?.updatedAt || 0) || 0;
+                        const isRecentlyCompletedImage = Boolean(
+                            stableEntityImageUrl
+                            && recentImageUrl
+                            && stableEntityImageUrl === recentImageUrl
+                            && recentUpdatedAt > 0
+                            && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
+                        );
                         const isAnalyzing = Boolean(analyzingEntities[String(entity.id)]);
                         let attrs = {};
                         try {
@@ -5745,6 +5754,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     className="absolute inset-0 object-contain object-center w-full h-full"
                                     loading={entityIndex < 8 ? 'eager' : 'lazy'}
                                     fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
+                                    retryOnError={isRecentlyCompletedImage}
+                                    retryDelays={[800, 1800, 3500, 6500, 10000]}
+                                    onLoad={() => {
+                                        if (stableEntityId && isRecentlyCompletedImage) {
+                                            delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
+                                        }
+                                    }}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                                 />
                             ) : entity.video_url ? (

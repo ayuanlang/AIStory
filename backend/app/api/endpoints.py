@@ -80,7 +80,8 @@ from app.services.payment_service import payment_service
 from app.services.task_manager import create_task_record as _create_task_record, submit as _submit_task, get_status as _get_task_status, submit_async_endpoint as _submit_async, cancel as _cancel_task, set_task_status as _set_task_status
 from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
-from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config
+from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config, get_script_analysis_flow_config
+from app.services.script_analysis_flow import build_script_analysis_flow_plan, get_script_analysis_flow_registry
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
 import os
@@ -5109,7 +5110,6 @@ def get_effective_setting_snapshot(
 
 _PROMPT_SKILL_ALIAS = {
     "scene_analysis.txt": "skill:scene_analysis/scene_analysis.txt",
-    "scene_analysis_subject_recovery_lite.txt": "skill:scene_analysis/scene_analysis_subject_recovery_lite.txt",
     "subject_generation.txt": "subject_generation.txt",
     "story_generator_global.txt": "skill:story_generation/story_generator_global.txt",
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
@@ -5288,98 +5288,6 @@ class PromptContentUpdateRequest(BaseModel):
     content: str
 
 
-@router.get("/prompts/{filename:path}")
-async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
-    """Retrieve content of a prompt file."""
-    normalized = str(filename or "").strip().strip("/")
-
-    if normalized == "skills":
-        return await list_prompt_skills(current_user)
-
-    if normalized.startswith("skills/"):
-        skill_id = normalized.split("/", 1)[1].strip()
-        if skill_id and "/" not in skill_id and not skill_id.endswith(('.md', '.txt', '.json')):
-            return await get_prompt_skill_detail(skill_id, current_user)
-
-    debug_info = _build_prompt_resolution_debug(filename)
-
-    try:
-        content = _resolve_prompt_text(filename)
-        logger.info(
-            "Prompt content loaded: filename=%s alias=%s content_len=%s",
-            filename,
-            debug_info.get("alias"),
-            len(content or ""),
-        )
-        return {
-            "content": content,
-            "debug": {
-                "prompt_ref": debug_info.get("prompt_ref"),
-                "alias": debug_info.get("alias"),
-                "content_len": len(content or ""),
-            },
-        }
-    except FileNotFoundError as exc:
-        logger.error(
-            "Prompt file not found: filename=%s err=%s debug=%s",
-            filename,
-            exc,
-            json.dumps(debug_info, ensure_ascii=False, default=str),
-        )
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": f"Prompt file '{filename}' not found.",
-                "prompt": filename,
-                "debug": debug_info,
-            },
-        )
-    except Exception as exc:
-        logger.exception(
-            "Prompt file load failed: filename=%s debug=%s",
-            filename,
-            json.dumps(debug_info, ensure_ascii=False, default=str),
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": f"Failed to load prompt file '{filename}'.",
-                "prompt": filename,
-                "error_type": exc.__class__.__name__,
-                "error": str(exc),
-                "debug": debug_info,
-            },
-        )
-
-
-@router.put("/prompts/{filename:path}")
-async def update_prompt_content(
-    filename: str,
-    payload: PromptContentUpdateRequest,
-    current_user: User = Depends(get_current_user),
-):
-    if not bool(getattr(current_user, "is_superuser", False) or getattr(current_user, "is_system", False)):
-        raise HTTPException(status_code=403, detail="Only system/admin users can update prompt files")
-
-    prompt_path = _resolve_prompt_file_path(filename)
-    content = str(getattr(payload, "content", "") or "")
-    prompt_path.write_text(content, encoding="utf-8")
-    logger.info(
-        "Prompt content updated: filename=%s path=%s user_id=%s content_len=%s",
-        filename,
-        str(prompt_path),
-        getattr(current_user, "id", None),
-        len(content),
-    )
-    return {
-        "ok": True,
-        "prompt": filename,
-        "path": str(prompt_path),
-        "content_len": len(content),
-        "updated_at": now_bj_iso(),
-    }
-
-
 @router.get("/prompts/skills")
 async def list_prompt_skills(current_user: User = Depends(get_current_user)):
     """List available prompt skills and metadata for frontend/tooling discovery."""
@@ -5533,6 +5441,148 @@ async def preview_scene_analysis_route(
         "diagnostics": bundle.get("diagnostics") or [],
     }
 
+
+@router.get("/prompts/scene-analysis/flow-registry")
+async def get_scene_analysis_flow_registry_preview(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Preview the planned script-analysis DAG and stage-3 auto-start switches."""
+    _ = current_user
+    cfg = get_script_analysis_flow_config(db)
+    db.commit()
+    return get_script_analysis_flow_registry(cfg)
+
+
+@router.post("/prompts/scene-analysis/flow-plan")
+async def preview_scene_analysis_flow_plan(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Preview which script-analysis nodes would auto-run for a requested flow slice."""
+    _ = current_user
+    cfg = get_script_analysis_flow_config(db)
+    db.commit()
+    requested_nodes = payload.get("requested_nodes") if isinstance(payload.get("requested_nodes"), list) else None
+    start_node = payload.get("start_node")
+    return build_script_analysis_flow_plan(
+        cfg,
+        requested_nodes=requested_nodes,
+        start_node=start_node,
+    )
+
+
+class ScriptAnalysisFlowRunNodeRequest(BaseModel):
+    node_key: str
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    scene_ids: Optional[List[int]] = None
+    analyze_payload: Optional[Dict[str, Any]] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
+@router.post("/prompts/scene-analysis/flow/run-node")
+async def run_scene_analysis_flow_node(
+    request: ScriptAnalysisFlowRunNodeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run one workflow node through its existing executor while preserving node-specific injection chains."""
+    node_key = str(getattr(request, "node_key", "") or "").strip().lower().replace("-", "_")
+    cfg = get_script_analysis_flow_config(db)
+    registry = get_script_analysis_flow_registry(cfg)
+    nodes = {str(node.get("key") or ""): node for node in (registry.get("nodes") or [])}
+    node = nodes.get(node_key)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Script analysis flow node '{node_key}' not found")
+
+    analyze_node_keys = {
+        "script_optimization",
+        "assets_extraction",
+        "scene_markdown",
+        "asset_design_character",
+        "asset_design_prop",
+        "asset_design_environment",
+    }
+    if node_key in analyze_node_keys:
+        raw_payload = dict(request.analyze_payload or {})
+        if not raw_payload.get("text"):
+            raise HTTPException(status_code=400, detail="analyze_payload.text is required for this workflow node")
+        raw_payload["prompt_file"] = raw_payload.get("prompt_file") or node.get("prompt_file")
+        raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
+        raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
+        
+        logger.info(f"[剧本分析流程] 准备执行节点 {node_key} | 使用提示词: {raw_payload['prompt_file']} | 函数 API: {raw_payload['function_name']} (ID: {raw_payload['system_api_id']})")
+        
+        if request.project_id and not raw_payload.get("project_id"):
+            raw_payload["project_id"] = request.project_id
+        if request.episode_id and not raw_payload.get("episode_id"):
+            raw_payload["episode_id"] = request.episode_id
+        if raw_payload.get("episode_id"):
+            episode = db.query(Episode).filter(Episode.id == int(raw_payload.get("episode_id"))).first()
+            if not episode:
+                raise HTTPException(status_code=404, detail="Episode not found")
+            _require_project_access(db, episode.project_id, current_user)
+            if raw_payload.get("project_id") and int(raw_payload.get("project_id")) != int(episode.project_id):
+                raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+        elif raw_payload.get("project_id"):
+            _require_project_access(db, int(raw_payload.get("project_id")), current_user)
+            
+        logger.info(f"[剧本分析流程] 开始调用 evaluate_scene 执行节点 {node_key}...")
+        result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+        logger.info(f"[剧本分析流程] 节点 {node_key} 执行完成。")
+        
+        return {
+            "status": "completed",
+            "node_key": node_key,
+            "executor": node.get("executor") or "analyze_scene",
+            "prompt_file": node.get("prompt_file"),
+            "injection_chain": node.get("injection_chain") or [],
+            "result": result,
+        }
+
+    if node_key == "storyboard_generation":
+        episode_id = int(getattr(request, "episode_id", None) or 0)
+        if episode_id <= 0:
+            raise HTTPException(status_code=400, detail="episode_id is required for storyboard_generation")
+
+        episode = db.query(Episode).filter(Episode.id == episode_id).first()
+        if not episode:
+            raise HTTPException(status_code=404, detail="Episode not found")
+        _require_project_access(db, episode.project_id, current_user)
+
+        if request.project_id and int(request.project_id) != int(episode.project_id):
+            logger.warning(f"[剧本分析流程] 校验失败: 节点 {node_key} 请求的 project_id 不匹配")
+            raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+        logger.info(f"[剧本分析流程] 准备委托批量任务执行分镜节点 {node_key} | 目标集: {episode_id} | 指定场景: {request.scene_ids}")
+        status_payload = _start_scene_ai_shots_batch_for_episode(
+            db=db,
+            episode=episode,
+            current_user=current_user,
+            scene_ids=request.scene_ids or [],
+            function_name=request.function_name,
+            system_api_id=request.system_api_id,
+        )
+        return {
+            "status": "started",
+            "node_key": node_key,
+            "executor": node.get("executor") or "shot_generation.batch_per_scene",
+            "prompt_file": node.get("prompt_file"),
+            "injection_chain": node.get("injection_chain") or [],
+            "batch_status": status_payload,
+        }
+
+    logger.warning(f"[剧本分析流程] 未知或未绑定的节点: {node_key}。将返回未迁移状态。")
+    return {
+        "status": "planned_not_migrated",
+        "node_key": node_key,
+        "node": node,
+        "message": "This node is registered and configurable, but no executor has been bound yet.",
+    }
+
 @router.get("/projects/{project_id}/subject_inventory_prompt")
 async def get_project_subject_inventory_prompt(
     project_id: int, 
@@ -5569,6 +5619,103 @@ async def get_project_subject_inventory_prompt(
     except Exception as e:
         logger.error(f"Failed to fetch subject inventory prompt: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
+
+
+
+@router.get("/prompts/{filename:path}")
+async def get_prompt_content(filename: str, current_user: User = Depends(get_current_user)):
+    """Retrieve content of a prompt file."""
+    normalized = str(filename or "").strip().strip("/")
+
+    if normalized == "skills":
+        return await list_prompt_skills(current_user)
+
+    if normalized.startswith("skills/"):
+        skill_id = normalized.split("/", 1)[1].strip()
+        if skill_id and "/" not in skill_id and not skill_id.endswith(('.md', '.txt', '.json')):
+            return await get_prompt_skill_detail(skill_id, current_user)
+
+    debug_info = _build_prompt_resolution_debug(filename)
+
+    try:
+        content = _resolve_prompt_text(filename)
+        logger.info(
+            "Prompt content loaded: filename=%s alias=%s content_len=%s",
+            filename,
+            debug_info.get("alias"),
+            len(content or ""),
+        )
+        return {
+            "content": content,
+            "debug": {
+                "prompt_ref": debug_info.get("prompt_ref"),
+                "alias": debug_info.get("alias"),
+                "content_len": len(content or ""),
+            },
+        }
+    except FileNotFoundError as exc:
+        logger.error(
+            "Prompt file not found: filename=%s err=%s debug=%s",
+            filename,
+            exc,
+            json.dumps(debug_info, ensure_ascii=False, default=str),
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Prompt file '{filename}' not found.",
+                "prompt": filename,
+                "debug": debug_info,
+            },
+        )
+    except Exception as exc:
+        logger.exception(
+            "Prompt file load failed: filename=%s debug=%s",
+            filename,
+            json.dumps(debug_info, ensure_ascii=False, default=str),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Failed to load prompt file '{filename}'.",
+                "prompt": filename,
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+                "debug": debug_info,
+            },
+        )
+
+
+
+@router.put("/prompts/{filename:path}")
+async def update_prompt_content(
+    filename: str,
+    payload: PromptContentUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not bool(getattr(current_user, "is_superuser", False) or getattr(current_user, "is_system", False)):
+        raise HTTPException(status_code=403, detail="Only system/admin users can update prompt files")
+
+    prompt_path = _resolve_prompt_file_path(filename)
+    content = str(getattr(payload, "content", "") or "")
+    prompt_path.write_text(content, encoding="utf-8")
+    logger.info(
+        "Prompt content updated: filename=%s path=%s user_id=%s content_len=%s",
+        filename,
+        str(prompt_path),
+        getattr(current_user, "id", None),
+        len(content),
+    )
+    return {
+        "ok": True,
+        "prompt": filename,
+        "path": str(prompt_path),
+        "content_len": len(content),
+        "updated_at": now_bj_iso(),
+    }
+
+
+
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
 async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety
@@ -15988,7 +16135,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
 
         scene_no_idx = _find_idx(headers, ["Scene No", "场次", "场次号"])
         core_idx = _find_idx(headers, ["Core Scene Info", "核心场景信息", "Core Goal"])
-        original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description"])
+        original_idx = _find_idx(headers, ["Original Script Text", "原始剧本文本", "Description", "Adapted Script Text", "改编剧本", "改编剧本文本"])
 
         if core_idx < 0 and original_idx < 0:
             continue
@@ -18703,23 +18850,20 @@ def _run_scene_ai_shots_batch_job(episode_id: int, scene_ids: List[int], user_id
         _clear_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id))
 
 
-@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/start", response_model=Dict[str, Any])
-def start_scene_ai_shots_batch(
-    episode_id: int,
-    req: SceneAiShotsBatchStartRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
-    if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
-    _require_project_access(db, episode.project_id, current_user)
-
+def _start_scene_ai_shots_batch_for_episode(
+    db: Session,
+    episode: Episode,
+    current_user: User,
+    scene_ids: Optional[List[int]] = None,
+    function_name: Optional[str] = None,
+    system_api_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    episode_id = int(episode.id)
     latest_status = _read_scene_ai_shots_batch_status(episode)
     if bool(latest_status.get("running")):
         raise HTTPException(status_code=409, detail="Scene AI shots batch is already running")
 
-    requested_scene_ids = [int(x) for x in (req.scene_ids or []) if x]
+    requested_scene_ids = [int(x) for x in (scene_ids or []) if x]
     scenes_query = db.query(Scene).filter(Scene.episode_id == episode_id)
     if requested_scene_ids:
         scenes_query = scenes_query.filter(Scene.id.in_(requested_scene_ids))
@@ -18774,13 +18918,34 @@ def start_scene_ai_shots_batch(
 
     worker = threading.Thread(
         target=_run_scene_ai_shots_batch_job,
-        args=(episode_id, scene_ids, current_user.id, batch_max_concurrency, getattr(req, "function_name", None), getattr(req, "system_api_id", None)),
+        args=(episode_id, scene_ids, current_user.id, batch_max_concurrency, function_name, system_api_id),
         daemon=True,
     )
     worker.start()
     _register_episode_worker(SCENE_AI_SHOTS_BATCH_THREADS, SCENE_AI_SHOTS_BATCH_THREADS_LOCK, int(episode_id), worker)
 
     return status_payload
+
+
+@router.post("/episodes/{episode_id}/scenes/ai_shots/batch/start", response_model=Dict[str, Any])
+def start_scene_ai_shots_batch(
+    episode_id: int,
+    req: SceneAiShotsBatchStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    return _start_scene_ai_shots_batch_for_episode(
+        db=db,
+        episode=episode,
+        current_user=current_user,
+        scene_ids=req.scene_ids or [],
+        function_name=req.function_name,
+        system_api_id=req.system_api_id,
+    )
 
 
 @router.get("/episodes/{episode_id}/scenes/ai_shots/batch/status", response_model=Dict[str, Any])

@@ -9269,7 +9269,7 @@ const UserAdmin = () => {
                                                   <th className="px-4 py-3">Time</th>
                                                   <th className="px-4 py-3">Provider</th>
                                                   <th className="px-4 py-3">Model</th>
-                                                  <th className="px-4 py-3">Tag</th>
+                                                  <th className="px-4 py-3">{t('状态', 'Status')}</th>
                                                   <th className="px-4 py-3">Latency</th>
                                                   <th className="px-4 py-3">API URL</th>
                                                   <th className="px-4 py-3">Details</th>
@@ -9282,7 +9282,12 @@ const UserAdmin = () => {
                                                       <td className="px-4 py-3 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.provider}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.model}</td>
-                                                      <td className="px-4 py-3 whitespace-nowrap">{log.tag}</td>
+                                                      <td className="px-4 py-3 whitespace-nowrap">
+                                                          {log.tag === 'LLM_REQUEST' ? <span className="text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded text-xs">{t('请求中', 'Pending')}</span> :
+                                                           log.tag === 'LLM_RESPONSE' ? <span className="text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded text-xs">{t('成功', 'Success')}</span> :
+                                                           log.tag === 'LLM_RESPONSE_ERROR' ? <span className="text-red-400 bg-red-400/10 px-2 py-1 rounded text-xs">{t('失败', 'Failed')}</span> :
+                                                           <span className="text-gray-400 bg-gray-400/10 px-2 py-1 rounded text-xs">{log.tag}</span>}
+                                                      </td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.latency_ms ? `${log.latency_ms}ms` : '-'}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.api_url ? log.api_url : '-'}</td>
                                                       <td className="px-4 py-3">

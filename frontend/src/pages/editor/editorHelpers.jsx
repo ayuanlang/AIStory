@@ -358,16 +358,34 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
     const [isLoaded, setIsLoaded] = useState(() => isWarmMediaUrl(rawSrc));
     const [useProxy, setUseProxy] = useState(false);
+    const [retryToken, setRetryToken] = useState(0);
+    const retryAttemptRef = useRef(0);
+    const retryTimerRef = useRef(null);
 
-    const { onLoad: userOnLoad, onError: userOnError, ...restImgProps } = imgProps;
+    const { onLoad: userOnLoad, onError: userOnError, retryOnError = false, retryDelays = null, ...restImgProps } = imgProps;
+    const retryDelayList = Array.isArray(retryDelays) && retryDelays.length > 0
+        ? retryDelays.map((value) => Math.max(250, Number(value) || 0)).filter(Boolean)
+        : [1000, 2500, 5000, 9000];
 
     useEffect(() => {
+        if (retryTimerRef.current) {
+            clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
+        }
+        retryAttemptRef.current = 0;
+        setRetryToken(0);
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
         setIsLoaded(isWarmMediaUrl(rawSrc));
         setUseProxy(false);
         if (isWarmMediaUrl(rawSrc)) {
             setShouldLoad(true);
         }
+        return () => {
+            if (retryTimerRef.current) {
+                clearTimeout(retryTimerRef.current);
+                retryTimerRef.current = null;
+            }
+        };
     }, [rawSrc]);
 
     useEffect(() => {
@@ -420,6 +438,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 />
             )}
             <img
+                key={`${rawSrc}:${useProxy ? 'proxy' : 'direct'}:${retryToken}`}
                 src={shouldLoad ? resolvedSrc : IMG_PLACEHOLDER_SRC}
                 alt={alt}
                 className={`absolute inset-0 w-full h-full transition-all duration-700 z-10 ${(className || '').includes('object-contain') ? 'object-contain' : 'object-cover'} ${
@@ -430,6 +449,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 fetchpriority={imgProps.fetchPriority || 'low'}
                 onLoad={(e) => {
                     if (e.target.src === IMG_PLACEHOLDER_SRC) return;
+                    retryAttemptRef.current = 0;
                     rememberWarmMediaUrl(rawSrc);
                     setIsLoaded(true);
                     if (typeof userOnLoad === 'function') userOnLoad();
@@ -442,6 +462,20 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                     }
                     if (!useProxy && canFallbackToAssetProxy(rawSrc)) {
                         setUseProxy(true);
+                        if (typeof userOnError === 'function') userOnError();
+                        return;
+                    }
+                    if (retryOnError && retryAttemptRef.current < retryDelayList.length) {
+                        const retryDelay = retryDelayList[retryAttemptRef.current];
+                        retryAttemptRef.current += 1;
+                        setShouldLoad(false);
+                        setIsLoaded(false);
+                        retryTimerRef.current = setTimeout(() => {
+                            retryTimerRef.current = null;
+                            setFailed(false);
+                            setShouldLoad(true);
+                            setRetryToken((value) => value + 1);
+                        }, retryDelay);
                         if (typeof userOnError === 'function') userOnError();
                         return;
                     }
