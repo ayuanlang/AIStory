@@ -2886,30 +2886,43 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const scopedText = headingMatch ? fullText.slice(headingMatch.index) : fullText;
         const lines = scopedText.split('\n');
 
-        let started = false;
-        const tableLines = [];
+        const toTableCandidate = (line) => {
+            const raw = String(line || '').trim();
+            if (!raw) return '';
+            if (raw.startsWith('|') && raw.includes('|')) return raw;
+            const firstPipeIdx = raw.indexOf('|');
+            if (firstPipeIdx < 0) return '';
+            const sliced = raw.slice(firstPipeIdx).trim();
+            return sliced.startsWith('|') && sliced.includes('|') ? sliced : '';
+        };
+
+        const blocks = [];
+        let current = [];
+        const flush = () => {
+            if (current.length >= 2) blocks.push(current.join('\n').trim());
+            current = [];
+        };
 
         for (const rawLine of lines) {
-            const line = String(rawLine || '');
-            const trimmed = line.trim();
-
-            if (!started) {
-                if (trimmed.startsWith('|') && trimmed.includes('|')) {
-                    started = true;
-                    tableLines.push(trimmed);
-                }
-                continue;
+            const candidate = toTableCandidate(rawLine);
+            if (candidate) {
+                current.push(candidate);
+            } else {
+                flush();
             }
-
-            if (trimmed.startsWith('|') && trimmed.includes('|')) {
-                tableLines.push(trimmed);
-                continue;
-            }
-
-            if (tableLines.length >= 2) break;
         }
+        flush();
 
-        return tableLines.join('\n').trim();
+        if (blocks.length <= 0) return '';
+
+        const hasSceneIdHeader = (blockText) => {
+            const firstLine = String(blockText || '').split('\n')[0] || '';
+            const normalized = firstLine.toLowerCase().replace(/[\s_.\-]/g, '');
+            return normalized.includes('sceneid') || normalized.includes('场景id');
+        };
+
+        const preferred = blocks.find(hasSceneIdHeader);
+        return String(preferred || blocks[0] || '').trim();
     }, []);
 
     const normalizeLlmMarkdownTable = useCallback((text) => {
@@ -5101,6 +5114,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings,
                 importReport,
                 runtimeMeta,
+                storyboardAutoStarted: aiShotsBatchStarted,
                 warning: importWarningMessage,
                 error: '',
             });
@@ -6904,6 +6918,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings,
                 importReport,
                 runtimeMeta,
+                storyboardAutoStarted: aiShotsBatchStarted,
                 warning: combinedReportWarning,
                 error: '',
             });
@@ -7597,6 +7612,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings,
                 importReport,
                 runtimeMeta,
+                storyboardAutoStarted: aiShotsBatchStarted,
                 warning: combinedReportWarning,
                 error: '',
             });
@@ -9136,6 +9152,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="w-1 h-5 bg-purple-500 rounded-full"></div>
                         {t('进度诊断面板', 'Workflow Diagnostics')}
                     </div>
+                    {(() => {
+                        const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted);
+                        const storyboardCanStart = Boolean(getStageOutputContent('stage2', 'scene_markdown'));
+                        return (
                     <div className="flex-1 w-full flex items-center justify-between relative max-w-3xl px-8 mt-2 md:mt-0">
                         <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
@@ -9213,8 +9233,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${storyboardAutoStarted ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (storyboardCanStart ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {storyboardAutoStarted ? <Check className="w-4 h-4" /> : 4}
+                            </div>
+                            <div className="flex flex-col items-center gap-1 text-center">
+                                <span className="text-xs font-semibold">{t('分镜状态', 'Storyboard')}</span>
+                                {storyboardAutoStarted ? (
+                                    <span className="text-[10px] text-emerald-400/80">{t('已启动', 'Started')}</span>
+                                ) : (
+                                    storyboardCanStart ? (
+                                        <span className="text-[10px] text-purple-300">{t('待触发', 'Pending')}</span>
+                                    ) : (
+                                        <span className="text-[10px] text-white/30">{t('缺场景编排', 'Needs Beats')}</span>
+                                    )
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (hasAssetGenerationPrerequisite ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 4}
+                                {!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 5}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('资产生成', 'Assets Gen')}</span>
@@ -9239,6 +9277,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         </div>
                     </div>
+                        );
+                    })()}
                 </div>
             </div>
 
@@ -9273,14 +9313,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
-                                                                        {[
+                                                                        {(() => {
+                            const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted);
+                            return [
                             { key: 'script_opt', label: t('剧本统筹', 'Script Opt') },
                             { key: 'extract_assets', label: t('美术提取', 'Extract Assets') },
                             { key: 'scene_beats', label: t('分镜规划', 'Scene Beats') },
+                            { key: 'storyboard', label: t('分镜状态', 'Storyboard') },
                             { key: 'assets_gen', label: t('资产生成', 'Assets Gen') },
                             { key: 'completed', label: t('AI 总结报告', 'Report') },
                         ].map((step, idx) => {
-                            const stepOrder = ['script_opt', 'extract_assets', 'scene_beats', 'assets_gen', 'completed'];
+                            const stepOrder = ['script_opt', 'extract_assets', 'scene_beats', 'storyboard', 'assets_gen', 'completed'];
                             const phase = analysisFlowStatus.phase || 'idle';
                             const currentIndex = stepOrder.indexOf(phase);
                             const stepIndex = stepOrder.indexOf(step.key);
@@ -9292,6 +9335,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (key === 'script_opt') return !!getStageOutputContent('stage1', 'adapted_script');
                                 if (key === 'extract_assets') return !!getStageOutputContent('stage2', 'subject_index');
                                 if (key === 'scene_beats') return !!getStageOutputContent('stage2', 'scene_markdown');
+                                if (key === 'storyboard') return storyboardAutoStarted;
                                 if (key === 'assets_gen') return !!getStageOutputContent('stage3', 'asset_design_json');
                                 if (key === 'completed') return hasFinalReport;
                                 return false;
@@ -9299,7 +9343,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             
                             const isDone = !isTerminalFailed && (
                                 hasFinalReport
-                                    ? stepIndex <= 3
+                                    ? stepIndex <= 4
                                     : (isTerminalWarning ? stepIndex <= 2 : ((currentIndex > stepIndex) || phase === 'completed' || hasArtifact(step.key)))
                             );
                             const isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
@@ -9321,7 +9365,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <span className="text-xs leading-tight">{step.label}</span>
                                 </div>
                             );
-                        })}
+                        });
+                        })()}
                     </div>
 
                     {analysisFlowStatusHistory.length > 0 && (

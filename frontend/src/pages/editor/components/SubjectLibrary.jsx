@@ -2734,7 +2734,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     && recentImageUrl
                     && recentUpdatedAt > 0
                     && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
-                    && !backendImageUrl
+                    && (
+                        !backendImageUrl
+                        || backendImageUrl !== recentImageUrl
+                    )
                 );
                 const nextItem = keepRecentImage ? { ...item, image_url: recentImageUrl } : item;
                 if (nextItem.type === 'environment' && (nextItem.name === '封面海报' || nextItem.name_en === 'Cover Poster')) {
@@ -4782,7 +4785,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(finalPrompt, selectedEntity, allEntities),
+                negative_prompt: buildEntityNegativePrompt(finalPrompt, activeEntity, allEntities),
                 ...(extraProviderOptions || {})
             });
 
@@ -5805,7 +5808,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     <ImagePlus size={16} />
                                 </button>
                                 <button 
-                                    onClick={(e) => { e.stopPropagation(); setViewingEntity(entity); setViewingEntityTab('generate'); setRefImage(null); handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang)); }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleGenerate(entity, null, getEntityPromptByLang(entity, effectivePromptSubmitLang));
+                                    }}
                                     disabled={imageActionLocked}
                                     className="p-1.5 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
                                     title={t('生成图片', 'Generate Image')}

@@ -2288,9 +2288,40 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         batchProgressRef.current = batchProgress || { current: 0, total: 0, status: '' };
     }, [batchProgress]);
 
-    const currentGeneratingState = editingShot?.id
+    const isShotVideoUiRunning = useCallback((shotId, stateOverride = null) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return false;
+        const shotState = (stateOverride && typeof stateOverride === 'object')
+            ? stateOverride
+            : (generatingStateByShotRef.current?.[stableShotId] || { start: false, end: false, video: false, videoAt: 0 });
+        if (!shotState?.video) return false;
+
+        const pendingVideoJobId = getPendingVideoJobId(stableShotId);
+        if (pendingVideoJobId) return true;
+
+        const statusText = String(videoStatuses?.[stableShotId] || '').trim();
+        if (statusText) {
+            const normalizedStatus = normalizeGenerationPhase(statusText);
+            if (!isTerminalGenerationPhase(normalizedStatus)) {
+                return true;
+            }
+        }
+
+        const startedAtMs = Number(shotState?.videoAt || 0);
+        if (startedAtMs > 0 && (Date.now() - startedAtMs) < SHOT_MEDIA_STARTUP_GRACE_MS) {
+            return true;
+        }
+
+        return false;
+    }, [SHOT_MEDIA_STARTUP_GRACE_MS, getPendingVideoJobId, isTerminalGenerationPhase, normalizeGenerationPhase, videoStatuses]);
+
+    const rawCurrentGeneratingState = editingShot?.id
         ? (generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 })
-        : { start: false, end: false, video: false };
+        : { start: false, end: false, video: false, startAt: 0, endAt: 0, videoAt: 0 };
+    const currentGeneratingState = {
+        ...rawCurrentGeneratingState,
+        video: editingShot?.id ? isShotVideoUiRunning(editingShot.id, rawCurrentGeneratingState) : false,
+    };
     const currentShotGenerating = Boolean(currentGeneratingState.start || currentGeneratingState.end || currentGeneratingState.video);
     const isShotFrameActionLocked = useCallback(
         (frameType) => Boolean(currentGeneratingState?.[frameType === 'end' ? 'end' : 'start']),
@@ -6307,7 +6338,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
         const shotState = generatingStateByShot[String(editingShot.id)] || { start: false, end: false, video: false };
-        if (shotState.start || shotState.end || shotState.video) return;
+        const isVideoGenerating = isShotVideoUiRunning(editingShot.id, shotState);
+        if (shotState.start || shotState.end || isVideoGenerating) return;
         const cfgOverride = Number(options?.cfg);
         const normalizedCfgOverride = Number.isFinite(cfgOverride) && cfgOverride > 0
             ? clampShotImageCfg(cfgOverride)
@@ -7465,7 +7497,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
-        if (targetGeneratingState.start || targetGeneratingState.end || targetGeneratingState.video) {
+        const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
+        if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) {
              return; 
         }
 
@@ -7862,7 +7895,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
-        if (targetGeneratingState.start || targetGeneratingState.end || targetGeneratingState.video) return;
+        const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
+        if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) return;
 
         const currentVideoUrl = String(shotSnapshot.video_url || '').trim();
         if (!currentVideoUrl) {
@@ -9352,7 +9386,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         )}
                         {sortedShots.map((shot, idx) => {
                             const shotState = generatingStateByShot[String(shot.id)] || { start: false, end: false, video: false };
-                            const isGeneratingThisShot = !!(shotState.start || shotState.end || shotState.video);
+                            const isVideoGeneratingThisShot = isShotVideoUiRunning(shot.id, shotState);
+                            const isGeneratingThisShot = !!(shotState.start || shotState.end || isVideoGeneratingThisShot);
                             const isCroppingThisShot = !!(shotState.cropping);
                             const shotCardPromptPreview = getShotCardPromptPreview(shot);
                             const shotCardPosterUrl = resolveShotVideoPosterUrl(shot) || shot.image_url || getShotEndFrameUrl(shot);
