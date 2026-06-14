@@ -15,6 +15,7 @@ import re
 import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import math
 from types import SimpleNamespace
 from pathlib import Path
@@ -10094,6 +10095,7 @@ def _format_pricing_description_from_summary(
     force_token_k_unit: bool = False,
     token_cost_input: Optional[int] = None,
     token_cost_output: Optional[int] = None,
+    round_cost_to_int: bool = False,
 ) -> str:
     data = summary or {}
     avg_cost = float(_safe_int(data.get("average_cost"), 0))
@@ -10110,7 +10112,12 @@ def _format_pricing_description_from_summary(
 
     unit_label = _format_billing_unit_short_label(normalized_unit)
 
+    def _round_half_up_int(value: float) -> int:
+        return int(Decimal(str(float(value))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
     def _format_cost_text(value: float) -> str:
+        if round_cost_to_int:
+            return str(_round_half_up_int(value))
         rounded = round(float(value), 6)
         if abs(rounded - int(rounded)) < 1e-9:
             return str(int(rounded))
@@ -10133,6 +10140,8 @@ def _format_pricing_description_from_summary(
 
     if max_cost > 0:
         if min_cost > 0 and abs(min_cost - max_cost) > 1e-9:
+            if round_cost_to_int and _round_half_up_int(min_cost) == _round_half_up_int(max_cost):
+                return f"约 {_format_cost_text(max_cost)} 积分/{unit_label}"
             return f"{_format_cost_text(min_cost)}-{_format_cost_text(max_cost)} 积分/{unit_label}"
         return f"约 {_format_cost_text(max_cost)} 积分/{unit_label}"
 
@@ -10148,6 +10157,7 @@ def _build_function_api_pricing_description_map(
     *,
     force_token_k_unit: bool = False,
     use_cached_price_fallback: bool = True,
+    round_cost_to_int: bool = False,
 ) -> Dict[int, str]:
     normalized_ids = sorted({_safe_int(sid, 0) for sid in (system_api_ids or []) if _safe_int(sid, 0) > 0})
     if not normalized_ids:
@@ -10240,6 +10250,7 @@ def _build_function_api_pricing_description_map(
             force_token_k_unit=force_token_k_unit,
             token_cost_input=io.get("cost_input"),
             token_cost_output=io.get("cost_output"),
+            round_cost_to_int=round_cost_to_int,
         )
     return result
 
@@ -10355,6 +10366,7 @@ def sync_function_api_pricing_descriptions(
         target_ids,
         force_token_k_unit=True,
         use_cached_price_fallback=False,
+        round_cost_to_int=True,
     )
     updated_rows = 0
     updated_items = 0
