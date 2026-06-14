@@ -4377,10 +4377,6 @@ def _build_scene_analysis_blocking_failure_detail(
         reasons_cn.append("返回内容疑似被截断，结果不完整")
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
-    if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_MISSING" in codes:
-        reasons_cn.append("第一阶段缺少 Project Visual Backfill JSON，结果不完整")
-    if "ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID" in codes:
-        reasons_cn.append("第一阶段 Project Visual Backfill JSON 损坏，无法安全解析")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
         reasons_cn.append("第一阶段未解析到 Subject Index 区块")
     if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
@@ -5722,54 +5718,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     total[k] = v
             return total
 
-        def _get_scene_analysis_validation_profile() -> Dict[str, Any]:
-            mode_source = str(effective_scene_analysis_mode or "").strip().lower()
-            prompt_source = " ".join([
-                str(getattr(request, "prompt_file", "") or ""),
-                str(template_signature.get("template_source") or ""),
-            ]).lower()
-            prompt_content_source = str(system_instruction or "").lower()
-            function_source = str(getattr(request, "function_name", "") or "").strip().lower()
-            source = " ".join([mode_source, prompt_source, prompt_content_source[:2000], function_source])
-
-            stage_id = "generic"
-            if mode_source == "entity_design" or mode_source.startswith("2_pass_generate_assets"):
-                stage_id = "entity_design"
-            elif (
-                mode_source in {"assets_extraction", "scene_assets_only"}
-                or "scene_planning_2_1_assets_extraction" in prompt_source
-                or "scene_planning_2_1_assets_extraction" in prompt_content_source
-                or "assets_extraction" in prompt_source
-                or "assets_extraction" in prompt_content_source
-            ):
-                stage_id = "assets_extraction"
-            elif (
-                mode_source in {"beats_generation", "scene_planning_beats", "scene_beats_only"}
-                or "scene_planning_2_2_beats_generation" in prompt_source
-                or "scene_planning_2_2_beats_generation" in prompt_content_source
-                or "beats_generation" in prompt_source
-                or "beats_generation" in prompt_content_source
-            ):
-                stage_id = "beats_generation"
-            elif "scene_planning_1_script_optimization" in prompt_source or "scene_planning_1_script_optimization" in prompt_content_source:
-                stage_id = "script_optimization"
-            elif any(marker in function_source for marker in ("script_optimization", "stage_1", "stage1")):
-                stage_id = "script_optimization"
-
-            return {
-                "stage_id": stage_id,
-                "mode_source": mode_source,
-                "prompt_source": prompt_source,
-                "function_source": function_source,
-                "requires_stage1_visual_backfill": stage_id == "script_optimization",
-                "requires_subject_index": stage_id == "assets_extraction",
-                "requires_beats_table": stage_id == "beats_generation",
-                "runs_entity_design_json_checks": stage_id == "entity_design",
-                "runs_subject_index_alignment": stage_id == "entity_design",
-                "runs_prompt_template_syntax": stage_id == "entity_design",
-                "diagnostic_source": source,
-            }
-
         def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
             text = str(output_text or "")
             checks = {
@@ -5780,117 +5728,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             }
             found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
             # Disable forced structural continuation to support decoupled Phase 1 / Phase 2 prompts.
-            missing_sections = []
-            stage1_meta = _detect_stage1_script_optimization_integrity(text) if text.strip() else {"ok": True}
-            if not bool(stage1_meta.get("ok", True)):
-                missing_sections.extend([str(x) for x in (stage1_meta.get("missing_sections") or []) if str(x)])
-            beats_meta = _detect_beats_generation_integrity(text) if text.strip() else {"ok": True}
-            if not bool(beats_meta.get("ok", True)):
-                missing_sections.extend([str(x) for x in (beats_meta.get("missing_sections") or []) if str(x)])
+            missing_sections = [] 
             return {
                 "found_sections": found_sections,
                 "missing_sections": missing_sections,
-                "structure_incomplete": bool(missing_sections),
-            }
-
-        def _is_stage1_script_optimization_request() -> bool:
-            return bool((_get_scene_analysis_validation_profile() or {}).get("requires_stage1_visual_backfill"))
-
-        def _extract_project_visual_backfill_json(text_value: Any) -> Tuple[Optional[Dict[str, Any]], str]:
-            text = str(text_value or "")
-            if not text.strip() or "project_visual_backfill" not in text.lower():
-                return None, "missing"
-
-            candidates: List[str] = []
-            try:
-                fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
-                for match in fence_re.finditer(text):
-                    candidate = str(match.group(1) or "").strip()
-                    if "project_visual_backfill" in candidate.lower():
-                        candidates.append(candidate)
-            except Exception:
-                pass
-
-            marker_match = re.search(r'\{\s*"project_visual_backfill"\s*:', text, flags=re.IGNORECASE)
-            if marker_match:
-                start = int(marker_match.start())
-                depth = 0
-                in_string = False
-                escape = False
-                for idx in range(start, len(text)):
-                    char = text[idx]
-                    if in_string:
-                        if escape:
-                            escape = False
-                        elif char == "\\":
-                            escape = True
-                        elif char == '"':
-                            in_string = False
-                        continue
-                    if char == '"':
-                        in_string = True
-                    elif char == "{":
-                        depth += 1
-                    elif char == "}":
-                        depth -= 1
-                        if depth == 0:
-                            candidates.append(text[start:idx + 1].strip())
-                            break
-
-            saw_invalid = False
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                try:
-                    parsed = json.loads(candidate)
-                    if isinstance(parsed, dict) and isinstance(parsed.get("project_visual_backfill"), dict):
-                        return parsed, "valid"
-                except Exception:
-                    saw_invalid = True
-
-            return None, "invalid" if saw_invalid or candidates else "missing"
-
-        def _detect_stage1_script_optimization_integrity(output_text: Any) -> Dict[str, Any]:
-            if not _is_stage1_script_optimization_request():
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
-
-            parsed_backfill, status = _extract_project_visual_backfill_json(output_text)
-            if parsed_backfill:
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
-
-            if status == "invalid":
-                return {
-                    "ok": False,
-                    "warning_codes": ["ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_INVALID"],
-                    "warnings": ["第一阶段 Project Visual Backfill JSON 未完整返回或无法解析，当前结果不能作为完整剧本分析使用。"],
-                    "missing_sections": ["Project Visual Backfill JSON"],
-                }
-
-            return {
-                "ok": False,
-                "warning_codes": ["ANALYSIS_STAGE1_VISUAL_BACKFILL_JSON_MISSING"],
-                "warnings": ["第一阶段未返回 Project Visual Backfill JSON，当前结果不完整，需触发 fallback 或重新分析。"],
-                "missing_sections": ["Project Visual Backfill JSON"],
-            }
-
-        def _detect_beats_generation_integrity(output_text: Any) -> Dict[str, Any]:
-            if not validation_profile.get("requires_beats_table"):
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
-
-            text = str(output_text or "").strip()
-            has_table = bool(
-                re.search(r"(?im)^\s*\|\s*Episode\s+ID\s*\|\s*Scene\s+ID\s*\|", text)
-                or re.search(r"(?im)^\s*\|\s*Scene\s+No\.?\s*\|", text)
-                or ("Equivalent Duration" in text and "Adapted Script Text" in text and "Environment" in text)
-            )
-            if has_table:
-                return {"ok": True, "warning_codes": [], "warnings": [], "missing_sections": []}
-
-            return {
-                "ok": False,
-                "warning_codes": ["ANALYSIS_STAGE2_BEATS_TABLE_MISSING"],
-                "warnings": ["场景编排阶段未返回可识别的 Scene Beats 表格，请检查 Stage 2.2 提示词输出。"],
-                "missing_sections": ["Scene Beats Table"],
+                "structure_incomplete": False,
             }
 
         def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
@@ -5987,36 +5829,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     + ", ".join([str(x) for x in missing_sections])
                     + "."
                 )
-
-            stage1_meta = _detect_stage1_script_optimization_integrity(text)
-            if not bool(stage1_meta.get("ok", True)):
-                stage1_missing = [str(x) for x in (stage1_meta.get("missing_sections") or []) if str(x)]
-                missing_sections = list(dict.fromkeys([*missing_sections, *stage1_missing]))
-                structure_incomplete = True
-                truncation_suspected = True
-                for code in (stage1_meta.get("warning_codes") or []):
-                    code_text = str(code or "").strip()
-                    if code_text and code_text not in warning_codes:
-                        warning_codes.append(code_text)
-                for warning in (stage1_meta.get("warnings") or []):
-                    warning_text = str(warning or "").strip()
-                    if warning_text and warning_text not in warnings:
-                        warnings.append(warning_text)
-
-            beats_meta = _detect_beats_generation_integrity(text)
-            if not bool(beats_meta.get("ok", True)):
-                beats_missing = [str(x) for x in (beats_meta.get("missing_sections") or []) if str(x)]
-                missing_sections = list(dict.fromkeys([*missing_sections, *beats_missing]))
-                structure_incomplete = True
-                truncation_suspected = True
-                for code in (beats_meta.get("warning_codes") or []):
-                    code_text = str(code or "").strip()
-                    if code_text and code_text not in warning_codes:
-                        warning_codes.append(code_text)
-                for warning in (beats_meta.get("warnings") or []):
-                    warning_text = str(warning or "").strip()
-                    if warning_text and warning_text not in warnings:
-                        warnings.append(warning_text)
 
             return {
                 "truncation_detected": had_length_finish,
@@ -6882,17 +6694,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 [item.get("skill_id") for item in (feature_bundle.get("combo_matches") or [])],
             )
 
-        validation_profile = _get_scene_analysis_validation_profile()
-        logger.info(
-            "[analyze_scene] validation_profile stage=%s mode=%s function=%s requires_stage1_backfill=%s requires_subject_index=%s runs_entity_json_checks=%s",
-            validation_profile.get("stage_id"),
-            validation_profile.get("mode_source"),
-            validation_profile.get("function_source"),
-            validation_profile.get("requires_stage1_visual_backfill"),
-            validation_profile.get("requires_subject_index"),
-            validation_profile.get("runs_entity_design_json_checks"),
-        )
-
         include_negative_prompt = getattr(request, "include_negative_prompt", True)
         
         is_asset_json_stage = "asset_design" in str(getattr(request, "system_api_id", "")) or "subject" in str(getattr(request, "system_api_id", "")) or "planning_1_stage_1_main" in str(getattr(request, "prompt_file", ""))
@@ -7465,7 +7266,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "request_text_chars": len((request.text or "")),
             "system_prompt_tokens_est": _estimate_tokens(system_instruction or ""),
             "user_prompt_tokens_est": _estimate_tokens(user_content or ""),
-            "validation_profile": validation_profile,
         }
         if template_signature:
             debug_meta.update(template_signature)
@@ -7618,8 +7418,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     return inc_l[len(c):]
             return incoming
 
-        async def _run_loop(target_messages, loop_config: Optional[Dict[str, Any]] = None):
-            active_loop_config = loop_config or config
+        async def _run_loop(target_messages):
             result_parts_loop: List[str] = []
             segments_meta_loop: List[Dict[str, Any]] = []
             usage_total_loop: Dict[str, Any] = {}
@@ -7641,7 +7440,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 system_only_messages = []
 
             for seg_idx in range(1, max_segments + 1):
-                llm_resp = await _await_analyze_scene_segment(current_messages, active_loop_config)
+                llm_resp = await _await_analyze_scene_segment(current_messages, config)
                 current_routing = _extract_llm_routing_metadata(llm_resp)
                 if current_routing:
                     resolved_llm_routing_loop = current_routing
@@ -7692,8 +7491,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     logger.warning(
                         "[analyze_scene] safety_output_cap_reached episode_id=%s provider=%s model=%s chars=%s cap=%s segments=%s",
                         getattr(request, "episode_id", None),
-                        (active_loop_config or {}).get("provider"),
-                        (active_loop_config or {}).get("model"),
+                        (config or {}).get("provider"),
+                        (config or {}).get("model"),
                         len(accumulated),
                         _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
                         len(segments_meta_loop or []),
@@ -7830,80 +7629,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
-
-        stage1_integrity_meta = _detect_stage1_script_optimization_integrity(result_content)
-        if not bool(stage1_integrity_meta.get("ok", True)) and dropdown_fallback_ids:
-            fallback_configs = agent_service.get_fallback_configs_by_ids(dropdown_fallback_ids)
-            for fallback_idx, fallback_config in enumerate(fallback_configs, 1):
-                if not fallback_config or not fallback_config.get("api_key"):
-                    continue
-                fallback_cfg_obj = fallback_config.get("config") if isinstance(fallback_config.get("config"), dict) else {}
-                fallback_cfg_obj["auto_continue_on_length"] = False
-                fallback_config["config"] = fallback_cfg_obj
-                logger.warning(
-                    "[analyze_scene] stage1_visual_backfill_json_incomplete_try_fallback episode_id=%s fallback_idx=%s provider=%s model=%s codes=%s",
-                    getattr(request, "episode_id", None),
-                    fallback_idx,
-                    fallback_config.get("provider"),
-                    fallback_config.get("model"),
-                    stage1_integrity_meta.get("warning_codes") or [],
-                )
-
-                fallback_loop_res = await _run_loop(messages, fallback_config)
-                fallback_result = fallback_loop_res.get("result_content", "")
-                if not is_entity_design_phase and script_hash:
-                    fallback_result = f"<!-- script_hash: {script_hash} -->\n" + fallback_result
-                fallback_stage1_meta = _detect_stage1_script_optimization_integrity(fallback_result)
-                if bool(fallback_stage1_meta.get("ok", True)):
-                    result_content = fallback_result
-                    loop1_res = fallback_loop_res
-                    segments_meta = loop1_res.get("segments_meta", [])
-                    usage_total = loop1_res.get("usage_total", {})
-                    resolved_llm_routing = loop1_res.get("resolved_llm_routing", {}) or {
-                        "provider": fallback_config.get("provider"),
-                        "model": fallback_config.get("model"),
-                    }
-                    finish_reason = loop1_res.get("finish_reason", "stop")
-                    continuation_stopped_by_max_segments = loop1_res.get("continuation_stopped_by_max_segments", False)
-                    output_char_cap_reached = loop1_res.get("output_char_cap_reached", False)
-                    continuation_reason_counts = dict(loop1_res.get("continuation_reason_counts", {}))
-                    continuation_by_structure = loop1_res.get("continuation_by_structure", 0)
-                    provider_limit_hints = list(set(loop1_res.get("provider_limit_hints", [])))
-                    llm_fallback_warnings = list(set([
-                        *list(loop1_res.get("llm_fallback_warnings", []) or []),
-                        f"Fallback {fallback_idx} ({fallback_config.get('provider')}/{fallback_config.get('model')}) used because first-stage Project Visual Backfill JSON was incomplete.",
-                    ]))
-                    usage = usage_total
-                    integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
-                    config = fallback_config
-                    provider = (config or {}).get("provider")
-                    model = (config or {}).get("model")
-                    break
-
-                stage1_integrity_meta = fallback_stage1_meta
-            else:
-                for code in (stage1_integrity_meta.get("warning_codes") or []):
-                    code_text = str(code or "").strip()
-                    if code_text and code_text not in (integrity_meta.get("warning_codes") or []):
-                        integrity_meta.setdefault("warning_codes", []).append(code_text)
-                for warning in (stage1_integrity_meta.get("warnings") or []):
-                    warning_text = str(warning or "").strip()
-                    if warning_text and warning_text not in (integrity_meta.get("warnings") or []):
-                        integrity_meta.setdefault("warnings", []).append(warning_text)
-
-                failure_detail = _build_scene_analysis_blocking_failure_detail(
-                    list(stage1_integrity_meta.get("warning_codes") or []),
-                    list(stage1_integrity_meta.get("warnings") or []),
-                    [],
-                )
-                raise HTTPException(status_code=502, detail=failure_detail)
-        elif not bool(stage1_integrity_meta.get("ok", True)):
-            failure_detail = _build_scene_analysis_blocking_failure_detail(
-                list(stage1_integrity_meta.get("warning_codes") or []),
-                list(stage1_integrity_meta.get("warnings") or []),
-                [],
-            )
-            raise HTTPException(status_code=502, detail=failure_detail)
 
         raw_total_chars = 0
         dedup_total_chars = 0
@@ -8060,10 +7785,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
         source_subject_index_text = sanitize_subject_index_text(result_content)
-        should_require_subject_index = bool(
-            validation_profile.get("requires_subject_index")
-        )
-        if should_require_subject_index:
+        if not is_entity_design_phase:
             has_subject_section = bool(
                 re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
                 or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
@@ -8173,16 +7895,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             cleaned_for_json = sanitize_llm_markdown_output(result_content)
             subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
 
-        if validation_profile.get("runs_subject_index_alignment"):
-            subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
-            subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
-            subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
-            subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
-            subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
-        else:
-            subject_index_reconcile_meta = {"skipped": True, "reason": "validation_profile_disabled"}
-            subject_index_reconcile_warning_codes = []
-            subject_index_reconcile_warnings = []
+        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
+        subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
+        subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
+        subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
+        subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
 
         response_payload["subjects_json"] = subjects_json
         response_payload["subjects_json_count"] = {
@@ -8193,40 +7910,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "posters": len(subjects_json.get("posters") or []),
         }
 
-        if validation_profile.get("runs_entity_design_json_checks"):
-            extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
-        else:
-            extraction_gap_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": [], "missing_total": 0}
+        extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
         debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
 
-        if validation_profile.get("runs_entity_design_json_checks"):
-            subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
-        else:
-            subject_index_coverage_meta = {
-                "skipped": True,
-                "reason": "validation_profile_disabled",
-                "expected_total": 0,
-                "expected_by_bucket": {},
-                "missing_total": 0,
-                "missing_by_bucket": {},
-                "warning_codes": [],
-                "warnings": [],
-            }
+        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
         debug_meta["subject_index_coverage"] = subject_index_coverage_meta
         debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
-        if validation_profile.get("runs_entity_design_json_checks"):
-            subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
-        else:
-            subject_consistency_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": []}
+        subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
         debug_meta["subject_consistency"] = subject_consistency_meta
 
         prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
 
-        if validation_profile.get("runs_prompt_template_syntax"):
-            prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
-        else:
-            prompt_template_meta = {"skipped": True, "reason": "validation_profile_disabled", "warning_codes": [], "warnings": [], "mismatch_count": 0}
+        prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
         debug_meta["prompt_template_syntax"] = prompt_template_meta
 
         diagnosis_hints: List[str] = []
@@ -34804,14 +34500,8 @@ def _append_video_api_ref_mapping(
     provider: str = "",
     model: str = "",
 ) -> str:
-    provider_text = str(provider or "").strip().lower()
-    model_text = str(model or "").strip().lower()
-    is_seedance = bool(
-        "seedance" in provider_text
-        or "seedance" in model_text
-        or provider_text in {"ark-seedance", "pixelmove"}
-        or (provider_text == "zlhub" and not model_text)
-    )
+    is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
+    original_use_prev_video = use_prev_video
     if is_seedance:
         use_prev_video = True
 
@@ -34928,10 +34618,10 @@ def _append_video_api_ref_mapping(
         updated_source = str(source_text or "").strip()
         if not updated_source:
             return updated_source
-        if not reference_video_urls:
+        if not (reference_video_urls and is_seedance):
             return updated_source
 
-        if use_prev_video:
+        if original_use_prev_video:
             vid_tag = "@Video 1"
             vid_tag_nospace = "@Video1"
             has_continuation_instruction = bool(
