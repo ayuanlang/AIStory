@@ -655,6 +655,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
     }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
 
+    const buildStage2_2SubjectIndexSection = useCallback((subjectIndexText) => {
+        const stableText = String(extractPureSubjectIndexText(subjectIndexText) || '').trim();
+        if (!stableText) return '';
+        return [
+            '[Stage 2-1 Subject Index - REQUIRED INPUT]',
+            'The following Subject Index is authoritative for Stage 2.2.',
+            'Do not rename / merge / invent entities. Keep ENV/CHAR/PROP names byte-identical.',
+            '```subject_index',
+            stableText,
+            '```',
+        ].join('\n');
+    }, [extractPureSubjectIndexText]);
+
     useEffect(() => {
         isSuperuserRef.current = isSuperuser;
     }, [isSuperuser]);
@@ -3088,6 +3101,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         const normalizedText = String(normalizeLlmMarkdownTable(raw) || '').trim();
+        const directImportCheck = validateAutoSceneTableImport(raw);
+        if (!normalizedText && directImportCheck?.ok) {
+            return {
+                ok: true,
+                normalizedText: String(directImportCheck.tableText || '').trim(),
+                warning: directImportCheck.warning || '',
+            };
+        }
         if (!normalizedText) {
             const looksLikeSubjectIndex = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Subject\s*Index|Subjects?\s*Index|资产清单|实体清单)\b/i.test(raw)
                 || /(?:^|\n)\s*\|\s*subject_no\s*\|\s*subject_type\s*\|/i.test(raw)
@@ -3116,6 +3137,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             warning: importCheck.warning || '',
         };
     }, [normalizeLlmMarkdownTable, validateAutoSceneTableImport, t]);
+
+    const logStage2_2Diagnostics = useCallback(({
+        phase = 'stage2_2',
+        subjectIndexText = '',
+        sceneInputText = '',
+        finalInputText = '',
+        rawOutputText = '',
+        normalizedText = '',
+    } = {}) => {
+        try {
+            const subjectIndexChars = String(subjectIndexText || '').length;
+            const sceneInputChars = String(sceneInputText || '').length;
+            const finalInputChars = String(finalInputText || '').length;
+            const rawText = String(rawOutputText || '');
+            const normalized = String(normalizedText || '').trim();
+            const rawHasSceneIdHeader = /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|场景\s*ID|场景ID)[^\n]*\|/i.test(rawText);
+            const normalizedRows = Array.isArray(parseMarkdownTable(normalized)?.rows)
+                ? parseMarkdownTable(normalized).rows.length
+                : 0;
+            const importCheck = validateAutoSceneTableImport(normalized || rawText);
+            const importRows = importCheck?.ok
+                ? (Array.isArray(parseMarkdownTable(importCheck.tableText || '')?.rows)
+                    ? parseMarkdownTable(importCheck.tableText || '').rows.length
+                    : 0)
+                : 0;
+            const msg = `[Stage2.2 Debug] phase=${phase} subject_index_chars=${subjectIndexChars} scene_input_chars=${sceneInputChars} final_input_chars=${finalInputChars} raw_has_scene_id_header=${rawHasSceneIdHeader} normalized_rows=${normalizedRows} import_rows=${importRows}`;
+            onLog?.(msg, 'info');
+            console.info(msg);
+        } catch (_) {
+            // best-effort diagnostics
+        }
+    }, [onLog, validateAutoSceneTableImport]);
 
     const validateStage2_1SubjectIndexOutput = useCallback((rawText, contextLabel = 'Stage 2.1') => {
         const source = String(rawText || '').trim();
@@ -4935,7 +4988,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask,
-        throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError
+        throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
+        buildStage2_2SubjectIndexSection
     ]);
 
     
@@ -5416,30 +5470,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return () => {
             // Keep backend analysis running when this view unmounts (tab/page switch).
             // Explicit cancellation should only happen via the "stop task" action.
-            try {
-                const episodeId = latestActiveEpisodeIdRef.current;
-                if (!episodeId) return;
-                const marker = loadAnalysisTaskMarker(episodeId);
-                const hasRunningAnalysis = Boolean(
-                    latestIsAnalyzingRef.current
-                    || analysisRunInFlightRef.current
-                    || analysisResumeInFlightRef.current
-                    || marker?.taskId
-                );
-                if (hasRunningAnalysis) {
-                    onLog?.(
-                        t(
-                            '已离开分析页面：场景分析任务仍在后台继续，可稍后返回继续查看进度。',
-                            'You left the analysis view: scene analysis continues in the background and can be resumed later.'
-                        ),
-                        'info'
-                    );
-                }
-            } catch (_) {
-                // Ignore unmount logging failures.
-            }
+            // No-op: avoid noisy unmount logs.
         };
-    }, [loadAnalysisTaskMarker, onLog, t]);
+    }, []);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
@@ -7529,7 +7562,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             finalStage2_1UserInput,
                             finalStage2_1Prompt,
                             null,
-                            null,
+                            activeEpisode?.id || null,
                             analysisAttentionNotes,
                             selectedReuseSubjectAssets,
                             {
@@ -7591,7 +7624,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
                     // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
-                    let finalStage2_2UserInput = `### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}\n\n${stage2_2UserInputBody}`;
+                    const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
+                    let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
+
+                    logStage2_2Diagnostics({
+                        phase: 'advanced-stage2_2-submit',
+                        subjectIndexText: stage2_1SubjectIndexText,
+                        sceneInputText: stage2_2UserInputBody,
+                        finalInputText: finalStage2_2UserInput,
+                    });
 
                     const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
                         () => runScriptAnalysisFlowAnalyzeNode(
@@ -7599,7 +7640,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             finalStage2_2UserInput,
                             finalStage2_2Prompt,
                             null,
-                            null,
+                            activeEpisode?.id || null,
                             analysisAttentionNotes,
                             selectedReuseSubjectAssets,
                             {
@@ -7642,6 +7683,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         throw new Error(errMsg2);
                     }
                     const stage2_2Check = validateStage2_2BeatsOutput(text2_2, 'Stage 2.2');
+                    logStage2_2Diagnostics({
+                        phase: 'advanced-stage2_2-result',
+                        subjectIndexText: stage2_1SubjectIndexText,
+                        sceneInputText: stage2_2UserInputBody,
+                        finalInputText: finalStage2_2UserInput,
+                        rawOutputText: text2_2,
+                        normalizedText: stage2_2Check?.normalizedText || '',
+                    });
                     if (!stage2_2Check.ok) {
                         throw new Error(stage2_2Check.reason || 'Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
                     }
@@ -8028,7 +8077,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         stage2UserInput,
                         stage2_1PromptRes?.content || '',
                         null,
-                        null,
+                        activeEpisode?.id || null,
                         analysisAttentionNotes,
                         selectedReuseSubjectAssets,
                         {
@@ -8079,15 +8128,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 let finalStage2_2Prompt = stage2_2PromptRes?.content || ''; 
                     // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
-                    let finalStage2_2UserInput = `### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}\n\n${stage2_2UserInputBody}`;
+                    const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
+                    let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
 
-                                const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
+                logStage2_2Diagnostics({
+                    phase: 'restart-stage2_2-submit',
+                    subjectIndexText: stage2_1SubjectIndexText,
+                    sceneInputText: stage2_2UserInputBody,
+                    finalInputText: finalStage2_2UserInput,
+                });
+
+                const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
                     () => runScriptAnalysisFlowAnalyzeNode( 
                         'scene_markdown',
                         finalStage2_2UserInput, 
                         finalStage2_2Prompt, 
                         null, 
-                        null, 
+                        activeEpisode?.id || null, 
                         analysisAttentionNotes, 
                         selectedReuseSubjectAssets, 
                         { 
@@ -8130,6 +8187,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     throw new Error(errMsg2); 
                 } 
                 const stage2_2Check = validateStage2_2BeatsOutput(text2_2, 'Stage 2.2 restart');
+                logStage2_2Diagnostics({
+                    phase: 'restart-stage2_2-result',
+                    subjectIndexText: stage2_1SubjectIndexText,
+                    sceneInputText: stage2_2UserInputBody,
+                    finalInputText: finalStage2_2UserInput,
+                    rawOutputText: text2_2,
+                    normalizedText: stage2_2Check?.normalizedText || '',
+                });
                 if (!stage2_2Check.ok) {
                     throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (restart mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
                 }
@@ -8342,7 +8407,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
             // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
             let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
-            let finalStage2_2UserInput = `### 【上游提取的资产清单 Subject Index】\n${stage2_1SubjectIndexText}\n\n${stage2_2UserInputBody}`;
+            const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
+            let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
+
+            logStage2_2Diagnostics({
+                phase: 'scene-only-stage2_2-submit',
+                subjectIndexText: stage2_1SubjectIndexText,
+                sceneInputText: stage2_2UserInputBody,
+                finalInputText: finalStage2_2UserInput,
+            });
 
             const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
@@ -8350,7 +8423,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     finalStage2_2UserInput,
                     finalStage2_2Prompt,
                     null,
-                    null,
+                    activeEpisode?.id || null,
                     analysisAttentionNotes,
                     selectedReuseSubjectAssets,
                     {
@@ -8375,6 +8448,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             const stage2_2Text = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
             const stage2_2Check = validateStage2_2BeatsOutput(stage2_2Text, 'Stage 2.2 scene-only rerun');
+            logStage2_2Diagnostics({
+                phase: 'scene-only-stage2_2-result',
+                subjectIndexText: stage2_1SubjectIndexText,
+                sceneInputText: stage2_2UserInputBody,
+                finalInputText: finalStage2_2UserInput,
+                rawOutputText: stage2_2Text,
+                normalizedText: stage2_2Check?.normalizedText || '',
+            });
             if (!stage2_2Check.ok) {
                 throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (scene-beats-only mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
             }
