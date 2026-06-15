@@ -202,6 +202,63 @@ If the user's request is not clear or does not require a tool, return an empty p
 """
 
 class LLMService:
+    def _should_drop_runtime_override_key(
+        self,
+        key: Any,
+        provider: Any,
+        resolved_category: Any,
+    ) -> bool:
+        key_text = str(key or "").strip()
+        if not key_text:
+            return True
+        if key_text in {"model", "messages", "stream"}:
+            return True
+        if key_text.startswith("__"):
+            return True
+
+        internal_runtime_keys = {
+            "endpoint",
+            "request_id",
+            "explicit_selection",
+            "strict_provider",
+            "api_strategy",
+            "mode",
+            "selection_source",
+            "use_system_setting_id",
+            "auto_continue_on_length",
+        }
+        internal_runtime_prefixes = ("retry_", "smart_", "auto_continue_")
+        if key_text in internal_runtime_keys:
+            return True
+        if any(key_text.startswith(prefix) for prefix in internal_runtime_prefixes):
+            return True
+
+        provider_lower = str(provider or "").strip().lower()
+        category_upper = str(resolved_category or "").strip().upper()
+
+        # For Google OpenAI-compatible endpoint, enforce strict payload whitelist
+        # to avoid leaking internal routing/runtime fields.
+        if provider_lower == "google" and category_upper == "LLM":
+            google_allowed_keys = {
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "max_completion_tokens",
+                "max_output_tokens",
+                "presence_penalty",
+                "frequency_penalty",
+                "n",
+                "stop",
+                "seed",
+                "response_format",
+                "tools",
+                "tool_choice",
+                "reasoning_effort",
+            }
+            return key_text not in google_allowed_keys
+
+        return False
+
     def _get_agent_system_prompt(self) -> str:
         try:
             resolved = get_skill_prompt_text("agent_orchestrator", "system_prompt.txt")
@@ -435,6 +492,10 @@ class LLMService:
         model_lower = (model or "").lower()
         if "kie.ai" in url:
             return "kie"
+        if "generativelanguage.googleapis.com" in url or "ai.google.dev" in url:
+            return "google"
+        if model_lower.startswith("gemini"):
+            return "google"
         if "ark.cn-" in url or "doubao" in model_lower:
             return "doubao"
         if "claude" in model_lower:
@@ -2611,6 +2672,9 @@ class LLMService:
 
         if not original_base_url and use_claude_api:
             base_url = "https://api.anthropic.com"
+        if not original_base_url and provider == "google":
+            # Google Gemini OpenAI-compatible endpoint root.
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
         
         if provider == "apiyi" or provider == "apiyi2":
             if not original_base_url or original_base_url == "https://api.apiyi.com":
@@ -2713,7 +2777,7 @@ class LLMService:
             # Merge extra config, but don't overwrite critical fields if not intended
             # For now, just update, but maybe exclude 'model' or 'messages'
             for k, v in extra_config.items():
-                if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
+                if not self._should_drop_runtime_override_key(k, provider, resolved_category):
                     payload[k] = v
 
         def _to_positive_int(value: Any) -> Optional[int]:
@@ -3134,6 +3198,9 @@ class LLMService:
 
         if not original_base_url and use_claude_api:
             base_url = "https://api.anthropic.com"
+        if not original_base_url and provider == "google":
+            # Google Gemini OpenAI-compatible endpoint root.
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 
         if not original_base_url and provider == "apiyi":
             base_url = "https://api.apiyi.com"
@@ -3247,7 +3314,7 @@ class LLMService:
             pass
         elif extra_config and not (use_claude_api and resolved_category == "LLM"):
             for k, v in extra_config.items():
-                if k not in ["model", "messages", "stream"] and not str(k).startswith("__"):
+                if not self._should_drop_runtime_override_key(k, provider, resolved_category):
                     payload[k] = v
 
         self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if extra_config else None,

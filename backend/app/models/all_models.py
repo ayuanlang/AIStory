@@ -350,6 +350,75 @@ class Shot(Base):
     
     scene = relationship("Scene", back_populates="shots")
 
+
+class ScriptProgressSceneUnit(Base):
+    __tablename__ = "script_progress_scene_units"
+    __table_args__ = (
+        UniqueConstraint("project_id", "episode_id", "scene_id", name="uq_script_progress_scene_units_project_episode_scene"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=False)
+    script_id = Column(String, index=True, nullable=True)
+    scene_id = Column(String, index=True, nullable=False)
+    scene_order = Column(Integer, nullable=True)
+    scene_text = Column(Text, nullable=True)
+    marker_start_token = Column(String, nullable=True)
+    marker_end_token = Column(String, nullable=True)
+    parse_status = Column(String, default="success")
+    import_status = Column(String, default="queued")
+    parse_error_code = Column(String, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
+class ScriptProgressPipelineNode(Base):
+    __tablename__ = "script_progress_pipeline_nodes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=False)
+    script_id = Column(String, index=True, nullable=True)
+    scene_id = Column(String, index=True, nullable=True)
+    node_name = Column(String, index=True, nullable=False)
+    asset_type = Column(String, index=True, nullable=True)
+    status = Column(String, index=True, default="queued")
+    progress_percent = Column(Float, default=0.0)
+    started_at = Column(String, nullable=True)
+    ended_at = Column(String, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    retry_count = Column(Integer, default=0)
+    retry_limit = Column(Integer, default=3)
+    depends_on = Column(JSON, default=[])
+    runtime_meta = Column(JSON, default={})
+    last_error_code = Column(String, nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
+class ScriptProgressIssue(Base):
+    __tablename__ = "script_progress_issues"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
+    script_id = Column(String, index=True, nullable=True)
+    scene_id = Column(String, index=True, nullable=True)
+    severity = Column(String, index=True, default="WARNING")
+    status = Column(String, index=True, default="open")
+    issue_code = Column(String, index=True, nullable=False)
+    title = Column(String, nullable=False)
+    details = Column(Text, nullable=True)
+    owner_domain = Column(String, index=True, nullable=True)
+    node_ref = Column(String, nullable=True)
+    first_seen_at = Column(String, default=now_bj_iso)
+    last_seen_at = Column(String, default=now_bj_iso)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
 class Entity(Base):
     __tablename__ = "entities"
     id = Column(Integer, primary_key=True, index=True)

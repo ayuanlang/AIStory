@@ -217,7 +217,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60 * 5;
     const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
-    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 3;
+    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 8;
+    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING = 30;
+    const SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS = 1000 * 60 * 2;
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 4;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
     const functionApiConfigs = useFunctionApis();
@@ -2455,12 +2457,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         statusResp = await getImageGenerationJobStatus(jobId);
                     } catch (statusErr) {
                         const detail = String(statusErr?.response?.data?.detail || statusErr?.message || 'unknown error').trim();
+                        const localStatus = String(job?.status || '').trim().toLowerCase();
+                        const maxStatusFailures = localStatus === 'persisting'
+                            ? SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING
+                            : SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES;
                         const nextFailureCount = Math.max(0, Number(job?.statusFailureCount || 0) || 0) + 1;
-                        if (nextFailureCount >= SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES) {
+                        const startedAtMs = Number(job?.startedAt || 0) || 0;
+                        const isNotFoundError = detail.toLowerCase().includes('not found');
+                        const withinNotFoundGrace = Boolean(
+                            isNotFoundError
+                            && startedAtMs > 0
+                            && (Date.now() - startedAtMs) < SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS
+                        );
+
+                        if (withinNotFoundGrace) {
+                            statusUpdates[String(entityId)] = {
+                                statusFailureCount: nextFailureCount,
+                                lastStatusError: detail,
+                                lastPolledAt: Date.now(),
+                            };
+                            continue;
+                        }
+
+                        if (nextFailureCount >= maxStatusFailures && localStatus !== 'persisting') {
                             await forceClearSubjectImageJob(
                                 entityId,
                                 job,
-                                `status polling failed ${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}: ${detail}`
+                                `status polling failed ${nextFailureCount}/${maxStatusFailures}: ${detail}`
                             );
                         } else {
                             statusUpdates[String(entityId)] = {
@@ -2471,8 +2494,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             if (isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                                 onLog(
                                     t(
-                                        `主体任务状态查询失败（${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}）：${job?.entityName || entityId} - ${detail}`,
-                                        `Subject job status polling failed (${nextFailureCount}/${SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES}): ${job?.entityName || entityId} - ${detail}`
+                                        `主体任务状态查询失败（${nextFailureCount}/${maxStatusFailures}）：${job?.entityName || entityId} - ${detail}`,
+                                        `Subject job status polling failed (${nextFailureCount}/${maxStatusFailures}): ${job?.entityName || entityId} - ${detail}`
                                     ),
                                     'warning'
                                 );
@@ -2690,7 +2713,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
             clearInterval(timer);
         };
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, subjectImageJobs, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, subjectImageJobs, t]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });

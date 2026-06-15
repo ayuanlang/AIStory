@@ -828,9 +828,17 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("shots", models.Shot),
             ("script_segments", models.ScriptSegment),
             ("project_shares", models.ProjectShare),
-            ("llm_call_logs", models.LLMCallLog)
+            ("llm_call_logs", models.LLMCallLog),
+            ("script_progress_scene_units", getattr(models, "ScriptProgressSceneUnit", None)),
+            ("script_progress_pipeline_nodes", getattr(models, "ScriptProgressPipelineNode", None)),
+            ("script_progress_issues", getattr(models, "ScriptProgressIssue", None)),
         ]:
             try:
+                if tmodel is None:
+                    continue
+                if not inspector.has_table(tname):
+                    tmodel.__table__.create(bind=engine, checkfirst=True)
+                    logger.info(f"Created {tname} table")
                 _ensure_missing_table_columns(tname, tmodel, is_postgres=is_postgres)
             except Exception as e:
                 logger.error(f"Failed to ensure {tname} columns: {e}")

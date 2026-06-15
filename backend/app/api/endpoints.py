@@ -81,7 +81,17 @@ from app.services.task_manager import create_task_record as _create_task_record,
 from app.services.system_default_api_service import get_task_default_system_setting, list_task_default_system_settings
 from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config, get_script_analysis_flow_config
-from app.services.script_analysis_flow import build_script_analysis_flow_plan, get_script_analysis_flow_registry
+from app.services.script_analysis_flow import (
+    build_script_analysis_flow_plan,
+    SCENES_BLOCK_END_TOKEN,
+    get_script_analysis_flow_registry,
+    normalize_node_status,
+    raise_progress_issue,
+    resolve_progress_issue,
+    SCENES_BLOCK_START_TOKEN,
+    sync_scene_units_from_script_text,
+    upsert_pipeline_node_status,
+)
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
 import os
@@ -157,6 +167,9 @@ TransactionAction = models.TransactionAction
 SMTPSystemConfig = models.SMTPSystemConfig
 WechatPayConfig = models.WechatPayConfig
 ProviderKeyPool = models.ProviderKeyPool
+ScriptProgressSceneUnit = getattr(models, "ScriptProgressSceneUnit", None)
+ScriptProgressPipelineNode = getattr(models, "ScriptProgressPipelineNode", None)
+ScriptProgressIssue = getattr(models, "ScriptProgressIssue", None)
 
 _REVIEW_MODELS_AVAILABLE = all(
     model is not None
@@ -5483,6 +5496,887 @@ class ScriptAnalysisFlowRunNodeRequest(BaseModel):
     system_api_id: Optional[int] = None
 
 
+class SceneUnitsSyncRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    script_text: str
+    script_id: Optional[str] = None
+
+
+class ProgressAutoOrchestrateRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_ids: Optional[List[str]] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+    asset_types: Optional[List[str]] = None
+
+
+class ProgressIssueResolveRequest(BaseModel):
+    issue_id: int
+
+
+class ProgressReconcileRequest(BaseModel):
+    project_id: int
+    episode_id: int
+
+
+def _extract_scene_markdown_text_from_result(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, dict):
+        return ""
+    for key in ("adapted_script", "scenes_markdown", "content", "result"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    data = result.get("data")
+    if isinstance(data, dict):
+        for key in ("adapted_script", "scenes_markdown", "content"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
+def _extract_analysis_text_from_result(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, dict):
+        return ""
+    for key in ("result", "content", "adapted_script", "scenes_markdown"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    data = result.get("data")
+    if isinstance(data, dict):
+        for key in ("result", "content", "adapted_script", "scenes_markdown"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
+def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
+    text = sanitize_subject_index_text(subject_index_text)
+    if not text:
+        return False
+
+    if re.search(r"(?i)\bsubject_type\s*=\s*(cover_poster|poster|posters|cover|covers|封面|封面海报|海报)\b", text):
+        return True
+
+    def _normalize_type(value: Any) -> str:
+        key = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if key in {"cover_poster", "coverposter", "poster", "posters", "cover", "covers", "封面", "封面海报", "海报"}:
+            return "cover_poster"
+        return key
+
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "").replace("\ufeff", "").strip()
+        line = re.sub(r"^\s*>\s*", "", line)
+        line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
+        if not line:
+            continue
+        if not re.match(r"^\|?\s*S\d+\s*\|", line, flags=re.IGNORECASE):
+            continue
+        normalized_line = line.strip("|").strip()
+        parts = [p.strip() for p in normalized_line.split("|")]
+        if len(parts) < 2:
+            continue
+        if _normalize_type(parts[1]) == "cover_poster":
+            return True
+    return False
+
+
+def _script_optimization_has_project_visual_backfill(result_text: Any) -> bool:
+    text = str(result_text or "").strip()
+    if not text:
+        return False
+
+    if re.search(r"(?i)\bproject_visual_backfill\b", text):
+        return True
+    if re.search(r"(?im)^\s*(?:#{1,6}\s*)?Project\s*Visual\s*Backfill\b", text):
+        return True
+
+    fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for match in fence_re.finditer(text):
+        candidate = str(match.group(1) or "").strip()
+        if not candidate:
+            continue
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict) and (
+                "project_visual_backfill" in obj
+                or "Project_Visual_Backfill" in obj
+                or "projectVisualBackfill" in obj
+            ):
+                return True
+        except Exception:
+            continue
+
+    try:
+        maybe_obj = json.loads(text)
+        if isinstance(maybe_obj, dict) and (
+            "project_visual_backfill" in maybe_obj
+            or "Project_Visual_Backfill" in maybe_obj
+            or "projectVisualBackfill" in maybe_obj
+        ):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _list_episode_scene_progress_rows(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    scene_ids: Optional[List[str]] = None,
+) -> List[Any]:
+    if ScriptProgressSceneUnit is None:
+        return []
+    query = (
+        db.query(ScriptProgressSceneUnit)
+        .filter(
+            ScriptProgressSceneUnit.project_id == int(project_id),
+            ScriptProgressSceneUnit.episode_id == int(episode_id),
+        )
+        .order_by(ScriptProgressSceneUnit.scene_order.asc(), ScriptProgressSceneUnit.id.asc())
+    )
+    if scene_ids:
+        normalized = [str(x).strip() for x in scene_ids if str(x).strip()]
+        if normalized:
+            query = query.filter(ScriptProgressSceneUnit.scene_id.in_(normalized))
+    return query.all()
+
+
+def _resolve_scene_id_to_db_scene(
+    db: Session,
+    *,
+    episode_id: int,
+    scene_marker_id: str,
+) -> Optional[Scene]:
+    marker = str(scene_marker_id or "").strip()
+    if not marker:
+        return None
+    fallback_no = marker
+    if "_SC" in marker:
+        try:
+            fallback_no = marker.split("_SC", 1)[1]
+        except Exception:
+            fallback_no = marker
+    scene = (
+        db.query(Scene)
+        .filter(
+            Scene.episode_id == int(episode_id),
+            or_(Scene.scene_no == marker, Scene.scene_no == fallback_no),
+        )
+        .first()
+    )
+    if scene:
+        return scene
+    try:
+        maybe_num = int(fallback_no)
+    except Exception:
+        maybe_num = None
+    if maybe_num is not None:
+        return (
+            db.query(Scene)
+            .filter(Scene.episode_id == int(episode_id), cast(Scene.scene_no, String) == str(maybe_num))
+            .first()
+        )
+    return None
+
+
+def _normalize_asset_types(values: Optional[List[str]]) -> List[str]:
+    default_types = ["character", "prop", "environment", "poster"]
+    if not values:
+        return default_types
+    normalized: List[str] = []
+    alias = {
+        "characters": "character",
+        "props": "prop",
+        "environments": "environment",
+        "covers": "poster",
+        "posters": "poster",
+    }
+    for item in values:
+        key = str(item or "").strip().lower()
+        if not key:
+            continue
+        key = alias.get(key, key)
+        if key in {"character", "prop", "environment", "poster"} and key not in normalized:
+            normalized.append(key)
+    return normalized or default_types
+
+
+def _normalize_scene_marker_id_from_scene(scene: Scene, episode_id: int) -> str:
+    scene_no = str(getattr(scene, "scene_no", "") or "").strip()
+    if scene_no:
+        if "_SC" in scene_no:
+            return scene_no
+        return f"EP{int(episode_id):02d}_SC{scene_no}"
+    return f"EP{int(episode_id):02d}_SC{int(scene.id)}"
+
+
+@router.post("/prompts/scene-analysis/progress/sync-scene-units")
+async def sync_scene_units_progress(
+    request: SceneUnitsSyncRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+    summary = sync_scene_units_from_script_text(
+        db,
+        project_id=int(request.project_id),
+        episode_id=int(request.episode_id),
+        script_text=request.script_text,
+        script_id=request.script_id,
+    )
+    upsert_pipeline_node_status(
+        db,
+        project_id=int(request.project_id),
+        episode_id=int(request.episode_id),
+        script_id=request.script_id,
+        node_name="scene_planning",
+        status="success",
+        progress_percent=100.0,
+    )
+    db.commit()
+    return {"status": "ok", "summary": summary}
+
+
+@router.get("/prompts/scene-analysis/progress/episodes/{episode_id}")
+async def get_episode_progress_snapshot(
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    scene_units: List[Dict[str, Any]] = []
+    if ScriptProgressSceneUnit is not None:
+        rows = (
+            db.query(ScriptProgressSceneUnit)
+            .filter(
+                ScriptProgressSceneUnit.project_id == int(episode.project_id),
+                ScriptProgressSceneUnit.episode_id == int(episode_id),
+            )
+            .order_by(ScriptProgressSceneUnit.scene_order.asc(), ScriptProgressSceneUnit.id.asc())
+            .all()
+        )
+        scene_units = [
+            {
+                "scene_id": row.scene_id,
+                "scene_order": row.scene_order,
+                "parse_status": row.parse_status,
+                "import_status": row.import_status,
+                "parse_error_code": row.parse_error_code,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ]
+
+    pipeline_nodes: List[Dict[str, Any]] = []
+    if ScriptProgressPipelineNode is not None:
+        rows = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(episode.project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+            )
+            .order_by(ScriptProgressPipelineNode.id.asc())
+            .all()
+        )
+        pipeline_nodes = [
+            {
+                "node_name": row.node_name,
+                "scene_id": row.scene_id,
+                "asset_type": row.asset_type,
+                "status": normalize_node_status(row.status),
+                "progress_percent": row.progress_percent,
+                "retry_count": row.retry_count,
+                "retry_limit": row.retry_limit,
+                "runtime_meta": row.runtime_meta if isinstance(row.runtime_meta, dict) else {},
+                "last_error_code": row.last_error_code,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ]
+
+    asset_matrix: Dict[str, Dict[str, Any]] = {}
+    for node in pipeline_nodes:
+        if str(node.get("node_name") or "") != "asset_generation":
+            continue
+        sid = str(node.get("scene_id") or "").strip()
+        at = str(node.get("asset_type") or "").strip()
+        if not sid or not at:
+            continue
+        asset_matrix.setdefault(sid, {})[at] = {
+            "status": node.get("status"),
+            "progress_percent": node.get("progress_percent"),
+            "last_error_code": node.get("last_error_code"),
+            "updated_at": node.get("updated_at"),
+        }
+
+    return {
+        "project_id": int(episode.project_id),
+        "episode_id": int(episode_id),
+        "scene_units": scene_units,
+        "pipeline_nodes": pipeline_nodes,
+        "asset_matrix": asset_matrix,
+    }
+
+
+@router.get("/prompts/scene-analysis/progress/projects/{project_id}/overview")
+async def get_project_progress_overview(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    episode_ids = [int(e.id) for e in db.query(Episode).filter(Episode.project_id == int(project_id)).all()]
+
+    nodes = []
+    if ScriptProgressPipelineNode is not None:
+        nodes = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(ScriptProgressPipelineNode.project_id == int(project_id))
+            .all()
+        )
+    issues = []
+    if ScriptProgressIssue is not None:
+        issues = (
+            db.query(ScriptProgressIssue)
+            .filter(
+                ScriptProgressIssue.project_id == int(project_id),
+                ScriptProgressIssue.status != "resolved",
+            )
+            .all()
+        )
+    scenes_total = 0
+    scenes_done = 0
+    if ScriptProgressSceneUnit is not None:
+        scene_rows = (
+            db.query(ScriptProgressSceneUnit)
+            .filter(ScriptProgressSceneUnit.project_id == int(project_id))
+            .all()
+        )
+        scenes_total = len(scene_rows)
+        scenes_done = sum(1 for row in scene_rows if str(row.import_status or "").lower() == "success")
+
+    status_counts = {
+        "queued": 0,
+        "running": 0,
+        "success": 0,
+        "warning": 0,
+        "failed": 0,
+        "blocked": 0,
+        "skipped": 0,
+    }
+    for row in nodes:
+        status_counts[normalize_node_status(getattr(row, "status", None))] += 1
+
+    total_nodes = len(nodes)
+    done_nodes = status_counts["success"] + status_counts["skipped"]
+    progress_percent = (float(done_nodes) / float(total_nodes) * 100.0) if total_nodes > 0 else 0.0
+    overall_status = "running"
+    if status_counts["failed"] > 0 or any(str(getattr(i, "severity", "")).upper() == "BLOCKER" for i in issues):
+        overall_status = "failed"
+    elif status_counts["blocked"] > 0:
+        overall_status = "blocked"
+    elif total_nodes > 0 and done_nodes >= total_nodes:
+        overall_status = "success"
+    elif total_nodes == 0:
+        overall_status = "queued"
+
+    issue_blockers = sum(1 for i in issues if str(getattr(i, "severity", "")).upper() == "BLOCKER")
+    issue_warnings = sum(1 for i in issues if str(getattr(i, "severity", "")).upper() == "WARNING")
+    issue_infos = sum(1 for i in issues if str(getattr(i, "severity", "")).upper() == "INFO")
+
+    return {
+        "project_id": int(project_id),
+        "episode_ids": episode_ids,
+        "overall_status": overall_status,
+        "progress_percent": round(progress_percent, 2),
+        "counts": {
+            "pipeline_nodes_total": total_nodes,
+            "pipeline_nodes_done": done_nodes,
+            "running": status_counts["running"],
+            "failed": status_counts["failed"],
+            "blocked": status_counts["blocked"],
+            "warning": status_counts["warning"],
+            "scenes_total": scenes_total,
+            "scenes_imported": scenes_done,
+            "issues_open": len(issues),
+            "issues_blocker": issue_blockers,
+            "issues_warning": issue_warnings,
+            "issues_info": issue_infos,
+        },
+    }
+
+
+@router.get("/prompts/scene-analysis/progress/projects/{project_id}/issues")
+async def get_project_progress_issues(
+    project_id: int,
+    episode_id: Optional[int] = Query(None),
+    severity: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    if ScriptProgressIssue is None:
+        return {"project_id": int(project_id), "issues": []}
+    query = db.query(ScriptProgressIssue).filter(ScriptProgressIssue.project_id == int(project_id))
+    if episode_id is not None:
+        query = query.filter(ScriptProgressIssue.episode_id == int(episode_id))
+    if severity:
+        query = query.filter(ScriptProgressIssue.severity == str(severity).upper())
+    if status:
+        query = query.filter(ScriptProgressIssue.status == str(status).lower())
+    rows = query.order_by(ScriptProgressIssue.updated_at.desc(), ScriptProgressIssue.id.desc()).all()
+    return {
+        "project_id": int(project_id),
+        "issues": [
+            {
+                "id": int(row.id),
+                "episode_id": row.episode_id,
+                "script_id": row.script_id,
+                "scene_id": row.scene_id,
+                "severity": row.severity,
+                "status": row.status,
+                "issue_code": row.issue_code,
+                "title": row.title,
+                "details": row.details,
+                "owner_domain": row.owner_domain,
+                "node_ref": row.node_ref,
+                "first_seen_at": row.first_seen_at,
+                "last_seen_at": row.last_seen_at,
+                "updated_at": row.updated_at,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/issues/resolve")
+async def resolve_project_progress_issue(
+    request: ProgressIssueResolveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if ScriptProgressIssue is None:
+        raise HTTPException(status_code=404, detail="progress issue storage not enabled")
+    issue = db.query(ScriptProgressIssue).filter(ScriptProgressIssue.id == int(request.issue_id)).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    _require_project_access(db, int(issue.project_id), current_user)
+    ok = resolve_progress_issue(db, issue_id=int(request.issue_id))
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to resolve issue")
+    db.commit()
+    return {"status": "ok", "issue_id": int(request.issue_id)}
+
+
+@router.post("/prompts/scene-analysis/progress/auto-orchestrate")
+async def auto_orchestrate_scene_progress(
+    request: ProgressAutoOrchestrateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+    scene_rows = _list_episode_scene_progress_rows(
+        db,
+        project_id=int(request.project_id),
+        episode_id=int(request.episode_id),
+        scene_ids=request.scene_ids,
+    )
+    if not scene_rows:
+        raise HTTPException(status_code=400, detail="No scene progress units available. Sync scene units first.")
+
+    marker_scene_ids = [str(getattr(row, "scene_id", "")).strip() for row in scene_rows if str(getattr(row, "scene_id", "")).strip()]
+    db_scene_map: Dict[str, Scene] = {}
+    unresolved_scene_ids: List[str] = []
+    for marker_scene_id in marker_scene_ids:
+        matched = _resolve_scene_id_to_db_scene(db, episode_id=int(request.episode_id), scene_marker_id=marker_scene_id)
+        if matched is None:
+            unresolved_scene_ids.append(marker_scene_id)
+            raise_progress_issue(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=f"episode:{int(request.episode_id)}",
+                scene_id=marker_scene_id,
+                issue_code="SCENE_IMPORT_FAILED",
+                title="Scene marker cannot map to saved scene",
+                severity="BLOCKER",
+                owner_domain="scene-orchestrator",
+                node_ref="scene_import",
+                details=f"Unable to find scene row for marker scene_id={marker_scene_id}",
+            )
+            upsert_pipeline_node_status(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=f"episode:{int(request.episode_id)}",
+                scene_id=marker_scene_id,
+                node_name="scene_import",
+                status="failed",
+                error_code="SCENE_IMPORT_FAILED",
+                error_message=f"scene marker not found in db scene table: {marker_scene_id}",
+            )
+            continue
+        db_scene_map[marker_scene_id] = matched
+
+    if unresolved_scene_ids:
+        db.commit()
+        return {
+            "status": "partial_failed",
+            "message": "Some marker scene ids are not mapped to scene rows",
+            "unresolved_scene_ids": unresolved_scene_ids,
+        }
+
+    scene_db_ids = [int(db_scene_map[sid].id) for sid in marker_scene_ids if sid in db_scene_map]
+    for sid in marker_scene_ids:
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_id=f"episode:{int(request.episode_id)}",
+            scene_id=sid,
+            node_name="scene_import",
+            status="success",
+            progress_percent=100.0,
+        )
+        row = next((r for r in scene_rows if str(getattr(r, "scene_id", "")).strip() == sid), None)
+        if row is not None:
+            row.import_status = "success"
+            row.updated_at = now_bj_iso()
+
+    # Trigger storyboard per selected scenes (batch executor supports scene_ids)
+    try:
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_id=f"episode:{int(request.episode_id)}",
+            node_name="storyboard_generation",
+            status="running",
+            progress_percent=10.0,
+            depends_on=["scene_import"],
+            runtime_meta={
+                "scene_db_ids": scene_db_ids,
+                "scene_marker_ids": marker_scene_ids,
+                "batch_type": "scene_ai_shots",
+            },
+        )
+        _start_scene_ai_shots_batch_for_episode(
+            db=db,
+            episode=episode,
+            current_user=current_user,
+            scene_ids=scene_db_ids,
+            function_name=request.function_name,
+            system_api_id=request.system_api_id,
+        )
+    except Exception as exc:
+        upsert_pipeline_node_status(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_id=f"episode:{int(request.episode_id)}",
+            node_name="storyboard_generation",
+            status="failed",
+            error_code="STORYBOARD_JOB_FAILED",
+            error_message=str(exc),
+        )
+        raise_progress_issue(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_id=f"episode:{int(request.episode_id)}",
+            issue_code="STORYBOARD_JOB_FAILED",
+            title="Storyboard batch start failed",
+            severity="BLOCKER",
+            owner_domain="storyboard-engine",
+            node_ref="storyboard_generation",
+            details=str(exc),
+        )
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to start storyboard generation: {exc}")
+
+    # Trigger per-scene asset generation by type through existing analyze_scene endpoint
+    requested_asset_types = _normalize_asset_types(request.asset_types)
+    asset_node_by_type = {
+        "character": "asset_design_character",
+        "prop": "asset_design_prop",
+        "environment": "asset_design_environment",
+        "poster": "asset_design_environment",
+    }
+    prompt_by_type = {
+        "character": "skills/scene_analysis_feature_stack/entity_design_character.md",
+        "prop": "skills/scene_analysis_feature_stack/entity_design_prop.md",
+        "environment": "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md",
+        "poster": "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md",
+    }
+    assets_dispatched: List[Dict[str, Any]] = []
+    for marker_scene_id in marker_scene_ids:
+        mapped_scene = db_scene_map.get(marker_scene_id)
+        if mapped_scene is None:
+            continue
+        scene_text = str(getattr(mapped_scene, "original_script_text", "") or "").strip()
+        for asset_type in requested_asset_types:
+            node_name = asset_node_by_type.get(asset_type, "asset_design_environment")
+            prompt_file = prompt_by_type.get(asset_type) or "skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md"
+            upsert_pipeline_node_status(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=f"episode:{int(request.episode_id)}",
+                scene_id=marker_scene_id,
+                node_name="asset_generation",
+                asset_type=asset_type,
+                status="queued",
+                progress_percent=0.0,
+                depends_on=["scene_import"],
+                runtime_meta={"task_id": "", "kind": f"asset_generation_{asset_type}"},
+            )
+            tid = _submit_async(
+                analyze_scene,
+                user_id=current_user.id,
+                kind=f"asset_generation_{asset_type}",
+                req=AnalyzeSceneRequest(
+                    text=scene_text or f"Scene {marker_scene_id}",
+                    project_id=int(request.project_id),
+                    episode_id=int(request.episode_id),
+                    prompt_file=prompt_file,
+                    function_name=request.function_name or "script_analysis",
+                    system_api_id=request.system_api_id,
+                ),
+                async_mode="0",
+            )
+            upsert_pipeline_node_status(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=f"episode:{int(request.episode_id)}",
+                scene_id=marker_scene_id,
+                node_name="asset_generation",
+                asset_type=asset_type,
+                status="running",
+                progress_percent=15.0,
+                runtime_meta={"task_id": tid, "kind": f"asset_generation_{asset_type}"},
+            )
+            assets_dispatched.append(
+                {
+                    "scene_id": marker_scene_id,
+                    "asset_type": asset_type,
+                    "task_id": tid,
+                    "node_name": node_name,
+                }
+            )
+
+    db.commit()
+    return {
+        "status": "started",
+        "project_id": int(request.project_id),
+        "episode_id": int(request.episode_id),
+        "scene_ids": marker_scene_ids,
+        "scene_db_ids": scene_db_ids,
+        "storyboard_started": True,
+        "assets_dispatched": assets_dispatched,
+    }
+
+
+@router.post("/prompts/scene-analysis/progress/reconcile")
+async def reconcile_progress_status(
+    request: ProgressReconcileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+    updated_asset_nodes = 0
+    updated_storyboard_nodes = 0
+
+    if ScriptProgressPipelineNode is not None:
+        asset_nodes = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(request.project_id),
+                ScriptProgressPipelineNode.episode_id == int(request.episode_id),
+                ScriptProgressPipelineNode.node_name == "asset_generation",
+            )
+            .all()
+        )
+        for row in asset_nodes:
+            meta = row.runtime_meta if isinstance(row.runtime_meta, dict) else {}
+            task_id = str(meta.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            info = _get_task_status(task_id, user_id=current_user.id) or _get_task_status(task_id)
+            if not isinstance(info, dict):
+                continue
+            task_status = str(info.get("status") or "").strip().lower()
+            next_status = None
+            next_progress = None
+            error_code = None
+            error_message = None
+            if task_status == "completed":
+                next_status = "success"
+                next_progress = 100.0
+            elif task_status == "failed":
+                next_status = "failed"
+                next_progress = float(row.progress_percent or 0.0)
+                error_code = "ASSET_TYPE_JOB_FAILED"
+                error_message = str(info.get("error") or "asset task failed")
+            elif task_status == "canceled":
+                next_status = "blocked"
+                error_code = "ASSET_TYPE_JOB_CANCELED"
+                error_message = str(info.get("error") or "asset task canceled")
+            elif task_status in {"running", "pending"}:
+                next_status = "running"
+                next_progress = max(float(row.progress_percent or 0.0), 20.0)
+            if next_status is None:
+                continue
+
+            current_status = normalize_node_status(getattr(row, "status", None))
+            if current_status == next_status and (next_progress is None or abs(float(row.progress_percent or 0.0) - float(next_progress)) < 0.001):
+                continue
+            upsert_pipeline_node_status(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=row.script_id,
+                scene_id=row.scene_id,
+                node_name="asset_generation",
+                asset_type=row.asset_type,
+                status=next_status,
+                progress_percent=(next_progress if next_progress is not None else row.progress_percent),
+                runtime_meta=meta,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            updated_asset_nodes += 1
+            if next_status in {"failed", "blocked"}:
+                raise_progress_issue(
+                    db,
+                    project_id=int(request.project_id),
+                    episode_id=int(request.episode_id),
+                    script_id=row.script_id,
+                    scene_id=row.scene_id,
+                    issue_code=error_code or "ASSET_TYPE_JOB_FAILED",
+                    title="Asset type job did not complete successfully",
+                    severity="WARNING",
+                    owner_domain="asset-worker",
+                    node_ref="asset_generation",
+                    details=error_message,
+                )
+
+        storyboard_nodes = (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(request.project_id),
+                ScriptProgressPipelineNode.episode_id == int(request.episode_id),
+                ScriptProgressPipelineNode.node_name == "storyboard_generation",
+            )
+            .all()
+        )
+        batch_status = _read_scene_ai_shots_batch_status(episode)
+        running = bool(batch_status.get("running"))
+        failed = int(batch_status.get("failed") or 0)
+        total = int(batch_status.get("total") or 0)
+        completed = int(batch_status.get("completed") or 0)
+        next_storyboard_status = "running" if running else ("failed" if failed > 0 and completed < total else "success")
+        next_storyboard_progress = (float(completed) / float(total) * 100.0) if total > 0 else (10.0 if running else 100.0)
+        storyboard_error = None
+        storyboard_error_message = None
+        if next_storyboard_status == "failed":
+            storyboard_error = "STORYBOARD_JOB_FAILED"
+            storyboard_error_message = str(batch_status.get("message") or "storyboard batch failed")
+
+        for row in storyboard_nodes:
+            cur = normalize_node_status(getattr(row, "status", None))
+            if cur == next_storyboard_status and abs(float(row.progress_percent or 0.0) - float(next_storyboard_progress)) < 0.001:
+                continue
+            upsert_pipeline_node_status(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=row.script_id,
+                scene_id=row.scene_id,
+                node_name="storyboard_generation",
+                status=next_storyboard_status,
+                progress_percent=next_storyboard_progress,
+                runtime_meta=row.runtime_meta if isinstance(row.runtime_meta, dict) else {},
+                error_code=storyboard_error,
+                error_message=storyboard_error_message,
+            )
+            updated_storyboard_nodes += 1
+        if next_storyboard_status == "failed":
+            raise_progress_issue(
+                db,
+                project_id=int(request.project_id),
+                episode_id=int(request.episode_id),
+                script_id=f"episode:{int(request.episode_id)}",
+                issue_code="STORYBOARD_JOB_FAILED",
+                title="Storyboard batch failed",
+                severity="BLOCKER",
+                owner_domain="storyboard-engine",
+                node_ref="storyboard_generation",
+                details=storyboard_error_message,
+            )
+
+        # best-effort mark scene import success for scenes with finished storyboard
+        if ScriptProgressSceneUnit is not None and total > 0 and completed > 0:
+            db_scenes = db.query(Scene).filter(Scene.episode_id == int(request.episode_id)).all()
+            scene_ids_done = set()
+            if next_storyboard_status == "success":
+                scene_ids_done = {_normalize_scene_marker_id_from_scene(s, int(request.episode_id)) for s in db_scenes}
+            for row in (
+                db.query(ScriptProgressSceneUnit)
+                .filter(
+                    ScriptProgressSceneUnit.project_id == int(request.project_id),
+                    ScriptProgressSceneUnit.episode_id == int(request.episode_id),
+                )
+                .all()
+            ):
+                if row.scene_id in scene_ids_done:
+                    row.import_status = "success"
+                    row.updated_at = now_bj_iso()
+
+    db.commit()
+    return {
+        "status": "ok",
+        "project_id": int(request.project_id),
+        "episode_id": int(request.episode_id),
+        "updated_asset_nodes": int(updated_asset_nodes),
+        "updated_storyboard_nodes": int(updated_storyboard_nodes),
+    }
+
+
 @router.post("/prompts/scene-analysis/flow/run-node")
 async def run_scene_analysis_flow_node(
     request: ScriptAnalysisFlowRunNodeRequest,
@@ -5490,6 +6384,7 @@ async def run_scene_analysis_flow_node(
     current_user: User = Depends(get_current_user),
 ):
     """Run one workflow node through its existing executor while preserving node-specific injection chains."""
+    flow_started_perf = time.perf_counter()
     node_key = str(getattr(request, "node_key", "") or "").strip().lower().replace("-", "_")
     cfg = get_script_analysis_flow_config(db)
     registry = get_script_analysis_flow_registry(cfg)
@@ -5514,7 +6409,15 @@ async def run_scene_analysis_flow_node(
         raw_payload["function_name"] = raw_payload.get("function_name") or request.function_name or "script_analysis"
         raw_payload["system_api_id"] = raw_payload.get("system_api_id") or request.system_api_id
         
-        logger.info(f"[剧本分析流程] 准备执行节点 {node_key} | 使用提示词: {raw_payload['prompt_file']} | 函数 API: {raw_payload['function_name']} (ID: {raw_payload['system_api_id']})")
+        logger.info(
+            "[剧本分析流程] 准备执行节点 %s | prompt=%s | function=%s | system_api_id=%s | project_id=%s | episode_id=%s",
+            node_key,
+            raw_payload.get("prompt_file"),
+            raw_payload.get("function_name"),
+            raw_payload.get("system_api_id"),
+            raw_payload.get("project_id"),
+            raw_payload.get("episode_id"),
+        )
         
         if request.project_id and not raw_payload.get("project_id"):
             raw_payload["project_id"] = request.project_id
@@ -5530,9 +6433,220 @@ async def run_scene_analysis_flow_node(
         elif raw_payload.get("project_id"):
             _require_project_access(db, int(raw_payload.get("project_id")), current_user)
             
-        logger.info(f"[剧本分析流程] 开始调用 evaluate_scene 执行节点 {node_key}...")
-        result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
-        logger.info(f"[剧本分析流程] 节点 {node_key} 执行完成。")
+        node_project_id = int(raw_payload.get("project_id") or request.project_id or 0)
+        node_episode_id = int(raw_payload.get("episode_id") or request.episode_id or 0)
+        if node_project_id > 0 and node_episode_id > 0:
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=f"episode:{node_episode_id}",
+                node_name=node_key,
+                status="running",
+                progress_percent=5.0,
+            )
+            db.commit()
+
+        llm_started_perf = time.perf_counter()
+        logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
+        try:
+            if node_key == "assets_extraction":
+                max_attempts = 2
+                result = None
+                for attempt in range(1, max_attempts + 1):
+                    result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+                    result_text = _extract_analysis_text_from_result(result)
+                    has_cover_poster = _subject_index_has_cover_poster(result_text)
+                    if has_cover_poster:
+                        if attempt > 1:
+                            logger.info(
+                                "[剧本分析流程] 节点 %s 在重试后通过 cover_poster 校验 | attempt=%s",
+                                node_key,
+                                attempt,
+                            )
+                        break
+                    logger.warning(
+                        "[剧本分析流程] 节点 %s 缺少 cover_poster/poster 条目 | attempt=%s/%s",
+                        node_key,
+                        attempt,
+                        max_attempts,
+                    )
+                    if attempt >= max_attempts:
+                        raise RuntimeError("ASSETS_EXTRACTION_COVER_POSTER_MISSING")
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="running",
+                        progress_percent=15.0,
+                        error_code="ASSETS_EXTRACTION_COVER_POSTER_MISSING",
+                        error_message="cover_poster/poster missing, auto-retrying once",
+                    )
+                    db.commit()
+            elif node_key == "script_optimization":
+                max_attempts = 2
+                result = None
+                for attempt in range(1, max_attempts + 1):
+                    result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+                    result_text = _extract_analysis_text_from_result(result)
+                    has_visual_backfill = _script_optimization_has_project_visual_backfill(result_text)
+                    if has_visual_backfill:
+                        if attempt > 1:
+                            logger.info(
+                                "[剧本分析流程] 节点 %s 在重试后通过 Project Visual Backfill 校验 | attempt=%s",
+                                node_key,
+                                attempt,
+                            )
+                        break
+                    logger.warning(
+                        "[剧本分析流程] 节点 %s 缺少 Project Visual Backfill | attempt=%s/%s",
+                        node_key,
+                        attempt,
+                        max_attempts,
+                    )
+                    if attempt >= max_attempts:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
+                        )
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="running",
+                        progress_percent=15.0,
+                        error_code="SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING",
+                        error_message="project_visual_backfill missing, auto-retrying once",
+                    )
+                    db.commit()
+            else:
+                result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
+        except Exception as exc:
+            if node_project_id > 0 and node_episode_id > 0:
+                error_text = str(exc or "")
+                if isinstance(exc, HTTPException):
+                    error_text = str(getattr(exc, "detail", "") or error_text)
+                error_code = (
+                    "ASSETS_EXTRACTION_COVER_POSTER_MISSING"
+                    if "ASSETS_EXTRACTION_COVER_POSTER_MISSING" in error_text
+                    else (
+                        "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING"
+                        if "SCRIPT_OPTIMIZATION_PROJECT_VISUAL_BACKFILL_MISSING" in error_text
+                        else "FLOW_RUN_NODE_FAILED"
+                    )
+                )
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name=node_key,
+                    status="failed",
+                    error_code=error_code,
+                    error_message=str(exc),
+                )
+                db.commit()
+            raise
+        llm_elapsed_ms = int((time.perf_counter() - llm_started_perf) * 1000)
+        logger.info("[剧本分析流程] 节点 %s 执行完成 | llm_elapsed_ms=%s", node_key, llm_elapsed_ms)
+
+        if node_project_id > 0 and node_episode_id > 0:
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=f"episode:{node_episode_id}",
+                node_name=node_key,
+                status="success",
+                progress_percent=100.0,
+            )
+
+            if node_key == "scene_markdown":
+                scene_markdown_started_perf = time.perf_counter()
+                parsed_text = _extract_scene_markdown_text_from_result(result)
+                parsed_text_len = len(str(parsed_text or ""))
+                logger.info(
+                    "[场景编排2.2] LLM结果提取完成 | project_id=%s | episode_id=%s | text_len=%s",
+                    node_project_id,
+                    node_episode_id,
+                    parsed_text_len,
+                )
+                if parsed_text.strip():
+                    try:
+                        sync_started_perf = time.perf_counter()
+                        logger.info(
+                            "[场景编排2.2] 开始同步场景单元 | project_id=%s | episode_id=%s",
+                            node_project_id,
+                            node_episode_id,
+                        )
+                        sync_result = sync_scene_units_from_script_text(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_text=parsed_text,
+                            script_id=f"episode:{node_episode_id}",
+                        )
+                        sync_elapsed_ms = int((time.perf_counter() - sync_started_perf) * 1000)
+                        logger.info(
+                            "[场景编排2.2] 场景单元同步完成 | project_id=%s | episode_id=%s | scene_count=%s | scene_ids=%s | sync_elapsed_ms=%s",
+                            node_project_id,
+                            node_episode_id,
+                            int(sync_result.get("scene_count") or 0),
+                            sync_result.get("scene_ids") or [],
+                            sync_elapsed_ms,
+                        )
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name="scene_planning",
+                            status="success",
+                            progress_percent=100.0,
+                        )
+                    except Exception as parse_exc:
+                        logger.exception(
+                            "[场景编排2.2] 场景标记解析/同步失败 | project_id=%s | episode_id=%s | error=%s",
+                            node_project_id,
+                            node_episode_id,
+                            parse_exc,
+                        )
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name="scene_planning",
+                            status="failed",
+                            error_code="SCENE_MARKER_PARSE_ERROR",
+                            error_message=str(parse_exc),
+                        )
+                else:
+                    logger.warning(
+                        "[场景编排2.2] scene_markdown 节点返回空文本，跳过 scene_units 同步 | project_id=%s | episode_id=%s",
+                        node_project_id,
+                        node_episode_id,
+                    )
+                scene_markdown_elapsed_ms = int((time.perf_counter() - scene_markdown_started_perf) * 1000)
+                logger.info(
+                    "[场景编排2.2] 节点后处理完成 | project_id=%s | episode_id=%s | post_elapsed_ms=%s",
+                    node_project_id,
+                    node_episode_id,
+                    scene_markdown_elapsed_ms,
+                )
+            db.commit()
+            logger.info(
+                "[剧本分析流程] 节点状态已提交 | node_key=%s | project_id=%s | episode_id=%s",
+                node_key,
+                node_project_id,
+                node_episode_id,
+            )
+        flow_elapsed_ms = int((time.perf_counter() - flow_started_perf) * 1000)
+        logger.info("[剧本分析流程] 节点完成返回 | node_key=%s | total_elapsed_ms=%s", node_key, flow_elapsed_ms)
         
         return {
             "status": "completed",
@@ -5965,7 +7079,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # Only flag JSON invalid for explicit pure-JSON responses.
             # Mixed markdown + partial JSON should stay non-blocking.
             should_flag_json_invalid = bool(json_expected and json_valid is False and explicit_json_response)
-            if should_flag_json_invalid:
+            suppress_json_invalid_warning = bool(
+                should_flag_json_invalid
+                and (
+                    is_scene_beats_stage
+                    or is_subject_index_extraction_stage
+                )
+            )
+            if should_flag_json_invalid and not suppress_json_invalid_warning:
                 warning_codes.append("ANALYSIS_JSON_INVALID")
                 warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
 
@@ -5986,6 +7107,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "json_error": json_error,
                 "explicit_json_response": explicit_json_response,
                 "parseable_json_block_count": parseable_json_block_count,
+                "json_invalid_suppressed": suppress_json_invalid_warning,
                 "found_sections": section_meta.get("found_sections") or {},
                 "missing_sections": missing_sections,
                 "structure_incomplete": structure_incomplete,
@@ -6937,6 +8059,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             or "scene_planning_2_2" in prompt_file_lower
             or mode_lower in {"beats_generation", "scene_planning_beats", "scene_beats_only"}
         )
+        is_subject_index_extraction_stage = bool(
+            function_name_lower in {"script_analysis_stage_2_1_assets_extraction", "assets_extraction"}
+            or "scene_planning_2_1" in prompt_file_lower
+            or mode_lower in {"assets_extraction", "stage2_1", "stage_2_1"}
+        )
         is_subject_index_consumer_stage = bool(
             "scene_planning_2_2" in prompt_file_lower
             or "entity_design" in prompt_file_lower
@@ -6944,6 +8071,28 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             or mode_lower.startswith("2_pass_generate_assets")
             or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats"}
         )
+        is_script_optimization_stage = bool(
+            function_name_lower in {"script_analysis_stage_1_script_optimization", "script_optimization"}
+            or "scene_planning_1_script_optimization" in prompt_file_lower
+            or mode_lower in {"script_optimization", "stage1", "stage_1"}
+        )
+
+        def _trim_to_scenes_block(raw_text: Any) -> str:
+            text = str(raw_text or "")
+            if not text.strip():
+                return ""
+            start_idx = text.find(SCENES_BLOCK_START_TOKEN)
+            if start_idx < 0:
+                return text
+            end_idx = text.find(SCENES_BLOCK_END_TOKEN, start_idx + len(SCENES_BLOCK_START_TOKEN))
+            if end_idx < 0:
+                return text[start_idx:].lstrip()
+            return text[start_idx:end_idx + len(SCENES_BLOCK_END_TOKEN)].strip()
+
+        # Keep full script_optimization output because Phase-1 must preserve
+        # Project Visual Backfill at the tail section; only beats stage requires
+        # strict SCENES_BLOCK trimming.
+        should_trim_before_submit = bool(is_scene_beats_stage)
 
         def _normalize_subject_index_entity_type(raw_type: Any) -> str:
             t = str(raw_type or "").strip().lower()
@@ -7113,6 +8262,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return text.strip()
             return text[:min(cut_positions)].strip()
 
+        def _extract_embedded_subject_index_from_stage_text(raw_text: Any) -> str:
+            text = sanitize_subject_index_text(raw_text)
+            if not text:
+                return ""
+            has_index_markers = bool(
+                re.search(r"(?i)\bsubject_no\b", text)
+                or re.search(r"(?i)\bsubject_type\b", text)
+                or re.search(r"(?im)^\s*\|?\s*S\d{3,}\s*\|", text)
+                or re.search(r"(?im)^\s*S\d{3,}\s*\|", text)
+            )
+            return text if has_index_markers else ""
+
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
@@ -7124,16 +8285,34 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
             if is_scene_beats_stage:
-                canonical_stage_text = _strip_embedded_subject_index_from_stage_text(request.text)
-                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
+                canonical_stage_text = str(request.text or "")
+                if should_trim_before_submit:
+                    canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
+                embedded_subject_index_for_prompt = _extract_embedded_subject_index_from_stage_text(request.text)
+                subject_index_blocks = [saved_subject_index_block]
+                if (
+                    embedded_subject_index_for_prompt
+                    and embedded_subject_index_for_prompt.strip() != persisted_subject_index_for_prompt.strip()
+                ):
+                    subject_index_blocks.append(
+                        "[Upstream Subject Index Injection - Supplemental]\n"
+                        "The following Subject Index is provided by the current Stage 2.1 -> 2.2 handoff.\n"
+                        "Use it as supplemental context ONLY when it does not conflict with the authoritative saved block above.\n\n"
+                        f"{embedded_subject_index_for_prompt}"
+                    )
+                user_content = f"{chr(10).join([b + chr(10) for b in subject_index_blocks]).strip()}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             elif is_subject_index_consumer_stage:
                 canonical_stage_text = str(request.text or "")
+                if should_trim_before_submit:
+                    canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 user_content = canonical_stage_text
             else:
                 canonical_stage_text = str(request.text or "")
+                if should_trim_before_submit:
+                    canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             logger.info(
-                "[analyze_scene] injected persisted sanitized subject index into user prompt episode_id=%s chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
+                "[analyze_scene] injected subject index into user prompt episode_id=%s saved_chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
                 getattr(request, "episode_id", None),
                 len(persisted_subject_index_for_prompt),
                 effective_scene_analysis_mode,
@@ -7142,6 +8321,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
         else:
             request_text_for_prompt = str(request.text or "")
+            if should_trim_before_submit:
+                request_text_for_prompt = _trim_to_scenes_block(request_text_for_prompt)
             if is_subject_index_consumer_stage and subject_index_allowed_types_for_request:
                 request_text_for_prompt = _filter_subject_index_text_by_types(
                     request_text_for_prompt,
@@ -7762,6 +8943,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         # In phase 1, attach script_hash for future reference if needed
         if not is_entity_design_phase and script_hash:
             result_content_1 = f"<!-- script_hash: {script_hash} -->\n" + result_content_1
+
+        # For script optimization / scene markdown(beats) stages,
+        # drop any content before [SCENES_BLOCK_START] from returned/persisted output.
+        if should_trim_before_submit:
+            result_content_1 = _trim_to_scenes_block(result_content_1)
             
         result_content = result_content_1
 
@@ -7778,6 +8964,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         llm_fallback_warnings = list(set(loop1_res.get("llm_fallback_warnings", [])))
         usage = usage_total
         integrity_meta = _detect_output_integrity(result_content, segments_meta, finish_reason)
+        if integrity_meta.get("json_invalid_suppressed"):
+            logger.info(
+                "[analyze_scene] suppressed_json_invalid_warning episode_id=%s mode=%s function=%s prompt_file=%s explicit_json_response=%s json_error=%s",
+                getattr(request, "episode_id", None),
+                mode_lower,
+                function_name_lower,
+                prompt_file_lower,
+                integrity_meta.get("explicit_json_response"),
+                integrity_meta.get("json_error"),
+            )
 
         raw_total_chars = 0
         dedup_total_chars = 0
@@ -7929,12 +9125,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 dedup_total_chars,
             )
 
-        # Phase 1 guard: if Subject Index is missing, mark as review-required.
-        # Do not hard-fail here so callers can still inspect/import partial output.
+        # Phase 1/2 guard: Subject Index completeness warning is only for
+        # assets extraction / scene markdown paths. script_optimization has its
+        # own Project Visual Backfill validation at flow-run level.
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
         source_subject_index_text = sanitize_subject_index_text(result_content)
-        if not is_entity_design_phase:
+        should_check_subject_index_guard = bool(
+            (not is_entity_design_phase)
+            and (is_subject_index_extraction_stage or is_scene_beats_stage)
+        )
+        if should_check_subject_index_guard:
             has_subject_section = bool(
                 re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
                 or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
@@ -7944,10 +9145,23 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     r"(?im)^\s*\|\s*subject_no\s*\|\s*subject_type\s*\|",
                     source_subject_index_text,
                 )
+                or re.search(
+                    r"(?im)^\s*subject_no\s*\|\s*subject_type\s*\|",
+                    source_subject_index_text,
+                )
+                or re.search(
+                    r"(?im)^\s*subject_no(?:\s+|\t+|\s*\|\s*)subject_type\b",
+                    source_subject_index_text,
+                )
                 or re.search(r"(?i)subject_no\s*=\s*", source_subject_index_text)
             )
             has_subject_rows = bool(
                 re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", source_subject_index_text)
+                or re.search(r"(?im)^\s*S\d{3,}\s*\|", source_subject_index_text)
+                or re.search(
+                    r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
+                    source_subject_index_text,
+                )
                 or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", source_subject_index_text)
             )
 
@@ -15907,6 +17121,10 @@ class SceneCreate(BaseModel):
     linked_characters: Optional[str] = None
     key_props: Optional[str] = None
 
+class SceneBatchUpsertRequest(BaseModel):
+    scenes: List[SceneCreate]
+    recompute_cost: Optional[bool] = False
+
 class SceneOut(BaseModel):
     id: int
     scene_no: str
@@ -16621,6 +17839,7 @@ def create_scene(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    scene_api_started_perf = time.perf_counter()
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
@@ -16629,6 +17848,13 @@ def create_scene(
 
     existing_scene = db.query(Scene).filter(Scene.episode_id == episode_id, Scene.scene_no == scene.scene_no).first()
     if existing_scene:
+        logger.info(
+            "[SceneImportAPI] upsert-existing start | episode_id=%s | project_id=%s | scene_no=%s | scene_name=%s",
+            episode_id,
+            episode.project_id,
+            str(scene.scene_no or "").strip(),
+            str(scene.scene_name or "").strip(),
+        )
         existing_scene.scene_name = scene.scene_name
         existing_scene.original_script_text = scene.original_script_text
         existing_scene.equivalent_duration = scene.equivalent_duration
@@ -16642,8 +17868,24 @@ def create_scene(
             logger.warning("create_scene(upsert) cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
         db.commit()
         db.refresh(existing_scene)
+        elapsed_ms = int((time.perf_counter() - scene_api_started_perf) * 1000)
+        logger.info(
+            "[SceneImportAPI] upsert-existing done | episode_id=%s | project_id=%s | scene_id=%s | scene_no=%s | elapsed_ms=%s",
+            episode_id,
+            episode.project_id,
+            existing_scene.id,
+            str(existing_scene.scene_no or "").strip(),
+            elapsed_ms,
+        )
         return existing_scene
 
+    logger.info(
+        "[SceneImportAPI] create-new start | episode_id=%s | project_id=%s | scene_no=%s | scene_name=%s",
+        episode_id,
+        episode.project_id,
+        str(scene.scene_no or "").strip(),
+        str(scene.scene_name or "").strip(),
+    )
     db_scene = Scene(
         episode_id=episode_id,
         scene_no=scene.scene_no,
@@ -16662,7 +17904,146 @@ def create_scene(
         logger.warning("create_scene cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     db.commit()
     db.refresh(db_scene)
+    elapsed_ms = int((time.perf_counter() - scene_api_started_perf) * 1000)
+    logger.info(
+        "[SceneImportAPI] create-new done | episode_id=%s | project_id=%s | scene_id=%s | scene_no=%s | elapsed_ms=%s",
+        episode_id,
+        episode.project_id,
+        db_scene.id,
+        str(db_scene.scene_no or "").strip(),
+        elapsed_ms,
+    )
     return db_scene
+
+@router.post("/episodes/{episode_id}/scenes/batch_upsert", response_model=Dict[str, Any])
+def batch_upsert_scenes(
+    episode_id: int,
+    request: SceneBatchUpsertRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    started_perf = time.perf_counter()
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    input_scenes = list(request.scenes or [])
+    if not input_scenes:
+        return {
+            "status": "ok",
+            "episode_id": int(episode_id),
+            "project_id": int(episode.project_id),
+            "processed": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "elapsed_ms": int((time.perf_counter() - started_perf) * 1000),
+            "scenes": [],
+        }
+
+    normalized_scene_nos = [
+        str(item.scene_no or "").strip()
+        for item in input_scenes
+        if str(getattr(item, "scene_no", "") or "").strip()
+    ]
+    existing_rows = (
+        db.query(Scene)
+        .filter(
+            Scene.episode_id == int(episode_id),
+            Scene.scene_no.in_(normalized_scene_nos),
+        )
+        .all()
+    ) if normalized_scene_nos else []
+    existing_by_no = {str(row.scene_no or "").strip(): row for row in existing_rows}
+
+    created = 0
+    updated = 0
+    skipped = 0
+    touched_scene_nos: List[str] = []
+
+    for item in input_scenes:
+        scene_no = str(getattr(item, "scene_no", "") or "").strip()
+        if not scene_no:
+            skipped += 1
+            continue
+        touched_scene_nos.append(scene_no)
+        existing = existing_by_no.get(scene_no)
+        if existing is not None:
+            existing.scene_name = item.scene_name
+            existing.original_script_text = item.original_script_text
+            existing.equivalent_duration = item.equivalent_duration
+            existing.core_scene_info = item.core_scene_info
+            existing.environment_name = item.environment_name
+            existing.linked_characters = item.linked_characters
+            existing.key_props = item.key_props
+            updated += 1
+            continue
+
+        row = Scene(
+            episode_id=int(episode_id),
+            scene_no=scene_no,
+            original_script_text=item.original_script_text,
+            scene_name=item.scene_name,
+            equivalent_duration=item.equivalent_duration,
+            core_scene_info=item.core_scene_info,
+            environment_name=item.environment_name,
+            linked_characters=item.linked_characters,
+            key_props=item.key_props,
+        )
+        db.add(row)
+        existing_by_no[scene_no] = row
+        created += 1
+
+    if bool(request.recompute_cost):
+        try:
+            _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+        except Exception as cost_exc:
+            logger.warning("batch_upsert_scenes cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
+
+    db.commit()
+
+    result_scenes: List[Dict[str, Any]] = []
+    unique_touched = list(dict.fromkeys([s for s in touched_scene_nos if s]))
+    if unique_touched:
+        refreshed = (
+            db.query(Scene)
+            .filter(Scene.episode_id == int(episode_id), Scene.scene_no.in_(unique_touched))
+            .all()
+        )
+        refreshed_by_no = {str(row.scene_no or "").strip(): row for row in refreshed}
+        for scene_no in unique_touched:
+            row = refreshed_by_no.get(scene_no)
+            if row is None:
+                continue
+            result_scenes.append({
+                "id": int(row.id),
+                "scene_no": str(row.scene_no or ""),
+                "scene_name": str(row.scene_name or ""),
+            })
+
+    elapsed_ms = int((time.perf_counter() - started_perf) * 1000)
+    logger.info(
+        "[SceneImportAPI] batch_upsert done | episode_id=%s | project_id=%s | processed=%s | created=%s | updated=%s | skipped=%s | elapsed_ms=%s",
+        episode_id,
+        episode.project_id,
+        len(input_scenes),
+        created,
+        updated,
+        skipped,
+        elapsed_ms,
+    )
+    return {
+        "status": "ok",
+        "episode_id": int(episode_id),
+        "project_id": int(episode.project_id),
+        "processed": int(len(input_scenes)),
+        "created": int(created),
+        "updated": int(updated),
+        "skipped": int(skipped),
+        "elapsed_ms": elapsed_ms,
+        "scenes": result_scenes,
+    }
 
 @router.put("/scenes/{scene_id}", response_model=SceneOut)
 def update_scene(
@@ -17132,6 +18513,14 @@ class ShotCreate(BaseModel):
     video_url: Optional[str] = None
     prompt: Optional[str] = None
     technical_notes: Optional[str] = None
+
+class ShotBatchCreateItem(BaseModel):
+    scene_id: int
+    shot: ShotCreate
+
+class ShotBatchCreateRequest(BaseModel):
+    items: List[ShotBatchCreateItem]
+    recompute_cost: Optional[bool] = False
 
 
 class ShotUpdate(BaseModel):
@@ -20108,6 +21497,102 @@ def create_shot(
         logger.error(f"[create_shot] EXCEPTION: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create shot: {str(e)}")
+
+@router.post("/episodes/{episode_id}/shots/batch_create", response_model=Dict[str, Any])
+def batch_create_shots(
+    episode_id: int,
+    request: ShotBatchCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    started_perf = time.perf_counter()
+    episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = _require_project_access(db, episode.project_id, current_user)
+
+    items = list(request.items or [])
+    if not items:
+        return {
+            "status": "ok",
+            "episode_id": int(episode_id),
+            "project_id": int(project.id),
+            "processed": 0,
+            "created": 0,
+            "skipped": 0,
+            "elapsed_ms": int((time.perf_counter() - started_perf) * 1000),
+        }
+
+    scene_ids = sorted({int(item.scene_id) for item in items if int(getattr(item, "scene_id", 0) or 0) > 0})
+    scenes = (
+        db.query(Scene)
+        .filter(
+            Scene.id.in_(scene_ids),
+            Scene.episode_id == int(episode_id),
+        )
+        .all()
+    ) if scene_ids else []
+    scene_by_id = {int(scene.id): scene for scene in scenes}
+
+    created = 0
+    skipped = 0
+    for item in items:
+        scene_id = int(getattr(item, "scene_id", 0) or 0)
+        shot = item.shot
+        if scene_id <= 0 or scene_id not in scene_by_id:
+            skipped += 1
+            continue
+        payload = shot.dict(exclude_unset=True)
+        _assert_allowed_shot_media_payload(payload)
+
+        db_shot = Shot(
+            scene_id=scene_id,
+            project_id=project.id,
+            episode_id=episode.id,
+            shot_id=shot.shot_id,
+            shot_name=shot.shot_name,
+            start_frame=shot.start_frame,
+            end_frame=shot.end_frame,
+            video_content=shot.video_content,
+            duration=shot.duration,
+            associated_entities=shot.associated_entities,
+            shot_logic_cn=shot.shot_logic_cn,
+            keyframes=shot.keyframes,
+            scene_code=shot.scene_code,
+            image_url=shot.image_url,
+            video_url=shot.video_url,
+            prompt=shot.prompt,
+            technical_notes=shot.technical_notes,
+        )
+        db.add(db_shot)
+        created += 1
+
+    if bool(request.recompute_cost):
+        try:
+            _recompute_and_persist_project_cost_estimation(db, int(project.id))
+        except Exception as cost_exc:
+            logger.warning("batch_create_shots cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
+
+    db.commit()
+    elapsed_ms = int((time.perf_counter() - started_perf) * 1000)
+    logger.info(
+        "[ShotImportAPI] batch_create done | episode_id=%s | project_id=%s | processed=%s | created=%s | skipped=%s | elapsed_ms=%s",
+        episode_id,
+        project.id,
+        len(items),
+        created,
+        skipped,
+        elapsed_ms,
+    )
+    return {
+        "status": "ok",
+        "episode_id": int(episode_id),
+        "project_id": int(project.id),
+        "processed": int(len(items)),
+        "created": int(created),
+        "skipped": int(skipped),
+        "elapsed_ms": elapsed_ms,
+    }
 
 @router.put("/shots/{shot_id}", response_model=ShotOut)
 def update_shot(

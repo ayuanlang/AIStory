@@ -1146,6 +1146,15 @@ export const createScene = async (episodeId, data) => {
     return response.data;
 }
 
+export const batchUpsertScenes = async (episodeId, scenes, options = {}) => {
+    const payload = {
+        scenes: Array.isArray(scenes) ? scenes : [],
+        recompute_cost: options?.recomputeCost !== false,
+    };
+    const response = await api.post(`/episodes/${episodeId}/scenes/batch_upsert`, payload);
+    return response.data;
+}
+
 export const updateScene = async (sceneId, data) => {
     const response = await api.put(`/scenes/${sceneId}`, data);
     return response.data;
@@ -1223,6 +1232,15 @@ export const fetchShots = async (sceneId) => {
 
 export const createShot = async (sceneId, data) => {
     const response = await api.post(`/scenes/${sceneId}/shots`, data);
+    return response.data;
+}
+
+export const batchCreateShots = async (episodeId, items, options = {}) => {
+    const payload = {
+        items: Array.isArray(items) ? items : [],
+        recompute_cost: options?.recomputeCost === true,
+    };
+    const response = await api.post(`/episodes/${episodeId}/shots/batch_create`, payload);
     return response.data;
 }
 
@@ -3533,6 +3551,20 @@ export const runSceneAnalysisFlowNode = async (payload = {}) => {
     }
     return (await api.post('/prompts/scene-analysis/flow/run-node', enrichedPayload)).data;
 };
+export const syncSceneUnitsProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/sync-scene-units', payload || {})).data;
+export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
+export const getProjectProgressOverview = async (projectId) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/overview`)).data;
+export const getProjectProgressIssues = async (projectId, params = {}) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/issues`, { params: params || {} })).data;
+export const resolveProjectProgressIssue = async (issueId) => (await api.post('/prompts/scene-analysis/progress/issues/resolve', { issue_id: issueId })).data;
+export const autoOrchestrateSceneProgress = async (payload = {}) => {
+    const enrichedPayload = { ...(payload || {}) };
+    enrichedPayload.function_name = enrichedPayload.function_name || 'script_analysis';
+    if (!enrichedPayload.system_api_id) {
+        enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
+    return (await api.post('/prompts/scene-analysis/progress/auto-orchestrate', enrichedPayload)).data;
+};
+export const reconcileSceneAnalysisProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reconcile', payload || {})).data;
 export const getProjectCostEstimationConfigManage = async () => (await api.get('/settings/system/manage/project-cost-estimation-config')).data;
 export const updateProjectCostEstimationConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-cost-estimation-config', payload || {})).data;
 export const updateProjectCreateOptionsConfigManage = async (payload = {}) => (await api.put('/settings/system/manage/project-create-options', payload || {})).data;

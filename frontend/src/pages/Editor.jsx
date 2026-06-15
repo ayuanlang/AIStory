@@ -33,12 +33,14 @@ import {
     deleteEpisode,
     fetchScenes, 
     createScene,
+    batchUpsertScenes,
     updateScene, 
     deleteScene,
     regenerateScene,
     fetchShots,
     fetchEpisodeShots,
     createShot,
+    batchCreateShots,
     updateShot,
     deleteShot,
     fetchEntities, 
@@ -1450,6 +1452,7 @@ const Editor = ({
         const effectiveImportType = shouldForceAutoImportForAnalysisBundle(text) ? 'auto' : requestedImportType;
         const autoSupplementSceneSubjects = Boolean(importOptions?.autoSupplementSceneSubjects);
         const suppressAlerts = Boolean(importOptions?.suppressAlerts);
+        const skipDbVerify = Boolean(importOptions?.skipDbVerify) || suppressAlerts;
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -2111,6 +2114,8 @@ const Editor = ({
                 let scriptLines = [];
                 let capturing = false;
 
+                const pendingSceneRows = [];
+
                 for (let line of lines) {
                     // Start marker
                     if (line.includes('|') && (line.includes('Paragraph ID') || line.includes('Paragraph Title'))) {
@@ -2156,6 +2161,12 @@ const Editor = ({
                 try { existingScenes = await fetchScenes(activeEpisodeId); } catch(e) {}
                 let currentSceneDbId = null;
                 const deferredShots = [];
+                const pendingShotItems = [];
+                const queueShotItem = (sceneId, shotData) => {
+                    const sid = Number(sceneId || 0);
+                    if (!Number.isFinite(sid) || sid <= 0 || !shotData?.shot_id) return;
+                    pendingShotItems.push({ scene_id: sid, shot: shotData });
+                };
                 const normalizeSceneNoToken = (value) => {
                     const text = String(value || '')
                         .replace(/<br\s*\/?>/gi, ' ')
@@ -2388,26 +2399,7 @@ const Editor = ({
                                     ...scData,
                                     id: null,
                                 });
-
-const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
-                                const match = existingScenes.find(s =>
-                                    String(s.scene_no || '').replace(/\s+/g, '') === currentSceneNo
-                                );
-
-                                if (match) {
-                                    // Skip duplicate scene imports
-                                    currentSceneDbId = match.id;
-                                    importedSceneRows[importedSceneRows.length - 1].id = match.id;
-                                    addLog(`Skipped updating existing Scene ${scData.scene_no} (duplicate imports not allowed)`, "warning");
-                                } else {
-                                    const newScene = await createScene(activeEpisodeId, scData);
-                                    currentSceneDbId = newScene.id;
-                                    importedSceneRows[importedSceneRows.length - 1].id = newScene.id;
-                                    createdSceneIds.push(newScene.id);
-                                    existingScenes.push(newScene); 
-                                    importStats.scenesCreated += 1;
-                                    addLog(`Created Scene ${scData.scene_no}`, "success");
-                                }
+                                pendingSceneRows.push(scData);
                              } catch (rowErr) {
                                  console.error("Row Error", rowErr);
                                  addLog(`Row Processing Failed: ${rowErr.message}`, "error");
@@ -2505,7 +2497,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                  if (sObj) sceneCode = sObj.scene_no;
                              }
 
-                             if (resolvedSceneDbId) {
+                            if (resolvedSceneDbId) {
                                  const shotData = {
                                      shot_id: rawShotId,
                                      shot_name: useMap ? getVal(['shotname', 'name', '镜头名称'], 1) : clean(cols[1]),
@@ -2519,13 +2511,7 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                                  };
                                  
                                  addLog(`Creating Shot ${shotData.shot_id} for Scene ID ${resolvedSceneDbId}...`, "info");
-                                 try {
-                                     await createShot(resolvedSceneDbId, shotData);
-                                     importStats.shotsCreated += 1;
-                                 } catch (shotErr) {
-                                      console.error("Shot DB Sync Error", shotErr);
-                                      addLog(`Failed to create shot ${shotData.shot_id}: ${shotErr.message}`, "error");
-                                 }
+                                queueShotItem(resolvedSceneDbId, shotData);
                              } else {
                                  const shotData = {
                                      shot_id: rawShotId,
@@ -2553,35 +2539,138 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                     }
                 }
 
+                if (pendingSceneRows.length > 0) {
+                    try {
+                        const batchResp = await batchUpsertScenes(activeEpisodeId, pendingSceneRows, { recomputeCost: false });
+                        const batchScenes = Array.isArray(batchResp?.scenes) ? batchResp.scenes : [];
+                        const sceneIdByNo = new Map(
+                            batchScenes
+                                .map((item) => [String(item?.scene_no || '').replace(/\s+/g, ''), item])
+                                .filter(([k]) => Boolean(k))
+                        );
+                        const existingIdSet = new Set(
+                            (existingScenes || []).map((s) => Number(s?.id)).filter((idVal) => Number.isFinite(idVal))
+                        );
+
+                        importedSceneRows.forEach((row) => {
+                            const noKey = String(row?.scene_no || '').replace(/\s+/g, '');
+                            const mapped = sceneIdByNo.get(noKey);
+                            if (mapped?.id) {
+                                row.id = mapped.id;
+                                currentSceneDbId = mapped.id;
+                                if (!existingIdSet.has(Number(mapped.id))) {
+                                    createdSceneIds.push(mapped.id);
+                                    existingIdSet.add(Number(mapped.id));
+                                }
+                            }
+                        });
+                        importStats.scenesCreated += Number(batchResp?.created || 0);
+                        importStats.scenesUpdated += Number(batchResp?.updated || 0);
+                        addLog(
+                            `Batch scene import done: processed=${Number(batchResp?.processed || pendingSceneRows.length)}, created=${Number(batchResp?.created || 0)}, updated=${Number(batchResp?.updated || 0)}, elapsed=${Number(batchResp?.elapsed_ms || 0)}ms`,
+                            "success"
+                        );
+                        if (batchScenes.length > 0) {
+                            const mergedMap = new Map(
+                                (existingScenes || []).map((s) => [String(s?.id || ''), s]).filter(([k]) => Boolean(k))
+                            );
+                            batchScenes.forEach((item) => {
+                                const stableId = String(item?.id || '').trim();
+                                if (!stableId) return;
+                                const prev = mergedMap.get(stableId) || {};
+                                mergedMap.set(stableId, {
+                                    ...prev,
+                                    id: Number(item.id),
+                                    scene_no: item.scene_no,
+                                    scene_name: item.scene_name,
+                                });
+                            });
+                            existingScenes = Array.from(mergedMap.values());
+                        }
+                    } catch (batchErr) {
+                        addLog(`Batch scene import failed, fallback to row-by-row import: ${batchErr.message || batchErr}`, "warning");
+                        for (const scData of pendingSceneRows) {
+                            const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
+                            const match = existingScenes.find(s =>
+                                String(s.scene_no || '').replace(/\s+/g, '') === currentSceneNo
+                            );
+                            if (match) {
+                                currentSceneDbId = match.id;
+                                const rowRef = importedSceneRows.find((x) => String(x?.scene_no || '').replace(/\s+/g, '') === currentSceneNo);
+                                if (rowRef) rowRef.id = match.id;
+                                addLog(`Skipped updating existing Scene ${scData.scene_no} (duplicate imports not allowed)`, "warning");
+                            } else {
+                                const newScene = await createScene(activeEpisodeId, scData);
+                                currentSceneDbId = newScene.id;
+                                const rowRef = importedSceneRows.find((x) => String(x?.scene_no || '').replace(/\s+/g, '') === currentSceneNo);
+                                if (rowRef) rowRef.id = newScene.id;
+                                createdSceneIds.push(newScene.id);
+                                existingScenes.push(newScene);
+                                importStats.scenesCreated += 1;
+                                addLog(`Created Scene ${scData.scene_no}`, "success");
+                            }
+                        }
+                    }
+                }
+
                 // Retry unresolved shots after entire document pass. This covers cases where shot rows
                 // appear before scene rows or scene list was stale during first pass.
                 if (deferredShots.length > 0) {
                     addLog(`Retrying ${deferredShots.length} deferred shots after scene refresh...`, 'process');
-                    try { existingScenes = await fetchScenes(activeEpisodeId); } catch (e) {}
-
+                    const unresolvedAfterLocalPass = [];
                     for (const deferred of deferredShots) {
                         const retryCode = deferred.sceneCode || deferred.shotData?.scene_code || deferred.rawShotId;
                         const sceneMatch = resolveSceneByCode(retryCode);
                         if (sceneMatch?.id) {
-                            try {
-                                await createShot(sceneMatch.id, deferred.shotData);
-                                importStats.shotsCreated += 1;
-                                currentSceneDbId = sceneMatch.id;
-                            } catch (shotErr) {
-                                console.error('Deferred Shot DB Sync Error', shotErr);
-                                addLog(`Failed to create deferred shot ${deferred.rawShotId}: ${shotErr.message}`, 'error');
-                            }
+                            queueShotItem(sceneMatch.id, deferred.shotData);
+                            currentSceneDbId = sceneMatch.id;
                         } else {
-                            const debugCandidates = extractSceneNoCandidates(retryCode).join(', ');
-                            const availableSceneNos = existingScenes
-                                .map((s) => String(s?.scene_no || s?.scene_id || s?.id || '').trim())
-                                .filter(Boolean)
-                                .slice(0, 12)
-                                .join(', ');
-                            addLog(
-                                `Skipped Shot ${deferred.rawShotId}: No matching Scene found for code '${deferred.sceneCode}' (candidates: ${debugCandidates || 'none'}, available: ${availableSceneNos || 'none'})`,
-                                'warning'
-                            );
+                            unresolvedAfterLocalPass.push(deferred);
+                        }
+                    }
+
+                    if (unresolvedAfterLocalPass.length > 0) {
+                        try { existingScenes = await fetchScenes(activeEpisodeId); } catch (e) {}
+                        for (const deferred of unresolvedAfterLocalPass) {
+                            const retryCode = deferred.sceneCode || deferred.shotData?.scene_code || deferred.rawShotId;
+                            const sceneMatch = resolveSceneByCode(retryCode);
+                            if (sceneMatch?.id) {
+                                queueShotItem(sceneMatch.id, deferred.shotData);
+                                currentSceneDbId = sceneMatch.id;
+                            } else {
+                                const debugCandidates = extractSceneNoCandidates(retryCode).join(', ');
+                                const availableSceneNos = existingScenes
+                                    .map((s) => String(s?.scene_no || s?.scene_id || s?.id || '').trim())
+                                    .filter(Boolean)
+                                    .slice(0, 12)
+                                    .join(', ');
+                                addLog(
+                                    `Skipped Shot ${deferred.rawShotId}: No matching Scene found for code '${deferred.sceneCode}' (candidates: ${debugCandidates || 'none'}, available: ${availableSceneNos || 'none'})`,
+                                    'warning'
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if (pendingShotItems.length > 0) {
+                    try {
+                        const shotBatchResp = await batchCreateShots(activeEpisodeId, pendingShotItems, { recomputeCost: false });
+                        importStats.shotsCreated += Number(shotBatchResp?.created || 0);
+                        addLog(
+                            `Batch shot import done: processed=${Number(shotBatchResp?.processed || pendingShotItems.length)}, created=${Number(shotBatchResp?.created || 0)}, skipped=${Number(shotBatchResp?.skipped || 0)}, elapsed=${Number(shotBatchResp?.elapsed_ms || 0)}ms`,
+                            'success'
+                        );
+                    } catch (shotBatchErr) {
+                        addLog(`Batch shot import failed, fallback to row-by-row create: ${shotBatchErr.message || shotBatchErr}`, 'warning');
+                        for (const item of pendingShotItems) {
+                            try {
+                                await createShot(item.scene_id, item.shot);
+                                importStats.shotsCreated += 1;
+                            } catch (shotErr) {
+                                console.error('Shot DB Sync Error', shotErr);
+                                addLog(`Failed to create shot ${item?.shot?.shot_id || '(unknown)'}: ${shotErr.message}`, 'error');
+                            }
                         }
                     }
                 }
@@ -2674,24 +2763,10 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                 // Force Overview refresh if needed
                 setRefreshKey(prev => prev + 1);
                 addLog("Project Settings updated. Refreshing views...", "info");
-                
-                // Force reload of scenes if the active episode was affected
-                if (activeEpisodeId) {
-                    try {
-                        const newScenes = await fetchScenes(activeEpisodeId);
-                        // Accessing SceneManager via ref or forcing a global refresh is intricate.
-                        // Ideally, we just update the 'activeEpisode' reference which triggers SceneManager useEffect.
-                        // But activeEpisode is derived from 'episodes'. 'setEpisodes(sortedFresh)' does that.
-                        // HOWEVER, SceneManager uses [activeEpisode, projectId] dependency.
-                        // If 'fresh' episode object is identical (by reference or value), it might not trigger.
-                        // Let's force a window reload as a last resort fallback, or better:
-                        // window.location.reload(); // Removed to prevent full page reload navigating away
-                    } catch(e) { console.error(e); }
-                }
             }
 
             try {
-                if (id) {
+                if (id && !skipDbVerify) {
                     const [dbEntitiesRaw, dbScenesRaw] = await Promise.all([
                         fetchEntities(id).catch(() => []),
                         activeEpisodeId ? fetchScenes(activeEpisodeId).catch(() => []) : Promise.resolve([]),
@@ -2755,6 +2830,8 @@ const currentSceneNo = String(scData.scene_no || '').replace(/\s+/g, '');
                         `[DB Verify This Run] reused_entities(skipped_existing)=${Array.isArray(skippedSubjectItems) ? skippedSubjectItems.length : 0}`,
                         'info'
                     );
+                } else if (skipDbVerify) {
+                    addLog('[DB Verify] skipped for fast import path.', 'info');
                 }
             } catch (dbCountErr) {
                 addLog(`DB verification count query failed: ${dbCountErr?.message || dbCountErr}`, 'warning');
