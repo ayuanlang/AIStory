@@ -2512,10 +2512,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const headers = splitCells(lines[0]);
             const normalizedHeaders = headers.map(normalize);
             const sceneIdIdx = findColIdx(normalizedHeaders, ['sceneid', '场景id']);
+            const sceneNoIdx = findColIdx(normalizedHeaders, ['sceneno', '场次序号', '场次']);
+            const sceneNameIdx = findColIdx(normalizedHeaders, ['scenename', '场景名', '场景名称']);
             const coreInfoIdx = findColIdx(normalizedHeaders, ['coresceneinfo', '核心场景信息']);
             const originalIdx = findColIdx(normalizedHeaders, ['originalscripttext', '原始剧本文本', 'scripttext', 'adaptedscripttext', '改编剧本', '改编剧本文本']);
 
-            if (sceneIdIdx < 0 || coreInfoIdx < 0 || originalIdx < 0) {
+            if (sceneIdIdx < 0 && sceneNoIdx < 0 && sceneNameIdx < 0) {
                 droppedTables += 1;
                 continue;
             }
@@ -2535,9 +2537,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 while (cells.length < headers.length) cells.push('');
 
                 const sceneId = String(cells[sceneIdIdx] || '').trim();
-                const coreInfo = String(cells[coreInfoIdx] || '').trim();
-                const originalText = String(cells[originalIdx] || '').trim();
-                if (!sceneId || (!coreInfo && !originalText)) {
+                const sceneNo = String(sceneNoIdx >= 0 ? (cells[sceneNoIdx] || '') : '').trim();
+                const sceneName = String(sceneNameIdx >= 0 ? (cells[sceneNameIdx] || '') : '').trim();
+                let coreInfo = String(coreInfoIdx >= 0 ? (cells[coreInfoIdx] || '') : '').trim();
+                let originalText = String(originalIdx >= 0 ? (cells[originalIdx] || '') : '').trim();
+
+                // LLM rows may include unescaped "|" in long markdown cells; avoid over-dropping valid rows.
+                if (!coreInfo && !originalText && cells.length > headers.length) {
+                    const startIdx = Math.max(0, coreInfoIdx >= 0 ? coreInfoIdx : (sceneNameIdx >= 0 ? sceneNameIdx + 1 : 0));
+                    const endIdx = Math.min(cells.length, headers.length);
+                    const mergedTail = cells.slice(startIdx, endIdx).join(' | ').trim();
+                    if (mergedTail) {
+                        if (!coreInfo) coreInfo = mergedTail;
+                        if (!originalText) originalText = mergedTail;
+                    }
+                }
+
+                if (!sceneId && !sceneNo && !sceneName) {
                     droppedRows += 1;
                     continue;
                 }
