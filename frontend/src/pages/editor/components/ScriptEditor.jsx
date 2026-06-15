@@ -3991,6 +3991,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisRunInFlightRef = useRef(false);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
+    const latestIsAnalyzingRef = useRef(false);
+    const latestActiveEpisodeIdRef = useRef(null);
     const lastAutoSubjectsImportRef = useRef({ signature: '', result: null });
     const lastSubjectsImportIncompleteAlertRef = useRef('');
     const lastPersistPayloadSignatureRef = useRef({});
@@ -5406,10 +5408,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 ]);
 
     useEffect(() => {
+        latestIsAnalyzingRef.current = Boolean(isAnalyzing);
+        latestActiveEpisodeIdRef.current = activeEpisode?.id || null;
+    }, [isAnalyzing, activeEpisode?.id]);
+
+    useEffect(() => {
         return () => {
-            analysisStopRequestedRef.current = true;
+            // Keep backend analysis running when this view unmounts (tab/page switch).
+            // Explicit cancellation should only happen via the "stop task" action.
+            try {
+                const episodeId = latestActiveEpisodeIdRef.current;
+                if (!episodeId) return;
+                const marker = loadAnalysisTaskMarker(episodeId);
+                const hasRunningAnalysis = Boolean(
+                    latestIsAnalyzingRef.current
+                    || analysisRunInFlightRef.current
+                    || analysisResumeInFlightRef.current
+                    || marker?.taskId
+                );
+                if (hasRunningAnalysis) {
+                    onLog?.(
+                        t(
+                            '已离开分析页面：场景分析任务仍在后台继续，可稍后返回继续查看进度。',
+                            'You left the analysis view: scene analysis continues in the background and can be resumed later.'
+                        ),
+                        'info'
+                    );
+                }
+            } catch (_) {
+                // Ignore unmount logging failures.
+            }
         };
-    }, []);
+    }, [loadAnalysisTaskMarker, onLog, t]);
 
     useEffect(() => {
         if (!activeEpisode?.id) return;
