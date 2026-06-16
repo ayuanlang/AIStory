@@ -84,6 +84,7 @@ from app.api.settings import get_scene_analysis_system_config, get_project_cost_
 from app.services.script_analysis_flow import (
     build_script_analysis_flow_plan,
     SCENES_BLOCK_END_TOKEN,
+    SceneMarkerParseError,
     get_script_analysis_flow_registry,
     normalize_node_status,
     raise_progress_issue,
@@ -6609,22 +6610,42 @@ async def run_scene_analysis_flow_node(
                             progress_percent=100.0,
                         )
                     except Exception as parse_exc:
-                        logger.exception(
-                            "[场景编排2.2] 场景标记解析/同步失败 | project_id=%s | episode_id=%s | error=%s",
-                            node_project_id,
-                            node_episode_id,
-                            parse_exc,
-                        )
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name="scene_planning",
-                            status="failed",
-                            error_code="SCENE_MARKER_PARSE_ERROR",
-                            error_message=str(parse_exc),
-                        )
+                        parse_error_code = str(getattr(parse_exc, "code", "") or "").strip().upper()
+                        is_missing_marker_block = isinstance(parse_exc, SceneMarkerParseError) and parse_error_code == "SCENE_MARKER_BLOCK_MISSING"
+                        if is_missing_marker_block:
+                            logger.warning(
+                                "[场景编排2.2] 未检测到场景标记块，跳过 scene_units 同步（非致命） | project_id=%s | episode_id=%s | error=%s",
+                                node_project_id,
+                                node_episode_id,
+                                parse_exc,
+                            )
+                            upsert_pipeline_node_status(
+                                db,
+                                project_id=node_project_id,
+                                episode_id=node_episode_id,
+                                script_id=f"episode:{node_episode_id}",
+                                node_name="scene_planning",
+                                status="warning",
+                                error_code="SCENE_MARKER_BLOCK_MISSING",
+                                error_message=str(parse_exc),
+                            )
+                        else:
+                            logger.exception(
+                                "[场景编排2.2] 场景标记解析/同步失败 | project_id=%s | episode_id=%s | error=%s",
+                                node_project_id,
+                                node_episode_id,
+                                parse_exc,
+                            )
+                            upsert_pipeline_node_status(
+                                db,
+                                project_id=node_project_id,
+                                episode_id=node_episode_id,
+                                script_id=f"episode:{node_episode_id}",
+                                node_name="scene_planning",
+                                status="failed",
+                                error_code="SCENE_MARKER_PARSE_ERROR",
+                                error_message=str(parse_exc),
+                            )
                 else:
                     logger.warning(
                         "[场景编排2.2] scene_markdown 节点返回空文本，跳过 scene_units 同步 | project_id=%s | episode_id=%s",
