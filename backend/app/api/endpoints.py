@@ -349,7 +349,10 @@ def admin_cancel_all_queued(current_user: "User" = Depends(get_current_user)):
 
 
 @router.get("/admin/queue/stats")
-def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
+def admin_get_queue_stats(
+    current_user: "User" = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if not getattr(current_user, "is_superuser", False):
         raise HTTPException(status_code=403, detail="Superuser required")
 

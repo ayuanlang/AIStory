@@ -36,6 +36,7 @@
 - 临时光效/粒子/拖尾仅留 Beat；可持续复现且可命名的施法形态必须建衍生变体并写明触发源、持续形态、识别锚点。
 - 环境仅写空镜信息：空间边界、固定建筑/装修、固定大件家具/基础陈设、锚点、衍生依赖、切换触发；禁止泛化为“室内环境”等。
 - 固定且不会被拿起/移出/递交/破坏/独立展示的家具陈设必须留在 `ENV`；会被拿起、带走、移出、递交、破坏、独立展示或作为行动目标的物件不得并入 `ENV`，按 `PROP` 提取或留 Beat 证据。
+- 同一实体在单次提取中必须二选一：要么作为 `ENV` 内固定陈设，要么作为独立 `PROP`；禁止同名同物在 `ENV` 与 `PROP` 中重复出现。
 
 ### 二、角色（CHAR）
 - 每个实体族（CHAR/PROP/ENV）至少一条基础版；基础版名称必须与上游原名逐字一致，不加后缀。
@@ -44,6 +45,7 @@
 - 持续变化：跨多个 Beat/Scene 持续，或可被后续剧集继承；单镜头/短时情绪/临时姿态/瞬时光效不算。
 - 非连续转场时，主要角色可按阶级与经济设定判定是否新增换装衍生；频率必须符合人物社会属性。
 - 先有基础版再有派生版；未过门禁时只写入基础版 `entity_attributes` 或留 Beat，禁止新增 `CHAR`。
+- 服饰信息仅在剧本原文明确提及时填写；若剧本未明确服饰，`subject_name_zh` 与 `entity_attributes` 均不得臆造或补写服饰描述。
 - 时序断点（闪回/多年后/重生/转世/复活/身份重置等）必须重判 `CHAR`，并同步触发 `ENV` 时序重识别。
 - 重生/转世默认新角色；仅在文本明确“外观与身份体系无实质变化且可直接继承”时可不新建。多人时必须逐个判定，不得群体合并跳过。
 - 长时间间隔导致身份/外观体系稳定变化时必须建新衍生；若同时导致空间时代/用途/陈设/破损翻新/社会功能稳定变化，继续按 ENV 时序规则建衍生环境。
@@ -96,3 +98,17 @@
 - 衍生环境至少包含：`env_role:衍生环境`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
 - 时序衍生环境补充：`time_break_type`、`stable_space_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`、`light_sound_continuity_or_change`、`inheritance_reason`。
 - 任一实体涉可见文字或隐含字段时，`entity_attributes` 必须完整写入文字内容、承载位置、排版要求、标记状态、可读性；`script_entity_coverage` 必须覆盖对应原文关键词。原文明示文字必须与剧本完全一致（字词、数字、大小写、标点、空格）。
+
+----------------*****--------------
+
+> 以下为**格式示例**，仅演示列结构与书写方式；生成结果时必须全部替换为本次输入对应的真实实体，绝不可抄写示例文本。
+
+### Subject Index
+
+| subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| S001 | character | 角色中文名 | Character English Name | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S002 | character | 角色中文名_时序衍生版 | Character English Name Time Variant | Character English Name | 仅填写剧本明示且可持续的身份/外观差异；若剧本未明确服饰，不写服饰描述。 | 原名 |
+| S003 | environment | 主环境名 衍生类型 | Base Environment English Derived Type | Base Environment English | env_role:衍生环境；empty_shot_only:Yes；no_character_or_prop_presence:Yes；derivative_base_zh:主环境名；derivative_base_en:Base Environment English；derivative_naming:主环境名 空格 衍生类型/观察区域/可见方向；in_out:内/外；time_of_day:日/夜；space_boundary:继承主环境边界；main_anchor:继承主环境空间锚点；entrance_exit:xx；fixed_architecture_and_finish:固定建筑/装修结构+空镜差异（empty_view_delta）；fixed_furniture_and_set_dressing:桌椅床凳柜架等固定大件/基础陈设+空镜差异（empty_view_delta）；light_source:继承光源+方向差异；sound_field:空镜声场；barriers:建筑阻隔层；FG/MG/BG:仅空间层次；empty_view_delta:xx；spatial_axis:xx；trigger_from_main/switch_to/visible_content/return_or_continue:仅填写空镜空间信息。严禁包含角色、临场道具与剧情临时动作。 | 主环境名、衍生环境名称、空间锚点、固定大件家具/基础陈设、空镜差异（empty_view_delta）等 |
+| S004 | prop | 关键道具名 | Prop English Name | None或依赖原名 | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
+| S005 | cover_poster | 影视级宣发海报 | Project Cover Poster | [依赖的核心CHAR/PROP英语名] | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
