@@ -631,6 +631,57 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
             logger.warning(f"Failed to normalize users.is_active to integer semantics: {e}")
             raise
 
+
+def _ensure_script_progress_pipeline_scope_unique_index(*, is_postgres: bool) -> None:
+    """Ensure scoped uniqueness for script_progress_pipeline_nodes under concurrency."""
+    if not inspect(engine).has_table("script_progress_pipeline_nodes"):
+        return
+
+    dedupe_sql = """
+    DELETE FROM script_progress_pipeline_nodes
+    WHERE id IN (
+        SELECT id
+        FROM (
+            SELECT
+                id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY project_id, episode_id, node_name, COALESCE(scene_id, ''), COALESCE(asset_type, '')
+                    ORDER BY id DESC
+                ) AS rn
+            FROM script_progress_pipeline_nodes
+        ) ranked
+        WHERE ranked.rn > 1
+    )
+    """
+    if is_postgres:
+        create_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_script_progress_pipeline_nodes_scope
+        ON script_progress_pipeline_nodes (
+            project_id,
+            episode_id,
+            node_name,
+            COALESCE(scene_id, ''),
+            COALESCE(asset_type, '')
+        )
+        """
+    else:
+        create_unique_sql = """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_script_progress_pipeline_nodes_scope
+        ON script_progress_pipeline_nodes (
+            project_id,
+            episode_id,
+            node_name,
+            IFNULL(scene_id, ''),
+            IFNULL(asset_type, '')
+        )
+        """
+
+    with engine.begin() as conn:
+        conn.execute(text(dedupe_sql))
+        conn.execute(text(create_unique_sql))
+
+    logger.info("Ensured script_progress_pipeline_nodes scoped unique index")
+
     inspector = inspect(engine)
     existing_columns = [c['name'] for c in inspector.get_columns('users')]
 
@@ -852,6 +903,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             _ensure_assets_normalized_url_unique_index(is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure assets normalized url unique index: {e}")
+
+        try:
+            _ensure_script_progress_pipeline_scope_unique_index(is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure script progress pipeline scoped unique index: {e}")
 
         try:
             if hasattr(models, "UserGroup"):
@@ -1508,6 +1564,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             existing_episode_columns = [c['name'] for c in inspector.get_columns('episodes')]
             episode_columns_to_check = [
                 ("ai_scene_analysis_result", "TEXT"),
+                ("ai_scene_analysis_scene_markdown", "TEXT"),
                 ("ai_entity_design_result", "TEXT"),
                 ("ai_scene_analysis_subject_index", "TEXT"),
                 ("ai_scene_analysis_adaptation", "TEXT"),

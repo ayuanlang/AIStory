@@ -11,6 +11,7 @@ _q_conf = load_queue_config()
 import threading
 import time
 import atexit
+import tempfile
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import text
@@ -52,6 +53,11 @@ _WORKER_THREAD_CAP = max(1, min(20, _PER_PROCESS_POOL_BUDGET // 2))
 _QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
+_QUEUE_FILE_LOCK_FD = None
+_QUEUE_FILE_LOCK_PATH = os.getenv("GENERATION_QUEUE_LEADER_LOCK_FILE", "").strip() or os.path.join(
+    tempfile.gettempdir(),
+    "aistory_generation_queue.lock",
+)
 
 if _REQUESTED_WORKER_THREADS > _QUEUE_WORKER_THREADS:
     logger.warning(
@@ -66,14 +72,36 @@ if _REQUESTED_WORKER_THREADS > _QUEUE_WORKER_THREADS:
 
 def _release_queue_leader_lock() -> None:
     global _QUEUE_LEADER_CONN
+    global _QUEUE_FILE_LOCK_FD
     conn = _QUEUE_LEADER_CONN
+    lock_fd = _QUEUE_FILE_LOCK_FD
     _QUEUE_LEADER_CONN = None
+    _QUEUE_FILE_LOCK_FD = None
     if conn is None:
-        return
-    try:
-        conn.close()
-    except Exception:
         pass
+    else:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    if lock_fd is not None:
+        try:
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
 
 
 atexit.register(_release_queue_leader_lock)
@@ -88,8 +116,43 @@ def _is_postgres_engine() -> bool:
 
 def _try_acquire_queue_leader_lock() -> bool:
     global _QUEUE_LEADER_CONN
+    global _QUEUE_FILE_LOCK_FD
     if not _is_postgres_engine():
-        return True
+        if _QUEUE_FILE_LOCK_FD is not None:
+            return True
+        lock_fd = None
+        try:
+            lock_dir = os.path.dirname(_QUEUE_FILE_LOCK_PATH) or "."
+            os.makedirs(lock_dir, exist_ok=True)
+            lock_fd = os.open(_QUEUE_FILE_LOCK_PATH, os.O_RDWR | os.O_CREAT)
+            try:
+                os.lseek(lock_fd, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return False
+            _QUEUE_FILE_LOCK_FD = lock_fd
+            lock_fd = None
+            return True
+        except Exception as exc:
+            logger.warning(
+                "generation queue file leader lock probe failed; skipping worker startup until next probe | path=%s err=%s",
+                _QUEUE_FILE_LOCK_PATH,
+                exc,
+            )
+            return False
+        finally:
+            if lock_fd is not None:
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
     if _QUEUE_LEADER_CONN is not None:
         return True
 
@@ -780,61 +843,93 @@ def cancel_generation_tasks(*, kind: Optional[str] = None, user_id: Optional[int
 
 def _claim_next_task(worker_id: str) -> Optional[Dict[str, Any]]:
     _ensure_queue_table_ready()
-    cutoff = time.time() - _QUEUE_RECLAIM_SECONDS
+    now = time.time()
+    cutoff = now - _QUEUE_RECLAIM_SECONDS
+    expire_before = now - 3600.0
     db = SessionLocal()
     try:
+        if _is_postgres_engine():
+            claim_sql = text(
+                """
+                WITH candidate AS (
+                    SELECT job_id
+                    FROM generation_task_queue
+                    WHERE status = 'queued'
+                             OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff)
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE generation_task_queue q
+                SET status = CASE
+                        WHEN COALESCE(q.created_at, :now_ts) < :expire_before THEN 'failed'
+                        ELSE 'submit'
+                    END,
+                    worker_id = :worker_id,
+                    started_at = COALESCE(q.started_at, :now_ts),
+                    last_heartbeat = :now_ts,
+                    finished_at = CASE
+                        WHEN COALESCE(q.created_at, :now_ts) < :expire_before THEN :now_ts
+                        ELSE NULL
+                    END,
+                    error = CASE
+                        WHEN COALESCE(q.created_at, :now_ts) < :expire_before THEN 'Task queued for over 60 minutes. Timed out.'
+                        ELSE NULL
+                    END,
+                    attempt_count = q.attempt_count + 1
+                FROM candidate
+                WHERE q.job_id = candidate.job_id
+                  AND (q.status = 'queued' OR (q.status IN ('submit', 'running') AND COALESCE(q.last_heartbeat, 0) < :cutoff))
+                RETURNING q.job_id, q.kind, q.user_id, q.payload_json, q.status
+                """
+            )
+        else:
+            claim_sql = text(
+                """
+                UPDATE generation_task_queue
+                SET status = CASE
+                        WHEN COALESCE(created_at, :now_ts) < :expire_before THEN 'failed'
+                        ELSE 'submit'
+                    END,
+                    worker_id = :worker_id,
+                    started_at = COALESCE(started_at, :now_ts),
+                    last_heartbeat = :now_ts,
+                    finished_at = CASE
+                        WHEN COALESCE(created_at, :now_ts) < :expire_before THEN :now_ts
+                        ELSE NULL
+                    END,
+                    error = CASE
+                        WHEN COALESCE(created_at, :now_ts) < :expire_before THEN 'Task queued for over 60 minutes. Timed out.'
+                        ELSE NULL
+                    END,
+                    attempt_count = attempt_count + 1
+                WHERE job_id = (
+                    SELECT job_id
+                    FROM generation_task_queue
+                    WHERE status = 'queued'
+                             OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff)
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                )
+                  AND (status = 'queued' OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff))
+                RETURNING job_id, kind, user_id, payload_json, status
+                """
+            )
         row = db.execute(
-            text(
-                """
-                SELECT job_id, kind, user_id, payload_json, created_at
-                FROM generation_task_queue
-                WHERE status = 'queued'
-                         OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff)
-                ORDER BY created_at ASC
-                LIMIT 1
-                """
-            ),
-            {"cutoff": cutoff},
+            claim_sql,
+            {
+                "worker_id": worker_id,
+                "now_ts": now,
+                "cutoff": cutoff,
+                "expire_before": expire_before,
+            },
         ).mappings().first()
+        db.commit()
         if not row:
             return None
 
-        now = time.time()
-        created_at = row.get("created_at") or now
-        is_expired = (now - created_at) > 3600.0
-
-        result = db.execute(
-            text(
-                """
-                UPDATE generation_task_queue
-                SET status = :next_status,
-                    worker_id = :worker_id,
-                    started_at = COALESCE(started_at, :started_at),
-                    last_heartbeat = :heartbeat,
-                    finished_at = :finished_at,
-                    error = :error,
-                    attempt_count = attempt_count + 1
-                WHERE job_id = :job_id
-                  AND (status = 'queued' OR (status IN ('submit', 'running') AND COALESCE(last_heartbeat, 0) < :cutoff))
-                """
-            ),
-            {
-                "job_id": str(row["job_id"]),
-                "worker_id": worker_id,
-                "started_at": now,
-                "heartbeat": now,
-                "cutoff": cutoff,
-                "next_status": 'failed' if is_expired else 'submit',
-                "finished_at": now if is_expired else None,
-                "error": 'Task queued for over 60 minutes. Timed out.' if is_expired else None,
-            },
-        )
-        db.commit()
-        if (result.rowcount or 0) < 1:
-            return None
-        
-        if is_expired:
-            logger.warning("Claimed task %s but it was created > 30 mins ago. Marked as failed.", row["job_id"])
+        if str(row.get("status") or "").strip().lower() == "failed":
+            logger.warning("Claimed task %s but it was queued over 60 minutes. Marked as failed.", row["job_id"])
             return None
         try:
             payload = json.loads(str(row["payload_json"] or "{}"))

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
@@ -441,17 +442,20 @@ def upsert_pipeline_node_status(
     asset_type_norm = str(asset_type or "").strip() or None
     script_id_norm = str(script_id or "").strip() or None
 
-    row = (
-        db.query(ScriptProgressPipelineNode)
-        .filter(
-            ScriptProgressPipelineNode.project_id == int(project_id),
-            ScriptProgressPipelineNode.episode_id == int(episode_id),
-            ScriptProgressPipelineNode.node_name == node_name_norm,
-            ScriptProgressPipelineNode.scene_id == scene_id_norm,
-            ScriptProgressPipelineNode.asset_type == asset_type_norm,
+    def _query_existing() -> Optional[ScriptProgressPipelineNode]:
+        return (
+            db.query(ScriptProgressPipelineNode)
+            .filter(
+                ScriptProgressPipelineNode.project_id == int(project_id),
+                ScriptProgressPipelineNode.episode_id == int(episode_id),
+                ScriptProgressPipelineNode.node_name == node_name_norm,
+                ScriptProgressPipelineNode.scene_id == scene_id_norm,
+                ScriptProgressPipelineNode.asset_type == asset_type_norm,
+            )
+            .first()
         )
-        .first()
-    )
+
+    row = _query_existing()
     if row is None:
         row = ScriptProgressPipelineNode(
             project_id=int(project_id),
@@ -471,8 +475,16 @@ def upsert_pipeline_node_status(
             created_at=now_iso,
             updated_at=now_iso,
         )
-        db.add(row)
-        return row
+        try:
+            with db.begin_nested():
+                db.add(row)
+                db.flush()
+            return row
+        except IntegrityError:
+            # Another concurrent request inserted the same scoped node first.
+            row = _query_existing()
+            if row is None:
+                raise
 
     previous_started_at = str(getattr(row, "started_at", "") or "").strip()
     row.script_id = script_id_norm

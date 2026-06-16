@@ -320,6 +320,23 @@ def admin_cancel_queue_task(job_id: str, current_user: "User" = Depends(get_curr
         raise HTTPException(status_code=403, detail="Superuser required")
     from app.services.generation_task_queue import cancel_generation_task
     task = cancel_generation_task(job_id, reason="Canceled by Admin")
+    if isinstance(task, dict) and task:
+        kind = str(task.get("kind") or "").strip().lower()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if kind == "image":
+            _set_image_job(
+                job_id,
+                status="canceled",
+                finished_at=now_iso,
+                error="Canceled by Admin",
+            )
+        elif kind == "video":
+            _set_video_job(
+                job_id,
+                status="canceled",
+                finished_at=now_iso,
+                error="Canceled by Admin",
+            )
     return {"status": "ok", "task": task}
 
 @router.post("/admin/queue/tasks/cancel-queued")
@@ -417,9 +434,11 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
     retry_scan_batch_total = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
     retry_scan_batch_in_use = max(0, min(int(retry_scan_batch_total), int(compensation_candidate_count)))
     retry_scan_batch_available = max(0, int(retry_scan_batch_total) - int(retry_scan_batch_in_use))
+    analyze_scene_dedup = _collect_analyze_scene_dedup_stats(db)
 
     return {
         "runtime": runtime_stats,
+        "analyze_scene_dedup": analyze_scene_dedup,
         "callback": {
             "store_count": callback_store_count,
             "async_inflight": callback_async_inflight,
@@ -504,6 +523,7 @@ def _snapshot_user_principal(user: Any) -> SimpleNamespace:
         account_status=int(getattr(user, "account_status", 1) or 1),
         email_verified=bool(getattr(user, "email_verified", False)),
         credits=int(getattr(user, "credits", 0) or 0),
+        preferences=getattr(user, "preferences", None),
     )
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
@@ -626,11 +646,17 @@ ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES: Dict[str, Dict[str, Any]] = {
 }
 
 _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP_WINDOW_SECONDS", "360")))
+_ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS = max(
+    30,
+    int(os.getenv("ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS", "120") or 120),
+)
 _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(30, int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "900") or 900))
 _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(2, min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)))
 _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(20000, int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000))
-_ANALYZE_SCENE_RECENT_TASKS: Dict[str, Dict[str, Any]] = {}
-_ANALYZE_SCENE_RECENT_TASKS_LOCK = threading.Lock()
+_ANALYZE_SCENE_DEDUP_TABLE_READY = False
+_ANALYZE_SCENE_DEDUP_TABLE_LOCK = threading.Lock()
+_ANALYZE_SCENE_DEDUP_LAST_PRUNE_TS = 0.0
+_ANALYZE_SCENE_DEDUP_PRUNE_LOCK = threading.Lock()
 
 
 async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -780,26 +806,179 @@ def _build_analyze_scene_dedup_key(user_id: int, request: AnalyzeSceneRequest) -
     return hashlib.sha256(stable_json.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _prune_recent_analyze_scene_tasks_locked(now_ts: float) -> None:
-    stale_keys = []
-    for key, payload in _ANALYZE_SCENE_RECENT_TASKS.items():
-        existing_task_id = str((payload or {}).get("task_id") or "").strip()
-        task_ts = float((payload or {}).get("ts") or 0.0)
-        
-        info = {}
-        status = ""
-        if existing_task_id:
-            info = _get_task_status(existing_task_id) or {}
-            status = str(info.get("status") or "").strip().lower()
-            
-        if (now_ts - task_ts) > _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS:
-            # Task not running and not successfully completed recently. 
-            # If it's failed, canceled, or expired from task manager, we can prune it.
-            if status not in {"pending", "running", "completed"}:
-                stale_keys.append(key)
-                
-    for key in stale_keys:
-        _ANALYZE_SCENE_RECENT_TASKS.pop(key, None)
+def _ensure_analyze_scene_dedup_table_ready() -> None:
+    global _ANALYZE_SCENE_DEDUP_TABLE_READY
+    if _ANALYZE_SCENE_DEDUP_TABLE_READY:
+        return
+    with _ANALYZE_SCENE_DEDUP_TABLE_LOCK:
+        if _ANALYZE_SCENE_DEDUP_TABLE_READY:
+            return
+        ddl = """
+        CREATE TABLE IF NOT EXISTS analyze_scene_dedup_tasks (
+            dedup_key TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            task_id TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+        index_ddl = """
+        CREATE INDEX IF NOT EXISTS idx_analyze_scene_dedup_tasks_updated_at
+        ON analyze_scene_dedup_tasks (updated_at)
+        """
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+            conn.execute(text(index_ddl))
+        _ANALYZE_SCENE_DEDUP_TABLE_READY = True
+
+
+def _prune_analyze_scene_dedup_rows(db: Session, now_ts: float) -> None:
+    global _ANALYZE_SCENE_DEDUP_LAST_PRUNE_TS
+    with _ANALYZE_SCENE_DEDUP_PRUNE_LOCK:
+        if (float(now_ts) - float(_ANALYZE_SCENE_DEDUP_LAST_PRUNE_TS)) < float(_ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS):
+            return
+        _ANALYZE_SCENE_DEDUP_LAST_PRUNE_TS = float(now_ts)
+
+    # Keep rows slightly longer than dedup window to reduce table churn.
+    cutoff = float(now_ts) - float(max(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS * 2, 600))
+    result = db.execute(
+        text(
+            """
+            DELETE FROM analyze_scene_dedup_tasks
+            WHERE updated_at < :cutoff
+            """
+        ),
+        {"cutoff": cutoff},
+    )
+    pruned = int(result.rowcount or 0)
+    if pruned > 0:
+        logger.info(
+            "[analyze_scene][dedup] pruned rows=%s cutoff_age_s=%s",
+            pruned,
+            int(max(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS * 2, 600)),
+        )
+
+
+def _get_analyze_scene_dedup_row(db: Session, dedup_key: str) -> Optional[Dict[str, Any]]:
+    row = db.execute(
+        text(
+            """
+            SELECT dedup_key, user_id, task_id, updated_at
+            FROM analyze_scene_dedup_tasks
+            WHERE dedup_key = :dedup_key
+            """
+        ),
+        {"dedup_key": str(dedup_key)},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def _delete_analyze_scene_dedup_row(db: Session, dedup_key: str) -> None:
+    db.execute(
+        text(
+            """
+            DELETE FROM analyze_scene_dedup_tasks
+            WHERE dedup_key = :dedup_key
+            """
+        ),
+        {"dedup_key": str(dedup_key)},
+    )
+
+
+def _insert_analyze_scene_dedup_row_if_absent(db: Session, *, dedup_key: str, user_id: int, task_id: str, now_ts: float) -> bool:
+    result = db.execute(
+        text(
+            """
+            INSERT INTO analyze_scene_dedup_tasks (dedup_key, user_id, task_id, updated_at)
+            VALUES (:dedup_key, :user_id, :task_id, :updated_at)
+            ON CONFLICT(dedup_key) DO NOTHING
+            """
+        ),
+        {
+            "dedup_key": str(dedup_key),
+            "user_id": int(user_id),
+            "task_id": str(task_id),
+            "updated_at": float(now_ts),
+        },
+    )
+    return int(result.rowcount or 0) > 0
+
+
+def _upsert_analyze_scene_dedup_row(db: Session, *, dedup_key: str, user_id: int, task_id: str, now_ts: float) -> None:
+    db.execute(
+        text(
+            """
+            INSERT INTO analyze_scene_dedup_tasks (dedup_key, user_id, task_id, updated_at)
+            VALUES (:dedup_key, :user_id, :task_id, :updated_at)
+            ON CONFLICT(dedup_key) DO UPDATE SET
+                user_id = excluded.user_id,
+                task_id = excluded.task_id,
+                updated_at = excluded.updated_at
+            """
+        ),
+        {
+            "dedup_key": str(dedup_key),
+            "user_id": int(user_id),
+            "task_id": str(task_id),
+            "updated_at": float(now_ts),
+        },
+    )
+
+
+def _collect_analyze_scene_dedup_stats(db: Session, now_ts: Optional[float] = None) -> Dict[str, Any]:
+    _ensure_analyze_scene_dedup_table_ready()
+    ts_now = float(now_ts or time.time())
+
+    total_rows = int(
+        (
+            db.execute(text("SELECT COUNT(*) AS cnt FROM analyze_scene_dedup_tasks")).mappings().first()
+            or {}
+        ).get("cnt")
+        or 0
+    )
+    window_cutoff = ts_now - float(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS)
+    window_rows = db.execute(
+        text(
+            """
+            SELECT dedup_key, task_id, updated_at
+            FROM analyze_scene_dedup_tasks
+            WHERE updated_at >= :window_cutoff
+            ORDER BY updated_at DESC
+            LIMIT 500
+            """
+        ),
+        {"window_cutoff": float(window_cutoff)},
+    ).mappings().all()
+
+    running_like = 0
+    terminal_like = 0
+    unknown_like = 0
+    provisional_rows = 0
+    for row in window_rows:
+        task_id = str((row or {}).get("task_id") or "").strip()
+        if task_id.startswith("pending-"):
+            provisional_rows += 1
+            continue
+        info = _get_task_status(task_id) or {}
+        status = str(info.get("status") or "").strip().lower()
+        if status in {"pending", "running"}:
+            running_like += 1
+        elif status in {"completed", "failed", "canceled"}:
+            terminal_like += 1
+        else:
+            unknown_like += 1
+
+    stale_rows = max(0, int(total_rows) - int(len(window_rows)))
+    return {
+        "rows_total": int(total_rows),
+        "rows_in_window": int(len(window_rows)),
+        "rows_stale": int(stale_rows),
+        "rows_running_like": int(running_like),
+        "rows_terminal_like": int(terminal_like),
+        "rows_unknown_like": int(unknown_like),
+        "rows_provisional": int(provisional_rows),
+        "dedup_window_seconds": int(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS),
+        "prune_interval_seconds": int(_ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS),
+    }
 
 # ── Generic async-task polling endpoint ──────────────────────────────────
 @router.get("/tasks/{task_id}")
@@ -1046,12 +1225,15 @@ def _run_callback_compensation_once() -> None:
     max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
 
     now_ts = time.time()
-    candidates: List[Tuple[str, Dict[str, Any]]] = []
-    with VIDEO_JOB_LOCK:
-        _prune_video_jobs_locked()
-        for job_id, payload in VIDEO_JOB_STORE.items():
-            if len(candidates) >= safe_batch:
-                break
+    candidates: List[Tuple[str, str, Dict[str, Any]]] = []
+    image_candidates: List[Tuple[str, Dict[str, Any]]] = []
+    video_candidates: List[Tuple[str, Dict[str, Any]]] = []
+
+    def _collect_callback_candidates(
+        store_items: List[Tuple[str, Dict[str, Any]]],
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        collected: List[Tuple[str, Dict[str, Any]]] = []
+        for job_id, payload in store_items:
             job = dict(payload or {})
             status = _normalize_generation_status(job.get("status"))
             is_timeout_failed = (
@@ -1063,14 +1245,49 @@ def _run_callback_compensation_once() -> None:
             callback_ticket = _extract_job_provider_callback_ticket(job)
             if not callback_ticket:
                 continue
-            candidates.append((str(job_id), job))
+            collected.append((str(job_id), job))
+        return collected
+
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        image_items = [(job_id, dict(payload or {})) for job_id, payload in IMAGE_JOB_STORE.items()]
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        video_items = [(job_id, dict(payload or {})) for job_id, payload in VIDEO_JOB_STORE.items()]
+
+    image_candidates = _collect_callback_candidates(image_items)
+    video_candidates = _collect_callback_candidates(video_items)
+
+    kind_share_base = max(1, safe_batch // 2)
+    image_quota = min(kind_share_base, len(image_candidates))
+    video_quota = min(kind_share_base, len(video_candidates))
+    selected_count = image_quota + video_quota
+    remaining_quota = max(0, safe_batch - selected_count)
+
+    image_remaining = max(0, len(image_candidates) - image_quota)
+    video_remaining = max(0, len(video_candidates) - video_quota)
+    if remaining_quota > 0:
+        if image_remaining >= video_remaining and image_remaining > 0:
+            image_extra = min(remaining_quota, image_remaining)
+            image_quota += image_extra
+            remaining_quota -= image_extra
+        if remaining_quota > 0 and video_remaining > 0:
+            video_extra = min(remaining_quota, video_remaining)
+            video_quota += video_extra
+            remaining_quota -= video_extra
+        if remaining_quota > 0 and image_remaining > (image_quota - kind_share_base):
+            image_extra = min(remaining_quota, len(image_candidates) - image_quota)
+            image_quota += image_extra
+
+    candidates.extend([("image", job_id, job) for job_id, job in image_candidates[:image_quota]])
+    candidates.extend([("video", job_id, job) for job_id, job in video_candidates[:video_quota]])
 
     if not candidates:
         return
 
     from app.services.generation_task_queue import get_generation_task_status, mark_generation_task_status_external, requeue_generation_task
 
-    for job_id, job in candidates:
+    for kind, job_id, job in candidates:
         callback_ticket = _extract_job_provider_callback_ticket(job)
         if not callback_ticket:
             continue
@@ -1081,7 +1298,10 @@ def _run_callback_compensation_once() -> None:
 
         callback_payload = _get_generation_callback_payload(callback_ticket)
         if callback_payload:
-            _maybe_finalize_video_job_from_provider_callback(job_id, dict(job))
+            if kind == "image":
+                _maybe_finalize_image_job_from_grsai_callback(job_id, dict(job))
+            else:
+                _maybe_finalize_video_job_from_provider_callback(job_id, dict(job))
             continue
 
         if not retry_enabled:
@@ -1122,28 +1342,50 @@ def _run_callback_compensation_once() -> None:
 
         try:
             requeue_generation_task(job_id, reason=None)
-            _set_video_job(
-                job_id,
-                status="queued",
-                started_at=None,
-                finished_at=None,
-                error=None,
-                upstream_submit_state="callback_timeout_retry_requeued" if is_timeout_failed else "callback_retry_requeued",
-                callback_submit_retries=retry_attempts + 1,
-                callback_retry_at=now_bj_iso(),
-            )
-            logger.warning(
-                "[VideoJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s timeout_failed=%s",
-                job_id,
-                callback_ticket,
-                elapsed_seconds,
-                retry_attempts + 1,
-                max_submit_retries,
-                is_timeout_failed,
-            )
+            if kind == "image":
+                _set_image_job(
+                    job_id,
+                    status="queued",
+                    started_at=None,
+                    finished_at=None,
+                    error=None,
+                    upstream_submit_state="callback_timeout_retry_requeued" if is_timeout_failed else "callback_retry_requeued",
+                    callback_submit_retries=retry_attempts + 1,
+                    callback_retry_at=now_bj_iso(),
+                )
+                logger.warning(
+                    "[ImageJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s timeout_failed=%s",
+                    job_id,
+                    callback_ticket,
+                    elapsed_seconds,
+                    retry_attempts + 1,
+                    max_submit_retries,
+                    is_timeout_failed,
+                )
+            else:
+                _set_video_job(
+                    job_id,
+                    status="queued",
+                    started_at=None,
+                    finished_at=None,
+                    error=None,
+                    upstream_submit_state="callback_timeout_retry_requeued" if is_timeout_failed else "callback_retry_requeued",
+                    callback_submit_retries=retry_attempts + 1,
+                    callback_retry_at=now_bj_iso(),
+                )
+                logger.warning(
+                    "[VideoJob] callback compensation requeued | job_id=%s callback_ticket=%s elapsed_seconds=%s retry=%s/%s timeout_failed=%s",
+                    job_id,
+                    callback_ticket,
+                    elapsed_seconds,
+                    retry_attempts + 1,
+                    max_submit_retries,
+                    is_timeout_failed,
+                )
         except Exception as exc:
             logger.warning(
-                "[VideoJob] callback compensation requeue failed | job_id=%s callback_ticket=%s error=%s",
+                "[%sJob] callback compensation requeue failed | job_id=%s callback_ticket=%s error=%s",
+                "Image" if kind == "image" else "Video",
                 job_id,
                 callback_ticket,
                 exc,
@@ -7406,19 +7648,22 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         now_ts = time.time()
         reused_task_id = ""
         reused_status = ""
+        _ensure_analyze_scene_dedup_table_ready()
 
-        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
-            _prune_recent_analyze_scene_tasks_locked(now_ts)
-            existing = _ANALYZE_SCENE_RECENT_TASKS.get(dedup_key) or {}
-            existing_task_id = str(existing.get("task_id") or "").strip()
-            if existing_task_id:
-                info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
-                status = str(info.get("status") or "").strip().lower()
-                if status in {"pending", "running"}:
-                    reused_task_id = existing_task_id
-                    reused_status = status
-                else:
-                    _ANALYZE_SCENE_RECENT_TASKS.pop(dedup_key, None)
+        _prune_analyze_scene_dedup_rows(db, now_ts)
+        existing = _get_analyze_scene_dedup_row(db, dedup_key) or {}
+        existing_task_id = str(existing.get("task_id") or "").strip()
+        existing_ts = float(existing.get("updated_at") or 0.0)
+        if existing_task_id:
+            info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+            status = str(info.get("status") or "").strip().lower()
+            within_window = (now_ts - existing_ts) <= float(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS)
+            if status in {"pending", "running"} and within_window:
+                reused_task_id = existing_task_id
+                reused_status = status
+            else:
+                _delete_analyze_scene_dedup_row(db, dedup_key)
+                db.commit()
 
         if reused_task_id:
             logger.warning(
@@ -7438,16 +7683,69 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "analysis_trace_id": analysis_trace_id,
             })
 
-        tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene",
-                            request=request, async_mode="0")
-        with _ANALYZE_SCENE_RECENT_TASKS_LOCK:
-            _prune_recent_analyze_scene_tasks_locked(now_ts)
-            _ANALYZE_SCENE_RECENT_TASKS[dedup_key] = {
-                "task_id": tid,
-                "ts": now_ts,
-                "episode_id": getattr(request, "episode_id", None),
-                "analysis_trace_id": analysis_trace_id,
-            }
+        provisional_task_id = f"pending-{uuid.uuid4().hex}"
+        inserted = _insert_analyze_scene_dedup_row_if_absent(
+            db,
+            dedup_key=dedup_key,
+            user_id=current_user.id,
+            task_id=provisional_task_id,
+            now_ts=now_ts,
+        )
+        db.commit()
+
+        if not inserted:
+            existing = _get_analyze_scene_dedup_row(db, dedup_key) or {}
+            existing_task_id = str(existing.get("task_id") or "").strip()
+            existing_ts = float(existing.get("updated_at") or 0.0)
+            if existing_task_id:
+                info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+                status = str(info.get("status") or "").strip().lower()
+                within_window = (now_ts - existing_ts) <= float(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS)
+                if status in {"pending", "running"} and within_window:
+                    logger.info(
+                        "[analyze_scene][dedup] reused-existing-race user_id=%s episode_id=%s task_id=%s status=%s age_s=%s trace_id=%s",
+                        current_user.id,
+                        getattr(request, "episode_id", None),
+                        existing_task_id,
+                        status,
+                        int(max(0.0, now_ts - existing_ts)),
+                        analysis_trace_id or "-",
+                    )
+                    return JSONResponse({
+                        "task_id": existing_task_id,
+                        "async": True,
+                        "deduplicated": True,
+                        "status": status,
+                        "analysis_trace_id": analysis_trace_id,
+                    })
+                _delete_analyze_scene_dedup_row(db, dedup_key)
+                db.commit()
+
+            _insert_analyze_scene_dedup_row_if_absent(
+                db,
+                dedup_key=dedup_key,
+                user_id=current_user.id,
+                task_id=provisional_task_id,
+                now_ts=now_ts,
+            )
+            db.commit()
+
+        tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene", request=request, async_mode="0")
+        _upsert_analyze_scene_dedup_row(
+            db,
+            dedup_key=dedup_key,
+            user_id=current_user.id,
+            task_id=tid,
+            now_ts=now_ts,
+        )
+        db.commit()
+        logger.info(
+            "[analyze_scene][dedup] new-task-claimed user_id=%s episode_id=%s task_id=%s trace_id=%s",
+            current_user.id,
+            getattr(request, "episode_id", None),
+            tid,
+            analysis_trace_id or "-",
+        )
         return JSONResponse({"task_id": tid, "async": True, "analysis_trace_id": analysis_trace_id})
     logger.info("Received analyze_scene request")
     try:
@@ -7487,8 +7785,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
     try:
         # Cache user primitives before releasing DB session for long LLM calls.
-        current_user_id = int(getattr(current_user, "id", 0) or 0)
-        current_user_is_superuser = bool(getattr(current_user, "is_superuser", False))
+        current_user_snapshot = _snapshot_user_principal(current_user)
+        current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+        current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
 
         def _is_length_finish_reason(reason: Any) -> bool:
             r = str(reason or "").strip().lower().replace("-", "_")
@@ -9123,7 +9422,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             getattr(request, "system_api_id", None),
             context="analyze_scene",
         )
-        config = _inject_user_advanced_llm_preferences(config, current_user)
+        config = _inject_user_advanced_llm_preferences(config, current_user_snapshot)
         config = _inject_project_creativity_temperature(
             config,
             request.project_metadata,
@@ -9631,6 +9930,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     episode_id,
                     len(result_content or ""),
                 )
+            elif is_scene_beats_stage:
+                persisted_field_name = "ai_scene_analysis_scene_markdown"
+                episode.ai_scene_analysis_scene_markdown = result_content
+                logger.info(
+                    "[analyze_scene] Persisted stage2.2 output to ai_scene_analysis_scene_markdown episode_id=%s chars=%s",
+                    episode_id,
+                    len(result_content or ""),
+                )
             else:
                 persisted_field_name = "ai_scene_analysis_result"
                 episode.ai_scene_analysis_result = result_content
@@ -9657,6 +9964,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
                 if persisted_field_name == "ai_entity_design_result":
                     persisted_chars_readback = len(str(getattr(episode, "ai_entity_design_result", "") or ""))
+                elif persisted_field_name == "ai_scene_analysis_scene_markdown":
+                    persisted_chars_readback = len(str(getattr(episode, "ai_scene_analysis_scene_markdown", "") or ""))
                 else:
                     persisted_chars_readback = len(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
                 debug_meta["saved_chars_readback"] = persisted_chars_readback
@@ -14728,6 +15037,7 @@ class EpisodeCreate(BaseModel):
     script_content: Optional[str] = ""
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_scene_markdown: Optional[str] = None
     ai_entity_design_result: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
     ai_entity_design_result: Optional[str] = None
@@ -14738,6 +15048,7 @@ class EpisodeUpdate(BaseModel):
     script_content: Optional[str] = None
     episode_info: Optional[Dict] = None
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_scene_markdown: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
     character_profiles: Optional[List[Dict[str, Any]]] = None
@@ -14759,6 +15070,7 @@ class EpisodeOut(BaseModel):
     script_content: Optional[str]
     episode_info: Optional[Dict] = {}
     ai_scene_analysis_result: Optional[str] = None
+    ai_scene_analysis_scene_markdown: Optional[str] = None
     ai_scene_analysis_subject_index: Optional[str] = None
     ai_scene_analysis_adaptation: Optional[str] = None
     ai_entity_design_result: Optional[str] = None
@@ -14797,6 +15109,7 @@ def read_episodes(
         .options(
             defer(Episode.script_content),
             defer(Episode.ai_scene_analysis_result),
+            defer(Episode.ai_scene_analysis_scene_markdown),
             defer(Episode.ai_scene_analysis_subject_index),
             defer(Episode.ai_scene_analysis_adaptation),
             defer(Episode.ai_entity_design_result),
@@ -14888,6 +15201,7 @@ def create_episode(
         script_content=episode.script_content,
         episode_info=episode_info,
         ai_scene_analysis_result=episode.ai_scene_analysis_result,
+        ai_scene_analysis_scene_markdown=episode.ai_scene_analysis_scene_markdown,
         character_profiles=episode.character_profiles or []
     )
     db.add(db_episode)
@@ -14927,6 +15241,8 @@ def update_episode(
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
         if not explicit_subject_index_update:
             episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_result)
+    if hasattr(episode_in, 'ai_scene_analysis_scene_markdown') and episode_in.ai_scene_analysis_scene_markdown is not None:
+        episode.ai_scene_analysis_scene_markdown = episode_in.ai_scene_analysis_scene_markdown
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
         episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
     if hasattr(episode_in, 'ai_scene_analysis_adaptation') and episode_in.ai_scene_analysis_adaptation is not None:
@@ -40250,6 +40566,7 @@ def import_project_backup(
             script_content=ep.get("script_content", ""),
             character_profiles=ep.get("character_profiles", []),
             ai_scene_analysis_result=ep.get("ai_scene_analysis_result"),
+            ai_scene_analysis_scene_markdown=ep.get("ai_scene_analysis_scene_markdown"),
             ai_scene_analysis_subject_index=ep.get("ai_scene_analysis_subject_index"),
             ai_scene_analysis_adaptation=ep.get("ai_scene_analysis_adaptation"),
             ai_entity_design_result=ep.get("ai_entity_design_result"),

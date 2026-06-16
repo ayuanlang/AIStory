@@ -417,6 +417,19 @@ export default function QueueAdmin() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-[#111114] rounded-xl border border-white/10 p-4 space-y-2">
+          <div className="text-xs text-gray-400">Analyze Scene 去重</div>
+          <div className="text-2xl font-bold text-indigo-300">{queueStats?.analyze_scene_dedup?.rows_in_window ?? 0}</div>
+          <div className="text-xs text-gray-500">去重窗口内记录数</div>
+          <div className="text-xs text-cyan-300">运行中记录: {queueStats?.analyze_scene_dedup?.rows_running_like ?? 0}</div>
+          <div className="text-xs text-emerald-300">已结束记录: {queueStats?.analyze_scene_dedup?.rows_terminal_like ?? 0}</div>
+          <div className="text-xs text-amber-300">占位记录(pending-*): {queueStats?.analyze_scene_dedup?.rows_provisional ?? 0}</div>
+          <div className="text-xs text-gray-300">总记录: {queueStats?.analyze_scene_dedup?.rows_total ?? 0} | 过窗记录: {queueStats?.analyze_scene_dedup?.rows_stale ?? 0}</div>
+          <div className="text-xs text-gray-300">窗口秒数: {queueStats?.analyze_scene_dedup?.dedup_window_seconds ?? 0} | 清理间隔: {queueStats?.analyze_scene_dedup?.prune_interval_seconds ?? 0}</div>
+        </div>
+      </div>
+
       <div className="bg-[#111114] p-5 rounded-xl border border-white/10">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">Global Thread Config</h3>
         <div className="flex items-end gap-6 flex-wrap">

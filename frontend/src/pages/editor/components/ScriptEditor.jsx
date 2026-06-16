@@ -3752,7 +3752,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setSelectedReuseSubjectIds([]);
         }
 
-        const stored = activeEpisode?.ai_scene_analysis_result;
+        const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
         const storedText = typeof stored === 'string' ? stored : '';
         setLlmRawResultContent(storedText);
         setLlmResultContent(normalizeLlmMarkdownTable(storedText));
@@ -3997,6 +3997,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const normalizedSubjectIndexValue = extractPureSubjectIndexText(subjectIndexValue);
                 updatePayload.ai_scene_analysis_subject_index = normalizedSubjectIndexValue;
                 updatePayload.ai_scene_analysis_adaptation = adaptationValue;
+                if (/stage2_2|scene_beats|scene_markdown/i.test(logSource)) {
+                    updatePayload.ai_scene_analysis_scene_markdown = nextContent;
+                }
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
                     analysisRawText: nextContent,
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
@@ -4006,6 +4009,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
+            } else if (resultField === 'ai_scene_analysis_scene_markdown') {
+                latestAnalysisRawTextRef.current = nextContent;
+                updatePayload.ai_scene_analysis_scene_markdown = nextContent;
+                updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
+                    analysisRawText: nextContent,
+                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
+                    stage2RawText: options?.stage2RawText || nextContent,
+                    stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
+                }), null, 2);
+                onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
             } else if (resultField === 'ai_entity_design_result') {
                 latestAssetRawTextRef.current = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
@@ -4558,7 +4572,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 {
                     startedAt,
                     baselineText,
-                    resultField: 'ai_scene_analysis_result',
+                    resultField: 'ai_scene_analysis_scene_markdown',
                     expectedResultKind: 'scene_beats',
                 }
             );
@@ -5405,8 +5419,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
                     {
                         startedAt,
-                        baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
-                        resultField: 'ai_scene_analysis_result',
+                        baselineText: String(activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result || '').trim(),
+                        resultField: 'ai_scene_analysis_scene_markdown',
                         expectedResultKind: 'scene_beats',
                     }
                 );
@@ -5427,7 +5441,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || activeEpisode?.ai_scene_analysis_subject_index
                     || ''
                 ).trim();
-                await persistLlmResultContent(validatedBeatsText, 'ai_scene_analysis_result', {
+                await persistLlmResultContent(validatedBeatsText, 'ai_scene_analysis_scene_markdown', {
                     source: 'resume-stage2_2-scene-beats',
                     stage1RawText: buildStage1RestartSourceText(),
                     stage2RawText: [stage2_1Text, validatedBeatsText].filter(Boolean).join('\n\n'),
@@ -8138,7 +8152,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 try {
                     if (onLog) onLog('Persisting split-flow combined raw LLM output immediately after Beats return...', 'process');
-                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_scene_markdown', {
                         source: 'advanced-analysis-split-combined-immediate',
                         stage1RawText: stage1PhaseRawText,
                         stage2RawText: stage2PhaseRawText,
@@ -8169,7 +8183,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (true || !savedByBackend && !finalRawResultPersistedEarly) {
                     phaseMarks.persistStartedAt = Date.now();
                     if (onLog) onLog('Saving advanced raw LLM output to episode analysis field...', 'process');
-                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_result', {
+                    await persistLlmResultContent(finalAnalysisText || '', 'ai_scene_analysis_scene_markdown', {
                         source: splitStage1Flow ? 'advanced-analysis-split-combined' : 'advanced-analysis',
                         stage1RawText: stage1PhaseRawText,
                         stage2RawText: stage2PhaseRawText,

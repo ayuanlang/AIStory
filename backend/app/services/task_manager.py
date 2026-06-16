@@ -16,6 +16,7 @@ import traceback
 import uuid
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,12 @@ _ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS = max(
     60,
     int(os.getenv("ASYNC_ENDPOINT_TASK_TIMEOUT_SECONDS", str(_RUNNING_TASK_MAX_AGE_SECONDS)) or _RUNNING_TASK_MAX_AGE_SECONDS),
 )
+_ASYNC_TASK_WORKER_THREADS = max(2, int(os.getenv("ASYNC_TASK_WORKER_THREADS", "8") or 8))
 
 # Global task store  {task_id: _TaskRecord}
 _tasks: Dict[str, "_TaskRecord"] = {}
 _lock = threading.Lock()
+_executor = ThreadPoolExecutor(max_workers=_ASYNC_TASK_WORKER_THREADS, thread_name_prefix="async-task")
 
 _DB_TABLE_READY = False
 _DB_TABLE_LOCK = threading.Lock()
@@ -321,8 +324,7 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
             rec.finished_at = time.time()
             _save_task_to_db(rec)
 
-    t = threading.Thread(target=_worker, daemon=True, name=f"task-{task_id[:8]}")
-    t.start()
+    _executor.submit(_worker)
 
     logger.info("Submitted task %s kind=%s user=%s", task_id, kind, user_id)
     return task_id

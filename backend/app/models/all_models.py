@@ -272,6 +272,7 @@ class Episode(Base):
 
     # Store AI Scene Analysis raw result separately (Markdown table / JSON), do NOT overwrite script_content
     ai_scene_analysis_result = Column(Text, nullable=True)
+    ai_scene_analysis_scene_markdown = Column(Text, nullable=True)
     ai_scene_analysis_subject_index = Column(Text, nullable=True)
     ai_scene_analysis_adaptation = Column(Text, nullable=True)
     ai_entity_design_result = Column(Text, nullable=True)
@@ -375,6 +376,16 @@ class ScriptProgressSceneUnit(Base):
 
 class ScriptProgressPipelineNode(Base):
     __tablename__ = "script_progress_pipeline_nodes"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "episode_id",
+            "node_name",
+            "scene_id",
+            "asset_type",
+            name="uq_script_progress_pipeline_nodes_scope",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
