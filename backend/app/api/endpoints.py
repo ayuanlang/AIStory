@@ -30230,6 +30230,7 @@ async def _run_generate_image(
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
     force_pure_callback_mode: bool = False,
+    provider_payload_callback: Any = None,
 ):
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -30812,6 +30813,8 @@ async def _run_generate_image(
         if callable(job_progress_callback):
             image_provider_options["_grsai_task_id_callback"] = job_progress_callback
             image_provider_options["_provider_task_id_callback"] = job_progress_callback
+        if callable(provider_payload_callback):
+            image_provider_options["_provider_payload_callback"] = provider_payload_callback
         if provider_callback_ticket:
             image_provider_options["_provider_callback_ticket"] = str(provider_callback_ticket).strip()
         if provider_callback_url:
@@ -31464,7 +31467,7 @@ async def _run_generate_image_job(
     provider_callback_ticket: Optional[str] = None,
     provider_callback_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from app.services.generation_task_queue import mark_generation_task_status_external
+    from app.services.generation_task_queue import mark_generation_task_status_external, patch_generation_task_payload
 
     db = SessionLocal()
     callback_url = _resolve_callback_url_from_payload(req_payload)
@@ -31481,6 +31484,29 @@ async def _run_generate_image_job(
             job_id,
             req_provider or "unknown",
             normalized_task_id,
+        )
+
+    def _on_provider_payload(payload_snapshot: Any) -> None:
+        if not isinstance(payload_snapshot, dict):
+            return
+        try:
+            import copy as _copy
+            payload_snapshot = _copy.deepcopy(payload_snapshot)
+        except Exception:
+            payload_snapshot = dict(payload_snapshot)
+        patch_generation_task_payload(
+            job_id,
+            {
+                "combined_payload": payload_snapshot,
+                "final_provider_payload": payload_snapshot,
+                "final_provider_payload_at": now_bj_iso(),
+            },
+        )
+        logger.info(
+            "[ImageJob] final provider payload recorded | job_id=%s provider=%s model=%s",
+            job_id,
+            req_provider or "unknown",
+            req_model or "unknown",
         )
 
     try:
@@ -31516,6 +31542,7 @@ async def _run_generate_image_job(
                 provider_callback_ticket=provider_callback_ticket,
                 provider_callback_url=provider_callback_url,
                 force_pure_callback_mode=True,
+                provider_payload_callback=_on_provider_payload,
             ),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )

@@ -5716,13 +5716,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             {(() => {
                                 let isOssTemp = false;
                                 const urlStr = String(entity.image_url || '').toLowerCase();
-                                const isStableOss = urlStr.startsWith('/') || /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory/.test(urlStr);
+                                const isStableOss = urlStr.startsWith('/') || /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun/.test(urlStr);
 
                                 if (isStableOss) {
                                     isOssTemp = false;
                                 } else {
                                     try {
                                         const attrs = entity.custom_attributes ? (typeof entity.custom_attributes === 'string' ? JSON.parse(entity.custom_attributes) : entity.custom_attributes) : {};
+                                        const providerDirectOss = Boolean(attrs && (attrs.provider_direct_oss_url || attrs.providerDirectOssUrl));
+                                        if (providerDirectOss) {
+                                            isOssTemp = false;
+                                        } else
                                         if (attrs && attrs.oss_uploaded_success === false) {
                                             isOssTemp = true;
                                         }

@@ -1173,6 +1173,10 @@ class MediaGenerationService:
         callback_enabled = bool(callback_url and callback_url != "-1")
         pure_callback_mode = bool(str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
         
+        provider_payload_callback = tool_conf.get("_provider_payload_callback")
+        if not callable(provider_payload_callback):
+            provider_payload_callback = None
+
         first_result = await self._submit_and_poll_video(
             url=task_endpoint,
             payload=task_payload,
@@ -1184,6 +1188,7 @@ class MediaGenerationService:
             callback_enabled=callback_enabled,
             callback_ticket=callback_ticket,
             callback_url=callback_url,
+            provider_payload_callback=provider_payload_callback,
         )
         first_payload = first_result if isinstance(first_result, dict) else {}
         failure_text = self._flatten_text(first_payload).lower()
@@ -1226,6 +1231,7 @@ class MediaGenerationService:
                         callback_enabled=callback_enabled,
                         callback_ticket=callback_ticket,
                         callback_url=callback_url,
+                        provider_payload_callback=provider_payload_callback,
                     )
                     retry_payload = retry_result if isinstance(retry_result, dict) else {}
                     if retry_payload.get("url") or retry_payload.get("video_url"):
@@ -1262,6 +1268,7 @@ class MediaGenerationService:
                         callback_enabled=callback_enabled,
                         callback_ticket=callback_ticket,
                         callback_url=callback_url,
+                        provider_payload_callback=provider_payload_callback,
                     )
                     direct_payload = direct_result if isinstance(direct_result, dict) else {}
                     if direct_payload.get("url") or direct_payload.get("video_url"):
@@ -2848,7 +2855,7 @@ class MediaGenerationService:
 
         return None
 
-    async def _submit_and_poll_image_task(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2):
+    async def _submit_and_poll_image_task(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2, provider_payload_callback: Any = None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
 
@@ -2889,6 +2896,25 @@ class MediaGenerationService:
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
 
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": provider_name or "unknown",
+                            "type": "image",
+                            "method": "POST",
+                            "url": url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed before image submit | error=%s",
+                        log_tag,
+                        callback_err,
+                    )
+
             if resp.status_code not in [200, 201]:
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
 
@@ -2904,6 +2930,28 @@ class MediaGenerationService:
                         metadata.update(extra_metadata)
                     return {"url": resolved_output, "metadata": metadata}
                 return {"error": "No Task ID", "submit_failed": True}
+
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": provider_name or "unknown",
+                            "type": "image",
+                            "method": "POST",
+                            "url": url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                            "provider_task_id": str(task_id),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed after image submit | task_id=%s error=%s",
+                        log_tag,
+                        task_id,
+                        callback_err,
+                    )
 
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
             for _ in range(max_attempts):
@@ -5652,7 +5700,14 @@ class MediaGenerationService:
                             payload["size"] = normalized_size
 
                     url = f"{endpoint.rstrip('/')}/images/generations"
-                    return await self._common_requests_post(url, payload, api_key, "doubao_image_multiref", extra_metadata=base_metadata)
+                    return await self._common_requests_post(
+                        url,
+                        payload,
+                        api_key,
+                        "doubao_image_multiref",
+                        extra_metadata=base_metadata,
+                        provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+                    )
             
             # Text to Image
             raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3"
@@ -5665,7 +5720,14 @@ class MediaGenerationService:
                 "watermark": False
             }
             
-            return await self._common_requests_post(url, payload, api_key, "doubao_image", extra_metadata=base_metadata)
+            return await self._common_requests_post(
+                url,
+                payload,
+                api_key,
+                "doubao_image",
+                extra_metadata=base_metadata,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+            )
 
         # Video Generation
         elif gen_type == "video":
@@ -5865,6 +5927,7 @@ class MediaGenerationService:
                 extra_metadata=base_metadata,
                 poll_timeout_seconds=poll_timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
             )
 
         return {"error": "Unknown Type"}
@@ -7726,6 +7789,7 @@ class MediaGenerationService:
                 api_key,
                 "RunningHubImage",
                 extra_metadata=base_metadata,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
             )
 
         if gen_type == "audio":
@@ -7753,6 +7817,7 @@ class MediaGenerationService:
                 api_key,
                 "RunningHubAudio",
                 extra_metadata=base_metadata,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
             )
 
         if gen_type != "video":
@@ -7975,6 +8040,7 @@ class MediaGenerationService:
             callback_enabled=callback_enabled,
             callback_ticket=callback_ticket,
             callback_url=callback_url,
+            provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
         )
 
     async def _handle_apiyi_generation(self, gen_type, prompt, config, ref_image=None, last_frame_url=None, duration=5, aspect_ratio=None, negative_prompt: Optional[str] = None, image_size: Optional[str] = None):
@@ -8131,7 +8197,14 @@ class MediaGenerationService:
                 }
                 
                 # We need special handling for the response since it returns base64
-                res = await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image_gemini", extra_metadata=base_metadata)
+                res = await self._common_requests_post(
+                    submit_url,
+                    payload,
+                    api_key,
+                    f"{str(provider_name).lower()}_image_gemini",
+                    extra_metadata=base_metadata,
+                    provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+                )
                 
                 # Check for base64 inlineData in response
                 if isinstance(res, dict) and not res.get("error"):
@@ -8218,7 +8291,14 @@ class MediaGenerationService:
                 "submit_url": submit_url,
                 "endpoint_family": "/v1/images/generations",
             }
-            return await self._common_requests_post(submit_url, payload, api_key, f"{str(provider_name).lower()}_image", extra_metadata=base_metadata)
+            return await self._common_requests_post(
+                submit_url,
+                payload,
+                api_key,
+                f"{str(provider_name).lower()}_image",
+                extra_metadata=base_metadata,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+            )
 
         if gen_type == "video":
             endpoint_lower = endpoint.lower()
@@ -8268,6 +8348,7 @@ class MediaGenerationService:
                     api_key,
                     f"{str(provider_name).lower()}_video",
                     extra_metadata=base_metadata,
+                    provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
                 )
             elif "/v1/videos" not in endpoint_lower:
                 return {"error": f"{provider_name} video endpoint family not supported yet: {endpoint}", "submit_failed": True}
@@ -8339,7 +8420,14 @@ class MediaGenerationService:
                 "seconds": payload.get("seconds"),
                 "size": payload.get("size"),
             }
-            return await self._submit_and_poll_video(submit_url, payload, api_key, f"{str(provider_name).lower()}_video", extra_metadata=base_metadata)
+            return await self._submit_and_poll_video(
+                submit_url,
+                payload,
+                api_key,
+                f"{str(provider_name).lower()}_video",
+                extra_metadata=base_metadata,
+                provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+            )
 
         return {"error": f"{provider_name} generation type not supported: {gen_type}", "submit_failed": True}
 
@@ -9879,6 +9967,7 @@ class MediaGenerationService:
             callback_enabled=callback_enabled,
             callback_ticket=callback_ticket,
             callback_url=callback_url,
+            provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
         )
 
     def _resolve_apiyi_chat_video_model(self, model: str, aspect_ratio: Optional[str] = None, duration: Optional[int] = None) -> str:
@@ -9932,7 +10021,7 @@ class MediaGenerationService:
             return url_match.group(0).rstrip(")].,!?\"'")
         return None
 
-    async def _submit_apiyi_chat_video_stream(self, url, payload, api_key, log_tag, extra_metadata=None):
+    async def _submit_apiyi_chat_video_stream(self, url, payload, api_key, log_tag, extra_metadata=None, provider_payload_callback: Any = None):
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -9964,6 +10053,26 @@ class MediaGenerationService:
                     resp = await asyncio.to_thread(_post, False, False)
                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                     resp = await asyncio.to_thread(_post, False, True)
+
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": str((extra_metadata or {}).get("provider") or "apiyi").strip().lower() or "apiyi",
+                            "type": "video",
+                            "method": "POST",
+                            "url": url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed on apiyi chat submit | error=%s",
+                        log_tag,
+                        callback_err,
+                    )
 
             if resp.status_code != 200:
                 body = ""
@@ -10343,7 +10452,14 @@ class MediaGenerationService:
             "submit_url": submit_url,
             "endpoint_family": "/kling/v1/images/generations",
         }
-        return await self._submit_and_poll_image_task(submit_url, payload, api_key, f"{str(provider_name).lower()}_kling_image", extra_metadata=extra_metadata)
+        return await self._submit_and_poll_image_task(
+            submit_url,
+            payload,
+            api_key,
+            f"{str(provider_name).lower()}_kling_image",
+            extra_metadata=extra_metadata,
+            provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+        )
 
     async def _handle_stability_generation(self, gen_type, prompt, config, ref_image=None, negative_prompt: Optional[str] = None):
         if gen_type != "image": return {"error": "Stability only supports image"}
@@ -10423,7 +10539,7 @@ class MediaGenerationService:
         return {"error": "No artifacts"}
 
     # --- Helper to Common Requests ---
-    async def _common_requests_post(self, url, payload, api_key, log_tag, timeout=None, extra_metadata=None):
+    async def _common_requests_post(self, url, payload, api_key, log_tag, timeout=None, extra_metadata=None, provider_payload_callback: Any = None):
         # Async wrap for requests
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
         headers = self._build_transport_headers(provider_name, log_tag, api_key, payload)
@@ -10482,6 +10598,26 @@ class MediaGenerationService:
             if resp is None:
                 return {"error": "Upstream request failed", "details": "No upstream response", "submit_failed": True}
 
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": provider_name or "unknown",
+                            "type": "image",
+                            "method": "POST",
+                            "url": selected_url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed on common post | error=%s",
+                        log_tag,
+                        callback_err,
+                    )
+
             if resp.status_code == 200:
                 data = resp.json()
                 _debug_log(f"[{log_tag}] API Response: {_strip_base64_from_log(data)}") # DEBUG USER REQUEST
@@ -10525,6 +10661,7 @@ class MediaGenerationService:
         callback_enabled: bool = False,
         callback_ticket: Optional[str] = None,
         callback_url: Optional[str] = None,
+        provider_payload_callback: Any = None,
     ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         retryable_statuses = {502, 503, 504, 520, 521, 522, 523, 524, 525, 526}
@@ -10618,6 +10755,25 @@ class MediaGenerationService:
                         continue
                     raise
 
+                if callable(provider_payload_callback) and isinstance(payload, dict):
+                    try:
+                        provider_payload_callback(
+                            {
+                                "provider": "runninghub",
+                                "type": "audio" if "audio" in str(log_tag or "").lower() else "video",
+                                "method": "POST",
+                                "url": submit_url,
+                                "model": payload.get("model"),
+                                "payload": _strip_base64_from_log(payload),
+                            }
+                        )
+                    except Exception as callback_err:
+                        logger.warning(
+                            "[%s] provider payload callback failed before runninghub submit | error=%s",
+                            log_tag,
+                            callback_err,
+                        )
+
                 if resp.status_code in [200, 201]:
                     try:
                         data = resp.json()
@@ -10694,6 +10850,28 @@ class MediaGenerationService:
                         "submit_failed": True,
                     }
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
+
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": "runninghub",
+                            "type": "audio" if "audio" in str(log_tag or "").lower() else "video",
+                            "method": "POST",
+                            "url": submit_url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                            "provider_task_id": str(task_id),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed after runninghub submit | task_id=%s error=%s",
+                        log_tag,
+                        task_id,
+                        callback_err,
+                    )
 
             if pure_callback_mode and callback_enabled:
                 logger.info(
@@ -10783,6 +10961,7 @@ class MediaGenerationService:
         callback_enabled: bool = False,
         callback_ticket: Optional[str] = None,
         callback_url: Optional[str] = None,
+        provider_payload_callback: Any = None,
     ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
@@ -10822,7 +11001,26 @@ class MediaGenerationService:
                         return self._build_ambiguous_submit_result(provider_name, log_tag, e3, url, extra_metadata)
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 return self._build_ambiguous_submit_result(provider_name, log_tag, e, url, extra_metadata)
-            if resp.status_code not in [200, 201]: 
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": provider_name or "unknown",
+                            "type": "video",
+                            "method": "POST",
+                            "url": url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed before submit | error=%s",
+                        log_tag,
+                        callback_err,
+                    )
+
+            if resp.status_code not in [200, 201]:
                 return {"error": f"Submission Failed {resp.status_code}", "details": resp.text, "submit_failed": True}
             
             data = resp.json()
@@ -10830,6 +11028,28 @@ class MediaGenerationService:
             if not task_id and isinstance(data.get("data"), dict):
                 task_id = data.get("data", {}).get("id") or data.get("data", {}).get("task_id")
             if not task_id: return {"error": "No Task ID", "submit_failed": True}
+
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": provider_name or "unknown",
+                            "type": "video",
+                            "method": "POST",
+                            "url": url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                            "provider_task_id": str(task_id),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed after submit | task_id=%s error=%s",
+                        log_tag,
+                        task_id,
+                        callback_err,
+                    )
 
             if pure_callback_mode and callback_enabled:
                 logger.info(
@@ -10933,6 +11153,7 @@ class MediaGenerationService:
         callback_enabled: bool = False,
         callback_ticket: Optional[str] = None,
         callback_url: Optional[str] = None,
+        provider_payload_callback: Any = None,
     ):
         trace_id = None
         media_url = None
@@ -11000,6 +11221,25 @@ class MediaGenerationService:
                     len(getattr(resp, "content", b"") or b""),
                 )
 
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": "zlhub",
+                            "type": "video",
+                            "method": "POST",
+                            "url": submit_url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed before zlhub submit | error=%s",
+                        log_tag,
+                        callback_err,
+                    )
+
             if resp.status_code not in [200, 201]:
                 if is_seedance2:
                     logger.error(
@@ -11020,6 +11260,28 @@ class MediaGenerationService:
                         _strip_base64_from_log(data),
                     )
                 return {"error": "No Task ID", "details": data, "submit_failed": True}
+
+            if callable(provider_payload_callback) and isinstance(payload, dict):
+                try:
+                    provider_payload_callback(
+                        {
+                            "provider": "zlhub",
+                            "type": "video",
+                            "method": "POST",
+                            "url": submit_url,
+                            "model": payload.get("model"),
+                            "payload": _strip_base64_from_log(payload),
+                            "final_submit": True,
+                            "provider_task_id": str(task_id),
+                        }
+                    )
+                except Exception as callback_err:
+                    logger.warning(
+                        "[%s] provider payload callback failed after zlhub submit | task_id=%s error=%s",
+                        log_tag,
+                        task_id,
+                        callback_err,
+                    )
 
             if pure_callback_mode and callback_enabled:
                 logger.info(
