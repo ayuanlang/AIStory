@@ -8040,8 +8040,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             selectedReuseSubjectAssets,
                             {
                                 onTaskCreated: (taskId) => {
-                                    setActiveAnalysisTaskId(String(taskId || '').trim());
-                                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 2 });
+                                    const stableTaskId = String(taskId || '').trim();
+                                    setActiveAnalysisTaskId(stableTaskId);
+                                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 2 });
+                                    updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 2 });
                                 },
                             },
                             projectId,
@@ -8090,8 +8092,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         startedAt: phaseMarks.llmReturnedAt || startedAt,
                         baselineText: baselineAnalysisText,
                         onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
+                            const stableTaskId = String(taskId || '').trim();
+                            setActiveAnalysisTaskId(stableTaskId);
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 'scene_beats' });
+                            updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 'scene_beats' });
                         },
                     });
                 };

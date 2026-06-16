@@ -6382,10 +6382,25 @@ async def run_scene_analysis_flow_node(
     request: ScriptAnalysisFlowRunNodeRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
 ):
     """Run one workflow node through its existing executor while preserving node-specific injection chains."""
-    flow_started_perf = time.perf_counter()
     node_key = str(getattr(request, "node_key", "") or "").strip().lower().replace("-", "_")
+    if async_mode == "1":
+        tid = _submit_async(
+            run_scene_analysis_flow_node,
+            user_id=current_user.id,
+            kind=f"script_analysis_flow_{node_key or 'unknown'}",
+            request=request,
+            async_mode="0",
+        )
+        return JSONResponse({
+            "task_id": tid,
+            "async": True,
+            "node_key": node_key,
+        })
+
+    flow_started_perf = time.perf_counter()
     cfg = get_script_analysis_flow_config(db)
     registry = get_script_analysis_flow_registry(cfg)
     nodes = {str(node.get("key") or ""): node for node in (registry.get("nodes") or [])}

@@ -1,4 +1,4 @@
-﻿const analysisRunsByEpisode = new Map();
+const analysisRunsByEpisode = new Map();
 
 export function trackEpisodeAnalysisRun(episodeId, runPromise, meta = {}) {
     const id = Number(episodeId || 0);
