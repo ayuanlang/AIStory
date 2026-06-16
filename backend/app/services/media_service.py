@@ -5308,13 +5308,40 @@ class MediaGenerationService:
 
         # Download
         if not skip_download and result and "url" in result and result["url"]:
-            result["url"] = await asyncio.to_thread(
-                self._download_and_save,
-                result["url"],
-                filename_base,
-                user_id,
-                storage_metadata,
+            result_url = str(result.get("url") or "").strip()
+            result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            result_provider = str(
+                result.get("provider")
+                or result_meta.get("provider")
+                or provider
+                or ""
+            ).strip().lower()
+            # Grsai image APIs may already write directly to provider OSS (with authorized access).
+            # Keep upstream URL as-is to avoid unnecessary re-download/localization.
+            skip_provider_direct_oss_download = bool(
+                result_provider == "grsai"
+                and str(asset_type or "").strip().lower() != "video"
+                and result_url.lower().startswith(("http://", "https://"))
             )
+            if not skip_provider_direct_oss_download:
+                result["url"] = await asyncio.to_thread(
+                    self._download_and_save,
+                    result["url"],
+                    filename_base,
+                    user_id,
+                    storage_metadata,
+                )
+            else:
+                logger.info(
+                    "[GenerateImage] skip localization for provider-direct oss url | provider=%s user_id=%s url=%s",
+                    result_provider,
+                    user_id,
+                    _strip_query_from_log_url(result_url),
+                )
+                if isinstance(result.get("metadata"), dict):
+                    result["metadata"]["provider_direct_oss_url"] = True
+                else:
+                    result["metadata"] = {"provider_direct_oss_url": True, "provider": result_provider}
         if result and result.get("error"):
             error_provider = result.get("_attempt_provider") if isinstance(result, dict) else None
             result["error"] = self._vendor_failed_message(error_provider or provider, result.get("error"))

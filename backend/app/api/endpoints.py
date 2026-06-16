@@ -2190,7 +2190,23 @@ def _attach_oss_metadata_from_managed_url(metadata: Dict[str, Any], url: str) ->
 def _oss_upload_succeeded_for_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> bool:
     if isinstance(metadata, dict) and isinstance(metadata.get("oss"), dict):
         return True
+    if _is_provider_direct_oss_url(url, metadata):
+        return True
     return bool(oss_storage_service.is_managed_url(str(url or "")))
+
+
+def _is_provider_direct_oss_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> bool:
+    raw = str(url or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return False
+    if _is_ephemeral_provider_media_url(raw):
+        return False
+    meta = metadata if isinstance(metadata, dict) else {}
+    if bool(meta.get("provider_direct_oss_url")):
+        return True
+    provider = str(meta.get("provider") or "").strip().lower()
+    # Grsai can directly write into configured OSS path and return an authorized OSS URL.
+    return provider in {"grsai"}
 
 
 def _persist_remote_video_result(
@@ -2216,6 +2232,15 @@ def _persist_remote_video_result(
         logger.info(
             "[VideoResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
             getattr(current_user, "id", None),
+            raw,
+        )
+        return raw, updated_metadata, True
+    if _is_provider_direct_oss_url(raw, updated_metadata):
+        updated_metadata["provider_direct_oss_url"] = True
+        logger.info(
+            "[VideoResultNormalize] skip localization for provider direct oss url | user_id=%s provider=%s url=%s",
+            getattr(current_user, "id", None),
+            str(updated_metadata.get("provider") or "").strip() or None,
             raw,
         )
         return raw, updated_metadata, True
@@ -2379,13 +2404,15 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
     return False
 
 
-def _is_durable_persisted_media_url(value: Any) -> bool:
+def _is_durable_persisted_media_url(value: Any, metadata: Optional[Dict[str, Any]] = None) -> bool:
     raw = str(value or "").strip()
     if not raw:
         return False
     if _is_ephemeral_provider_media_url(raw):
         return False
     if raw.startswith("/uploads/"):
+        return True
+    if _is_provider_direct_oss_url(raw, metadata):
         return True
     if oss_storage_service.is_managed_url(raw):
         return True
@@ -2407,10 +2434,10 @@ def _resolve_video_persistence_source_url(result: Dict[str, Any]) -> str:
 def _video_result_needs_persistence_retry(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
-    current = str(result.get("url") or "").strip() or _extract_job_result_url(result)
-    if current and _is_durable_persisted_media_url(current):
-        return False
     meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    current = str(result.get("url") or "").strip() or _extract_job_result_url(result)
+    if current and _is_durable_persisted_media_url(current, meta):
+        return False
     if meta.get("persistence_gave_up") is True:
         return False
     source = _resolve_video_persistence_source_url(result)
@@ -2433,12 +2460,16 @@ def _resolve_video_bind_url(
 ) -> Tuple[Optional[str], bool, Dict[str, Any]]:
     meta = dict(normalized_meta or {})
     durable = str(normalized_url or "").strip()
-    if durable and _is_durable_persisted_media_url(durable):
+    if durable and _is_durable_persisted_media_url(durable, meta):
         return durable, False, meta
 
     source = str(raw_url or "").strip()
     if not source:
         return None, False, meta
+
+    if _is_provider_direct_oss_url(source, meta):
+        # Provider-side direct OSS links are stable; do not mark ephemeral/retry.
+        return source, False, meta
 
     if source.lower().startswith(("http://", "https://")) or _is_ephemeral_provider_media_url(source):
         meta["ephemeral_binding"] = True
@@ -9558,7 +9589,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             else:
                 persisted_field_name = "ai_scene_analysis_result"
                 episode.ai_scene_analysis_result = result_content
-                episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
+                # Keep subject index isolated to Stage 2.1 assets extraction output.
+                # Stage 2.2 scene markdown should not overwrite the subject index slot.
+                if is_subject_index_extraction_stage:
+                    episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
                 logger.info(
                     "[analyze_scene] Persisted raw phase1 output to ai_scene_analysis_result episode_id=%s chars=%s",
                     episode_id,
