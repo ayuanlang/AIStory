@@ -290,13 +290,15 @@ async function pollTask(taskId, {
     let attempts = 0;
   const deadline = Date.now() + timeout;
     let notFoundSince = 0;
-  while (true) {
+  while (Date.now() < deadline) {
                 attempts += 1;
         try {
             const reqConfig = {
                 ...(baseURL ? { baseURL } : {}),
                 // Prevent proxy/browser stale-cache from pinning task status at "running".
                 params: { _ts: Date.now() },
+                // Per-poll timeout: fail fast and retry instead of blocking on the global 10m axios default.
+                timeout: Math.max(15000, Math.min(60000, Number(interval || LLM_POLL_INTERVAL) * 4)),
             };
             const res = await api.get(`/tasks/${taskId}`, reqConfig);
             notFoundSince = 0;
@@ -363,12 +365,16 @@ const err = new Error('Task polling received an invalid response format (not an 
 
 const waitForAsyncTaskSingleFlight = async (taskId, pollOptions = {}) => {
         const baseURL = String(pollOptions?.baseURL || api.defaults.baseURL || '').trim();
-        const key = buildSingleFlightKey(`TASK_POLL:${baseURL}:${taskId}`, {
-                timeout: Number(pollOptions?.timeout || 0),
-                interval: Number(pollOptions?.interval || 0),
-                notFoundGraceMs: Number(pollOptions?.notFoundGraceMs || 0),
-        });
+        // One poll loop per task id — do not include timeout/interval in the key (resume vs submit used to fork polls).
+        const key = `TASK_POLL:${baseURL}:${taskId}`;
         return runSingleFlight(key, () => pollTask(taskId, pollOptions || {}));
+};
+
+export const isAsyncTaskPollInFlight = (taskId, baseURL = api.defaults.baseURL) => {
+        const stableTaskId = String(taskId || '').trim();
+        if (!stableTaskId) return false;
+        const stableBaseURL = String(baseURL || api.defaults.baseURL || '').trim();
+        return inFlightRequestMap.has(`TASK_POLL:${stableBaseURL}:${stableTaskId}`);
 };
 
 /**

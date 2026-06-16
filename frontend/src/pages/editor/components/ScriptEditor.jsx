@@ -13,6 +13,7 @@ import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Set
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
+import { getEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -4090,6 +4091,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisStopRequestedRef = useRef(false);
     const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
+    const scriptEditorMountedRef = useRef(true);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
     const latestIsAnalyzingRef = useRef(false);
@@ -4266,6 +4268,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // Ignore localStorage failures.
         }
     }, [getAnalysisTaskStorageKey]);
+
+    const isRecoverableAnalysisError = useCallback((error) => {
+        if (!error || isTaskCanceledError(error)) return false;
+        const code = String(error?.code || '').toUpperCase();
+        const msg = String(error?.message || '').toLowerCase();
+        if (code === 'ECONNABORTED') return true;
+        if (!error?.response) return true;
+        return (
+            msg.includes('network error')
+            || msg.includes('no response')
+            || msg.includes('submit/poll no response')
+            || msg.includes('timed out while waiting')
+            || msg.includes('task polling timed out')
+            || msg.includes('llm task polling timed out')
+        );
+    }, [isTaskCanceledError]);
+
+    const shouldRetainAnalysisTaskMarker = useCallback(({ pipelineFinished = false, canceled = false, error = null, mounted = true } = {}) => {
+        if (pipelineFinished || canceled) return false;
+        if (!mounted) return true;
+        return isRecoverableAnalysisError(error);
+    }, [isRecoverableAnalysisError]);
 
     const canStopAnalysisTask = useMemo(() => {
         if (isAnalyzing || isRetryingPhase2 || isStoppingAnalysisTask) return true;
@@ -4460,6 +4484,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         throw new Error('AI Script Analysis timed out while waiting for async task result.');
     }, [onLog, t, throwIfAnalysisStopped, waitForEpisodeAnalysisResultUpdate]);
 
+    const selectedReuseSubjectAssets = useMemo(() => {
+        if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
+        const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
+        return availableSubjectAssets
+            .filter(asset => selected.has(String(asset.id)))
+            .map(asset => ({
+                id: asset.id,
+                name: asset.name || '',
+                type: asset.type || '',
+                description: asset.description || asset.narrative_description || '',
+                anchor_description: asset.anchor_description || '',
+            }));
+    }, [availableSubjectAssets, selectedReuseSubjectIds]);
+
     const runStage2_2WithValidationRetry = useCallback(async ({
         label = 'Stage 2.2',
         logPhasePrefix = 'advanced',
@@ -4582,20 +4620,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         t,
         validateStage2_2BeatsOutput,
     ]);
-
-    const selectedReuseSubjectAssets = useMemo(() => {
-        if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
-        const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
-        return availableSubjectAssets
-            .filter(asset => selected.has(String(asset.id)))
-            .map(asset => ({
-                id: asset.id,
-                name: asset.name || '',
-                type: asset.type || '',
-                description: asset.description || asset.narrative_description || '',
-                anchor_description: asset.anchor_description || '',
-            }));
-    }, [availableSubjectAssets, selectedReuseSubjectIds]);
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
         if (sceneBeatsOnlyRerunInFlightRef.current) {
@@ -5228,6 +5252,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId) return;
+        if (getEpisodeAnalysisRun(activeEpisode.id)?.promise) return;
         if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
         analysisResumeInFlightRef.current = true;
 
@@ -5336,9 +5361,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (e) {
                 console.error("Stage 3 recovery error:", e);
                 const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
-                setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第三阶段资产设计任务失败：${friendlyRecoveryError}`, `Failed to resume Stage 3 asset design task: ${friendlyRecoveryError}`) });
-                  setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
-                  clearAnalysisTaskMarker(activeEpisode.id);
+                const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+                const retainMarker = shouldRetainAnalysisTaskMarker({
+                    canceled,
+                    error: e,
+                    mounted: scriptEditorMountedRef.current,
+                });
+                if (scriptEditorMountedRef.current) {
+                    setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第三阶段资产设计任务失败：${friendlyRecoveryError}`, `Failed to resume Stage 3 asset design task: ${friendlyRecoveryError}`) });
+                    setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
+                }
+                if (!retainMarker) {
+                    clearAnalysisTaskMarker(activeEpisode.id);
+                }
             } finally {
                 analysisResumeInFlightRef.current = false;
                 setIsRetryingPhase2(false);
@@ -5426,12 +5461,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (e) {
                 console.error('Stage 2.2 recovery error:', e);
                 const friendlyRecoveryError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
-                setAnalysisFlowStatus({
-                    phase: 'failed',
-                    message: t(`恢复场景编排任务失败：${friendlyRecoveryError}`, `Failed to resume scene beats task: ${friendlyRecoveryError}`),
+                const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+                const retainMarker = shouldRetainAnalysisTaskMarker({
+                    canceled,
+                    error: e,
+                    mounted: scriptEditorMountedRef.current,
                 });
-                setAnalysisUiReport(prev => ({ ...(prev || {}), status: 'error', error: friendlyRecoveryError }));
-                clearAnalysisTaskMarker(activeEpisode.id);
+                if (scriptEditorMountedRef.current) {
+                    setAnalysisFlowStatus({
+                        phase: 'failed',
+                        message: t(`恢复场景编排任务失败：${friendlyRecoveryError}`, `Failed to resume scene beats task: ${friendlyRecoveryError}`),
+                    });
+                    setAnalysisUiReport(prev => ({ ...(prev || {}), status: 'error', error: friendlyRecoveryError }));
+                }
+                if (!retainMarker) {
+                    clearAnalysisTaskMarker(activeEpisode.id);
+                }
             } finally {
                 analysisResumeInFlightRef.current = false;
                 setIsAnalyzing(false);
@@ -5645,25 +5690,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            setAnalysisFlowStatus(
-                canceled
-                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                    : { phase: 'failed', message: t(`恢复分析任务失败：${e?.message || e}`, `Failed to resume analysis task: ${e?.message || e}`) }
-            );
-            setAnalysisUiReport({
-                status: canceled ? 'warning' : 'failed',
-                startedAt,
-                durationMs: Date.now() - startedAt,
-                phaseTimings,
-                importReport,
-                runtimeMeta,
-                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
-                error: canceled ? '' : (e?.message || String(e || '')),
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                canceled,
+                error: e,
+                mounted: scriptEditorMountedRef.current,
             });
-            clearAnalysisTaskMarker(activeEpisode.id);
+            if (scriptEditorMountedRef.current) {
+                setAnalysisFlowStatus(
+                    canceled
+                        ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
+                        : retainMarker
+                            ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
+                            : { phase: 'failed', message: t(`恢复分析任务失败：${e?.message || e}`, `Failed to resume analysis task: ${e?.message || e}`) }
+                );
+                setAnalysisUiReport({
+                    status: canceled ? 'warning' : retainMarker ? 'warning' : 'failed',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings,
+                    importReport,
+                    runtimeMeta,
+                    warning: canceled
+                        ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
+                        : retainMarker
+                            ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
+                            : '',
+                    error: canceled || retainMarker ? '' : (e?.message || String(e || '')),
+                });
+            }
+            if (!retainMarker) {
+                clearAnalysisTaskMarker(activeEpisode.id);
+            }
         } finally {
             analysisResumeInFlightRef.current = false;
-            if (!analysisRunInFlightRef.current) {
+            if (!analysisRunInFlightRef.current && scriptEditorMountedRef.current) {
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
                 analysisStopRequestedRef.current = false;
@@ -5678,6 +5738,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         computeAnalysisPhaseTimings,
         extractAnalysisRuntimeMeta,
         isTaskCanceledError,
+        shouldRetainAnalysisTaskMarker,
         normalizeLlmMarkdownTable,
         persistLlmResultContent,
         refreshAnalysisFromDB,
@@ -5697,20 +5758,132 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [isAnalyzing, activeEpisode?.id]);
 
     useEffect(() => {
+        scriptEditorMountedRef.current = true;
         return () => {
             // Keep backend analysis running when this view unmounts (tab/page switch).
             // Explicit cancellation should only happen via the "stop task" action.
-            // No-op: avoid noisy unmount logs.
+            scriptEditorMountedRef.current = false;
         };
     }, []);
 
-    useEffect(() => {
+    const reattachToExistingAnalysisRun = useCallback(async (entry) => {
+        if (!activeEpisode?.id || !entry?.promise || analysisResumeInFlightRef.current) return false;
+        analysisResumeInFlightRef.current = true;
+
+        const startedAt = Number(entry.startedAt || Date.now());
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        setIsAnalyzing(true);
+        if (entry.taskId) {
+            setActiveAnalysisTaskId(String(entry.taskId));
+        }
+        setAnalysisFlowStatus({
+            phase: entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
+            message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
+        });
+        setAnalysisUiReport((prev) => (prev?.status === 'running' ? prev : {
+            status: 'running',
+            startedAt,
+            durationMs: elapsedMs,
+            phaseTimings: null,
+            importReport: null,
+            runtimeMeta: null,
+            warning: '',
+            error: '',
+        }));
+
+        try {
+            await entry.promise;
+            await refreshAnalysisFromDB();
+            await refreshAnalysisFromDB({ resultField: 'ai_entity_design_result' });
+            const marker = loadAnalysisTaskMarker(activeEpisode.id);
+            if (!marker?.taskId) {
+                setAnalysisFlowStatus((prev) => (prev?.phase === 'completed' ? prev : {
+                    phase: 'completed',
+                    message: t('分析任务已完成。', 'Analysis task completed.'),
+                }));
+                setAnalysisUiReport((prev) => ({
+                    ...(prev || {}),
+                    status: 'completed',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    error: '',
+                }));
+            }
+        } catch (e) {
+            const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                canceled,
+                error: e,
+                mounted: true,
+            });
+            const friendlyError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
+            if (canceled) {
+                setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+            } else if (retainMarker) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.'),
+                });
+            } else {
+                setAnalysisFlowStatus({
+                    phase: 'failed',
+                    message: t(`分析失败：${friendlyError}`, `Analysis failed: ${friendlyError}`),
+                });
+                setAnalysisUiReport((prev) => ({
+                    ...(prev || {}),
+                    status: 'failed',
+                    error: friendlyError,
+                }));
+            }
+        } finally {
+            analysisResumeInFlightRef.current = false;
+            if (!getEpisodeAnalysisRun(activeEpisode.id)?.promise) {
+                setIsAnalyzing(false);
+                setActiveAnalysisTaskId('');
+            }
+        }
+        return true;
+    }, [
+        activeEpisode?.id,
+        isTaskCanceledError,
+        loadAnalysisTaskMarker,
+        localizeAnalysisFailureMessage,
+        refreshAnalysisFromDB,
+        shouldRetainAnalysisTaskMarker,
+        t,
+    ]);
+
+    const tryResumePendingAnalysis = useCallback(async () => {
         if (!activeEpisode?.id) return;
         if (isAnalyzing || analysisResumeInFlightRef.current) return;
+
+        const activeRun = getEpisodeAnalysisRun(activeEpisode.id);
+        if (activeRun?.promise) {
+            await reattachToExistingAnalysisRun(activeRun);
+            return;
+        }
+
         const marker = loadAnalysisTaskMarker(activeEpisode.id);
         if (!marker?.taskId) return;
         resumeAnalysisFromTaskMarker(marker);
-    }, [activeEpisode?.id]);
+    }, [activeEpisode?.id, isAnalyzing, loadAnalysisTaskMarker, reattachToExistingAnalysisRun, resumeAnalysisFromTaskMarker]);
+
+    useEffect(() => {
+        tryResumePendingAnalysis();
+    }, [tryResumePendingAnalysis]);
+
+    useEffect(() => {
+        const refreshPendingAnalysis = () => {
+            if (document.visibilityState !== 'visible') return;
+            tryResumePendingAnalysis();
+        };
+        document.addEventListener('visibilitychange', refreshPendingAnalysis);
+        window.addEventListener('focus', refreshPendingAnalysis);
+        return () => {
+            document.removeEventListener('visibilitychange', refreshPendingAnalysis);
+            window.removeEventListener('focus', refreshPendingAnalysis);
+        };
+    }, [tryResumePendingAnalysis]);
 
     useEffect(() => {
         // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
@@ -7101,6 +7274,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         
+        const episodeId = activeEpisode?.id;
+        let analysisPipelineFinished = false;
+        let analysisError = null;
+        let analysisCanceled = false;
+
+        const existingRun = episodeId ? getEpisodeAnalysisRun(episodeId) : null;
+        if (existingRun?.promise) {
+            return reattachToExistingAnalysisRun(existingRun);
+        }
+
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -7117,6 +7300,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resetAnalysisFallbackRetryCounts(activeEpisode?.id);
         lastAutoSubjectsImportRef.current = { signature: '', result: null };
         const startedAt = Date.now();
+        const runAnalysisPipeline = async () => {
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -7183,8 +7367,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 1 });
+                            const stableTaskId = String(taskId || '').trim();
+                            setActiveAnalysisTaskId(stableTaskId);
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                            updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
                         },
                     },
                     projectId,
@@ -7466,43 +7652,73 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (onLog) onLog("AI Analysis applied and saved.");
             setShowAnalysisModal(false);
+            analysisPipelineFinished = true;
         } catch (e) {
             console.error(e);
             
-            const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            analysisError = e;
+            analysisCanceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            if (!scriptEditorMountedRef.current) {
+                return;
+            }
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                canceled: analysisCanceled,
+                error: e,
+                mounted: true,
+            });
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            if (canceled) {
+            if (analysisCanceled) {
                 if (onLog) onLog('Analysis task canceled by user.', 'warning');
             } else {
                 if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`);
             }
             setAnalysisFlowStatus(
-                canceled
+                analysisCanceled
                     ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                    : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
+                    : retainMarker
+                        ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
+                        : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
             );
             setAnalysisUiReport({
-                status: canceled ? 'warning' : 'failed',
+                status: analysisCanceled ? 'warning' : retainMarker ? 'warning' : 'failed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings,
                 importReport: importReport,
                 runtimeMeta,
-                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
-                error: canceled ? '' : friendlyAnalysisError,
+                warning: analysisCanceled
+                    ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
+                    : retainMarker
+                        ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
+                        : '',
+                error: analysisCanceled || retainMarker ? '' : friendlyAnalysisError,
             });
-            if (!canceled) {
+            if (!analysisCanceled && !retainMarker) {
                 alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
-            clearAnalysisTaskMarker(activeEpisode?.id);
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                pipelineFinished: analysisPipelineFinished,
+                canceled: analysisCanceled,
+                error: analysisError,
+                mounted: scriptEditorMountedRef.current,
+            });
+            if (!retainMarker) {
+                clearAnalysisTaskMarker(episodeId);
+            }
+            analysisRunInFlightRef.current = false;
+            if (!scriptEditorMountedRef.current) return;
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
             analysisStopRequestedRef.current = false;
-            analysisRunInFlightRef.current = false;
         }
+        };
+        const runPromise = runAnalysisPipeline();
+
+        trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'standard' });
+        return runPromise;
     };
 
     const handleSaveAnalysisAttentionNotes = async () => {
@@ -7588,6 +7804,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        const episodeId = activeEpisode.id;
+        const existingRun = getEpisodeAnalysisRun(episodeId);
+        if (existingRun?.promise) {
+            return reattachToExistingAnalysisRun(existingRun);
+        }
+
+        let analysisPipelineFinished = false;
+        let analysisError = null;
+        let analysisCanceled = false;
+
         // When force-regenerating, clear existing scenes and episode analysis fields.
         if (forceRegenerate && activeEpisode?.id) {
             await clearAnalysisOutputsForRestart();
@@ -7609,6 +7835,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resetAnalysisFallbackRetryCounts(activeEpisode?.id);
 
         const startedAt = Date.now();
+        const runAnalysisPipeline = async () => {
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -7672,8 +7899,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 1 });
+                            const stableTaskId = String(taskId || '').trim();
+                            setActiveAnalysisTaskId(stableTaskId);
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                            updateEpisodeAnalysisRun(episodeId, { taskId: stableTaskId, phase: 1 });
                         },
                     },
                     projectId,
@@ -8122,44 +8351,74 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
             setShowAnalysisModal(false);
+            analysisPipelineFinished = true;
         } catch (e) {
             console.error(e);
             
+            analysisError = e;
+            analysisCanceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
+            if (!scriptEditorMountedRef.current) {
+                return;
+            }
 
-            const canceled = isTaskCanceledError(e) || analysisStopRequestedRef.current;
             const friendlyAnalysisError = localizeAnalysisFailureMessage(e?.message || String(e || ''));
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                canceled: analysisCanceled,
+                error: e,
+                mounted: true,
+            });
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            if (canceled) {
+            if (analysisCanceled) {
                 if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
             } else {
                 if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`);
             }
             setAnalysisFlowStatus(
-                canceled
+                analysisCanceled
                     ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                    : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
+                    : retainMarker
+                        ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
+                        : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
             );
             setAnalysisUiReport({
-                status: canceled ? 'warning' : 'failed',
+                status: analysisCanceled ? 'warning' : retainMarker ? 'warning' : 'failed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings,
                 importReport: importReport,
                 runtimeMeta,
-                warning: canceled ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.') : '',
-                error: canceled ? '' : friendlyAnalysisError,
+                warning: analysisCanceled
+                    ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
+                    : retainMarker
+                        ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
+                        : '',
+                error: analysisCanceled || retainMarker ? '' : friendlyAnalysisError,
             });
-            if (!canceled) {
+            if (!analysisCanceled && !retainMarker) {
                 alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
-            clearAnalysisTaskMarker(activeEpisode?.id);
+            const retainMarker = shouldRetainAnalysisTaskMarker({
+                pipelineFinished: analysisPipelineFinished,
+                canceled: analysisCanceled,
+                error: analysisError,
+                mounted: scriptEditorMountedRef.current,
+            });
+            if (!retainMarker) {
+                clearAnalysisTaskMarker(episodeId);
+            }
+            analysisRunInFlightRef.current = false;
+            if (!scriptEditorMountedRef.current) return;
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
             analysisStopRequestedRef.current = false;
-            analysisRunInFlightRef.current = false;
         }
+        };
+        const runPromise = runAnalysisPipeline();
+
+        trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'advanced' });
+        return runPromise;
     };
 
     const getStageOutputContent = useCallback((stageKey, outputKey) => {
