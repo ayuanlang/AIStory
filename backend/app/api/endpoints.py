@@ -2171,6 +2171,121 @@ def _persist_remote_image_result(
     return normalized_url, updated_metadata
 
 
+def _attach_oss_metadata_from_managed_url(metadata: Dict[str, Any], url: str) -> Dict[str, Any]:
+    updated = dict(metadata)
+    if isinstance(updated.get("oss"), dict):
+        return updated
+    pool, key = oss_storage_service._extract_managed_target(str(url or ""))
+    if pool and key:
+        updated["oss"] = {
+            "provider": getattr(pool, "provider", None),
+            "bucket": getattr(pool, "bucket", None),
+            "key": key,
+            "endpoint": getattr(pool, "endpoint", None),
+        }
+    return updated
+
+
+def _oss_upload_succeeded_for_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> bool:
+    if isinstance(metadata, dict) and isinstance(metadata.get("oss"), dict):
+        return True
+    return bool(oss_storage_service.is_managed_url(str(url or "")))
+
+
+def _persist_remote_video_result(
+    current_user: User,
+    media_url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    filename_base: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+    raw = str(media_url or "").strip()
+    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    if not raw:
+        return media_url, updated_metadata or metadata, False
+
+    if raw.startswith("/"):
+        return raw, updated_metadata, _oss_upload_succeeded_for_url(raw, updated_metadata)
+
+    if not raw.lower().startswith(("http://", "https://")):
+        return media_url, updated_metadata or metadata, False
+
+    if oss_storage_service.is_managed_url(raw):
+        updated_metadata = _attach_oss_metadata_from_managed_url(updated_metadata, raw)
+        logger.info(
+            "[VideoResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
+            getattr(current_user, "id", None),
+            raw,
+        )
+        return raw, updated_metadata, True
+
+    temp_filename = _extract_media_filename_from_url(raw)
+    source_url = raw
+    resolved_kie_download_url = _resolve_kie_downloadable_url(source_url)
+    if resolved_kie_download_url and resolved_kie_download_url != raw:
+        raw = resolved_kie_download_url
+        if not temp_filename:
+            temp_filename = _extract_media_filename_from_url(raw)
+
+    user_id = int(getattr(current_user, "id", 0) or 0)
+    try:
+        persisted_url = media_service._download_and_save(
+            raw,
+            filename_base=filename_base,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[VideoResultNormalize] remote video download/save failed | user_id=%s url=%s err=%s",
+            user_id,
+            raw,
+            exc,
+        )
+        updated_metadata["remote_localization_failed"] = True
+        updated_metadata["remote_localization_error"] = str(exc)
+        updated_metadata["remote_localization_source_url"] = raw
+        if temp_filename:
+            updated_metadata["temporary_source_filename"] = temp_filename
+        return media_url, updated_metadata, False
+
+    persisted_url = str(persisted_url or "").strip() or raw
+    oss_ok = _oss_upload_succeeded_for_url(persisted_url, updated_metadata)
+
+    if persisted_url != source_url:
+        updated_metadata["stored_from_remote_url"] = raw
+        if temp_filename:
+            updated_metadata["temporary_source_filename"] = temp_filename
+        if resolved_kie_download_url:
+            updated_metadata["stored_from_remote_url_source"] = source_url
+            updated_metadata["stored_from_remote_url_resolved_via"] = "kie_download_url"
+
+    if oss_ok:
+        updated_metadata = _attach_oss_metadata_from_managed_url(updated_metadata, persisted_url)
+
+    if persisted_url == source_url and not oss_ok:
+        updated_metadata["remote_localization_failed"] = True
+        updated_metadata.setdefault(
+            "remote_localization_error",
+            "download_and_save returned original provider url",
+        )
+        updated_metadata["remote_localization_source_url"] = source_url
+        logger.warning(
+            "[VideoResultNormalize] remote video persisted without stable storage | user_id=%s url=%s",
+            user_id,
+            source_url,
+        )
+        return media_url, updated_metadata, False
+
+    logger.info(
+        "[VideoResultNormalize] stored remote video | user_id=%s source_url=%s normalized_url=%s oss=%s",
+        user_id,
+        source_url,
+        persisted_url,
+        oss_ok,
+    )
+    return persisted_url, updated_metadata, oss_ok
+
+
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
     re.compile(r"(^|\.)aiquickdraw\.com$", re.IGNORECASE),
@@ -3703,9 +3818,23 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                 pass
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
-        
-        normalized_url, normalized_meta = _persist_remote_image_result(current_user, raw_url, metadata)
-        
+
+        filename_base = _build_persist_filename_base_from_context(req_context, db)
+        normalized_url, normalized_meta, oss_uploaded = _persist_remote_video_result(
+            current_user,
+            raw_url,
+            metadata,
+            filename_base=filename_base,
+        )
+        logger.info(
+            "[VideoJobPersist] normalized | job_id=%s user_id=%s shot_id=%s normalized_url=%s oss=%s",
+            job_id,
+            getattr(current_user, "id", None),
+            req_context.get("shot_id"),
+            normalized_url,
+            oss_uploaded,
+        )
+
         if normalized_meta is None:
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
@@ -3729,7 +3858,7 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                     current_user,
                     req_context,
                     normalized_url,
-                    oss_uploaded_success=True,
+                    oss_uploaded_success=oss_uploaded,
                     media_metadata=normalized_meta,
                 )
             except Exception as bind_exc:
@@ -28450,6 +28579,17 @@ def _build_generation_filename_base(req: Any, db: Session) -> str:
     return "_".join(parts) if parts else "gen"
 
 
+def _build_persist_filename_base_from_context(req_context: Dict[str, Any], db: Session) -> str:
+    class _GenerationFilenameContext:
+        def __init__(self, context: Dict[str, Any]):
+            self._context = context if isinstance(context, dict) else {}
+
+        def __getattr__(self, name: str) -> Any:
+            return self._context.get(name)
+
+    return _build_generation_filename_base(_GenerationFilenameContext(req_context), db)
+
+
 def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
     if raw is None:
         return None
@@ -33360,45 +33500,39 @@ async def _run_generate_video(
         # Register asset + bind shot for direct-success providers (callback mode handles this in finalize path).
         if result.get("url"):
             temp_url = str(result.get("url") or "").strip()
-            if temp_url:
-                if temp_url.startswith("http"):
-                    norm_url, norm_meta = await asyncio.to_thread(
-                        _persist_remote_image_result,
+            if temp_url and not _is_ephemeral_provider_media_url(temp_url):
+                filename_base = _build_generation_filename_base(req, db)
+                if temp_url.lower().startswith(("http://", "https://")):
+                    norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
+                        _persist_remote_video_result,
                         current_user,
                         temp_url,
                         result.get("metadata"),
+                        filename_base=filename_base,
                     )
-                    final_url = norm_url if (norm_url and norm_url != temp_url) else temp_url
-                    final_meta = dict(norm_meta if norm_meta is not None else (result.get("metadata") or {}))
-
-                    if norm_url and norm_url != temp_url:
-                        result["url"] = norm_url
-                        result["metadata"] = final_meta
-
-                    if final_url and not _is_ephemeral_provider_media_url(final_url):
-                        await asyncio.to_thread(_register_asset_helper, db, current_user.id, final_url, req, final_meta)
-                        await asyncio.to_thread(
-                            _bind_generated_media_to_shot,
-                            db,
-                            current_user,
-                            req,
-                            final_url,
-                            True,
-                            final_meta,
-                        )
                 else:
-                    if not _is_ephemeral_provider_media_url(temp_url):
-                        final_meta_sync = dict(result.get("metadata") or {})
-                        await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, final_meta_sync)
-                        await asyncio.to_thread(
-                            _bind_generated_media_to_shot,
-                            db,
-                            current_user,
-                            req,
-                            temp_url,
-                            False,
-                            final_meta_sync,
-                        )
+                    norm_url = temp_url
+                    norm_meta = dict(result.get("metadata") or {})
+                    oss_uploaded = _oss_upload_succeeded_for_url(norm_url, norm_meta)
+
+                final_url = str(norm_url or temp_url).strip()
+                final_meta = dict(norm_meta if norm_meta is not None else (result.get("metadata") or {}))
+
+                if final_url and final_url != temp_url:
+                    result["url"] = final_url
+                    result["metadata"] = final_meta
+
+                if final_url:
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, final_url, req, final_meta)
+                    await asyncio.to_thread(
+                        _bind_generated_media_to_shot,
+                        db,
+                        current_user,
+                        req,
+                        final_url,
+                        oss_uploaded,
+                        final_meta,
+                    )
 
         if reservation_tx_id is not None:
             final_meta = result.get("metadata") if isinstance(result, dict) else {}
