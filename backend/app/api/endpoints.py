@@ -107,6 +107,7 @@ from pydantic import BaseModel
 import bcrypt
 import re
 import json
+import time
 from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from app.core.config import settings
@@ -2228,22 +2229,43 @@ def _persist_remote_video_result(
             temp_filename = _extract_media_filename_from_url(raw)
 
     user_id = int(getattr(current_user, "id", 0) or 0)
-    try:
-        persisted_url = media_service._download_and_save(
-            raw,
-            filename_base=filename_base,
-            user_id=user_id,
-        )
-    except Exception as exc:
-        logger.warning(
-            "[VideoResultNormalize] remote video download/save failed | user_id=%s url=%s err=%s",
-            user_id,
-            raw,
-            exc,
-        )
+    max_attempts = max(1, int(os.getenv("REMOTE_VIDEO_LOCALIZE_MAX_ATTEMPTS", "3")))
+    retry_backoff_seconds = max(0.5, float(os.getenv("REMOTE_VIDEO_LOCALIZE_RETRY_BACKOFF_SECONDS", "2")))
+    persisted_url = ""
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            candidate_url = media_service._download_and_save(
+                raw,
+                filename_base=filename_base,
+                user_id=user_id,
+            )
+            candidate_url = str(candidate_url or "").strip() or raw
+            if candidate_url != source_url or _is_durable_persisted_media_url(candidate_url):
+                persisted_url = candidate_url
+                last_exc = None
+                break
+            persisted_url = candidate_url
+            last_exc = ValueError("download_and_save returned original provider url")
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "[VideoResultNormalize] remote video download/save attempt failed | user_id=%s url=%s attempt=%s/%s err=%s",
+                user_id,
+                raw,
+                attempt,
+                max_attempts,
+                exc,
+            )
+        if attempt < max_attempts:
+            time.sleep(retry_backoff_seconds * attempt)
+
+    if last_exc is not None and not persisted_url:
         updated_metadata["remote_localization_failed"] = True
-        updated_metadata["remote_localization_error"] = str(exc)
+        updated_metadata["remote_localization_error"] = str(last_exc)
         updated_metadata["remote_localization_source_url"] = raw
+        updated_metadata["persist_attempts"] = max_attempts
         if temp_filename:
             updated_metadata["temporary_source_filename"] = temp_filename
         return media_url, updated_metadata, False
@@ -2253,6 +2275,8 @@ def _persist_remote_video_result(
 
     if persisted_url != source_url:
         updated_metadata["stored_from_remote_url"] = raw
+        updated_metadata["remote_localization_failed"] = False
+        updated_metadata.pop("remote_localization_error", None)
         if temp_filename:
             updated_metadata["temporary_source_filename"] = temp_filename
         if resolved_kie_download_url:
@@ -2261,20 +2285,23 @@ def _persist_remote_video_result(
 
     if oss_ok:
         updated_metadata = _attach_oss_metadata_from_managed_url(updated_metadata, persisted_url)
+    elif persisted_url.startswith("/uploads/"):
+        updated_metadata["stored_locally"] = True
 
-    if persisted_url == source_url and not oss_ok:
+    if not _is_durable_persisted_media_url(persisted_url):
         updated_metadata["remote_localization_failed"] = True
         updated_metadata.setdefault(
             "remote_localization_error",
             "download_and_save returned original provider url",
         )
         updated_metadata["remote_localization_source_url"] = source_url
+        updated_metadata["needs_persistence_retry"] = True
         logger.warning(
-            "[VideoResultNormalize] remote video persisted without stable storage | user_id=%s url=%s",
+            "[VideoResultNormalize] remote video persisted without durable storage | user_id=%s url=%s",
             user_id,
             source_url,
         )
-        return media_url, updated_metadata, False
+        return persisted_url, updated_metadata, False
 
     logger.info(
         "[VideoResultNormalize] stored remote video | user_id=%s source_url=%s normalized_url=%s oss=%s",
@@ -2284,6 +2311,43 @@ def _persist_remote_video_result(
         oss_ok,
     )
     return persisted_url, updated_metadata, oss_ok
+
+
+def _persist_remote_media_result(
+    current_user: User,
+    media_url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    filename_base: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+    """Stream-download remote media and persist to OSS/local (video/audio/large files)."""
+    return _persist_remote_video_result(
+        current_user,
+        media_url,
+        metadata,
+        filename_base=filename_base,
+    )
+
+
+def _resolve_media_bind_url(
+    *,
+    raw_url: str,
+    normalized_url: Optional[str],
+    normalized_meta: Dict[str, Any],
+) -> Tuple[Optional[str], bool, Dict[str, Any]]:
+    return _resolve_video_bind_url(
+        raw_url=raw_url,
+        normalized_url=normalized_url,
+        normalized_meta=normalized_meta,
+    )
+
+
+def _resolve_media_persistence_source_url(result: Dict[str, Any]) -> str:
+    return _resolve_video_persistence_source_url(result)
+
+
+def _media_result_needs_persistence_retry(result: Any) -> bool:
+    return _video_result_needs_persistence_retry(result)
 
 
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
@@ -2313,6 +2377,76 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
         if pattern.match(hostname):
             return True
     return False
+
+
+def _is_durable_persisted_media_url(value: Any) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    if _is_ephemeral_provider_media_url(raw):
+        return False
+    if raw.startswith("/uploads/"):
+        return True
+    if oss_storage_service.is_managed_url(raw):
+        return True
+    return False
+
+
+def _resolve_video_persistence_source_url(result: Dict[str, Any]) -> str:
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    for key in ("remote_localization_source_url", "stored_from_remote_url", "pending_source_url"):
+        candidate = str(meta.get(key) or "").strip()
+        if candidate:
+            return candidate
+    direct = str(result.get("url") or "").strip()
+    if direct:
+        return direct
+    return _extract_job_result_url(result)
+
+
+def _video_result_needs_persistence_retry(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    current = str(result.get("url") or "").strip() or _extract_job_result_url(result)
+    if current and _is_durable_persisted_media_url(current):
+        return False
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    if meta.get("persistence_gave_up") is True:
+        return False
+    source = _resolve_video_persistence_source_url(result)
+    if not source:
+        return False
+    if meta.get("remote_localization_failed") or meta.get("needs_persistence_retry") or meta.get("ephemeral_binding"):
+        return True
+    if _is_ephemeral_provider_media_url(current) or _is_ephemeral_provider_media_url(source):
+        return True
+    if current.lower().startswith(("http://", "https://")) and not oss_storage_service.is_managed_url(current):
+        return True
+    return False
+
+
+def _resolve_video_bind_url(
+    *,
+    raw_url: str,
+    normalized_url: Optional[str],
+    normalized_meta: Dict[str, Any],
+) -> Tuple[Optional[str], bool, Dict[str, Any]]:
+    meta = dict(normalized_meta or {})
+    durable = str(normalized_url or "").strip()
+    if durable and _is_durable_persisted_media_url(durable):
+        return durable, False, meta
+
+    source = str(raw_url or "").strip()
+    if not source:
+        return None, False, meta
+
+    if source.lower().startswith(("http://", "https://")) or _is_ephemeral_provider_media_url(source):
+        meta["ephemeral_binding"] = True
+        meta["needs_persistence_retry"] = True
+        meta.setdefault("pending_source_url", source)
+        return source, True, meta
+
+    return None, False, meta
 
 
 def _extract_media_filename_from_url(value: Any) -> str:
@@ -3098,6 +3232,8 @@ def _extract_job_result_url(result: Any) -> str:
             return ""
         if len(value) > 4096:
             return ""
+        if value.startswith("/uploads/"):
+            return value
         try:
             parsed = urllib.parse.urlparse(value)
             if parsed.scheme.lower() not in {"http", "https", "oss", "s3", "cos"}:
@@ -3467,7 +3603,16 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
         )
         normalized_url, normalized_meta = _persist_data_uri_image_result(current_user, raw_url, metadata)
-        normalized_url, normalized_meta = _persist_remote_image_result(current_user, normalized_url, normalized_meta)
+        if str(normalized_url or "").strip().lower().startswith(("http://", "https://")):
+            filename_base = _build_persist_filename_base_from_context(req_context, db)
+            normalized_url, normalized_meta, oss_uploaded = _persist_remote_media_result(
+                current_user,
+                normalized_url,
+                normalized_meta,
+                filename_base=filename_base,
+            )
+        else:
+            oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta)
         logger.info(
             "[ImageJobPersist] normalized | job_id=%s user_id=%s entity_id=%s shot_id=%s normalized_url=%s oss=%s",
             job_id,
@@ -3475,42 +3620,60 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
             req_context.get("entity_id"),
             req_context.get("shot_id"),
             normalized_url,
-            bool((normalized_meta or {}).get("oss")) if isinstance(normalized_meta, dict) else False,
+            oss_uploaded,
         )
         if normalized_meta is None:
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
 
+        bind_url, ephemeral_binding, normalized_meta = _resolve_media_bind_url(
+            raw_url=raw_url,
+            normalized_url=str(normalized_url or "").strip() or None,
+            normalized_meta=normalized_meta,
+        )
+
         finalized_result = dict(result)
-        if normalized_url:
-            finalized_result["url"] = normalized_url
+        display_url = str(normalized_url or "").strip()
+        if display_url and _is_durable_persisted_media_url(display_url):
+            finalized_result["url"] = display_url
+        elif bind_url:
+            finalized_result["url"] = bind_url
+        elif display_url:
+            finalized_result["url"] = display_url
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
         request_mode = str(req_context.get("mode") or "").strip().lower()
-        if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
-            _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
+        if bind_url:
+            bind_oss_flag = bool(oss_uploaded and not ephemeral_binding)
+            _register_asset_helper(db, current_user.id, bind_url, req_context, normalized_meta)
             if request_mode != "joint_diptych":
                 _bind_generated_media_to_shot(
                     db,
                     current_user,
                     req_context,
-                    normalized_url,
-                    oss_uploaded_success=True,
+                    bind_url,
+                    oss_uploaded_success=bind_oss_flag,
                     media_metadata=normalized_meta,
                 )
-                _bind_generated_media_to_entity(db, current_user, req_context, normalized_url, oss_uploaded_success=True)
+                _bind_generated_media_to_entity(
+                    db,
+                    current_user,
+                    req_context,
+                    bind_url,
+                    oss_uploaded_success=bind_oss_flag,
+                )
         elif normalized_url:
             if request_mode != "joint_diptych":
                 logger.warning(
-                "[ImageJob] skipped asset registration/bind for temporary provider url | job_id=%s user_id=%s url=%s temp_filename=%s entity_id=%s shot_id=%s",
-                job_id,
-                getattr(current_user, "id", None),
-                normalized_url,
-                _extract_media_filename_from_url(normalized_url),
-                req_context.get("entity_id"),
-                req_context.get("shot_id"),
-            )
+                    "[ImageJob] skipped asset registration/bind because no durable or fallback url | job_id=%s user_id=%s url=%s temp_filename=%s entity_id=%s shot_id=%s",
+                    job_id,
+                    getattr(current_user, "id", None),
+                    normalized_url,
+                    _extract_media_filename_from_url(normalized_url),
+                    req_context.get("entity_id"),
+                    req_context.get("shot_id"),
+                )
 
         return finalized_result
     except Exception as exc:
@@ -3568,6 +3731,8 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
                     effective_job.update(updates)
                     persisted_result = _finalize_image_job_result_persistence(job_id, effective_job, dict(candidate_result))
                     persisted_result_url = _extract_job_result_url(persisted_result)
+                    if not persisted_result_url and isinstance(persisted_result, dict):
+                        persisted_result_url = str(persisted_result.get("url") or "").strip()
                     effective_current_result = updates.get("result") if "result" in updates else job.get("result")
                     effective_current_result_url = _extract_job_result_url(effective_current_result)
                     if persisted_result_url and (
@@ -3593,7 +3758,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
             updates["error"] = failure_text
 
     if not updates:
-        return job
+        return _maybe_retry_image_job_result_persistence(job_id, job)
 
     if provider_task_id:
         updates.setdefault("provider_task_id", provider_task_id)
@@ -3609,7 +3774,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
         bool(callback_result_url),
         callback_result_url or None,
     )
-    return updated or job
+    return _maybe_retry_image_job_result_persistence(job_id, updated or job)
 
 
 def _find_image_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -3764,6 +3929,164 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
 
 
 
+def _maybe_retry_video_job_result_persistence(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    status = _normalize_generation_status(job.get("status"))
+    if status not in {"succeeded", "completed", "done", "waiting_callback"}:
+        return job
+
+    result = job.get("result")
+    if not isinstance(result, dict) or not _video_result_needs_persistence_retry(result):
+        return job
+
+    meta = dict(result.get("metadata") or {})
+    retry_count = int(meta.get("persistence_retry_count") or 0)
+    max_retries = _media_persistence_poll_max_retries()
+    if retry_count >= max_retries:
+        if not meta.get("persistence_gave_up"):
+            meta["persistence_gave_up"] = True
+            meta["needs_persistence_retry"] = False
+            retry_result = dict(result)
+            retry_result["metadata"] = meta
+            _set_video_job(job_id, result=retry_result)
+            logger.error(
+                "[VideoJobPersist] gave up persistence retries | job_id=%s retries=%s source_url=%s",
+                job_id,
+                retry_count,
+                _resolve_video_persistence_source_url(result),
+            )
+            with VIDEO_JOB_LOCK:
+                return dict(VIDEO_JOB_STORE.get(job_id) or job)
+        return job
+
+    min_interval = _media_persistence_retry_interval_seconds()
+    last_retry_at = meta.get("persistence_retry_at")
+    if last_retry_at:
+        parsed = _parse_iso_datetime(last_retry_at)
+        if parsed and (datetime.utcnow() - parsed).total_seconds() < min_interval:
+            return job
+
+    source_url = _resolve_video_persistence_source_url(result)
+    if not source_url:
+        return job
+
+    retry_input = dict(result)
+    retry_input["url"] = source_url
+    meta["persistence_retry_count"] = retry_count + 1
+    meta["persistence_retry_at"] = now_bj_iso()
+    meta["needs_persistence_retry"] = True
+    retry_input["metadata"] = meta
+
+    logger.info(
+        "[VideoJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
+        job_id,
+        retry_count + 1,
+        max_retries,
+        source_url,
+    )
+    persisted = _finalize_video_job_result_persistence(job_id, job, retry_input)
+    persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
+    if persisted_url and _is_durable_persisted_media_url(persisted_url):
+        _set_video_job(job_id, result=persisted)
+        with VIDEO_JOB_LOCK:
+            updated = dict(VIDEO_JOB_STORE.get(job_id) or job)
+        logger.info(
+            "[VideoJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+            job_id,
+            persisted_url,
+        )
+        return updated
+
+    if isinstance(persisted, dict) and persisted != result:
+        _set_video_job(job_id, result=persisted)
+        with VIDEO_JOB_LOCK:
+            return dict(VIDEO_JOB_STORE.get(job_id) or job)
+    return job
+
+
+def _media_persistence_poll_max_retries() -> int:
+    return max(1, int(os.getenv("MEDIA_PERSISTENCE_POLL_MAX_RETRIES", os.getenv("VIDEO_PERSISTENCE_POLL_MAX_RETRIES", "12"))))
+
+
+def _media_persistence_retry_interval_seconds() -> int:
+    return max(5, int(os.getenv("MEDIA_PERSISTENCE_RETRY_INTERVAL_SECONDS", os.getenv("VIDEO_PERSISTENCE_RETRY_INTERVAL_SECONDS", "20"))))
+
+
+def _maybe_retry_image_job_result_persistence(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    status = _normalize_generation_status(job.get("status"))
+    if status not in {"succeeded", "completed", "done", "waiting_callback", "storing_asset"}:
+        return job
+
+    result = job.get("result")
+    if not isinstance(result, dict) or not _media_result_needs_persistence_retry(result):
+        return job
+
+    meta = dict(result.get("metadata") or {})
+    retry_count = int(meta.get("persistence_retry_count") or 0)
+    max_retries = _media_persistence_poll_max_retries()
+    if retry_count >= max_retries:
+        if not meta.get("persistence_gave_up"):
+            meta["persistence_gave_up"] = True
+            meta["needs_persistence_retry"] = False
+            retry_result = dict(result)
+            retry_result["metadata"] = meta
+            _set_image_job(job_id, result=retry_result)
+            logger.error(
+                "[ImageJobPersist] gave up persistence retries | job_id=%s retries=%s source_url=%s",
+                job_id,
+                retry_count,
+                _resolve_media_persistence_source_url(result),
+            )
+            with IMAGE_JOB_LOCK:
+                return dict(IMAGE_JOB_STORE.get(job_id) or job)
+        return job
+
+    min_interval = _media_persistence_retry_interval_seconds()
+    last_retry_at = meta.get("persistence_retry_at")
+    if last_retry_at:
+        parsed = _parse_iso_datetime(last_retry_at)
+        if parsed and (datetime.utcnow() - parsed).total_seconds() < min_interval:
+            return job
+
+    source_url = _resolve_media_persistence_source_url(result)
+    if not source_url:
+        return job
+
+    retry_input = dict(result)
+    retry_input["url"] = source_url
+    meta["persistence_retry_count"] = retry_count + 1
+    meta["persistence_retry_at"] = now_bj_iso()
+    meta["needs_persistence_retry"] = True
+    retry_input["metadata"] = meta
+
+    logger.info(
+        "[ImageJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
+        job_id,
+        retry_count + 1,
+        max_retries,
+        source_url,
+    )
+    persisted = _finalize_image_job_result_persistence(job_id, job, retry_input)
+    persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
+    if not persisted_url and isinstance(persisted, dict):
+        persisted_url = _extract_job_result_url(persisted)
+    if persisted_url and _is_durable_persisted_media_url(persisted_url):
+        _set_image_job(job_id, result=persisted, status="succeeded", finished_at=now_bj_iso())
+        with IMAGE_JOB_LOCK:
+            updated = dict(IMAGE_JOB_STORE.get(job_id) or job)
+        logger.info(
+            "[ImageJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+            job_id,
+            persisted_url,
+        )
+        return updated
+
+    if isinstance(persisted, dict) and persisted != result:
+        _set_image_job(job_id, result=persisted)
+        with IMAGE_JOB_LOCK:
+            return dict(IMAGE_JOB_STORE.get(job_id) or job)
+    return job
+
+
 def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return result
@@ -3839,16 +4162,27 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
 
+        bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
+            raw_url=raw_url,
+            normalized_url=str(normalized_url or "").strip() or None,
+            normalized_meta=normalized_meta,
+        )
+
         finalized_result = dict(result)
-        if normalized_url:
-            finalized_result["url"] = normalized_url
+        display_url = str(normalized_url or "").strip()
+        if display_url and _is_durable_persisted_media_url(display_url):
+            finalized_result["url"] = display_url
+        elif bind_url:
+            finalized_result["url"] = bind_url
+        elif display_url:
+            finalized_result["url"] = display_url
         if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
-        # Register + bind if relevant and not ephemeral
-        if normalized_url and not _is_ephemeral_provider_media_url(normalized_url):
+        if bind_url:
+            bind_oss_flag = bool(oss_uploaded and not ephemeral_binding)
             try:
-                _register_asset_helper(db, current_user.id, normalized_url, req_context, normalized_meta)
+                _register_asset_helper(db, current_user.id, bind_url, req_context, normalized_meta)
             except Exception as reg_exc:
                 logger.warning(f"[_finalize_video_job_result_persistence] _register_asset_helper failed: {reg_exc}")
 
@@ -3857,8 +4191,8 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                     db,
                     current_user,
                     req_context,
-                    normalized_url,
-                    oss_uploaded_success=oss_uploaded,
+                    bind_url,
+                    oss_uploaded_success=bind_oss_flag,
                     media_metadata=normalized_meta,
                 )
             except Exception as bind_exc:
@@ -3930,6 +4264,8 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
                     effective_job.update(updates)
                     persisted_result = _finalize_video_job_result_persistence(job_id, effective_job, dict(candidate_result))
                     persisted_result_url = _extract_job_result_url(persisted_result)
+                    if not persisted_result_url and isinstance(persisted_result, dict):
+                        persisted_result_url = str(persisted_result.get("url") or "").strip()
                     effective_current_result = updates.get("result") if "result" in updates else job.get("result")
                     effective_current_result_url = _extract_job_result_url(effective_current_result)
                     if persisted_result_url and (
@@ -3955,7 +4291,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
             updates["error"] = failure_text
 
     if not updates:
-        return job
+        return _maybe_retry_video_job_result_persistence(job_id, job)
 
     if provider_task_id:
         updates.setdefault("provider_task_id", provider_task_id)
@@ -3971,7 +4307,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
         bool(callback_result_url),
         callback_result_url or None,
     )
-    return updated or job
+    return _maybe_retry_video_job_result_persistence(job_id, updated or job)
 
 
 def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -30751,27 +31087,60 @@ async def _run_generate_image(
                             if job_id:
                                 _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
                             return
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
+                        norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
+                            _persist_remote_media_result,
+                            bg_user,
+                            raw_url,
+                            meta,
+                            filename_base=_build_generation_filename_base(req_obj, bg_db),
+                        )
 
-                        final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
+                        final_url = str(norm_url or raw_url).strip()
                         final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
                         if job_id:
                             final_meta["idempotency_key"] = job_id
-                        
-                        if not _is_ephemeral_provider_media_url(final_url):
-                            await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
-                            if request_mode != "joint_diptych":
-                                await asyncio.to_thread(_bind_generated_media_to_shot, bg_db, bg_user, req_obj, final_url, True)
-                                await asyncio.to_thread(_bind_generated_media_to_entity, bg_db, bg_user, req_obj, final_url, True)
 
-                        if job_id and norm_url and norm_url != raw_url:
+                        bind_url, ephemeral_binding, final_meta = _resolve_media_bind_url(
+                            raw_url=raw_url,
+                            normalized_url=final_url,
+                            normalized_meta=final_meta,
+                        )
+                        if bind_url:
+                            await asyncio.to_thread(
+                                _register_asset_helper,
+                                bg_db,
+                                bg_user.id,
+                                bind_url,
+                                req_obj,
+                                final_meta,
+                            )
+                            if request_mode != "joint_diptych":
+                                await asyncio.to_thread(
+                                    _bind_generated_media_to_shot,
+                                    bg_db,
+                                    bg_user,
+                                    req_obj,
+                                    bind_url,
+                                    bool(oss_uploaded and not ephemeral_binding),
+                                    final_meta,
+                                )
+                                await asyncio.to_thread(
+                                    _bind_generated_media_to_entity,
+                                    bg_db,
+                                    bg_user,
+                                    req_obj,
+                                    bind_url,
+                                    bool(oss_uploaded and not ephemeral_binding),
+                                )
+
+                        if job_id and bind_url and bind_url != raw_url:
                             with IMAGE_JOB_LOCK:
                                 _job_to_update = dict(IMAGE_JOB_STORE.get(job_id) or {})
                             if _job_to_update:
                                 updated_res = dict(_job_to_update.get("result") or result)
-                                updated_res["url"] = norm_url
-                                if norm_meta is not None:
-                                    updated_res["metadata"] = norm_meta
+                                updated_res["url"] = bind_url
+                                if final_meta is not None:
+                                    updated_res["metadata"] = final_meta
                                 _set_image_job(job_id, result=updated_res, status="succeeded", finished_at=now_bj_iso())
                         elif job_id:
                             _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
@@ -30784,14 +31153,34 @@ async def _run_generate_image(
 
                 asyncio.create_task(_bg_upload_and_update(current_user, req, temp_url, result.get("metadata")))
             else:
-                if not _is_ephemeral_provider_media_url(temp_url):
-                    final_meta_sync = dict(result.get("metadata") or {})
-                    if job_id:
-                        final_meta_sync["idempotency_key"] = job_id
-                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, temp_url, req, final_meta_sync)
+                final_meta_sync = dict(result.get("metadata") or {})
+                if job_id:
+                    final_meta_sync["idempotency_key"] = job_id
+                bind_url, ephemeral_binding, final_meta_sync = _resolve_media_bind_url(
+                    raw_url=temp_url,
+                    normalized_url=temp_url,
+                    normalized_meta=final_meta_sync,
+                )
+                if bind_url:
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, bind_url, req, final_meta_sync)
                     if request_mode != "joint_diptych":
-                        await asyncio.to_thread(_bind_generated_media_to_shot, db, current_user, req, temp_url, False)
-                        await asyncio.to_thread(_bind_generated_media_to_entity, db, current_user, req, temp_url, False)
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_shot,
+                            db,
+                            current_user,
+                            req,
+                            bind_url,
+                            _oss_upload_succeeded_for_url(bind_url, final_meta_sync) and not ephemeral_binding,
+                            final_meta_sync,
+                        )
+                        await asyncio.to_thread(
+                            _bind_generated_media_to_entity,
+                            db,
+                            current_user,
+                            req,
+                            bind_url,
+                            _oss_upload_succeeded_for_url(bind_url, final_meta_sync) and not ephemeral_binding,
+                        )
                 if job_id:
                     _set_image_job(job_id, status="succeeded", finished_at=now_bj_iso())
 
@@ -31504,6 +31893,7 @@ def get_generate_image_job_status(
             job["result"] = compact_result
 
     job = _maybe_finalize_image_job_from_grsai_callback(job_id, job)
+    job = _maybe_retry_image_job_result_persistence(job_id, job)
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
     owner_username_norm = owner_username.lower()
@@ -32409,29 +32799,44 @@ async def generate_voice_endpoint(
                     try:
                         bg_user = bg_db.query(User).filter(User.id == user.id).first()
                         if not bg_user: return
-                        norm_url, norm_meta = await asyncio.to_thread(_persist_remote_image_result, bg_user, raw_url, meta)
-                        if norm_url and norm_url != raw_url:
-                            # Update shot
-                            if req_obj.shot_id:
-                                bg_shot = bg_db.query(Shot).filter(Shot.id == int(req_obj.shot_id)).first()
-                                if bg_shot:
-                                    bg_tech = {}
-                                    try:
-                                        bg_tech = json.loads(bg_shot.technical_notes or "{}")
-                                    except:
-                                        bg_tech = {}
-                                    if bg_tech.get("voiceover_url") == raw_url:
-                                        bg_tech["voiceover_url"] = norm_url
-                                        bg_shot.technical_notes = json.dumps(bg_tech, ensure_ascii=False)
-                                        bg_db.add(bg_shot)
-                                        bg_db.commit()
-                            
-                        # Register correctly whether OSS'd or not
-                        final_url = norm_url if (norm_url and norm_url != raw_url) else raw_url
+                        norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
+                            _persist_remote_media_result,
+                            bg_user,
+                            raw_url,
+                            meta,
+                            filename_base=_build_generation_filename_base(req_obj, bg_db),
+                        )
+                        final_url = str(norm_url or raw_url).strip()
                         final_meta = dict(norm_meta if norm_meta is not None else (meta or {}))
                         if not str(final_meta.get("idempotency_key") or "").strip() and req_obj.shot_id:
                             final_meta["idempotency_key"] = f"voice-shot-{int(req_obj.shot_id)}"
-                        await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, final_url, req_obj, final_meta)
+
+                        bind_url, ephemeral_binding, final_meta = _resolve_media_bind_url(
+                            raw_url=raw_url,
+                            normalized_url=final_url,
+                            normalized_meta=final_meta,
+                        )
+                        if bind_url and req_obj.shot_id:
+                            bg_shot = bg_db.query(Shot).filter(Shot.id == int(req_obj.shot_id)).first()
+                            if bg_shot:
+                                bg_tech = {}
+                                try:
+                                    bg_tech = json.loads(bg_shot.technical_notes or "{}")
+                                except Exception:
+                                    bg_tech = {}
+                                current_voice = str(bg_tech.get("voiceover_url") or "").strip()
+                                if current_voice in {raw_url, bind_url}:
+                                    bg_tech["voiceover_url"] = bind_url
+                                    if ephemeral_binding:
+                                        bg_tech["voiceover_ephemeral_binding"] = True
+                                    elif oss_uploaded:
+                                        bg_tech["voiceover_oss_uploaded"] = True
+                                    bg_shot.technical_notes = json.dumps(bg_tech, ensure_ascii=False)
+                                    bg_db.add(bg_shot)
+                                    bg_db.commit()
+
+                        if bind_url:
+                            await asyncio.to_thread(_register_asset_helper, bg_db, bg_user.id, bind_url, req_obj, final_meta)
                     except Exception as e:
                         logger.error(f"[_bg_upload_and_update_voice] failed for user={user.id} url={raw_url}: {e}")
                     finally:
@@ -33500,7 +33905,7 @@ async def _run_generate_video(
         # Register asset + bind shot for direct-success providers (callback mode handles this in finalize path).
         if result.get("url"):
             temp_url = str(result.get("url") or "").strip()
-            if temp_url and not _is_ephemeral_provider_media_url(temp_url):
+            if temp_url:
                 filename_base = _build_generation_filename_base(req, db)
                 if temp_url.lower().startswith(("http://", "https://")):
                     norm_url, norm_meta, oss_uploaded = await asyncio.to_thread(
@@ -33522,15 +33927,23 @@ async def _run_generate_video(
                     result["url"] = final_url
                     result["metadata"] = final_meta
 
-                if final_url:
-                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, final_url, req, final_meta)
+                bind_url, ephemeral_binding, final_meta = _resolve_video_bind_url(
+                    raw_url=temp_url,
+                    normalized_url=final_url,
+                    normalized_meta=final_meta,
+                )
+                if bind_url:
+                    if bind_url != temp_url or ephemeral_binding:
+                        result["url"] = bind_url
+                        result["metadata"] = final_meta
+                    await asyncio.to_thread(_register_asset_helper, db, current_user.id, bind_url, req, final_meta)
                     await asyncio.to_thread(
                         _bind_generated_media_to_shot,
                         db,
                         current_user,
                         req,
-                        final_url,
-                        oss_uploaded,
+                        bind_url,
+                        bool(oss_uploaded and not ephemeral_binding),
                         final_meta,
                     )
 
@@ -34354,6 +34767,7 @@ def get_generate_video_job_status(
             job["result"] = compact_result
 
     job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+    job = _maybe_retry_video_job_result_persistence(job_id, job)
     owner_id = job.get("user_id")
     owner_username = str(job.get("username") or "").strip()
     owner_username_norm = owner_username.lower()

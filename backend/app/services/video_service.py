@@ -135,7 +135,11 @@ def create_montage(project_id: int, items: list, user_id: int = 0) -> str:
         final_clip = concatenate_videoclips(clips, method="compose")
         
         output_filename = f"montage_{project_id}_{uuid.uuid4().hex}.mp4"
-        output_path = os.path.join(settings.UPLOAD_DIR, output_filename)
+        output_dir = settings.UPLOAD_DIR
+        if user_id:
+            output_dir = os.path.join(settings.UPLOAD_DIR, str(user_id))
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, output_filename)
         
         # Write file
         write_kwargs = {
@@ -170,18 +174,26 @@ def create_montage(project_id: int, items: list, user_id: int = 0) -> str:
                 content_type="video/mp4",
                 category="montage"
             )
-            if uploaded and uploaded.get("public_url"):
+            oss_url = str((uploaded or {}).get("url") or "").strip()
+            if oss_url:
                 try:
                     os.remove(output_path)
-                    logger.info(f"Montage uploaded to OSS, local file removed: {output_path}")
+                    logger.info(
+                        "Montage uploaded to OSS | user_id=%s key=%s url=%s",
+                        user_id,
+                        (uploaded or {}).get("key"),
+                        oss_url,
+                    )
                 except Exception as ex:
                     logger.warning(f"Failed to remove local montage file {output_path}: {ex}")
-                return uploaded["public_url"]
+                return oss_url
         except Exception as oss_err:
             logger.error(f"Failed to upload montage to OSS: {oss_err}")
-            
-        # Return URL
-        return f"/uploads/{output_filename}"
+
+        relative_name = output_filename
+        if user_id:
+            relative_name = f"{user_id}/{output_filename}"
+        return f"/uploads/{relative_name}"
 
     except Exception as e:
         logger.error(f"Montage generation failed: {e}")

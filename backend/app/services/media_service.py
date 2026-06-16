@@ -14272,6 +14272,10 @@ class MediaGenerationService:
              if "localhost" in url or "127.0.0.1" in url: return url
 
              response = requests.get(url, stream=True, timeout=600, headers={"User-Agent": "Mozilla/5.0"})
+             if response.status_code != 200:
+                _debug_log(f"Download failed: HTTP {response.status_code} for {url}", "error")
+                raise ValueError(f"HTTP {response.status_code}")
+
              if response.status_code == 200:
                 from urllib.parse import urlparse
 
