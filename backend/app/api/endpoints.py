@@ -6381,6 +6381,8 @@ def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
 
     if re.search(r"(?i)\bsubject_type\s*=\s*(cover_poster|poster|posters|cover|covers|封面|封面海报|海报)\b", text):
         return True
+    if re.search(r"(?im)\b(?:subject_type|type)\b\s*[:=]\s*(cover_poster|poster|posters|cover|covers|封面|封面海报|海报)\b", text):
+        return True
 
     def _normalize_type(value: Any) -> str:
         key = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -6394,13 +6396,28 @@ def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
         line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
         if not line:
             continue
-        if not re.match(r"^\|?\s*S\d+\s*\|", line, flags=re.IGNORECASE):
+        if "|" not in line:
             continue
         normalized_line = line.strip("|").strip()
         parts = [p.strip() for p in normalized_line.split("|")]
         if len(parts) < 2:
             continue
+        first_col = str(parts[0] or "").strip().lower()
+        if first_col in {"subject_no", "subject_id", "id", "编号"}:
+            continue
         if _normalize_type(parts[1]) == "cover_poster":
+            return True
+
+    # subject_no-style line fallback, e.g.:
+    # subject_no=S001 | subject_type=poster | ...
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "").replace("\ufeff", "").strip()
+        if not line:
+            continue
+        if not re.search(r"(?i)\bsubject_(?:no|id)\b", line):
+            continue
+        matched = re.search(r"(?i)\bsubject_type\s*[:=]\s*([a-zA-Z_\-\u4e00-\u9fff]+)", line)
+        if matched and _normalize_type(matched.group(1)) == "cover_poster":
             return True
     return False
 
@@ -7285,6 +7302,7 @@ async def run_scene_analysis_flow_node(
             if node_key == "assets_extraction":
                 max_attempts = 2
                 result = None
+                assets_cover_poster_missing_after_retries = False
                 for attempt in range(1, max_attempts + 1):
                     result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
                     result_text = _extract_analysis_text_from_result(result)
@@ -7304,7 +7322,13 @@ async def run_scene_analysis_flow_node(
                         max_attempts,
                     )
                     if attempt >= max_attempts:
-                        raise RuntimeError("ASSETS_EXTRACTION_COVER_POSTER_MISSING")
+                        assets_cover_poster_missing_after_retries = True
+                        logger.warning(
+                            "[剧本分析流程] 节点 %s 在重试后仍缺少 cover_poster/poster，按非阻断告警继续 | episode_id=%s",
+                            node_key,
+                            node_episode_id,
+                        )
+                        break
                     upsert_pipeline_node_status(
                         db,
                         project_id=node_project_id,
@@ -7315,6 +7339,19 @@ async def run_scene_analysis_flow_node(
                         progress_percent=15.0,
                         error_code="ASSETS_EXTRACTION_COVER_POSTER_MISSING",
                         error_message="cover_poster/poster missing, auto-retrying once",
+                    )
+                    db.commit()
+                if assets_cover_poster_missing_after_retries and node_project_id > 0 and node_episode_id > 0:
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="running",
+                        progress_percent=85.0,
+                        error_code="ASSETS_EXTRACTION_COVER_POSTER_MISSING",
+                        error_message="cover_poster/poster missing after retries; continued as non-blocking warning",
                     )
                     db.commit()
             elif node_key == "script_optimization":
