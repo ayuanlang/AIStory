@@ -2205,8 +2205,24 @@ def _is_provider_direct_oss_url(url: Optional[str], metadata: Optional[Dict[str,
     if bool(meta.get("provider_direct_oss_url")):
         return True
     provider = str(meta.get("provider") or "").strip().lower()
-    # Grsai can directly write into configured OSS path and return an authorized OSS URL.
-    return provider in {"grsai"}
+    # Grsai can directly write into configured OSS path and return an authorized OSS URL,
+    # but only treat known managed/public OSS hosts as direct-oss.
+    if provider != "grsai":
+        return False
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        hostname = str(parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    if not hostname:
+        return False
+    return bool(
+        re.match(r"(^|.+\.)clouddn\.com$", hostname, re.IGNORECASE)
+        or re.match(r"(^|.+\.)qiniucs\.com$", hostname, re.IGNORECASE)
+        or re.match(r"(^|.+\.)woola\.fun$", hostname, re.IGNORECASE)
+        or ".bkt." in hostname
+        or "backblaze" in hostname
+    )
 
 
 def _persist_remote_video_result(
@@ -2377,7 +2393,7 @@ def _media_result_needs_persistence_retry(result: Any) -> bool:
 
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
-    re.compile(r"(^|\.)aiquickdraw\.com$", re.IGNORECASE),
+    re.compile(r"(^|.+\.)aiquickdraw\.com$", re.IGNORECASE),
 ]
 
 
@@ -3470,7 +3486,11 @@ def _normalize_generation_status(value: Any) -> str:
     return status
 
 
-def _build_result_from_provider_callback(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_result_from_provider_callback(
+    payload: Dict[str, Any],
+    *,
+    fallback_provider: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
 
@@ -3496,8 +3516,22 @@ def _build_result_from_provider_callback(payload: Dict[str, Any]) -> Optional[Di
         callback_payload_size = len(json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8", errors="ignore"))
     except Exception:
         callback_payload_size = 0
+    provider_candidates: List[str] = []
+    for candidate in (
+        payload.get("provider"),
+        payload.get("provider_name"),
+        payload.get("providerName"),
+        payload.get("vendor"),
+        payload.get("source"),
+        fallback_provider,
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            provider_candidates.append(text)
+    resolved_provider = provider_candidates[0] if provider_candidates else ""
+
     metadata: Dict[str, Any] = {
-        "provider": "grsai",
+        "provider": resolved_provider,
         "status": _normalize_generation_status(payload.get("status")),
         "payload_truncated": bool(payload.get("payload_truncated")),
     }
@@ -3729,7 +3763,10 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
 
     normalized_status = _normalize_generation_status(callback_payload.get("status"))
     current_status = _normalize_generation_status(job.get("status"))
-    result = _build_result_from_provider_callback(callback_payload)
+    result = _build_result_from_provider_callback(
+        callback_payload,
+        fallback_provider=str(job.get("provider") or "").strip() or None,
+    )
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
     current_error = str(job.get("error") or "").strip()
@@ -4253,7 +4290,10 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
         logger.debug("[DEBUG-CB] job_id=%s task_id mismatch! provider_task_id=%s callback_task_id=%s", job_id, provider_task_id, callback_task_id)
         return job
 
-    result = _build_result_from_provider_callback(callback_payload)
+    result = _build_result_from_provider_callback(
+        callback_payload,
+        fallback_provider=str(job.get("provider") or "").strip() or None,
+    )
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
     logger.debug("[DEBUG-CB] job_id=%s callback_payload=%s", job_id, repr(callback_payload))
@@ -4460,7 +4500,12 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         callback_status = _normalize_generation_status(
             callback_payload.get("status") or _extract_callback_status(callback_payload)
         )
-        if not callback_status and _extract_job_result_url(_build_result_from_provider_callback(callback_payload) or {}):
+        if not callback_status and _extract_job_result_url(
+            _build_result_from_provider_callback(
+                callback_payload,
+                fallback_provider=str(job.get("provider") or "").strip() or None,
+            ) or {}
+        ):
             callback_status = "succeeded"
         callback_is_terminal = callback_status in {"succeeded", "failed", "canceled"}
         if callback_is_terminal:
