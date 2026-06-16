@@ -9248,6 +9248,41 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
             return text if has_index_markers else ""
 
+        def _unwrap_script_to_analyze(raw_text: Any) -> str:
+            text = str(raw_text or "")
+            if not text.strip():
+                return ""
+            marker = "Script to Analyze:"
+            if marker not in text:
+                return text.strip()
+            # Keep the innermost payload when wrappers are nested.
+            idx = text.rfind(marker)
+            if idx < 0:
+                return text.strip()
+            return text[idx + len(marker):].strip()
+
+        def _collapse_exact_duplicated_text(raw_text: Any) -> str:
+            text = str(raw_text or "").strip()
+            if not text:
+                return ""
+            lines = [line.rstrip() for line in text.splitlines()]
+            if len(lines) >= 8 and len(lines) % 2 == 0:
+                half = len(lines) // 2
+                left = "\n".join(lines[:half]).strip()
+                right = "\n".join(lines[half:]).strip()
+                if left and right and left == right:
+                    return left
+            return text
+
+        def _sanitize_scene_beats_stage_text(raw_text: Any) -> str:
+            text = str(raw_text or "")
+            if not text.strip():
+                return ""
+            text = _unwrap_script_to_analyze(text)
+            text = _strip_embedded_subject_index_from_stage_text(text)
+            text = _collapse_exact_duplicated_text(text)
+            return text.strip()
+
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
@@ -9259,7 +9294,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
             if is_scene_beats_stage:
-                canonical_stage_text = str(request.text or "")
+                canonical_stage_text = _sanitize_scene_beats_stage_text(request.text)
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 embedded_subject_index_for_prompt = _extract_embedded_subject_index_from_stage_text(request.text)
@@ -9295,6 +9330,8 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
         else:
             request_text_for_prompt = str(request.text or "")
+            if is_scene_beats_stage:
+                request_text_for_prompt = _sanitize_scene_beats_stage_text(request_text_for_prompt)
             if should_trim_before_submit:
                 request_text_for_prompt = _trim_to_scenes_block(request_text_for_prompt)
             if is_subject_index_consumer_stage and subject_index_allowed_types_for_request:
