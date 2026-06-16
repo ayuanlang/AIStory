@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 
@@ -123,6 +123,196 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
     return parsed
 
 
+def _normalize_scene_table_header(value: Any) -> str:
+    return re.sub(r"[\s_\-./()]", "", str(value or "").strip().lower())
+
+
+def _split_scene_table_cells(line: str) -> List[str]:
+    cells = [str(cell or "").strip() for cell in str(line or "").split("|")]
+    if cells and cells[0] == "":
+        cells.pop(0)
+    if cells and cells[-1] == "":
+        cells.pop()
+    return cells
+
+
+def _is_scene_table_separator_line(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text:
+        return False
+    return bool(re.search(r"\|\s*:?-{3,}:?", text)) or bool(re.match(r"^[\s\|:\-]*$", text))
+
+
+def _find_scene_table_col_idx(normalized_headers: List[str], aliases: List[str]) -> int:
+    alias_set = {_normalize_scene_table_header(alias) for alias in aliases}
+    for idx, header in enumerate(normalized_headers):
+        normalized = _normalize_scene_table_header(header)
+        if any(alias in normalized or normalized in alias for alias in alias_set):
+            return idx
+    return -1
+
+
+def _collect_scene_table_blocks(script_text: str) -> List[str]:
+    lines = str(script_text or "").splitlines()
+    blocks: List[List[str]] = []
+    current: List[str] = []
+
+    def flush() -> None:
+        if len(current) >= 2:
+            blocks.append(list(current))
+        current.clear()
+
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if line.startswith("|") and "|" in line:
+            current.append(line)
+        else:
+            flush()
+    flush()
+    return ["\n".join(block).strip() for block in blocks if block]
+
+
+def _scene_table_row_has_identity(cells: List[str], scene_id_idx: int, scene_no_idx: int, scene_name_idx: int) -> bool:
+    scene_id = str(cells[scene_id_idx] if scene_id_idx >= 0 and scene_id_idx < len(cells) else "").strip()
+    scene_no = str(cells[scene_no_idx] if scene_no_idx >= 0 and scene_no_idx < len(cells) else "").strip()
+    scene_name = str(cells[scene_name_idx] if scene_name_idx >= 0 and scene_name_idx < len(cells) else "").strip()
+    return bool(scene_id or scene_no or scene_name)
+
+
+def _scene_table_cell_value(cells: List[str], idx: int) -> str:
+    if idx < 0 or idx >= len(cells):
+        return ""
+    return str(cells[idx] or "").strip()
+
+
+def _build_scene_text_from_table_row(
+    cells: List[str],
+    *,
+    core_info_idx: int,
+    adapted_idx: int,
+    scene_name_idx: int,
+    environment_idx: int,
+    linked_characters_idx: int,
+    key_props_idx: int,
+) -> str:
+    parts = [
+        _scene_table_cell_value(cells, core_info_idx),
+        _scene_table_cell_value(cells, adapted_idx),
+        _scene_table_cell_value(cells, environment_idx),
+        _scene_table_cell_value(cells, linked_characters_idx),
+        _scene_table_cell_value(cells, key_props_idx),
+    ]
+    if scene_name_idx >= 0:
+        scene_name = _scene_table_cell_value(cells, scene_name_idx)
+        if scene_name:
+            parts.insert(0, f"Scene Name: {scene_name}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUnit]:
+    text = str(script_text or "")
+    if not text.strip():
+        raise SceneMarkerParseError("SCENES_TABLE_EMPTY", "scenes table text is empty")
+
+    blocks = _collect_scene_table_blocks(text)
+    if not blocks:
+        raise SceneMarkerParseError("SCENES_TABLE_BLOCK_MISSING", "no markdown scenes table detected")
+
+    parsed: List[ParsedSceneUnit] = []
+    seen_scene_ids: Set[str] = set()
+
+    for block in blocks:
+        lines = [line.strip() for line in str(block or "").splitlines() if str(line or "").strip()]
+        if len(lines) < 2:
+            continue
+
+        headers = _split_scene_table_cells(lines[0])
+        normalized_headers = [_normalize_scene_table_header(header) for header in headers]
+        scene_id_idx = _find_scene_table_col_idx(normalized_headers, ["sceneid", "场景id"])
+        scene_no_idx = _find_scene_table_col_idx(normalized_headers, ["sceneno", "场次序号", "场次"])
+        scene_name_idx = _find_scene_table_col_idx(normalized_headers, ["scenename", "场景名", "场景名称"])
+        core_info_idx = _find_scene_table_col_idx(normalized_headers, ["coresceneinfo", "核心场景信息"])
+        adapted_idx = _find_scene_table_col_idx(
+            normalized_headers,
+            ["adaptedscripttext", "改编剧本文本", "改编剧本", "originalscripttext", "原始剧本文本", "scripttext"],
+        )
+        environment_idx = _find_scene_table_col_idx(normalized_headers, ["environmentname", "环境名", "环境名称", "环境"])
+        linked_characters_idx = _find_scene_table_col_idx(normalized_headers, ["linkedcharacters", "关联角色", "角色", "characters"])
+        key_props_idx = _find_scene_table_col_idx(normalized_headers, ["keyprops", "关键道具", "道具", "props"])
+
+        if scene_id_idx < 0 and scene_no_idx < 0 and scene_name_idx < 0:
+            continue
+
+        current_unit: Optional[ParsedSceneUnit] = None
+
+        for line in lines[1:]:
+            if _is_scene_table_separator_line(line):
+                continue
+
+            cells = _split_scene_table_cells(line)
+            if not cells:
+                continue
+            while len(cells) < len(headers):
+                cells.append("")
+
+            if _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx):
+                scene_id = _scene_table_cell_value(cells, scene_id_idx)
+                scene_no = _scene_table_cell_value(cells, scene_no_idx)
+                scene_name = _scene_table_cell_value(cells, scene_name_idx)
+                if not scene_id:
+                    if scene_no:
+                        scene_id = scene_no
+                    elif scene_name:
+                        scene_id = scene_name
+                if not scene_id:
+                    continue
+                if scene_id in seen_scene_ids:
+                    raise SceneMarkerParseError("SCENES_TABLE_DUPLICATE_SCENE_ID", f"duplicate scene_id: {scene_id}")
+                seen_scene_ids.add(scene_id)
+
+                scene_text = _build_scene_text_from_table_row(
+                    cells,
+                    core_info_idx=core_info_idx,
+                    adapted_idx=adapted_idx,
+                    scene_name_idx=scene_name_idx,
+                    environment_idx=environment_idx,
+                    linked_characters_idx=linked_characters_idx,
+                    key_props_idx=key_props_idx,
+                )
+                current_unit = ParsedSceneUnit(
+                    scene_id=scene_id,
+                    scene_order=len(parsed) + 1,
+                    scene_text=scene_text,
+                    marker_start_token="scenes_table",
+                    marker_end_token="scenes_table",
+                )
+                parsed.append(current_unit)
+                continue
+
+            if current_unit is None:
+                continue
+
+            continuation_parts = [
+                _scene_table_cell_value(cells, core_info_idx),
+                _scene_table_cell_value(cells, adapted_idx),
+                _scene_table_cell_value(cells, environment_idx),
+                _scene_table_cell_value(cells, linked_characters_idx),
+                _scene_table_cell_value(cells, key_props_idx),
+            ]
+            continuation_text = "\n\n".join(part for part in continuation_parts if part).strip()
+            if not continuation_text:
+                continue
+            if current_unit.scene_text:
+                current_unit.scene_text = f"{current_unit.scene_text}\n\n{continuation_text}".strip()
+            else:
+                current_unit.scene_text = continuation_text
+
+    if not parsed:
+        raise SceneMarkerParseError("SCENES_TABLE_NO_SCENES", "no valid scenes found in scenes table")
+
+    return parsed
+
+
 def _upsert_scene_unit(
     db: Session,
     *,
@@ -179,7 +369,14 @@ def sync_scene_units_from_script_text(
     script_text: str,
     script_id: Optional[str] = None,
 ) -> Dict[str, object]:
-    units = parse_scene_units_from_markers(script_text)
+    parse_source = "scene_markers"
+    try:
+        units = parse_scene_units_from_markers(script_text)
+    except SceneMarkerParseError as marker_exc:
+        if str(getattr(marker_exc, "code", "") or "").strip().upper() != "SCENE_MARKER_BLOCK_MISSING":
+            raise
+        units = parse_scene_units_from_scenes_table(script_text)
+        parse_source = "scenes_table"
     now_iso = now_bj_iso()
     existing_rows = (
         db.query(ScriptProgressSceneUnit)
@@ -217,6 +414,7 @@ def sync_scene_units_from_script_text(
         "script_id": script_id,
         "scene_count": len(units),
         "scene_ids": [unit.scene_id for unit in units],
+        "parse_source": parse_source,
     }
 
 
@@ -388,6 +586,7 @@ __all__ = [
     "normalize_node_status",
     "normalize_script_analysis_flow_config",
     "parse_scene_units_from_markers",
+    "parse_scene_units_from_scenes_table",
     "raise_progress_issue",
     "resolve_progress_issue",
     "sync_scene_units_from_script_text",
