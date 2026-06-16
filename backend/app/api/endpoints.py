@@ -7437,15 +7437,16 @@ async def run_scene_analysis_flow_node(
         logger.info("[剧本分析流程] 节点 %s 执行完成 | llm_elapsed_ms=%s", node_key, llm_elapsed_ms)
 
         if node_project_id > 0 and node_episode_id > 0:
-            upsert_pipeline_node_status(
-                db,
-                project_id=node_project_id,
-                episode_id=node_episode_id,
-                script_id=f"episode:{node_episode_id}",
-                node_name=node_key,
-                status="success",
-                progress_percent=100.0,
-            )
+            if node_key != "scene_markdown":
+                upsert_pipeline_node_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    script_id=f"episode:{node_episode_id}",
+                    node_name=node_key,
+                    status="success",
+                    progress_percent=100.0,
+                )
 
             if node_key == "scene_markdown":
                 scene_markdown_started_perf = time.perf_counter()
@@ -7487,6 +7488,15 @@ async def run_scene_analysis_flow_node(
                             project_id=node_project_id,
                             episode_id=node_episode_id,
                             script_id=f"episode:{node_episode_id}",
+                            node_name=node_key,
+                            status="success",
+                            progress_percent=100.0,
+                        )
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
                             node_name="scene_planning",
                             status="success",
                             progress_percent=100.0,
@@ -7498,6 +7508,17 @@ async def run_scene_analysis_flow_node(
                             node_episode_id,
                             parse_exc,
                         )
+                        parse_error_code = str(getattr(parse_exc, "code", "") or "SCENE_PARSE_ERROR")
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name=node_key,
+                            status="failed",
+                            error_code=parse_error_code,
+                            error_message=str(parse_exc),
+                        )
                         upsert_pipeline_node_status(
                             db,
                             project_id=node_project_id,
@@ -7505,15 +7526,29 @@ async def run_scene_analysis_flow_node(
                             script_id=f"episode:{node_episode_id}",
                             node_name="scene_planning",
                             status="failed",
-                            error_code=str(getattr(parse_exc, "code", "") or "SCENE_PARSE_ERROR"),
+                            error_code=parse_error_code,
                             error_message=str(parse_exc),
                         )
+                        db.commit()
+                        raise HTTPException(status_code=422, detail=parse_error_code)
                 else:
                     logger.warning(
                         "[场景编排2.2] scene_markdown 节点返回空文本，跳过 scene_units 同步 | project_id=%s | episode_id=%s",
                         node_project_id,
                         node_episode_id,
                     )
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
+                        status="failed",
+                        error_code="SCENE_MARKDOWN_EMPTY",
+                        error_message="scene_markdown node returned empty text",
+                    )
+                    db.commit()
+                    raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_EMPTY")
                 scene_markdown_elapsed_ms = int((time.perf_counter() - scene_markdown_started_perf) * 1000)
                 logger.info(
                     "[场景编排2.2] 节点后处理完成 | project_id=%s | episode_id=%s | post_elapsed_ms=%s",
@@ -9028,10 +9063,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return text[start_idx:].lstrip()
             return text[start_idx:end_idx + len(SCENES_BLOCK_END_TOKEN)].strip()
 
-        # Keep full script_optimization output because Phase-1 must preserve
-        # Project Visual Backfill at the tail section; only beats stage requires
-        # strict SCENES_BLOCK trimming.
-        should_trim_before_submit = bool(is_scene_beats_stage)
+        # Keep full outputs for stage1/stage2.1/stage2.2.
+        # Stage 2.2 contract is "Part 1: Scenes Table", not SCENES_BLOCK markers,
+        # so do not trim to marker block for beats stage.
+        should_trim_before_submit = False
 
         def _normalize_subject_index_entity_type(raw_type: Any) -> str:
             t = str(raw_type or "").strip().lower()

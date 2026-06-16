@@ -370,14 +370,14 @@ def sync_scene_units_from_script_text(
     script_text: str,
     script_id: Optional[str] = None,
 ) -> Dict[str, object]:
-    parse_source = "scene_markers"
+    parse_source = "scenes_table"
     try:
-        units = parse_scene_units_from_markers(script_text)
-    except SceneMarkerParseError as marker_exc:
-        if str(getattr(marker_exc, "code", "") or "").strip().upper() != "SCENE_MARKER_BLOCK_MISSING":
-            raise
+        # Stage 2.2 output contract is Part 1: Scenes Table only.
+        # Parse table first; marker parsing is kept as backward compatibility.
         units = parse_scene_units_from_scenes_table(script_text)
-        parse_source = "scenes_table"
+    except SceneMarkerParseError:
+        units = parse_scene_units_from_markers(script_text)
+        parse_source = "scene_markers"
     now_iso = now_bj_iso()
     existing_rows = (
         db.query(ScriptProgressSceneUnit)

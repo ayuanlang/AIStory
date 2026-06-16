@@ -5018,11 +5018,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const reconcile = async () => {
             if (!stableShotId) return;
 
-            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'video' });
+            await syncShotMediaRuntimeState({
+                shotId: stableShotId,
+                mediaKey: 'video',
+                preferPoolLookup: false,
+            });
             if (cancelled) return;
-            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'start' });
+            await syncShotMediaRuntimeState({
+                shotId: stableShotId,
+                mediaKey: 'start',
+                preferPoolLookup: false,
+            });
             if (cancelled) return;
-            await syncShotMediaRuntimeState({ shotId: stableShotId, mediaKey: 'end' });
+            await syncShotMediaRuntimeState({
+                shotId: stableShotId,
+                mediaKey: 'end',
+                preferPoolLookup: false,
+            });
         };
 
         reconcile();
@@ -7524,6 +7536,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         let createdVideoJobId = '';
         let keepRunningUi = false;
+        let ignoreAsyncJobCallbacks = false;
+        let ignoredAsyncJobCallbackCount = 0;
 
         onLog?.('Generating Video...', 'info');
         try {
@@ -7732,11 +7746,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     entity_url_map: tech.entity_url_map || undefined,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
+                        if (ignoreAsyncJobCallbacks) {
+                            ignoredAsyncJobCallbackCount += 1;
+                            return;
+                        }
                         createdVideoJobId = String(jobId || '').trim();
                         setPendingVideoJob(targetShotId, jobId);
                         setShotGeneratingState(targetShotId, 'video', true);
                     },
                     on_job_status: (status, data) => {
+                        if (ignoreAsyncJobCallbacks) {
+                            ignoredAsyncJobCallbackCount += 1;
+                            return;
+                        }
                         setVideoStatuses(prev => ({ ...prev, [targetShotId]: String(data?.status || status).toLowerCase() }));
                     },
                 }, keyframeRequestUrls);
@@ -7754,6 +7776,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 if (!resolvedVideoUrl) {
                     // Some providers finish asynchronously and do not return URL in immediate response.
                     // Force a server resync so UI still updates when the shot record has been updated.
+                    ignoreAsyncJobCallbacks = true;
                     releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                     onLog?.(t('视频任务已完成，正在同步最新镜头数据...', 'Video task completed, syncing latest shot data...'), 'info');
                     refreshShotAssetsMeta();
@@ -7771,6 +7794,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     }
                     setVideoStatuses(prev => { const n = { ...prev }; delete n[targetShotId]; return n; });
                 } else {
+                ignoreAsyncJobCallbacks = true;
                 if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resolvedVideoUrl);
 
                 try {
@@ -7834,11 +7858,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         showNotification('Video job continues in background.', 'info');
                         keepRunningUi = true;
                     } else {
+                        ignoreAsyncJobCallbacks = true;
                         releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                         onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                         showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                     }
                 } else {
+                    ignoreAsyncJobCallbacks = true;
                     releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                     onLog?.(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
                     showNotification(`Generation failed: ${e?.message || 'unknown error'}`, 'error');
@@ -7857,19 +7883,29 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                      showNotification('Video job continues in background.', 'info');
                      keepRunningUi = true;
                  } else {
+                    ignoreAsyncJobCallbacks = true;
                      releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                      onLog?.(`Generation failed: ${e.message}`, 'error');
                      showNotification(`Generation failed: ${e.message}`, 'error');
                  }
              } else {
+                 ignoreAsyncJobCallbacks = true;
                  releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
                  onLog?.(`Generation failed: ${e.message}`, 'error');
                  showNotification(`Generation failed: ${e.message}`, 'error');
              }
         } finally {
             if (!keepRunningUi) {
+                ignoreAsyncJobCallbacks = true;
                 setShotGeneratingState(targetShotId, 'video', false);
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
+            }
+            if (ignoredAsyncJobCallbackCount > 0 && typeof window !== 'undefined') {
+                console.debug('[ShotsView] Ignored stale video job callbacks', {
+                    shotId: String(targetShotId || ''),
+                    jobId: String(createdVideoJobId || ''),
+                    ignoredCount: ignoredAsyncJobCallbackCount,
+                });
             }
         }
     };
