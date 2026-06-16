@@ -2114,8 +2114,6 @@ const Editor = ({
                 let scriptLines = [];
                 let capturing = false;
 
-                const pendingSceneRows = [];
-
                 for (let line of lines) {
                     // Start marker
                     if (line.includes('|') && (line.includes('Paragraph ID') || line.includes('Paragraph Title'))) {
@@ -2162,6 +2160,7 @@ const Editor = ({
                 let currentSceneDbId = null;
                 const deferredShots = [];
                 const pendingShotItems = [];
+                const pendingSceneRows = [];
                 const queueShotItem = (sceneId, shotData) => {
                     const sid = Number(sceneId || 0);
                     if (!Number.isFinite(sid) || sid <= 0 || !shotData?.shot_id) return;

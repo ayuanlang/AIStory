@@ -111,6 +111,9 @@ import {
     recomputeEpisodeCostEstimation,
 } from '../../../services/api';
 
+/** Max automatic fallback reruns for scene beats / asset generation (excluding the initial run). */
+const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
+
 import RefineControl from '../../../components/RefineControl.jsx';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
@@ -211,7 +214,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
-    const zeroCountAutoRerunRef = useRef({ reportKey: '', attempted: new Set(), running: false });
+    const analysisFallbackRetryRef = useRef({
+        episodeId: null,
+        sceneBeatsAttempts: 0,
+        assetAttempts: 0,
+        sceneRegenAttempts: 0,
+        running: false,
+    });
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
@@ -3241,6 +3250,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { ok: true, subjectIndexText };
     }, [extractPureSubjectIndexText, t]);
 
+    const runStage2_1WithValidationRetry = useCallback(async (runAttempt, contextLabel = 'Stage 2.1') => {
+        let result = await runAttempt();
+        let text = extractAnalysisTextFromResult(result) || '';
+        let validation = validateStage2_1SubjectIndexOutput(text, contextLabel);
+        for (let fallbackAttempt = 1; !validation.ok && fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+            onLog?.(`[Stage 2.1] ${validation.reason}`, 'warning');
+            setAnalysisFlowStatus({
+                phase: 'extract_assets',
+                message: t(
+                    `Stage 2.1 校验失败，正在自动重试 (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`,
+                    `Stage 2.1 validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
+                ),
+            });
+            result = await runAttempt();
+            text = extractAnalysisTextFromResult(result) || '';
+            validation = validateStage2_1SubjectIndexOutput(text, `${contextLabel} retry ${fallbackAttempt}`);
+        }
+        if (!validation.ok) {
+            throw new Error(validation.reason || `Stage 2.1 failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+        }
+        return { result, text, validation };
+    }, [extractAnalysisTextFromResult, onLog, t, validateStage2_1SubjectIndexOutput]);
+
     const llmMarkdownTableText = useMemo(() => normalizeLlmMarkdownTable(llmResultContent), [llmResultContent, normalizeLlmMarkdownTable]);
     const llmMarkdownTable = useMemo(() => parseMarkdownTable(llmMarkdownTableText), [llmMarkdownTableText]);
     const llmSceneCount = useMemo(() => {
@@ -4069,6 +4101,65 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const ANALYSIS_TASK_MARKER_TTL_MS = 120 * 60 * 1000;
     const AI_SHOTS_TASK_MARKER_TTL_MS = 45 * 60 * 1000;
 
+    const resetAnalysisFallbackRetryCounts = useCallback((episodeId) => {
+        const id = Number(episodeId || 0);
+        if (!id) return;
+        analysisFallbackRetryRef.current = {
+            episodeId: id,
+            sceneBeatsAttempts: 0,
+            assetAttempts: 0,
+            sceneRegenAttempts: 0,
+            running: false,
+        };
+    }, []);
+
+    const ensureAnalysisFallbackState = useCallback((episodeId) => {
+        const id = Number(episodeId || 0);
+        if (!id) return null;
+        if (analysisFallbackRetryRef.current.episodeId !== id) {
+            resetAnalysisFallbackRetryCounts(id);
+        }
+        return analysisFallbackRetryRef.current;
+    }, [resetAnalysisFallbackRetryCounts]);
+
+    const canAttemptAnalysisFallback = useCallback((episodeId, kind) => {
+        const state = ensureAnalysisFallbackState(episodeId);
+        if (!state) return false;
+        const fieldByKind = {
+            scene_beats: 'sceneBeatsAttempts',
+            asset_gen: 'assetAttempts',
+            scene_regen: 'sceneRegenAttempts',
+        };
+        const field = fieldByKind[kind];
+        if (!field) return false;
+        return Number(state[field] || 0) < MAX_ANALYSIS_FALLBACK_ATTEMPTS;
+    }, [ensureAnalysisFallbackState]);
+
+    const recordAnalysisFallbackAttempt = useCallback((episodeId, kind) => {
+        const state = ensureAnalysisFallbackState(episodeId);
+        if (!state) return;
+        const fieldByKind = {
+            scene_beats: 'sceneBeatsAttempts',
+            asset_gen: 'assetAttempts',
+            scene_regen: 'sceneRegenAttempts',
+        };
+        const field = fieldByKind[kind];
+        if (field) state[field] = Number(state[field] || 0) + 1;
+    }, [ensureAnalysisFallbackState]);
+
+    const getAnalysisFallbackRemaining = useCallback((episodeId, kind) => {
+        const state = ensureAnalysisFallbackState(episodeId);
+        if (!state) return 0;
+        const fieldByKind = {
+            scene_beats: 'sceneBeatsAttempts',
+            asset_gen: 'assetAttempts',
+            scene_regen: 'sceneRegenAttempts',
+        };
+        const field = fieldByKind[kind];
+        if (!field) return 0;
+        return Math.max(0, MAX_ANALYSIS_FALLBACK_ATTEMPTS - Number(state[field] || 0));
+    }, [ensureAnalysisFallbackState]);
+
     const isTaskCanceledError = useCallback((error) => {
         if (!error) return false;
         if (error?.isCanceled) return true;
@@ -4368,6 +4459,129 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (settled) return resolvedValue;
         throw new Error('AI Script Analysis timed out while waiting for async task result.');
     }, [onLog, t, throwIfAnalysisStopped, waitForEpisodeAnalysisResultUpdate]);
+
+    const runStage2_2WithValidationRetry = useCallback(async ({
+        label = 'Stage 2.2',
+        logPhasePrefix = 'advanced',
+        finalStage2_2UserInput,
+        stage2_2UserInputBody = '',
+        stage2_1SubjectIndexText = '',
+        startedAt,
+        baselineText = '',
+        functionName = 'script_analysis_stage_2_2_beats',
+        sceneAnalysisModePayload = null,
+        onTaskCreated,
+    }) => {
+        const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
+        const finalStage2_2Prompt = stage2_2PromptRes?.content || '';
+        let lastError = '';
+
+        for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+            if (fallbackAttempt > 0) {
+                onLog?.(
+                    `[${label}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                    'warning'
+                );
+                setAnalysisFlowStatus({
+                    phase: 'scene_beats',
+                    message: t(
+                        `场景编排校验失败，正在自动重试 (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`,
+                        `Scene beats validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
+                    ),
+                });
+            }
+
+            logStage2_2Diagnostics({
+                phase: `${logPhasePrefix}-stage2_2-submit`,
+                subjectIndexText: stage2_1SubjectIndexText,
+                sceneInputText: stage2_2UserInputBody,
+                finalInputText: finalStage2_2UserInput,
+            });
+
+            const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'scene_markdown',
+                    finalStage2_2UserInput,
+                    finalStage2_2Prompt,
+                    null,
+                    activeEpisode?.id || null,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        onTaskCreated: (taskId) => {
+                            onTaskCreated?.(taskId);
+                        },
+                    },
+                    projectId,
+                    functionName,
+                    selectedScriptAnalysisApiId,
+                    sceneAnalysisModePayload
+                ),
+                {
+                    startedAt,
+                    baselineText,
+                    resultField: 'ai_scene_analysis_result',
+                    expectedResultKind: 'scene_beats',
+                }
+            );
+
+            const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
+            let isUpstreamError2 = false;
+            let errMsg2 = '';
+            const matchObjStr2 = text2_2.trim().replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+            if (matchObjStr2.startsWith('{')) {
+                try {
+                    const parseObj = JSON.parse(matchObjStr2);
+                    if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
+                        isUpstreamError2 = true;
+                        errMsg2 = `上游接口异常 (${label})：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
+                    }
+                } catch (_) {}
+            }
+            if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(text2_2)) {
+                isUpstreamError2 = true;
+                errMsg2 = `上游接口熔断或系统维护 (${label})：${text2_2.slice(0, 100)}`;
+            }
+            if (isUpstreamError2) {
+                throw new Error(errMsg2);
+            }
+
+            const validationLabel = fallbackAttempt > 0 ? `${label} retry ${fallbackAttempt}` : label;
+            const stage2_2Check = validateStage2_2BeatsOutput(text2_2, validationLabel);
+            logStage2_2Diagnostics({
+                phase: `${logPhasePrefix}-stage2_2-result`,
+                subjectIndexText: stage2_1SubjectIndexText,
+                sceneInputText: stage2_2UserInputBody,
+                finalInputText: finalStage2_2UserInput,
+                rawOutputText: text2_2,
+                normalizedText: stage2_2Check?.normalizedText || '',
+            });
+            if (stage2_2Check.ok) {
+                return {
+                    stage2_2Text: stage2_2Check.normalizedText,
+                    stage2_2Result: stage2_2ResultObj,
+                    stage2_2Check,
+                };
+            }
+            lastError = stage2_2Check.reason || t(`${label} 镜头节拍生成失败：未检测到有效的场景编排表。`, `${label} did not return a valid Scenes Table.`);
+        }
+
+        throw new Error(lastError || `${label} failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+    }, [
+        activeEpisode?.id,
+        analysisAttentionNotes,
+        awaitAnalyzeSceneWithRecovery,
+        extractAnalysisTextFromResult,
+        fetchPrompt,
+        logStage2_2Diagnostics,
+        onLog,
+        projectId,
+        selectedReuseSubjectAssets,
+        selectedScriptAnalysisApiId,
+        setAnalysisFlowStatus,
+        t,
+        validateStage2_2BeatsOutput,
+    ]);
 
     const selectedReuseSubjectAssets = useMemo(() => {
         if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
@@ -6363,6 +6577,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableEpisodeId = activeEpisode?.id;
         if (!stableEpisodeId) return false;
 
+        const isAutomatic = options?.manual !== true;
+        if (isAutomatic && !canAttemptAnalysisFallback(stableEpisodeId, 'scene_regen')) {
+            onLog?.(
+                `[Scene Regen] skipped: auto fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS}).`,
+                'warning'
+            );
+            return false;
+        }
+
         const sourceText = String(analysisText || '').trim();
         const sceneCheck = validateAutoSceneTableImport(sourceText);
         const normalizedSceneTable = String(normalizeLlmMarkdownTable(sourceText || '') || '').trim();
@@ -6414,6 +6637,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         try {
             onLog?.(`Scene arrangement import issue detected. Starting separate regeneration task. source=${sourceLabel}`, 'warning');
+            if (isAutomatic) {
+                recordAnalysisFallbackAttempt(stableEpisodeId, 'scene_regen');
+            }
             await startEpisodeScenesGeneration(stableEpisodeId, {
                 scene_count: null,
                 extra_notes: extraNotes,
@@ -6888,6 +7114,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
+        resetAnalysisFallbackRetryCounts(activeEpisode?.id);
         lastAutoSubjectsImportRef.current = { signature: '', result: null };
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
@@ -7379,6 +7606,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
+        resetAnalysisFallbackRetryCounts(activeEpisode?.id);
 
         const startedAt = Date.now();
         analysisStopRequestedRef.current = false;
@@ -7595,26 +7823,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     )
                 );
 
-                let stage2_1Result = await runStage2_1Attempt();
-                let stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-                let stage2_1Validation = validateStage2_1SubjectIndexOutput(stage2_1Text, 'Stage 2.1');
-                if (!stage2_1Validation.ok) {
-                    onLog?.(`[Stage 2.1] ${stage2_1Validation.reason}`, 'warning');
-                    setAnalysisFlowStatus({
-                        phase: 'failed',
-                        message: t('Stage 2.1 校验失败：缺少 cover_poster，正在自动重试一次...', 'Stage 2.1 validation failed: missing cover_poster, retrying once...'),
-                    });
-                    setAnalysisFlowStatus({
-                        phase: 'extract_assets',
-                        message: t('🔁 正在自动重试 Stage 2.1 资产提取（cover_poster 校验失败后重试）...', 'Auto-retrying Stage 2.1 asset extraction after cover_poster validation failure...'),
-                    });
-                    stage2_1Result = await runStage2_1Attempt();
-                    stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-                    stage2_1Validation = validateStage2_1SubjectIndexOutput(stage2_1Text, 'Stage 2.1 retry');
-                    if (!stage2_1Validation.ok) {
-                        throw new Error(stage2_1Validation.reason || 'Stage 2.1 retry failed: cover_poster/poster is still missing.');
-                    }
-                }
+                const { result: stage2_1Result, text: stage2_1Text, validation: stage2_1Validation } = await runStage2_1WithValidationRetry(
+                    runStage2_1Attempt,
+                    'Stage 2.1'
+                );
                 const stage2_1SubjectIndexText = String(stage2_1Validation.subjectIndexText || '').trim() || extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
                 globalStage2_1Text = stage2_1SubjectIndexText;
                 
@@ -7636,82 +7848,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
 
                 const runStage2_2Task = async () => {
-                    const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
-                    let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-                    // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
                     const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
                     let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
 
-                    logStage2_2Diagnostics({
-                        phase: 'advanced-stage2_2-submit',
-                        subjectIndexText: stage2_1SubjectIndexText,
-                        sceneInputText: stage2_2UserInputBody,
-                        finalInputText: finalStage2_2UserInput,
+                    return runStage2_2WithValidationRetry({
+                        label: 'Stage 2.2',
+                        logPhasePrefix: 'advanced',
+                        finalStage2_2UserInput,
+                        stage2_2UserInputBody,
+                        stage2_1SubjectIndexText,
+                        startedAt: phaseMarks.llmReturnedAt || startedAt,
+                        baselineText: baselineAnalysisText,
+                        onTaskCreated: (taskId) => {
+                            setActiveAnalysisTaskId(String(taskId || '').trim());
+                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
+                        },
                     });
-
-                    const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                        () => runScriptAnalysisFlowAnalyzeNode(
-                            'scene_markdown',
-                            finalStage2_2UserInput,
-                            finalStage2_2Prompt,
-                            null,
-                            activeEpisode?.id || null,
-                            analysisAttentionNotes,
-                            selectedReuseSubjectAssets,
-                            {
-                                onTaskCreated: (taskId) => {
-                                    setActiveAnalysisTaskId(String(taskId || '').trim());
-                                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
-                                },
-                            },
-                            projectId,
-                            'script_analysis_stage_2_2_beats',
-                            selectedScriptAnalysisApiId
-                        ),
-                        {
-                            startedAt: phaseMarks.llmReturnedAt || startedAt,
-                            baselineText: baselineAnalysisText,
-                            resultField: 'ai_scene_analysis_result',
-                            expectedResultKind: 'scene_beats',
-                        }
-                    );
-
-                    const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
-                    
-                    let isUpstreamError2 = false;
-                    let errMsg2 = '';
-                    const matchObjStr2 = text2_2.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-                    if (matchObjStr2.startsWith('{')) {
-                        try {
-                            const parseObj = JSON.parse(matchObjStr2);
-                            if (parseObj.code === 500 || parseObj.error || parseObj.msg) {
-                                isUpstreamError2 = true;
-                                errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`;
-                            }
-                        } catch(e) {}
-                    }
-                    if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(text2_2)) {
-                        isUpstreamError2 = true;
-                        errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${text2_2.slice(0, 100)}`;
-                    }
-                    if (isUpstreamError2) {
-                        throw new Error(errMsg2);
-                    }
-                    const stage2_2Check = validateStage2_2BeatsOutput(text2_2, 'Stage 2.2');
-                    logStage2_2Diagnostics({
-                        phase: 'advanced-stage2_2-result',
-                        subjectIndexText: stage2_1SubjectIndexText,
-                        sceneInputText: stage2_2UserInputBody,
-                        finalInputText: finalStage2_2UserInput,
-                        rawOutputText: text2_2,
-                        normalizedText: stage2_2Check?.normalizedText || '',
-                    });
-                    if (!stage2_2Check.ok) {
-                        throw new Error(stage2_2Check.reason || 'Stage 2.2 镜头节拍生成失败：未检测到有效的分镜表格产出，请重试。');
-                    }
-                    
-                    return { stage2_2Text: stage2_2Check.normalizedText, stage2_2Result: stage2_2ResultObj };
                 };
 
                                 const runStage3Task = async () => {
@@ -8110,26 +8263,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 )
             );
 
-            let stage2_1Result = await runStage2_1Attempt();
-            let stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-            let stage2_1Validation = validateStage2_1SubjectIndexOutput(stage2_1Text, 'Stage 2.1 restart');
-            if (!stage2_1Validation.ok) {
-                onLog?.(`[Stage 2.1] ${stage2_1Validation.reason}`, 'warning');
-                setAnalysisFlowStatus({
-                    phase: 'failed',
-                    message: t('Stage 2.1 校验失败：缺少 cover_poster，正在自动重试一次...', 'Stage 2.1 validation failed: missing cover_poster, retrying once...'),
-                });
-                setAnalysisFlowStatus({
-                    phase: 'extract_assets',
-                    message: t('🔁 正在自动重试 Stage 2.1 资产提取（cover_poster 校验失败后重试）...', 'Auto-retrying Stage 2.1 asset extraction after cover_poster validation failure...'),
-                });
-                stage2_1Result = await runStage2_1Attempt();
-                stage2_1Text = extractAnalysisTextFromResult(stage2_1Result) || '';
-                stage2_1Validation = validateStage2_1SubjectIndexOutput(stage2_1Text, 'Stage 2.1 restart retry');
-                if (!stage2_1Validation.ok) {
-                    throw new Error(stage2_1Validation.reason || 'Stage 2.1 retry failed: cover_poster/poster is still missing.');
-                }
-            }
+            const { result: stage2_1Result, text: stage2_1Text, validation: stage2_1Validation } = await runStage2_1WithValidationRetry(
+                runStage2_1Attempt,
+                'Stage 2.1 restart'
+            );
             const stage2_1SubjectIndexText = String(stage2_1Validation.subjectIndexText || '').trim() || extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
             let globalStage2_1Text = stage2_1SubjectIndexText;
             if (onLog) onLog('清单整理完成（重跑场景），开始并发执行：场景拆解 + 视觉资产生成。', 'info');
@@ -8139,82 +8276,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('📝 正在并发执行：场景拆解与视觉资产生成...', 'Running scene breakdown and visual asset generation in parallel...'),
             });
 
-                        const runStage2_2Task = async () => { 
-                const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md'); 
-                let finalStage2_2Prompt = stage2_2PromptRes?.content || ''; 
-                    // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
-                    let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
-                    const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
-                    let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
+                        const runStage2_2Task = async () => {
+                let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
+                const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
+                let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
 
-                logStage2_2Diagnostics({
-                    phase: 'restart-stage2_2-submit',
-                    subjectIndexText: stage2_1SubjectIndexText,
-                    sceneInputText: stage2_2UserInputBody,
-                    finalInputText: finalStage2_2UserInput,
+                return runStage2_2WithValidationRetry({
+                    label: 'Stage 2.2 restart',
+                    logPhasePrefix: 'restart',
+                    finalStage2_2UserInput,
+                    stage2_2UserInputBody,
+                    stage2_1SubjectIndexText,
+                    startedAt,
+                    baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
+                    onTaskCreated: (taskId) => {
+                        setActiveAnalysisTaskId(String(taskId || '').trim());
+                        saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
+                    },
                 });
-
-                const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                    () => runScriptAnalysisFlowAnalyzeNode( 
-                        'scene_markdown',
-                        finalStage2_2UserInput, 
-                        finalStage2_2Prompt, 
-                        null, 
-                        activeEpisode?.id || null, 
-                        analysisAttentionNotes, 
-                        selectedReuseSubjectAssets, 
-                        { 
-                            onTaskCreated: (taskId) => { 
-                                setActiveAnalysisTaskId(String(taskId || '').trim()); 
-                                saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' }); 
-                            }, 
-                        }, 
-                        projectId,
-                        'script_analysis_stage_2_2_beats',
-                        selectedScriptAnalysisApiId
-                    ),
-                    {
-                        startedAt,
-                        baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
-                        resultField: 'ai_scene_analysis_result',
-                        expectedResultKind: 'scene_beats',
-                    }
-                ); 
-
-                const text2_2 = extractAnalysisTextFromResult(stage2_2ResultObj) || ''; 
-                 
-                let isUpstreamError2 = false; 
-                let errMsg2 = ''; 
-                const matchObjStr2 = text2_2.trim().replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, ''); 
-                if (matchObjStr2.startsWith('{')) { 
-                    try { 
-                        const parseObj = JSON.parse(matchObjStr2); 
-                        if (parseObj.code === 500 || parseObj.error || parseObj.msg) { 
-                            isUpstreamError2 = true; 
-                            errMsg2 = `上游接口异常 (Stage 2.2)：${parseObj.msg || parseObj.error?.message || matchObjStr2}`; 
-                        } 
-                    } catch(e) {} 
-                } 
-                if (!isUpstreamError2 && /服务器错误|maintained|too many requests|rate limit/i.test(text2_2)) { 
-                    isUpstreamError2 = true; 
-                    errMsg2 = `上游接口熔断或系统维护 (Stage 2.2)：${text2_2.slice(0, 100)}`; 
-                } 
-                if (isUpstreamError2) { 
-                    throw new Error(errMsg2); 
-                } 
-                const stage2_2Check = validateStage2_2BeatsOutput(text2_2, 'Stage 2.2 restart');
-                logStage2_2Diagnostics({
-                    phase: 'restart-stage2_2-result',
-                    subjectIndexText: stage2_1SubjectIndexText,
-                    sceneInputText: stage2_2UserInputBody,
-                    finalInputText: finalStage2_2UserInput,
-                    rawOutputText: text2_2,
-                    normalizedText: stage2_2Check?.normalizedText || '',
-                });
-                if (!stage2_2Check.ok) {
-                    throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (restart mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
-                }
-                return { stage2_2Text: stage2_2Check.normalizedText, stage2_2Result: stage2_2ResultObj }; 
             };
 
                         const runStage3Task = async () => {
@@ -8419,63 +8498,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog?.('进入仅场景重排模式，已启用视觉资产阶段保护。', 'info');
 
         try {
-            const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
-            let finalStage2_2Prompt = stage2_2PromptRes?.content || '';
-            // 使用专门为 Stage 2.2 设计的 userInput 构建函数，避免"第一步 vs 第二步"混淆导致 LLM 生成 Subject Index
             let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
             const stage2_2SubjectIndexSection = buildStage2_2SubjectIndexSection(stage2_1SubjectIndexText);
             let finalStage2_2UserInput = [stage2_2SubjectIndexSection, stage2_2UserInputBody].filter(Boolean).join('\n\n');
 
-            logStage2_2Diagnostics({
-                phase: 'scene-only-stage2_2-submit',
-                subjectIndexText: stage2_1SubjectIndexText,
-                sceneInputText: stage2_2UserInputBody,
-                finalInputText: finalStage2_2UserInput,
+            const { stage2_2Text, stage2_2Result: stage2_2ResultObj } = await runStage2_2WithValidationRetry({
+                label: 'Stage 2.2 scene-only rerun',
+                logPhasePrefix: 'scene-only',
+                finalStage2_2UserInput,
+                stage2_2UserInputBody,
+                stage2_1SubjectIndexText,
+                startedAt,
+                baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
+                sceneAnalysisModePayload: 'scene_beats_only',
+                onTaskCreated: (taskId) => {
+                    setActiveAnalysisTaskId(String(taskId || '').trim());
+                    saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
+                },
             });
-
-            const stage2_2ResultObj = await awaitAnalyzeSceneWithRecovery(
-                () => runScriptAnalysisFlowAnalyzeNode(
-                    'scene_markdown',
-                    finalStage2_2UserInput,
-                    finalStage2_2Prompt,
-                    null,
-                    activeEpisode?.id || null,
-                    analysisAttentionNotes,
-                    selectedReuseSubjectAssets,
-                    {
-                        onTaskCreated: (taskId) => {
-                            setActiveAnalysisTaskId(String(taskId || '').trim());
-                            saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
-                        },
-                    },
-                    projectId,
-                    'script_analysis_stage_2_2_beats',
-                    selectedScriptAnalysisApiId,
-                    'scene_beats_only'
-                ),
-                {
-                    startedAt,
-                    baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
-                    resultField: 'ai_scene_analysis_result',
-                    expectedResultKind: 'scene_beats',
-                }
-            );
             onLog?.('已切换为仅场景重排通道，跳过清单整理阶段。', 'info');
 
-            const stage2_2Text = extractAnalysisTextFromResult(stage2_2ResultObj) || '';
-            const stage2_2Check = validateStage2_2BeatsOutput(stage2_2Text, 'Stage 2.2 scene-only rerun');
-            logStage2_2Diagnostics({
-                phase: 'scene-only-stage2_2-result',
-                subjectIndexText: stage2_1SubjectIndexText,
-                sceneInputText: stage2_2UserInputBody,
-                finalInputText: finalStage2_2UserInput,
-                rawOutputText: stage2_2Text,
-                normalizedText: stage2_2Check?.normalizedText || '',
-            });
-            if (!stage2_2Check.ok) {
-                throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (scene-beats-only mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
-            }
-            const validatedBeatsText = stage2_2Check.normalizedText;
+            const validatedBeatsText = stage2_2Text;
 
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
@@ -8764,6 +8807,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const handleRetryPhase2 = async (options = {}) => {
         if (!activeEpisode?.id) return;
+        if (options?.autoZeroReportRerun) {
+            if (!canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen')) {
+                onLog?.(
+                    `[Auto Zero Report Rerun] skipped: asset fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS}).`,
+                    'warning'
+                );
+                return;
+            }
+            recordAnalysisFallbackAttempt(activeEpisode.id, 'asset_gen');
+        }
         phase2RetryOptionsRef.current = options;
         analysisStopRequestedRef.current = false;
         activeAnalysisTaskIdsRef.current.clear();
@@ -9059,11 +9112,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const isSceneBeatsOnlyRerun = runTag === 'scene_beats_only_rerun';
         if (reportStatus !== 'completed') return;
 
-        const reportKey = `${activeEpisode.id}:${Number(analysisUiReport?.startedAt || 0) || 'latest'}`;
-        if (zeroCountAutoRerunRef.current.reportKey !== reportKey) {
-            zeroCountAutoRerunRef.current = { reportKey, attempted: new Set(), running: false };
-        }
-        if (zeroCountAutoRerunRef.current.running) return;
+        ensureAnalysisFallbackState(activeEpisode.id);
+        if (analysisFallbackRetryRef.current.running) return;
 
         const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
             ? analysisUiReport.importReport
@@ -9117,9 +9167,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const addAssetTargetIfZero = (key, labelZh, targets) => {
             if (counts[key] !== 0) return;
             if (!subjectCategories.has(key)) return;
-            const attemptKey = `asset:${key}`;
-            if (zeroCountAutoRerunRef.current.attempted.has(attemptKey)) return;
-            zeroCountAutoRerunRef.current.attempted.add(attemptKey);
             pendingLabels.push(labelZh);
             pendingAssetTargets.push(...targets);
         };
@@ -9130,27 +9177,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         addAssetTargetIfZero('posters', '封面/海报', ['posters', 'covers']);
 
         const shouldRerunScenes = counts.scenes === 0
-            && !zeroCountAutoRerunRef.current.attempted.has('scene_beats')
+            && canAttemptAnalysisFallback(activeEpisode.id, 'scene_beats')
             && Boolean(buildStage1RestartSourceText())
             && Boolean(resolveSubjectIndexTextForAssetRerun());
 
         if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
 
-        zeroCountAutoRerunRef.current.running = true;
-        if (shouldRerunScenes) zeroCountAutoRerunRef.current.attempted.add('scene_beats');
+        const shouldRerunAssets = pendingAssetTargets.length > 0
+            && canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen');
+
+        if (!shouldRerunScenes && !shouldRerunAssets) {
+            onLog?.(
+                `[Auto Zero Report Rerun] skipped: fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} per category).`,
+                'warning'
+            );
+            return;
+        }
+
+        analysisFallbackRetryRef.current.running = true;
 
         (async () => {
             try {
                 if (shouldRerunScenes) {
-                    onLog?.('[Auto Zero Report Rerun] scenes count is 0, rerunning scene beats once.', 'warning');
+                    recordAnalysisFallbackAttempt(activeEpisode.id, 'scene_beats');
+                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'scene_beats');
+                    onLog?.(
+                        `[Auto Zero Report Rerun] scenes count is 0, rerunning scene beats (remaining auto retries: ${remaining}).`,
+                        'warning'
+                    );
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
-                        message: t('检查报告发现“场景”为 0，正在自动单独重排场景一次...', 'Report found scenes=0. Auto-rerunning scene beats once...'),
+                        message: t(
+                            `检查报告发现“场景”为 0，正在自动单独重排场景（剩余 ${remaining} 次）...`,
+                            `Report found scenes=0. Auto-rerunning scene beats (${remaining} auto retries left)...`
+                        ),
                     });
                     await handleRerunSceneBeatsOnly();
                 }
 
-                if (pendingAssetTargets.length > 0) {
+                if (shouldRerunAssets) {
                     if (isSceneBeatsOnlyRerun) {
                         onLog?.('[Auto Zero Report Rerun] skipped asset auto-rerun for scene-beats-only rerun report.', 'info');
                         return;
@@ -9167,19 +9232,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const detail = String(error?.message || error || 'unknown error');
                 onLog?.(`[Auto Zero Report Rerun] failed: ${detail}`, 'warning');
             } finally {
-                zeroCountAutoRerunRef.current.running = false;
+                analysisFallbackRetryRef.current.running = false;
             }
         })();
     }, [
         activeEpisode?.id,
         analysisUiReport,
         buildStage1RestartSourceText,
+        canAttemptAnalysisFallback,
+        ensureAnalysisFallbackState,
+        getAnalysisFallbackRemaining,
         handleRetryPhase2,
         handleRerunSceneBeatsOnly,
         isAnalyzing,
         isRetryingPhase2,
         onLog,
         phase2RerunSubjectEntries,
+        recordAnalysisFallbackAttempt,
         resolveSubjectIndexTextForAssetRerun,
         t,
     ]);
