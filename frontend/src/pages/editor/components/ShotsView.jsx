@@ -5314,9 +5314,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const currentStartUrl = String(shot?.image_url || '');
                 const currentEndUrl = String(getShotEndFrameUrl(shot));
                 const currentVideoUrl = String(shot?.video_url || '');
-                const hasFreshStartUrl = Boolean(currentStartUrl) && currentStartUrl !== String(base.start || '');
-                const hasFreshEndUrl = Boolean(currentEndUrl) && currentEndUrl !== String(base.end || '');
-                const hasFreshVideoUrl = Boolean(currentVideoUrl) && currentVideoUrl !== String(base.video || '');
+                const currentStartToken = normalizeAssetUrlToken(currentStartUrl);
+                const currentEndToken = normalizeAssetUrlToken(currentEndUrl);
+                const currentVideoToken = normalizeAssetUrlToken(currentVideoUrl);
+                const baseStartToken = normalizeAssetUrlToken(String(base.start || ''));
+                const baseEndToken = normalizeAssetUrlToken(String(base.end || ''));
+                const baseVideoToken = normalizeAssetUrlToken(String(base.video || ''));
+                const hasFreshStartUrl = Boolean(currentStartToken) && currentStartToken !== baseStartToken;
+                const hasFreshEndUrl = Boolean(currentEndToken) && currentEndToken !== baseEndToken;
+                const hasFreshVideoUrl = Boolean(currentVideoToken) && currentVideoToken !== baseVideoToken;
 
                 if (updated.start && Object.prototype.hasOwnProperty.call(base, 'start') && hasFreshStartUrl) {
                     updated.start = false;
@@ -5353,7 +5359,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             writeGenerationStateStorage(next);
             return next;
         });
-    }, [shots, hasActiveGeneration, writeGenerationStateStorage, getShotEndFrameUrl]);
+    }, [shots, hasActiveGeneration, writeGenerationStateStorage, getShotEndFrameUrl, normalizeAssetUrlToken]);
 
     useEffect(() => {
         if (!editingShot?.id || (shots || []).length === 0) return;
@@ -7742,9 +7748,30 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             const videoSettled = await Promise.allSettled([videoTaskPromise]);
 
-            if (videoSettled[0].status === 'fulfilled' && videoSettled[0].value && videoSettled[0].value.url) {
+            if (videoSettled[0].status === 'fulfilled' && videoSettled[0].value) {
                 const res = videoSettled[0].value;
-                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
+                const resolvedVideoUrl = String(res?.url || res?.video_url || '').trim();
+                if (!resolvedVideoUrl) {
+                    // Some providers finish asynchronously and do not return URL in immediate response.
+                    // Force a server resync so UI still updates when the shot record has been updated.
+                    releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
+                    onLog?.(t('视频任务已完成，正在同步最新镜头数据...', 'Video task completed, syncing latest shot data...'), 'info');
+                    refreshShotAssetsMeta();
+                    await refreshShots();
+                    try {
+                        const latestShot = await fetchShot(targetShotId);
+                        if (latestShot?.id) {
+                            setEditingShot((prev) => {
+                                if (!prev || String(prev.id) !== String(targetShotId)) return prev;
+                                return { ...prev, ...normalizeShotPromptDefaults(latestShot) };
+                            });
+                        }
+                    } catch (syncErr) {
+                        console.warn('Failed to sync latest shot after video completion:', syncErr);
+                    }
+                    setVideoStatuses(prev => { const n = { ...prev }; delete n[targetShotId]; return n; });
+                } else {
+                if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(resolvedVideoUrl);
 
                 try {
                     await new Promise((resolve) => {
@@ -7761,15 +7788,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         v.oncanplay = finish;
                         v.onloadeddata = finish;
                         v.onerror = finish;
-                        v.src = getFullUrl(res.url);
+                        v.src = getFullUrl(resolvedVideoUrl);
                         v.load();
                         setTimeout(finish, 4000);
                     });
-                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(res.url);
+                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(resolvedVideoUrl);
                 } catch(e) {}
 
                 releaseShotVideoUi({ shotId: targetShotId, jobId: createdVideoJobId });
-                const newData = { video_url: res.url, prompt: rawPrompt };
+                const newData = { video_url: resolvedVideoUrl, prompt: rawPrompt };
                 
                 // 1. Force Local State Update IMMEDIATELY (Optimistic/Local)
                 setEditingShot(prev => {
@@ -7790,6 +7817,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 refreshShotAssetsMeta();
                 Promise.resolve(refreshShots()).catch(() => {});
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
+                }
             }
 
             if (videoSettled[0].status === 'rejected') {

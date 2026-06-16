@@ -3826,6 +3826,16 @@ def _build_result_from_provider_callback(
         metadata["failure_reason"] = payload.get("failure_reason")
     if payload.get("error") not in (None, ""):
         metadata["error"] = payload.get("error")
+    if isinstance(payload.get("metadata"), dict):
+        payload_meta = payload.get("metadata") or {}
+        for key in (
+            "provider",
+            "model",
+            "provider_direct_oss_url",
+            "system_api_id",
+        ):
+            if payload_meta.get(key) not in (None, ""):
+                metadata[key] = payload_meta.get(key)
     result["metadata"] = metadata
     return result
 
@@ -32011,6 +32021,30 @@ async def _run_generate_image_job(
             ),
             timeout=IMAGE_JOB_MAX_RUNNING_SECONDS,
         )
+        if isinstance(result, dict):
+            result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            resolved_provider = str((result_meta or {}).get("provider") or req_provider or "").strip() or None
+            resolved_model = str((result_meta or {}).get("model") or req_model or "").strip() or None
+            provider_update_fields: Dict[str, Any] = {}
+            if resolved_provider:
+                provider_update_fields["provider"] = resolved_provider
+            if resolved_model:
+                provider_update_fields["model"] = resolved_model
+            if provider_update_fields:
+                _set_video_job(job_id, **provider_update_fields)
+
+        if isinstance(result, dict):
+            result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            resolved_provider = str((result_meta or {}).get("provider") or req_provider or "").strip() or None
+            resolved_model = str((result_meta or {}).get("model") or req_model or "").strip() or None
+            provider_update_fields: Dict[str, Any] = {}
+            if resolved_provider:
+                provider_update_fields["provider"] = resolved_provider
+            if resolved_model:
+                provider_update_fields["model"] = resolved_model
+            if provider_update_fields:
+                _set_image_job(job_id, **provider_update_fields)
+
         if isinstance(result, dict) and result.get("pending_callback"):
             with IMAGE_JOB_LOCK:
                 current_job = dict(IMAGE_JOB_STORE.get(job_id) or {})

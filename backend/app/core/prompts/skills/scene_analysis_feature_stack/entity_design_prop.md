@@ -50,6 +50,7 @@
 ### 1.3 生图提示词与 Imagen 兼容规范
 - **Clean Plate**：只写可见物理实体；去除角色名、人称、不可见专名；禁止手、人影、持握残留，除非上游明确指定为道具组成。
 - **字段回写**：`generation_prompt_cn` 必须吸收类型、状态、依赖、功能、材质、磨损等结构字段；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段，名称含可见物理信息时只吸收可见语义。
+- **项目风格种子回写（强制）**：`description_cn` 与 `generation_prompt_cn` 必须显式吸收 `entity_attributes.project_base_positioning` 与 `entity_attributes.project_global_style`，并转为可执行视觉语义（如材质语言、工艺精度、光照基调、时代质感）；禁止仅写抽象口号。若上游缺失任一字段，必须在 `dependency_strategy.logic` 标注 `上游待补（回流 Stage 2）：缺少 project_base_positioning/project_global_style`。
 - **光学顺序**：主光来源/方向/照亮面 -> 补光/反光/环境光 -> 轮廓分离 -> 材质与色彩响应。禁止泛写“电影感光影”。
 - **三点布光**：明确 Key Light、Fill Light、Backlight；亮度/反差服从 `Genre` 与 `Base Positioning`。
 - **色彩层次**：主色、辅色、点缀色、过渡色绑定材质、光源、距离层；禁单色平铺。
@@ -98,7 +99,7 @@
 - 输出前逐条核对输入类型与输出数组；总数正确但归类错误仍失败。
 - 字段按类型分离；`props[]` 使用道具状态/类型字段，禁止角色字段借壳。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -111,8 +112,8 @@
       "name_en": "Police ID Badge Lanyard",
       "base_name_en": "Police ID Badge Lanyard",
       "type": "held/static",
-      "description_cn": "英文项目警探身份挂绳：深蓝尼龙长绳、透明亚克力卡套、老旧黄铜拉丝五角星警徽、英文 ID 卡面。Key Light 聚焦黄铜划痕与徽章高光；Fill Light 点亮亚克力边缘与尼龙织纹。",
-      "generation_prompt_cn": "写实道具四视图，16:9 横向纯白画布。警徽挂绳证件卡，居中转台视角。第一宫微距特写占 35%，纵向居中，展示黄铜划痕、亚克力厚度、尼龙纤维；第二宫正面、第三宫侧面、第四宫背面共享 65%。四格同一横排，禁止第二排、换行、错层、2x2。顶部柔和主光塑造金属与透明材质，弱补光托起暗部，细轮廓光分离边缘。四面板边缘清楚、纹理可读、清晰度一致，绝对纯白连续背景，无手、无灰底、无阴影脏污。",
+      "description_cn": "英文项目警探身份挂绳。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫。深蓝尼龙长绳、透明亚克力卡套、老旧黄铜拉丝五角星警徽、英文 ID 卡面。Key Light 聚焦黄铜划痕与徽章高光；Fill Light 点亮亚克力边缘与尼龙织纹。",
+      "generation_prompt_cn": "写实道具四视图，16:9 横向纯白画布。项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实材质细节。警徽挂绳证件卡，居中转台视角。第一宫微距特写占 35%，纵向居中，展示黄铜划痕、亚克力厚度、尼龙纤维；第二宫正面、第三宫侧面、第四宫背面共享 65%。四格同一横排，禁止第二排、换行、错层、2x2。顶部柔和主光塑造金属与透明材质，弱补光托起暗部，细轮廓光分离边缘。四面板边缘清楚、纹理可读、清晰度一致，绝对纯白连续背景，无手、无灰底、无阴影脏污。",
       "generation_prompt_en": "",
       "negative_prompt_en": "hands, fingers, holding pose, toy plastic, grey backdrop, fewer than four panels, more than four panels, wrong text language",
       "anchor_description": "navy woven lanyard, rigid clear badge holder, worn brass police badge, English ID",

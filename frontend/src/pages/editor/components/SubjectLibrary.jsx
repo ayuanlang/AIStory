@@ -4655,8 +4655,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
         }
 
+        const isHistoricalAssetSelected = Boolean(asset && asset.is_current_project_asset === false);
         const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
-            skipAnalyze: imageSelectAction === 'rewrite_and_regenerate',
+            // Selecting a historical-version asset should only replace binding without triggering reverse analysis.
+            skipAnalyze: imageSelectAction === 'rewrite_and_regenerate' || isHistoricalAssetSelected,
             extraFields
         });
         if (!updatedEntity) return;

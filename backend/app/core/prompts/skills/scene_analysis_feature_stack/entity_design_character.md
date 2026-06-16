@@ -68,6 +68,7 @@
 ### 1.3 生图提示词与 Imagen 兼容规范
 - **Clean Plate**：角色设定图只写当前角色可见实体；去除不可见专名、人称代词和非本角色主体。
 - **字段回写**：`generation_prompt_cn` 必须吸收 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等字段并转化为可见画面词；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段，名称含可见物理信息时只吸收可见语义。
+- **项目风格种子回写（强制）**：`description_cn` 与 `generation_prompt_cn` 必须显式吸收 `entity_attributes.project_base_positioning` 与 `entity_attributes.project_global_style`，并落成可执行视觉语义（如妆造方向、材质层级、光照基调、镜头气质）；禁止仅写抽象口号。若上游缺失任一字段，必须在 `dependency_strategy.logic` 标注 `上游待补（回流 Stage 2）：缺少 project_base_positioning/project_global_style`。
 - **光学顺序**：主光来源/方向/照亮面 -> 补光/反光/环境光 -> 轮廓分离 -> 肤质/服饰材质与色彩响应。禁止泛写“电影感光影”。
 - **三点布光**：明确 Key Light、Fill Light、Backlight；主光优先塑形脸部、肩颈和全身比例。
 - **色彩层次**：主色、辅色、点缀色、过渡色绑定服饰材质、肤色、光源、距离层；禁单色平铺。
@@ -126,7 +127,7 @@
 - 输出前逐条核对输入类型与输出数组；总数正确但归类错误仍失败。
 - 字段按类型分离；`characters[]` 才允许 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等角色字段。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -138,14 +139,14 @@
       "name": "林月",
       "name_en": "Lin Yue",
       "base_name_en": "Lin Yue",
-      "description_cn": "调查记者，28岁。窄长鹅蛋脸、清晰下颌折角、深琥珀色内双眼、挺直窄鼻梁、偏薄唇形、白色基准下的真实冷白肤质、右侧耳后收拢的齐肩黑色短发、高挑长腿比例构成稳定辨识点。Key Light 从左前上方 45 度塑形眉骨、鼻梁、肩颈；Fill Light 从右前方冷调托起暗部。",
+      "description_cn": "调查记者，28岁。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫。窄长鹅蛋脸、清晰下颌折角、深琥珀色内双眼、挺直窄鼻梁、偏薄唇形、白色基准下的真实冷白肤质、右侧耳后收拢的齐肩黑色短发、高挑长腿比例构成稳定辨识点。Key Light 从左前上方 45 度塑形眉骨、鼻梁、肩颈；Fill Light 从右前方冷调托起暗部。",
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "习惯有0.5秒的停滞停顿等动作特征原文",
       "appearance_cn": "28岁东亚女性，身高178cm，头身比1:9.3，下半身视觉占比约63%。窄长鹅蛋脸、清晰下颌折角、深琥珀色内双、略上挑眼尾、挺直窄鼻梁、小而收的鼻尖、偏薄唇形、略高颧骨。剧本未明确肤色时按白色基准落地为真实冷白肤色，保留细小毛孔、微弱斑点、眼下轻微纹理与自然妆感。黑色齐肩短发，右侧挽耳后，左侧发尾内扣。",
       "clothing": "播出安全等级：成人。深海军蓝 V 领缎面吊带上衣，窄黑包边；修身截短轻机能夹克，微落肩、收腰、压胶袖口、哑黑防水拉链、暗银金属拉片；高腰侧开叉黑色短裤，双排细纽扣、窄腰袢、侧缝压线；及膝哑光黑色平底皮靴。固定配饰：钛灰腕表、小银环、深灰窄肩相机包。时尚对标：都市调查记者、Techwear、高级极简、深海军蓝/黑/钛灰。",
       "action_characteristics": "重心下沉且稳定，观察事物前有0.5秒停顿。",
-      "generation_prompt_cn": "电影级写实真人角色四视图，16:9 横向纯白画布。28岁东亚女性调查记者，剧本未明确肤色时按白色基准呈现真实冷白肤质、细小毛孔、微斑点、眼下纹理与自然妆感；身高178cm，头身比1:9.3，下半身约63%。窄长鹅蛋脸、清晰下颌、深琥珀内双、挺直窄鼻梁、偏薄唇、右侧挽耳黑色齐肩短发。穿深海军蓝 V 领缎面吊带、修身截短机能夹克、高腰侧开叉黑短裤、及膝哑光黑皮靴，佩戴钛灰腕表、小银环、窄肩相机包。第一宫面部特写占 35% 且纵向居中；正面/侧面/背面全身共享 65%，鞋子完整可见。四格同一横排，禁止第二排、换行、错层、2x2。平视机位、镜头水平、静态站姿。左前上 45 度柔和主光塑形脸部肩颈，右前冷调弱补光保留暗部，细背轮廓光分离黑发与深色夹克。四面板清晰度一致、纹理可读、纯白连续背景。",
+      "generation_prompt_cn": "电影级写实真人角色四视图，16:9 横向纯白画布。项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实材质细节。28岁东亚女性调查记者，剧本未明确肤色时按白色基准呈现真实冷白肤质、细小毛孔、微斑点、眼下纹理与自然妆感；身高178cm，头身比1:9.3，下半身约63%。窄长鹅蛋脸、清晰下颌、深琥珀内双、挺直窄鼻梁、偏薄唇、右侧挽耳黑色齐肩短发。穿深海军蓝 V 领缎面吊带、修身截短机能夹克、高腰侧开叉黑短裤、及膝哑光黑皮靴，佩戴钛灰腕表、小银环、窄肩相机包。第一宫面部特写占 35% 且纵向居中；正面/侧面/背面全身共享 65%，鞋子完整可见。四格同一横排，禁止第二排、换行、错层、2x2。平视机位、镜头水平、静态站姿。左前上 45 度柔和主光塑形脸部肩颈，右前冷调弱补光保留暗部，细背轮廓光分离黑发与深色夹克。四面板清晰度一致、纹理可读、纯白连续背景。",
       "generation_prompt_en": "",
       "negative_prompt_en": "beauty-filter skin, plastic face, CGI look, waxy skin, anime proportion, cropped shoes, wrong panel order, fewer than four panels",
       "anchor_description": "female investigative reporter, narrow oval face, right-tucked black bob, cropped navy techwear jacket, knee-high matte black boots",

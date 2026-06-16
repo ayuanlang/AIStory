@@ -49,6 +49,7 @@
 ### 1.3 生图提示词与 Imagen 兼容规范
 - **Clean Plate**：环境只写空间、材质、灯光、空气感与匿名非情节群演；已进入 Subject Index 的角色不得进入 `environments`。海报可按依赖整合角色/道具/环境。
 - **字段回写**：`generation_prompt_cn` 必须吸收场所属性、级别、方向、早晚、依赖、功能、动作通道、版式要求等结构字段；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段，名称含可见物理信息时只吸收可见语义。
+- **项目风格种子回写（强制）**：`description_cn` 与 `generation_prompt_cn` 必须显式吸收 `entity_attributes.project_base_positioning` 与 `entity_attributes.project_global_style`，写成可执行视觉语义（如材质、光照、色谱、镜头气质、空间秩序）；禁止仅写抽象口号。若上游缺失任一字段，必须在 `dependency_strategy.logic` 标注 `上游待补（回流 Stage 2）：缺少 project_base_positioning/project_global_style`。
 - **光学顺序**：主光来源/方向/照亮面 -> 补光/反光/环境光 -> 轮廓或背景分离 -> 材质与色彩响应。禁止泛写“电影感光影”。
 - **三点布光**：明确 Key Light、Fill Light、Backlight；亮度/反差服从 `Genre` 与 `Base Positioning`。
 - **色彩层次**：主色、辅色、点缀色、过渡色绑定材质、光源、距离层；说明曝光、白平衡、反差、风格化影调，禁单色平铺。
@@ -162,7 +163,7 @@
 - 字段按类型分离；`environments[]` 与 `posters[]` 使用 `atmosphere`、`visual_params` 等环境/海报字段，禁止角色字段借壳。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
 - 衍生环境若按“主环境名 + 空格 + 衍生类型/观察区域/可见方向”命名，输出 `name` 必须逐字符保留，`visual_dependencies` 必须回挂 `ENV:[主环境名]`，`dependency_strategy.type` 使用 `Type A/Type B`，`generation_prompt_cn` 必须写继承锚点与 Delta 差异。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -176,8 +177,8 @@
       "base_name_en": "Harbor Office",
       "atmosphere": "Rainy tense night with restrained noir contrast and structured staging",
       "visual_params": "Mid/Interior/Night",
-      "description_cn": "港口办公区夜景。基准空间四面拓扑：0度正面为有雨痕斑驳的百叶窗与玻璃；90度右侧为一排铁皮文件柜；180度反面为半开实木门及外侧幽灰通道；270度左侧为挂满线索照片的白板；老旧实木桌位于中央。当前视角由门外（180度）向内（0度）看，老旧木桌与百叶窗拉出纵深。Key Light 来自桌面黄铜台灯，照亮核心舞台；Fill Light 来自窗外冷蓝雨夜反射，保留暗部细节。后景可有少量匿名深夜办公群演，只作远景氛围。",
-      "generation_prompt_cn": "电影级写实环境，35mm 广角，胸口高度略低于视线，镜头水平，三分法结合前景门框框景。从半开实木门框内侧作为 Viewpoint Anchor 正向看入办公室深处（沿180度向0度方向看）。FG 左侧门框木纹；MG 老旧实木办公桌和两把空转椅为 Primary Subject；BG 金属百叶窗与雨痕玻璃为 Secondary Subject，辅以局部模糊的铁皮文件柜与白板边缘。黄铜台灯作暖色主光，窗外冷蓝街灯作补光与背景分离，桌面、文件、椅背、地面形成受光面、半影和投影。中等景深，主舞台锐利，远景略软。色彩以旧木褐和煤灰蓝为主辅，琥珀暖光、橄榄灰过渡、冷白雨痕反射作层次。通道清楚，空间厚重、克制、可读。远景可保留 2-3 个大幅虚化匿名办公群演，面部不可识别、服饰低信息、不得像任何角色。",
+      "description_cn": "港口办公区夜景。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。基准空间四面拓扑：0度正面为有雨痕斑驳的百叶窗与玻璃；90度右侧为一排铁皮文件柜；180度反面为半开实木门及外侧幽灰通道；270度左侧为挂满线索照片的白板；老旧实木桌位于中央。当前视角由门外（180度）向内（0度）看，老旧木桌与百叶窗拉出纵深。Key Light 来自桌面黄铜台灯，照亮核心舞台；Fill Light 来自窗外冷蓝雨夜反射，保留暗部细节。后景可有少量匿名深夜办公群演，只作远景氛围。",
+      "generation_prompt_cn": "电影级写实环境，项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实物理材质。35mm 广角，胸口高度略低于视线，镜头水平，三分法结合前景门框框景。从半开实木门框内侧作为 Viewpoint Anchor 正向看入办公室深处（沿180度向0度方向看）。FG 左侧门框木纹；MG 老旧实木办公桌和两把空转椅为 Primary Subject；BG 金属百叶窗与雨痕玻璃为 Secondary Subject，辅以局部模糊的铁皮文件柜与白板边缘。黄铜台灯作暖色主光，窗外冷蓝街灯作补光与背景分离，桌面、文件、椅背、地面形成受光面、半影和投影。中等景深，主舞台锐利，远景略软。色彩以旧木褐和煤灰蓝为主辅，琥珀暖光、橄榄灰过渡、冷白雨痕反射作层次。通道清楚，空间厚重、克制、可读。远景可保留 2-3 个大幅虚化匿名办公群演，面部不可识别、服饰低信息、不得像任何角色。",
       "generation_prompt_en": "",
       "negative_prompt_en": "specific characters, clear faces, hero extras, foreground humans, messy blocked paths, flat lighting, plastic set, miniature look",
       "anchor_description": "solid wood desk, brass desk lamp, metal blinds, rain-streaked glass window",
@@ -216,8 +217,8 @@
       "base_name_en": "Project Cover Poster",
       "atmosphere": "Premium theatrical tension with layered poster depth",
       "visual_params": "Poster/Cover/4:3",
-      "description_cn": "4:3 横版封面海报。主要角色与关键道具整合为单张主视觉。Key Light 服务人物轮廓与标题留白；Fill Light 由背景冷色反射分离层次。标题置于顶部安全区 y=30%-35%，保留右侧和底部 UI 净空。",
-      "generation_prompt_cn": "电影级写实封面海报，固定 4:3 poster canvas。以 premium theatrical one-sheet 构图整合角色、道具与环境依赖，前景道具作引导线，中景角色群像承载冲突，背景环境形成纵深。主光清楚塑形面部与身体轮廓，冷色补光分离背景层次。上方三分之一保留标题安全区，标题背后低噪声、低信息密度，并有足够明度/色相对比；人物高光、武器/法器、烟雾、雨丝、火花不得压住标题主阅读区。右侧与底部保留移动端 UI 净空。",
+      "description_cn": "4:3 横版封面海报。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。主要角色与关键道具整合为单张主视觉。Key Light 服务人物轮廓与标题留白；Fill Light 由背景冷色反射分离层次。标题置于顶部安全区 y=30%-35%，保留右侧和底部 UI 净空。",
+      "generation_prompt_cn": "电影级写实封面海报，固定 4:3 poster canvas。项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实材质与可读叙事层次。以 premium theatrical one-sheet 构图整合角色、道具与环境依赖，前景道具作引导线，中景角色群像承载冲突，背景环境形成纵深。主光清楚塑形面部与身体轮廓，冷色补光分离背景层次。上方三分之一保留标题安全区，标题背后低噪声、低信息密度，并有足够明度/色相对比；人物高光、武器/法器、烟雾、雨丝、火花不得压住标题主阅读区。右侧与底部保留移动端 UI 净空。",
       "generation_prompt_en": "",
       "negative_prompt_en": "comic grid, tiled collage, split-screen montage, unreadable title, wrong canvas ratio, blurry faces",
       "anchor_description": "cover poster layout, top-third title safe zone, cool-warm poster contrast, layered key art depth",
