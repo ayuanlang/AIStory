@@ -432,6 +432,7 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
     retry_worker_slots_in_use = 1 if bool(_CALLBACK_COMPENSATION_STARTED) else 0
     retry_worker_slots_available = max(0, retry_worker_slots_total - retry_worker_slots_in_use)
     retry_scan_batch_total = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
+    image_share_percent = _queue_cfg_int("callback_compensation_image_share_percent", 50, minimum=0, maximum=100)
     retry_scan_batch_in_use = max(0, min(int(retry_scan_batch_total), int(compensation_candidate_count)))
     retry_scan_batch_available = max(0, int(retry_scan_batch_total) - int(retry_scan_batch_in_use))
     analyze_scene_dedup = _collect_analyze_scene_dedup_stats(db)
@@ -476,6 +477,7 @@ def admin_get_queue_stats(current_user: "User" = Depends(get_current_user)):
             "scan_enabled": _queue_cfg_bool("callback_compensation_scan_enabled", True),
             "scan_interval_seconds": _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600),
             "scan_batch_size": retry_scan_batch_total,
+            "scan_image_share_percent": image_share_percent,
             "scan_batch_in_use": retry_scan_batch_in_use,
             "scan_batch_available": retry_scan_batch_available,
             "worker_started": bool(_CALLBACK_COMPENSATION_STARTED),
@@ -510,20 +512,49 @@ def _release_db_connection(db: Optional[Session], reason: str = "") -> None:
 
 def _snapshot_user_principal(user: Any) -> SimpleNamespace:
     """Build a detached-safe user snapshot for long-running/background tasks."""
+    def _safe_attr(name: str, default: Any = None) -> Any:
+        if user is None:
+            return default
+        try:
+            state = inspect(user)
+        except Exception:
+            state = None
+
+        if state is not None and hasattr(state, "dict"):
+            state_dict = getattr(state, "dict", {}) or {}
+            if name in state_dict:
+                return state_dict.get(name, default)
+            if name == "id":
+                identity = getattr(state, "identity", None)
+                if identity and len(identity) > 0:
+                    return identity[0]
+            # Detached/expired ORM attrs must not trigger DB refresh here.
+            return default
+
+        if isinstance(user, dict):
+            return user.get(name, default)
+        user_dict = getattr(user, "__dict__", None)
+        if isinstance(user_dict, dict) and name in user_dict:
+            return user_dict.get(name, default)
+        try:
+            return getattr(user, name, default)
+        except Exception:
+            return default
+
     return SimpleNamespace(
-        id=int(getattr(user, "id", 0) or 0),
-        username=str(getattr(user, "username", "") or ""),
-        email=str(getattr(user, "email", "") or "") or None,
-        full_name=str(getattr(user, "full_name", "") or "") or None,
-        avatar_url=str(getattr(user, "avatar_url", "") or "") or None,
-        is_active=int(getattr(user, "is_active", 1) or 1),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-        is_authorized=bool(getattr(user, "is_authorized", False)),
-        is_system=bool(getattr(user, "is_system", False)),
-        account_status=int(getattr(user, "account_status", 1) or 1),
-        email_verified=bool(getattr(user, "email_verified", False)),
-        credits=int(getattr(user, "credits", 0) or 0),
-        preferences=getattr(user, "preferences", None),
+        id=int(_safe_attr("id", 0) or 0),
+        username=str(_safe_attr("username", "") or ""),
+        email=str(_safe_attr("email", "") or "") or None,
+        full_name=str(_safe_attr("full_name", "") or "") or None,
+        avatar_url=str(_safe_attr("avatar_url", "") or "") or None,
+        is_active=int(_safe_attr("is_active", 1) or 1),
+        is_superuser=bool(_safe_attr("is_superuser", False)),
+        is_authorized=bool(_safe_attr("is_authorized", False)),
+        is_system=bool(_safe_attr("is_system", False)),
+        account_status=int(_safe_attr("account_status", 1) or 1),
+        email_verified=bool(_safe_attr("email_verified", False)),
+        credits=int(_safe_attr("credits", 0) or 0),
+        preferences=_safe_attr("preferences", None),
     )
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
@@ -1219,6 +1250,7 @@ def _run_callback_compensation_once() -> None:
         return
 
     safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
+    image_share_percent = _queue_cfg_int("callback_compensation_image_share_percent", 50, minimum=0, maximum=100)
     retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
     retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
     timeout_retry_after_seconds = min(retry_after_seconds, 120)
@@ -1258,9 +1290,11 @@ def _run_callback_compensation_once() -> None:
     image_candidates = _collect_callback_candidates(image_items)
     video_candidates = _collect_callback_candidates(video_items)
 
-    kind_share_base = max(1, safe_batch // 2)
-    image_quota = min(kind_share_base, len(image_candidates))
-    video_quota = min(kind_share_base, len(video_candidates))
+    configured_image_quota = int(round((safe_batch * image_share_percent) / 100.0))
+    configured_image_quota = max(0, min(safe_batch, configured_image_quota))
+    configured_video_quota = max(0, safe_batch - configured_image_quota)
+    image_quota = min(configured_image_quota, len(image_candidates))
+    video_quota = min(configured_video_quota, len(video_candidates))
     selected_count = image_quota + video_quota
     remaining_quota = max(0, safe_batch - selected_count)
 
@@ -1275,7 +1309,7 @@ def _run_callback_compensation_once() -> None:
             video_extra = min(remaining_quota, video_remaining)
             video_quota += video_extra
             remaining_quota -= video_extra
-        if remaining_quota > 0 and image_remaining > (image_quota - kind_share_base):
+        if remaining_quota > 0 and image_remaining > 0:
             image_extra = min(remaining_quota, len(image_candidates) - image_quota)
             image_quota += image_extra
 
@@ -7643,8 +7677,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         async_mode,
         analysis_trace_id or "-",
     )
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
     if async_mode == "1":
-        dedup_key = _build_analyze_scene_dedup_key(current_user.id, request)
+        dedup_key = _build_analyze_scene_dedup_key(current_user_id, request)
         now_ts = time.time()
         reused_task_id = ""
         reused_status = ""
@@ -7655,7 +7692,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         existing_task_id = str(existing.get("task_id") or "").strip()
         existing_ts = float(existing.get("updated_at") or 0.0)
         if existing_task_id:
-            info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+            info = _get_task_status(existing_task_id, user_id=current_user_id) or {}
             status = str(info.get("status") or "").strip().lower()
             within_window = (now_ts - existing_ts) <= float(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS)
             if status in {"pending", "running"} and within_window:
@@ -7668,7 +7705,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if reused_task_id:
             logger.warning(
                 "[analyze_scene] deduplicated async submit user_id=%s episode_id=%s task_id=%s status=%s window_s=%s trace_id=%s",
-                current_user.id,
+                current_user_id,
                 getattr(request, "episode_id", None),
                 reused_task_id,
                 reused_status,
@@ -7687,7 +7724,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         inserted = _insert_analyze_scene_dedup_row_if_absent(
             db,
             dedup_key=dedup_key,
-            user_id=current_user.id,
+            user_id=current_user_id,
             task_id=provisional_task_id,
             now_ts=now_ts,
         )
@@ -7698,13 +7735,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             existing_task_id = str(existing.get("task_id") or "").strip()
             existing_ts = float(existing.get("updated_at") or 0.0)
             if existing_task_id:
-                info = _get_task_status(existing_task_id, user_id=current_user.id) or {}
+                info = _get_task_status(existing_task_id, user_id=current_user_id) or {}
                 status = str(info.get("status") or "").strip().lower()
                 within_window = (now_ts - existing_ts) <= float(_ANALYZE_SCENE_DEDUP_WINDOW_SECONDS)
                 if status in {"pending", "running"} and within_window:
                     logger.info(
                         "[analyze_scene][dedup] reused-existing-race user_id=%s episode_id=%s task_id=%s status=%s age_s=%s trace_id=%s",
-                        current_user.id,
+                        current_user_id,
                         getattr(request, "episode_id", None),
                         existing_task_id,
                         status,
@@ -7724,24 +7761,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             _insert_analyze_scene_dedup_row_if_absent(
                 db,
                 dedup_key=dedup_key,
-                user_id=current_user.id,
+                user_id=current_user_id,
                 task_id=provisional_task_id,
                 now_ts=now_ts,
             )
             db.commit()
 
-        tid = _submit_async(analyze_scene, user_id=current_user.id, kind="analyze_scene", request=request, async_mode="0")
+        tid = _submit_async(analyze_scene, user_id=current_user_id, kind="analyze_scene", request=request, async_mode="0")
         _upsert_analyze_scene_dedup_row(
             db,
             dedup_key=dedup_key,
-            user_id=current_user.id,
+            user_id=current_user_id,
             task_id=tid,
             now_ts=now_ts,
         )
         db.commit()
         logger.info(
             "[analyze_scene][dedup] new-task-claimed user_id=%s episode_id=%s task_id=%s trace_id=%s",
-            current_user.id,
+            current_user_id,
             getattr(request, "episode_id", None),
             tid,
             analysis_trace_id or "-",
@@ -7785,10 +7822,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
     try:
         # Cache user primitives before releasing DB session for long LLM calls.
-        current_user_snapshot = _snapshot_user_principal(current_user)
-        current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
-        current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
-
         def _is_length_finish_reason(reason: Any) -> bool:
             r = str(reason or "").strip().lower().replace("-", "_")
             return r in {
@@ -10770,15 +10803,20 @@ async def process_agent_command(
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
+    current_user_is_authorized = bool(getattr(current_user_snapshot, "is_authorized", False))
+    current_user_username = getattr(current_user_snapshot, "username", None)
     if async_mode == "1":
-        tid = _submit_async(process_agent_command, user_id=current_user.id, kind="agent_command",
+        tid = _submit_async(process_agent_command, user_id=current_user_id, kind="agent_command",
                             request=request, async_mode="0")
         return JSONResponse({"task_id": tid, "async": True})
     # Resolve Project ID
     project_id = request.project_id or request.context.get("projectId")
     
     if project_id:
-        _require_project_access(db, int(project_id), current_user)
+        _require_project_access(db, int(project_id), current_user_snapshot)
 
     agent_function_name = (
         getattr(request, "function_name", None)
@@ -10788,7 +10826,7 @@ async def process_agent_command(
     agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
 
     resolved_llm_config = agent_service.get_active_llm_config(
-        current_user.id,
+        current_user_id,
         category="LLM",
         function_name=agent_function_name,
         system_api_id=agent_system_api_id,
@@ -10801,7 +10839,7 @@ async def process_agent_command(
     resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
     logger.info(
         "[agent.command] resolved_user_active_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
-        current_user.id,
+        current_user_id,
         provider,
         model,
         resolved_cfg_meta.get("__resolved_setting_id"),
@@ -10812,10 +10850,10 @@ async def process_agent_command(
     merged_context = dict(request.context or {})
     merged_context["agent_mode"] = "project"
     merged_context["auth"] = {
-        "user_id": current_user.id,
-        "is_superuser": bool(getattr(current_user, "is_superuser", False)),
-        "is_authorized": bool(getattr(current_user, "is_authorized", False)),
-        "username": getattr(current_user, "username", None),
+        "user_id": current_user_id,
+        "is_superuser": current_user_is_superuser,
+        "is_authorized": current_user_is_authorized,
+        "username": current_user_username,
     }
 
     request_for_agent = request.copy(update={
@@ -10824,6 +10862,7 @@ async def process_agent_command(
     })
     
     reservation_tx = None
+    reserve_episode_id = None
     # Billing Check / Reserve
     # Only reserve for intent-analysis LLM call (skip refinement flow which doesn't call LLM)
     if (not request.context.get("is_refinement")) and billing_service.is_token_pricing(db, "llm_chat", provider, model):
@@ -10856,20 +10895,21 @@ async def process_agent_command(
         _agent_episode_id = request.context.get("episode_id") or request.context.get("episodeId")
         if _agent_episode_id:
             try:
-                reserve_details["episode_id"] = int(_agent_episode_id)
+                reserve_episode_id = int(_agent_episode_id)
+                reserve_details["episode_id"] = reserve_episode_id
             except Exception:
                 pass
-        reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+        reservation_tx = billing_service.reserve_credits(db, current_user_id, "llm_chat", provider, model, reserve_details)
     else:
-        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+        billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
     try:
         _release_db_connection(db, "agent_command_before_process")
-        result = await agent_service.process_command(request_for_agent, db, current_user)
+        result = await agent_service.process_command(request_for_agent, db, current_user_snapshot)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
         _finalize_model_invocation_billing(
             db=db,
-            current_user=current_user,
+            current_user=current_user_snapshot,
             task_type="llm_chat",
             provider=provider,
             model=model,
@@ -10880,7 +10920,7 @@ async def process_agent_command(
                 "query": (request.query or "")[:50],
                 "request_scope": "agent_command",
                 **({"project_id": int(request.project_id)} if request.project_id else {}),
-                **({"episode_id": int(reserve_details.get("episode_id"))} if reserve_details.get("episode_id") else {}),
+                **({"episode_id": int(reserve_episode_id)} if reserve_episode_id else {}),
             },
             routing_payload=result.dict() if hasattr(result, "dict") else None,
             cancel_if_missing_usage=True,
@@ -10891,7 +10931,7 @@ async def process_agent_command(
     except Exception as e:
         logger.error(f"Agent Command Failed: {e}")
         _cancel_reservation_quietly(db, reservation_tx, str(e))
-        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+        billing_service.log_failed_transaction(db, current_user_id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -10902,11 +10942,16 @@ async def process_system_management_agent_command(
     db: Session = Depends(get_db),
     async_mode: str = Query("0"),
 ):
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
+    current_user_is_authorized = bool(getattr(current_user_snapshot, "is_authorized", False))
+    current_user_username = getattr(current_user_snapshot, "username", None)
     if async_mode == "1":
-        tid = _submit_async(process_system_management_agent_command, user_id=current_user.id,
+        tid = _submit_async(process_system_management_agent_command, user_id=current_user_id,
                             kind="system_agent_command", request=request, async_mode="0")
         return JSONResponse({"task_id": tid, "async": True})
-    if not bool(getattr(current_user, "is_superuser", False)):
+    if not current_user_is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
     agent_function_name = (
@@ -10917,7 +10962,7 @@ async def process_system_management_agent_command(
     agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
 
     resolved_llm_config = agent_service.get_active_llm_config(
-        current_user.id,
+        current_user_id,
         category="LLM",
         function_name=agent_function_name,
         system_api_id=agent_system_api_id,
@@ -10930,7 +10975,7 @@ async def process_system_management_agent_command(
     resolved_cfg_meta = resolved_llm_config.get("config") if isinstance(resolved_llm_config.get("config"), dict) else {}
     logger.info(
         "[agent.system_management.command] resolved_llm | user_id=%s provider=%s model=%s setting_id=%s source=%s category=%s",
-        current_user.id,
+        current_user_id,
         provider,
         model,
         resolved_cfg_meta.get("__resolved_setting_id"),
@@ -10961,17 +11006,28 @@ async def process_system_management_agent_command(
         }
         if request.project_id:
             reserve_details["project_id"] = int(request.project_id)
-        reservation_tx = billing_service.reserve_credits(db, current_user.id, "llm_chat", provider, model, reserve_details)
+        reservation_tx = billing_service.reserve_credits(db, current_user_id, "llm_chat", provider, model, reserve_details)
     else:
-        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+        billing_service.check_balance(db, current_user_id, "llm_chat", provider, model)
 
     try:
         _release_db_connection(db, "system_agent_command_before_process")
-        result = await agent_service.process_system_management_command(request, db, current_user)
+        request_for_system_agent = request.copy(update={
+            "context": {
+                **dict(request.context or {}),
+                "auth": {
+                    "user_id": current_user_id,
+                    "is_superuser": current_user_is_superuser,
+                    "is_authorized": current_user_is_authorized,
+                    "username": current_user_username,
+                },
+            }
+        })
+        result = await agent_service.process_system_management_command(request_for_system_agent, db, current_user_snapshot)
         usage_payload = result.usage if isinstance(result.usage, dict) else {}
         _finalize_model_invocation_billing(
             db=db,
-            current_user=current_user,
+            current_user=current_user_snapshot,
             task_type="llm_chat",
             provider=provider,
             model=model,
@@ -10994,7 +11050,7 @@ async def process_system_management_agent_command(
     except Exception as e:
         logger.error(f"System Management Agent Command Failed: {e}")
         _cancel_reservation_quietly(db, reservation_tx, str(e))
-        billing_service.log_failed_transaction(db, current_user.id, "llm_chat", provider, model, str(e))
+        billing_service.log_failed_transaction(db, current_user_id, "llm_chat", provider, model, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -11023,11 +11079,16 @@ async def stream_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
 ):
-    print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user.id}")
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
+    current_user_is_authorized = bool(getattr(current_user_snapshot, "is_authorized", False))
+    current_user_username = getattr(current_user_snapshot, "username", None)
+    print(f"[STREAM-DEBUG] === stream_agent_command entered === query={request.query[:80] if request.query else 'N/A'}, user={current_user_id}")
     project_id = request.project_id or request.context.get("projectId")
     if project_id:
         with SessionLocal() as auth_db:
-            _require_project_access(auth_db, int(project_id), current_user)
+            _require_project_access(auth_db, int(project_id), current_user_snapshot)
 
     agent_function_name = (
         getattr(request, "function_name", None)
@@ -11037,7 +11098,7 @@ async def stream_agent_command(
     agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
 
     resolved_llm_config = agent_service.get_active_llm_config(
-        current_user.id,
+        current_user_id,
         category="LLM",
         function_name=agent_function_name,
         system_api_id=agent_system_api_id,
@@ -11051,10 +11112,10 @@ async def stream_agent_command(
     merged_context = dict(request.context or {})
     merged_context["agent_mode"] = "project"
     merged_context["auth"] = {
-        "user_id": current_user.id,
-        "is_superuser": bool(getattr(current_user, "is_superuser", False)),
-        "is_authorized": bool(getattr(current_user, "is_authorized", False)),
-        "username": getattr(current_user, "username", None),
+        "user_id": current_user_id,
+        "is_superuser": current_user_is_superuser,
+        "is_authorized": current_user_is_authorized,
+        "username": current_user_username,
     }
 
     request_for_agent = request.copy(update={
@@ -11064,14 +11125,14 @@ async def stream_agent_command(
 
     # Billing: simple deduction (streaming cannot easily do reservation/settlement)
     with SessionLocal() as billing_db:
-        billing_service.check_balance(billing_db, current_user.id, "llm_chat", provider, model)
+        billing_service.check_balance(billing_db, current_user_id, "llm_chat", provider, model)
     print(f"[STREAM-DEBUG] endpoint: billing OK, calling stream_process_command, provider={provider}, model={model}")
 
     async def _generate():
         print(f"[STREAM-DEBUG] _generate() started iterating stream_process_command")
         try:
             from contextlib import aclosing
-            async with aclosing(agent_service.stream_process_command(request_for_agent, current_user)) as _stream:
+            async with aclosing(agent_service.stream_process_command(request_for_agent, current_user_snapshot)) as _stream:
                 async for event in _stream:
                     if event.get("type") == "heartbeat":
                         yield event
@@ -11082,7 +11143,7 @@ async def stream_agent_command(
             with SessionLocal() as billing_db:
                 billing_service.deduct_credits(
                     billing_db,
-                    current_user.id,
+                    current_user_id,
                     "llm_chat",
                     provider,
                     model,
@@ -11092,7 +11153,7 @@ async def stream_agent_command(
             logger.error("stream_agent_command error: %s", e)
             try:
                 with SessionLocal() as billing_db:
-                    billing_service.log_failed_transaction(billing_db, current_user.id, "llm_chat", provider, model, str(e))
+                    billing_service.log_failed_transaction(billing_db, current_user_id, "llm_chat", provider, model, str(e))
             except Exception:
                 logger.warning("stream_agent_command failed to record billing failure", exc_info=True)
             yield {"type": "error", "message": str(e)}
@@ -11109,7 +11170,10 @@ async def stream_system_management_agent_command(
     request: AgentRequest,
     current_user: User = Depends(get_current_user),
 ):
-    if not bool(getattr(current_user, "is_superuser", False)):
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    current_user_is_superuser = bool(getattr(current_user_snapshot, "is_superuser", False))
+    if not current_user_is_superuser:
         raise HTTPException(status_code=403, detail="Only superuser can use system management AI agent")
 
     agent_function_name = (
@@ -11120,7 +11184,7 @@ async def stream_system_management_agent_command(
     agent_system_api_id = getattr(request, "system_api_id", None) or (request.context or {}).get("system_api_id")
 
     resolved_llm_config = agent_service.get_active_llm_config(
-        current_user.id,
+        current_user_id,
         category="LLM",
         function_name=agent_function_name,
         system_api_id=agent_system_api_id,
@@ -11132,18 +11196,18 @@ async def stream_system_management_agent_command(
     model = resolved_llm_config.get("model")
 
     with SessionLocal() as billing_db:
-        billing_service.check_balance(billing_db, current_user.id, "llm_chat", provider, model)
+        billing_service.check_balance(billing_db, current_user_id, "llm_chat", provider, model)
 
     async def _generate():
         try:
             from contextlib import aclosing
-            async with aclosing(agent_service.stream_process_system_management_command(request, current_user)) as _stream:
+            async with aclosing(agent_service.stream_process_system_management_command(request, current_user_snapshot)) as _stream:
                 async for event in _stream:
                     yield event
             with SessionLocal() as billing_db:
                 billing_service.deduct_credits(
                     billing_db,
-                    current_user.id,
+                    current_user_id,
                     "llm_chat",
                     provider,
                     model,
@@ -11153,7 +11217,7 @@ async def stream_system_management_agent_command(
             logger.error("stream_system_management_agent_command error: %s", e)
             try:
                 with SessionLocal() as billing_db:
-                    billing_service.log_failed_transaction(billing_db, current_user.id, "llm_chat", provider, model, str(e))
+                    billing_service.log_failed_transaction(billing_db, current_user_id, "llm_chat", provider, model, str(e))
             except Exception:
                 logger.warning("stream_system_management_agent_command failed to record billing failure", exc_info=True)
             yield {"type": "error", "message": str(e)}
@@ -40049,6 +40113,7 @@ class QueueConfigBase(BaseModel):
     callback_compensation_scan_enabled: bool = True
     callback_compensation_scan_interval_seconds: int = 60
     callback_compensation_scan_batch_size: int = 10
+    callback_compensation_image_share_percent: int = 50
 
 @router.get("/admin/queue/config", response_model=QueueConfigBase)
 async def admin_get_queue_config(current_user: User = Depends(get_current_user)):

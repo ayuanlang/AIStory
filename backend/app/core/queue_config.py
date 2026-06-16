@@ -18,6 +18,7 @@ DEFAULT_QUEUE_CONFIG: Dict[str, Any] = {
     "callback_compensation_scan_enabled": True,
     "callback_compensation_scan_interval_seconds": 60,
     "callback_compensation_scan_batch_size": 10,
+    "callback_compensation_image_share_percent": 50,
 }
 
 
