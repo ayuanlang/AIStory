@@ -9380,6 +9380,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const subjectName = String(
                 obj.subject_name_exact
                 ?? obj.subject_name_zh
+                ?? obj.subject_name_en
                 ?? obj.subject_name
                 ?? obj.name
                 ?? obj['名称']
@@ -9538,7 +9539,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const subjectType = String(entry?.type || getSubjectFieldValueByAliases(normalizedFields, ['subject_type', 'type', '类型', '类别']) || '').trim();
         const subjectName = String(
             entry?.name
-            || getSubjectFieldValueByAliases(normalizedFields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])
+            || getSubjectFieldValueByAliases(normalizedFields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])
             || ''
         ).trim();
         const subjectNo = String(entry?.subjectNo || getSubjectFieldValueByAliases(normalizedFields, ['subject_no', 'id', '编号']) || '').trim();
@@ -9586,7 +9587,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextType = String(getSubjectFieldValueByAliases(nextFields, ['subject_type', 'type', '类型', '类别']) || originalEntry.type || '').trim();
             const nextSubjectNo = String(getSubjectFieldValueByAliases(nextFields, ['subject_no', 'id', '编号']) || originalEntry.subjectNo || '').trim();
             const nextName = String(
-                getSubjectFieldValueByAliases(nextFields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])
+                getSubjectFieldValueByAliases(nextFields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])
                 || originalEntry.name
                 || ''
             ).trim();
@@ -9719,7 +9720,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!entryKey) return;
         const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
         const fields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
-        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])).trim();
+        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])).trim();
         const nextType = String(getSubjectFieldValueByAliases(fields, ['subject_type', 'type', '类型', '类别'])).trim();
         if (!nextName) {
             alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
