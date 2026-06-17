@@ -732,6 +732,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         category: 'characters',
         subjectKey: '',
         query: '',
+        deletedSubjectKeys: {},
+        subjectEdits: {},
+        editingSubjectKey: '',
     });
     const [postAnalysisCheckModal, setPostAnalysisCheckModal] = useState({
         open: false,
@@ -9311,20 +9314,73 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         [parseSubjectIndexEntriesForAssetRerun, resolveSubjectIndexTextForAssetRerun]
     );
 
+    const buildSingleSubjectIndexTextForRerun = useCallback((entry) => {
+        const subjectNo = String(entry?.subjectNo || '').trim();
+        const subjectType = String(entry?.type || '').trim();
+        const subjectName = String(entry?.name || '').trim();
+        if (!subjectType || !subjectName) return '';
+        return buildMarkdownTable(
+            ['subject_no', 'subject_type', 'subject_name_exact'],
+            [[subjectNo, subjectType, subjectName]]
+        );
+    }, [buildMarkdownTable]);
+
+    const phase2RerunDisplayEntries = useMemo(() => {
+        const deletedMap = (phase2RerunModal?.deletedSubjectKeys && typeof phase2RerunModal.deletedSubjectKeys === 'object')
+            ? phase2RerunModal.deletedSubjectKeys
+            : {};
+        const editsMap = (phase2RerunModal?.subjectEdits && typeof phase2RerunModal.subjectEdits === 'object')
+            ? phase2RerunModal.subjectEdits
+            : {};
+        return (phase2RerunSubjectEntries || []).reduce((acc, originalEntry) => {
+            if (!originalEntry?.key) return acc;
+            if (deletedMap[originalEntry.key]) return acc;
+
+            const patch = editsMap[originalEntry.key] || {};
+            const nextType = String(patch.type ?? originalEntry.type ?? '').trim();
+            const mapped = mapSubjectIndexTypeToRerunTarget(nextType);
+            if (!mapped.category || !mapped.targetEntityTypes?.length) return acc;
+
+            const merged = {
+                ...originalEntry,
+                subjectNo: String(patch.subjectNo ?? originalEntry.subjectNo ?? '').trim(),
+                name: String(patch.name ?? originalEntry.name ?? '').trim(),
+                type: nextType,
+                category: mapped.category,
+                targetEntityTypes: mapped.targetEntityTypes,
+            };
+            if (!merged.name) return acc;
+            const sourceText = buildSingleSubjectIndexTextForRerun(merged);
+            if (!sourceText) return acc;
+            acc.push({
+                ...merged,
+                sourceText,
+                sourceLine: `subject_no=${merged.subjectNo || '-'} | subject_type=${merged.type} | subject_name_exact=${merged.name}`,
+            });
+            return acc;
+        }, []);
+    }, [
+        buildSingleSubjectIndexTextForRerun,
+        mapSubjectIndexTypeToRerunTarget,
+        phase2RerunModal?.deletedSubjectKeys,
+        phase2RerunModal?.subjectEdits,
+        phase2RerunSubjectEntries,
+    ]);
+
     const filteredPhase2RerunSubjectEntries = useMemo(() => {
         const category = String(phase2RerunModal.category || '').trim();
         const query = String(phase2RerunModal.query || '').trim().toLowerCase();
-        return phase2RerunSubjectEntries.filter((item) => {
+        return phase2RerunDisplayEntries.filter((item) => {
             if (category && item.category !== category) return false;
             if (!query) return true;
             return [item.subjectNo, item.name, item.type, item.sourceLine]
                 .some((value) => String(value || '').toLowerCase().includes(query));
         });
-    }, [phase2RerunModal.category, phase2RerunModal.query, phase2RerunSubjectEntries]);
+    }, [phase2RerunDisplayEntries, phase2RerunModal.category, phase2RerunModal.query]);
 
     const openPhase2RerunModal = useCallback((patch = {}) => {
         const nextCategory = String(patch.category || phase2RerunModal.category || 'characters').trim();
-        const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === nextCategory) || phase2RerunSubjectEntries[0];
+        const firstSubject = phase2RerunDisplayEntries.find((item) => item.category === nextCategory) || phase2RerunDisplayEntries[0];
         setPhase2RerunModal((prev) => ({
             ...prev,
             open: true,
@@ -9332,8 +9388,105 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             category: nextCategory,
             subjectKey: patch.subjectKey || prev.subjectKey || firstSubject?.key || '',
             query: patch.query ?? prev.query ?? '',
+            deletedSubjectKeys: {},
+            subjectEdits: {},
+            editingSubjectKey: '',
         }));
-    }, [phase2RerunModal.category, phase2RerunSubjectEntries]);
+    }, [phase2RerunDisplayEntries, phase2RerunModal.category]);
+
+    const handleDeletePhase2RerunEntry = useCallback((entry) => {
+        if (!entry?.key) return;
+        if (!window.confirm(t(`确定从本次重跑列表中移除「${entry.name || entry.subjectNo || '该实体'}」吗？`, `Remove "${entry.name || entry.subjectNo || 'this entity'}" from this rerun selection?`))) {
+            return;
+        }
+        setPhase2RerunModal((prev) => {
+            const nextDeleted = {
+                ...((prev.deletedSubjectKeys && typeof prev.deletedSubjectKeys === 'object') ? prev.deletedSubjectKeys : {}),
+                [entry.key]: true,
+            };
+            const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
+            delete nextEdits[entry.key];
+            return {
+                ...prev,
+                deletedSubjectKeys: nextDeleted,
+                subjectEdits: nextEdits,
+                editingSubjectKey: prev.editingSubjectKey === entry.key ? '' : prev.editingSubjectKey,
+                subjectKey: prev.subjectKey === entry.key ? '' : prev.subjectKey,
+            };
+        });
+    }, [t]);
+
+    const beginEditPhase2RerunEntry = useCallback((entry) => {
+        if (!entry?.key) return;
+        setPhase2RerunModal((prev) => ({
+            ...prev,
+            editingSubjectKey: entry.key,
+            subjectEdits: {
+                ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}),
+                [entry.key]: {
+                    subjectNo: String(entry.subjectNo || '').trim(),
+                    name: String(entry.name || '').trim(),
+                    type: String(entry.type || '').trim(),
+                },
+            },
+        }));
+    }, []);
+
+    const updatePhase2RerunEntryEditField = useCallback((entryKey, field, value) => {
+        if (!entryKey || !field) return;
+        setPhase2RerunModal((prev) => {
+            const prevEdits = (prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {};
+            const currentEdit = (prevEdits[entryKey] && typeof prevEdits[entryKey] === 'object') ? prevEdits[entryKey] : {};
+            return {
+                ...prev,
+                subjectEdits: {
+                    ...prevEdits,
+                    [entryKey]: {
+                        ...currentEdit,
+                        [field]: String(value ?? ''),
+                    },
+                },
+            };
+        });
+    }, []);
+
+    const savePhase2RerunEntryEdit = useCallback((entryKey) => {
+        if (!entryKey) return;
+        const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
+        const nextName = String(draft?.name || '').trim();
+        const nextType = String(draft?.type || '').trim();
+        if (!nextName) {
+            alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
+            return;
+        }
+        const mapped = mapSubjectIndexTypeToRerunTarget(nextType);
+        if (!mapped?.category || !mapped?.targetEntityTypes?.length) {
+            alert(t('实体类型无效，请选择可识别类型。', 'Invalid entity type. Please choose a supported type.'));
+            return;
+        }
+        setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
+    }, [mapSubjectIndexTypeToRerunTarget, phase2RerunModal?.subjectEdits, t]);
+
+    useEffect(() => {
+        if (!phase2RerunModal.open) return;
+        if (phase2RerunModal.mode !== 'single') return;
+        const currentKey = String(phase2RerunModal.subjectKey || '').trim();
+        const exists = currentKey && filteredPhase2RerunSubjectEntries.some((item) => item.key === currentKey);
+        if (exists) return;
+        const fallback = filteredPhase2RerunSubjectEntries[0] || phase2RerunDisplayEntries.find((item) => item.category === phase2RerunModal.category) || phase2RerunDisplayEntries[0] || null;
+        if (!fallback?.key && !currentKey) return;
+        setPhase2RerunModal((prev) => ({
+            ...prev,
+            subjectKey: fallback?.key || '',
+        }));
+    }, [
+        filteredPhase2RerunSubjectEntries,
+        phase2RerunDisplayEntries,
+        phase2RerunModal.category,
+        phase2RerunModal.mode,
+        phase2RerunModal.open,
+        phase2RerunModal.subjectKey,
+    ]);
 
     const confirmPhase2RerunSelection = useCallback(async () => {
         const mode = String(phase2RerunModal.mode || 'all');
@@ -9350,7 +9503,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } else if (mode === 'single') {
             const selected = filteredPhase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey)
                 || filteredPhase2RerunSubjectEntries[0]
-                || phase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey);
+                || phase2RerunDisplayEntries.find((item) => item.key === phase2RerunModal.subjectKey);
             if (!selected?.sourceText) {
                 alert(t('请选择一个资产清单实体后再重跑。', 'Select one subject-index entity before rerunning.'));
                 return;
@@ -9375,7 +9528,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         phase2RerunModal.category,
         phase2RerunModal.mode,
         phase2RerunModal.subjectKey,
-        phase2RerunSubjectEntries,
+        phase2RerunDisplayEntries,
         resolveSubjectIndexTextForAssetRerun,
         t,
     ]);
@@ -9438,7 +9591,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ),
         };
 
-        const subjectCategories = new Set((phase2RerunSubjectEntries || []).map((item) => item.category).filter(Boolean));
+        const subjectCategories = new Set((phase2RerunDisplayEntries || []).map((item) => item.category).filter(Boolean));
         const pendingAssetTargets = [];
         const pendingLabels = [];
         const addAssetTargetIfZero = (key, labelZh, targets) => {
@@ -9524,7 +9677,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isAnalyzing,
         isRetryingPhase2,
         onLog,
-        phase2RerunSubjectEntries,
+        phase2RerunDisplayEntries,
         recordAnalysisFallbackAttempt,
         resolveSubjectIndexTextForAssetRerun,
         t,
@@ -10418,7 +10571,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             type="button"
                                             onClick={() => {
                                                 const category = phase2RerunModal.category || 'characters';
-                                                const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === category) || phase2RerunSubjectEntries[0];
+                                                const firstSubject = phase2RerunDisplayEntries.find((item) => item.category === category) || phase2RerunDisplayEntries[0];
                                                 setPhase2RerunModal((prev) => ({
                                                     ...prev,
                                                     mode: mode.key,
@@ -10453,7 +10606,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     key={option.key}
                                                     type="button"
                                                     onClick={() => {
-                                                        const firstSubject = phase2RerunSubjectEntries.find((item) => item.category === option.key);
+                                                        const firstSubject = phase2RerunDisplayEntries.find((item) => item.category === option.key);
                                                         setPhase2RerunModal((prev) => ({
                                                             ...prev,
                                                             category: option.key,
@@ -10492,20 +10645,92 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <div className="rounded-lg border border-white/10 bg-black/20 max-h-[280px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
                                         {filteredPhase2RerunSubjectEntries.length > 0 ? filteredPhase2RerunSubjectEntries.map((item) => {
                                             const active = phase2RerunModal.subjectKey === item.key;
+                                            const isEditing = phase2RerunModal.editingSubjectKey === item.key;
+                                            const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
                                             return (
-                                                <button
+                                                <div
                                                     key={item.key}
-                                                    type="button"
-                                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, subjectKey: item.key }))}
                                                     className={`w-full text-left px-3 py-2.5 transition-colors ${active ? 'bg-purple-500/25 text-purple-50' : 'hover:bg-white/5 text-white/80'}`}
                                                 >
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <span className="font-bold">{item.name}</span>
-                                                        {item.subjectNo && <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/10 text-white/65">{item.subjectNo}</span>}
-                                                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-100">{item.type}</span>
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setPhase2RerunModal((prev) => ({ ...prev, subjectKey: item.key }))}
+                                                            className="text-left flex-1 min-w-[180px]"
+                                                        >
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <span className="font-bold">{item.name}</span>
+                                                                {item.subjectNo && <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/10 text-white/65">{item.subjectNo}</span>}
+                                                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-100">{item.type}</span>
+                                                            </div>
+                                                        </button>
+                                                        <div className="flex items-center gap-1">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => beginEditPhase2RerunEntry(item)}
+                                                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-400/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                                                                title={t('编辑该实体', 'Edit this entity')}
+                                                            >
+                                                                <Edit3 className="w-3.5 h-3.5" />
+                                                                <span className="text-[11px] font-semibold">{t('编辑', 'Edit')}</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleDeletePhase2RerunEntry(item)}
+                                                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-rose-400/30 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20"
+                                                                title={t('从本次重跑列表移除', 'Remove from this rerun list')}
+                                                            >
+                                                                <Trash2 className="w-3.5 h-3.5" />
+                                                                <span className="text-[11px] font-semibold">{t('删除', 'Delete')}</span>
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                     <div className="mt-1 text-[11px] text-white/45 truncate">{item.sourceLine}</div>
-                                                </button>
+                                                    {isEditing && (
+                                                        <div className="mt-2 rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
+                                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                                                <input
+                                                                    value={String(draft.subjectNo ?? item.subjectNo ?? '')}
+                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'subjectNo', event.target.value)}
+                                                                    placeholder={t('实体编号', 'Subject No')}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
+                                                                />
+                                                                <select
+                                                                    value={String(draft.type ?? item.type ?? '')}
+                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'type', event.target.value)}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
+                                                                >
+                                                                    <option value="character">{t('角色 (character)', 'Character')}</option>
+                                                                    <option value="prop">{t('道具 (prop)', 'Prop')}</option>
+                                                                    <option value="environment">{t('环境 (environment)', 'Environment')}</option>
+                                                                    <option value="cover_poster">{t('封面/海报 (cover_poster)', 'Cover/Poster')}</option>
+                                                                </select>
+                                                                <input
+                                                                    value={String(draft.name ?? item.name ?? '')}
+                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'name', event.target.value)}
+                                                                    placeholder={t('实体名称', 'Entity Name')}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
+                                                                />
+                                                            </div>
+                                                            <div className="flex items-center justify-end gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }))}
+                                                                    className="px-2.5 py-1 text-[11px] rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80"
+                                                                >
+                                                                    {t('取消', 'Cancel')}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => savePhase2RerunEntryEdit(item.key)}
+                                                                    className="px-2.5 py-1 text-[11px] rounded border border-emerald-400/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold"
+                                                                >
+                                                                    {t('保存', 'Save')}
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             );
                                         }) : (
                                             <div className="px-3 py-6 text-center text-sm text-white/45">
@@ -10519,7 +10744,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
                             <div className="text-xs text-white/45">
-                                {t(`可选实体：${phase2RerunSubjectEntries.length} 个`, `${phase2RerunSubjectEntries.length} selectable entities`)}
+                                {t(`可选实体：${phase2RerunDisplayEntries.length} 个`, `${phase2RerunDisplayEntries.length} selectable entities`)}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
