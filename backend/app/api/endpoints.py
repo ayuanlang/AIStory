@@ -2673,7 +2673,18 @@ def _media_result_needs_persistence_retry(result: Any) -> bool:
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
     re.compile(r"(^|.+\.)aiquickdraw\.com$", re.IGNORECASE),
+    # Volcengine Ark / Seedance temporary TOS delivery URLs (must be localized to OSS).
+    re.compile(r"(^|.+\.)volces\.com$", re.IGNORECASE),
 ]
+
+_EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS = (
+    "x-tos-algorithm",
+    "x-tos-signature",
+    "x-tos-credential",
+    "x-amz-algorithm",
+    "x-amz-signature",
+    "x-amz-credential",
+)
 
 
 def _is_ephemeral_provider_media_url(value: Any) -> bool:
@@ -2696,7 +2707,24 @@ def _is_ephemeral_provider_media_url(value: Any) -> bool:
     for pattern in _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS:
         if pattern.match(hostname):
             return True
+
+    query_lower = str(parsed.query or "").strip().lower()
+    if query_lower and any(marker in query_lower for marker in _EPHEMERAL_PROVIDER_MEDIA_QUERY_MARKERS):
+        return True
     return False
+
+
+def _job_has_durable_result_url(job: Dict[str, Any]) -> bool:
+    if not isinstance(job, dict):
+        return False
+    result = job.get("result")
+    current_url = _extract_job_result_url(result)
+    if not current_url:
+        return False
+    meta: Dict[str, Any] = {}
+    if isinstance(result, dict) and isinstance(result.get("metadata"), dict):
+        meta = dict(result.get("metadata") or {})
+    return _is_durable_persisted_media_url(current_url, meta)
 
 
 def _is_durable_persisted_media_url(value: Any, metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -4059,7 +4087,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
     current_error = str(job.get("error") or "").strip()
-    current_has_stable_result = bool(current_result_url) and not _is_ephemeral_provider_media_url(current_result_url)
+    current_has_stable_result = _job_has_durable_result_url(job)
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
@@ -4595,7 +4623,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
 
     current_status = _normalize_generation_status(job.get("status"))
     current_error = str(job.get("error") or "").strip()
-    current_has_stable_result = bool(current_result_url) and not _is_ephemeral_provider_media_url(current_result_url)
+    current_has_stable_result = _job_has_durable_result_url(job)
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}

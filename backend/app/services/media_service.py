@@ -14560,7 +14560,38 @@ class MediaGenerationService:
              if url.startswith("/"): return url
              if "localhost" in url or "127.0.0.1" in url: return url
 
-             response = requests.get(url, stream=True, timeout=600, headers={"User-Agent": "Mozilla/5.0"})
+             def _fetch_remote_media(use_proxy: bool = True):
+                 kwargs = {
+                     "stream": True,
+                     "timeout": 600,
+                     "headers": {"User-Agent": "Mozilla/5.0"},
+                     "verify": False,
+                 }
+                 if not use_proxy:
+                     kwargs["proxies"] = {"http": None, "https": None}
+                 return requests.get(url, **kwargs)
+
+             response = None
+             fetch_errors: List[str] = []
+             for use_proxy in (True, False):
+                 try:
+                     candidate = _fetch_remote_media(use_proxy=use_proxy)
+                 except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as fetch_err:
+                     fetch_errors.append(f"proxy={'on' if use_proxy else 'off'} err={fetch_err}")
+                     continue
+                 if candidate.status_code == 200:
+                     response = candidate
+                     break
+                 fetch_errors.append(f"proxy={'on' if use_proxy else 'off'} status={candidate.status_code}")
+                 if use_proxy:
+                     continue
+                 response = candidate
+
+             if response is None:
+                 detail = "; ".join(fetch_errors) if fetch_errors else "unknown fetch error"
+                 _debug_log(f"Download failed: {detail} for {url}", "error")
+                 raise ValueError(detail)
+
              if response.status_code != 200:
                 _debug_log(f"Download failed: HTTP {response.status_code} for {url}", "error")
                 raise ValueError(f"HTTP {response.status_code}")
