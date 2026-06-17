@@ -958,12 +958,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         const phase = String(analysisFlowStatus?.phase || '').trim();
         const message = String(analysisFlowStatus?.message || '').trim();
+        const highlightHint = String(analysisFlowStatus?.highlightHint || '').trim();
 
         if (!phase || phase === 'idle' || !message) return;
 
         setAnalysisFlowStatusHistory((prev) => {
             const lastItem = prev[prev.length - 1];
             if (lastItem && lastItem.phase === phase && lastItem.message === message) {
+                if (highlightHint && highlightHint !== String(lastItem.highlightHint || '').trim()) {
+                    return [...prev.slice(0, -1), { ...lastItem, highlightHint, endedAt: null }];
+                }
                 return prev;
             }
             const now = Date.now();
@@ -978,6 +982,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 id: `${now}-${prev.length}`,
                 phase,
                 message,
+                highlightHint,
                 createdAt: now,
                 endedAt: null,
             });
@@ -4861,6 +4866,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
 
+        const getAssetDesignTaskLabel = (key) => {
+            const labels = {
+                characters: t('角色', 'Characters'),
+                props: t('道具', 'Props'),
+                environments: t('环境', 'Environments'),
+                posters: t('封面/海报', 'Posters/Covers'),
+            };
+            return labels[key] || String(key || '');
+        };
+
+        const buildAssetReadyHint = (taskKey) => {
+            const label = getAssetDesignTaskLabel(taskKey);
+            if (!label) return '';
+            return t(
+                `「${label}」已入库，可前往资产库开始生成`,
+                `"${label}" is ready — open the Assets library to start generation`
+            );
+        };
+
         const promptFilesRaw = [
 
 
@@ -4931,6 +4955,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
         const targetAssetsCount = promptFiles.length;
+        const runningAssetTaskLabels = promptFiles.map((p) => getAssetDesignTaskLabel(p.key)).filter(Boolean).join('、');
 
 
 
@@ -4940,7 +4965,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: "assets_gen",
 
 
-            message: t(`✨ 正在执行第四阶段资产设计 (共 ${targetAssetsCount} 项并发推演)...`, `Running Stage 4 asset design (${targetAssetsCount} tasks)...`),
+            message: t(
+                `✨ 正在执行第四阶段资产设计 (共 ${targetAssetsCount} 项并发推演${runningAssetTaskLabels ? `：${runningAssetTaskLabels}` : ''})...`,
+                `Running Stage 4 asset design (${targetAssetsCount} tasks${runningAssetTaskLabels ? `: ${runningAssetTaskLabels.replace(/、/g, ', ')}` : ''})...`
+            ),
 
 
         });
@@ -4948,6 +4976,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
         let assetsGenCompletedCount = 0;
+        const assetsGenCompletedKeys = [];
 
 
 
@@ -5104,10 +5133,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             : (aText ? (getAnalysisEntitiesPayloadFromJsonText(aText) || {}) : {});
 
                         assetsGenCompletedCount += 1;
-                        setAnalysisFlowStatus({
-                            phase: "assets_gen",
-                            message: t(`✨ 第四阶段资产推演中 (${assetsGenCompletedCount}/${targetAssetsCount} 个并发任务已完成)...`, `Running Stage 4 asset design (${assetsGenCompletedCount}/${targetAssetsCount} completed)...`),
-                        });
+                        if (pData.key && !assetsGenCompletedKeys.includes(pData.key)) {
+                            assetsGenCompletedKeys.push(pData.key);
+                        }
                         onLog?.(`[Stage 3 Asset Design] Subtask completed key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}${responseTraceId ? ` response_trace_id=${responseTraceId}` : ''}`, 'info');
 
                         const subtaskPayload = buildSubtaskSubjectsPayload(pData.key, bJson || {});
@@ -5153,6 +5181,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         } else {
                             onLog?.(`[Stage 3 Asset Design] Subtask has no importable subjects key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'warning');
                         }
+
+                        const completedAssetTaskLabels = assetsGenCompletedKeys.map(getAssetDesignTaskLabel).filter(Boolean).join('、');
+                        const assetImportReady = Boolean(
+                            subtaskHasImportableSubjects
+                            && subtaskImportReport
+                            && !subtaskImportError
+                        );
+                        setAnalysisFlowStatus({
+                            phase: "assets_gen",
+                            message: t(
+                                `✨ 第四阶段资产推演中 (${assetsGenCompletedCount}/${targetAssetsCount} 已完成${completedAssetTaskLabels ? `：${completedAssetTaskLabels}` : ''})...`,
+                                `Running Stage 4 asset design (${assetsGenCompletedCount}/${targetAssetsCount} completed${completedAssetTaskLabels ? `: ${completedAssetTaskLabels.replace(/、/g, ', ')}` : ''})...`
+                            ),
+                            highlightHint: assetImportReady ? buildAssetReadyHint(pData.key) : '',
+                        });
 
                         return {
                             key: pData.key,
@@ -10547,6 +10590,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 const endedTime = formatHistoryClock(item?.endedAt);
                                 const phaseLabel = getBusinessPhaseLabel(item?.phase);
                                 const displayMessage = toBusinessHistoryMessage(item?.message);
+                                const highlightHint = String(item?.highlightHint || '').trim();
                                 return (
                                     <div key={item.id} className={`text-xs rounded-md px-2.5 py-2 border ${isLatest ? 'border-white/20 bg-black/20 opacity-100' : 'border-white/10 bg-black/10 opacity-90'}`}>
                                         <div className="flex items-start justify-between gap-3">
@@ -10563,9 +10607,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             </span>
                                         </div>
                                         <div className="mt-1 opacity-95">{displayMessage || item.message}</div>
+                                        {highlightHint && (
+                                            <div className={`mt-1.5 rounded-md border px-2 py-1.5 text-[11px] font-semibold leading-snug ${isLatest ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.15)] animate-pulse' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200/90'}`}>
+                                                🎨 {highlightHint}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+
+                    {(isAnalyzing || isRetryingPhase2) && String(analysisFlowStatus?.highlightHint || '').trim() && (
+                        <div className="mb-2 rounded-lg border border-emerald-400/45 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 shadow-[0_0_14px_rgba(52,211,153,0.18)] animate-pulse">
+                            🎨 {String(analysisFlowStatus.highlightHint).trim()}
                         </div>
                     )}
 

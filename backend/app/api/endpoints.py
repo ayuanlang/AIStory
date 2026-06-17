@@ -6153,9 +6153,16 @@ async def list_prompt_skills(current_user: User = Depends(get_current_user)):
 @router.get("/prompts/skills/{skill_id}")
 async def get_prompt_skill_detail(skill_id: str, current_user: User = Depends(get_current_user)):
     """Get one prompt skill metadata by skill id."""
-    meta = get_skill_meta(skill_id)
+    normalized_skill_id = str(skill_id or "").strip()
+    # Single-segment refs like `skills/shot_generation.md` are routed here before
+    # `/prompts/{filename:path}`; delegate to prompt file loading when the segment
+    # is clearly a prompt filename rather than a registry skill id.
+    if normalized_skill_id.endswith((".md", ".txt", ".json")):
+        return await get_prompt_content(f"skills/{normalized_skill_id}", current_user)
+
+    meta = get_skill_meta(normalized_skill_id)
     if not meta:
-        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found.")
+        raise HTTPException(status_code=404, detail=f"Skill '{normalized_skill_id}' not found.")
     return meta
 
 

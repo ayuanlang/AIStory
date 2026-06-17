@@ -4655,7 +4655,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
         }
 
-        const isHistoricalAssetSelected = Boolean(asset && asset.is_current_project_asset === false);
+        const isHistoricalAssetSelected = Boolean(asset) && !Boolean(asset.is_current_project_asset);
         const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
             // Selecting a historical-version asset should only replace binding without triggering reverse analysis.
             skipAnalyze: imageSelectAction === 'rewrite_and_regenerate' || isHistoricalAssetSelected,
@@ -7076,7 +7076,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${status === 'completed' ? 'bg-emerald-500/15 text-emerald-200' : 'bg-amber-500/15 text-amber-100'}`}>{status}</span>
                                                                         </div>
                                                                         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                                                                            <button onClick={() => canPreview && updateEntityImage(item.resultUrl, false, viewingEntity)} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
+                                                                            <button onClick={() => canPreview && updateEntityImage(item.resultUrl, false, viewingEntity, { skipAnalyze: true })} disabled={!canPreview} className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/80 hover:bg-white/10">
                                                                                 <ImageIcon size={10} /> {t('设为当前', 'Use Result')}
                                                                             </button>
                                                                             <button onClick={() => handleDeleteSubjectGenerationHistoryItem(item)} disabled={isDeleting} className="inline-flex items-center gap-1 rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/20">
@@ -7835,7 +7835,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         <div className="flex flex-wrap items-center gap-2 pt-1">
                                                                             <button
                                                                                 type="button"
-                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl, true, selectedEntity)}
+                                                                                onClick={() => canPreview && updateEntityImage(item.resultUrl, true, selectedEntity, { skipAnalyze: true })}
                                                                                 disabled={!canPreview}
                                                                                 className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-40"
                                                                             >
