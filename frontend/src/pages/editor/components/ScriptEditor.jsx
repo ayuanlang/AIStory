@@ -115,6 +115,76 @@ import {
 /** Max automatic fallback reruns for scene beats / asset generation (excluding the initial run). */
 const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
 
+const firstPositiveFiniteNumber = (...values) => {
+    for (const value of values) {
+        const numberValue = Number(value);
+        if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
+    }
+    return 0;
+};
+
+const syncScenePostImportCheckedCount = (importReport, postImportSceneSubjectReport) => {
+    const importedRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows.length : 0;
+    const importStatsTotal = Number(importReport?.importStats?.scenesCreated || 0) + Number(importReport?.importStats?.scenesUpdated || 0);
+    const resolvedCheckedSceneCount = firstPositiveFiniteNumber(
+        importedRows,
+        importStatsTotal,
+        importReport?.dbPersistedCounts?.scenes?.currentEpisode,
+        postImportSceneSubjectReport?.checkedSceneCount,
+    );
+    if (!postImportSceneSubjectReport || typeof postImportSceneSubjectReport !== 'object') {
+        return resolvedCheckedSceneCount > 0 ? { checkedSceneCount: resolvedCheckedSceneCount } : postImportSceneSubjectReport;
+    }
+    return {
+        ...postImportSceneSubjectReport,
+        checkedSceneCount: resolvedCheckedSceneCount,
+    };
+};
+
+const resolveImportReportSceneCount = (importReport, scenePostReport, dbSceneCount = null) => firstPositiveFiniteNumber(
+    dbSceneCount,
+    importReport?.dbPersistedCounts?.scenes?.currentEpisode,
+    Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows.length : null,
+    (Number(importReport?.importStats?.scenesCreated || 0) + Number(importReport?.importStats?.scenesUpdated || 0)) || null,
+    importReport?.importStats?.scenesCreated,
+    importReport?.dbRunInsertedCounts?.scenes?.created,
+    scenePostReport?.checkedSceneCount,
+);
+
+const normalizeAssetReportType = (value) => {
+    const key = String(value || '').trim().toLowerCase();
+    if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) return 'character';
+    if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) return 'prop';
+    if (['environment', 'environments', 'env', 'scene', 'scenes', '空镜', '场景', '环境'].includes(key)) return 'environment';
+    if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) return 'poster';
+    return key;
+};
+
+const countCreatedAssetItemsByType = (items, type) => {
+    if (!Array.isArray(items)) return 0;
+    return items.reduce((count, item) => (
+        count + (normalizeAssetReportType(item?.type || item?.entity_type || item?.subject_type) === type ? 1 : 0)
+    ), 0);
+};
+
+const toPositiveCount = (value) => {
+    const count = Number(value);
+    return Number.isFinite(count) && count > 0 ? count : 0;
+};
+
+const resolveImportReportAssetInsertedCount = (importReport, type) => {
+    const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
+    const supplementReport = scenePostReport?.supplementReport || {};
+    return Math.max(
+        toPositiveCount(importReport?.dbRunInsertedCounts?.entities?.[type]),
+        toPositiveCount(importReport?.importedSubjectCounts?.[type]),
+        toPositiveCount(scenePostReport?.importedSubjectCounts?.[type]),
+        toPositiveCount(supplementReport?.countsByType?.[type]),
+        countCreatedAssetItemsByType(importReport?.createdSubjectItems, type),
+        countCreatedAssetItemsByType(supplementReport?.createdItems, type),
+    );
+};
+
 import RefineControl from '../../../components/RefineControl.jsx';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
@@ -222,6 +292,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         sceneRegenAttempts: 0,
         running: false,
     });
+    const autoZeroReportHandledRef = useRef({ key: '', handledAt: 0 });
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
@@ -4156,6 +4227,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const resetAnalysisFallbackRetryCounts = useCallback((episodeId) => {
         const id = Number(episodeId || 0);
         if (!id) return;
+        autoZeroReportHandledRef.current = { key: '', handledAt: 0 };
         analysisFallbackRetryRef.current = {
             episodeId: id,
             sceneBeatsAttempts: 0,
@@ -5655,16 +5727,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            const mergedResumeScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
-                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                    sceneSubjectPostImportReport: mergedResumeScenePostReport,
                 };
-                if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
-                    importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
+                if (mergedResumeScenePostReport?.dbRunInsertedCounts) {
+                    importReport.dbRunInsertedCounts = mergedResumeScenePostReport.dbRunInsertedCounts;
                 }
-                if (postImportSceneSubjectReport?.dbPersistedCounts) {
-                    importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
+                if (mergedResumeScenePostReport?.dbPersistedCounts) {
+                    importReport.dbPersistedCounts = mergedResumeScenePostReport.dbPersistedCounts;
                 }
             }
 
@@ -7593,6 +7666,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             maybeAlertIncompleteSubjectsImport(result, analyzedText || '');
 
             postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(importReport, analyzedText);
+            postImportSceneSubjectReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
             if (importReport && typeof importReport === 'object') {
                 importReport = {
                     ...importReport,
@@ -8302,18 +8376,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             maybeAlertIncompleteSubjectsImport(result, finalAnalysisText || '');
 
             if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
+                const mergedScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
                 importReport = {
                     ...importReport,
-                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                    sceneSubjectPostImportReport: mergedScenePostReport,
                 };
-                if (postImportSceneSubjectReport?.dbRunInsertedCounts) importReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
-                if (postImportSceneSubjectReport?.dbPersistedCounts) importReport.dbPersistedCounts = postImportSceneSubjectReport.dbPersistedCounts;
-                if (postImportSceneSubjectReport?.importedSubjectCounts) {
+                if (mergedScenePostReport?.dbRunInsertedCounts) importReport.dbRunInsertedCounts = mergedScenePostReport.dbRunInsertedCounts;
+                if (mergedScenePostReport?.dbPersistedCounts) importReport.dbPersistedCounts = mergedScenePostReport.dbPersistedCounts;
+                if (mergedScenePostReport?.importedSubjectCounts) {
                     importReport.importedSubjectCounts = {
-                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.character) || 0),
-                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.prop) || 0),
-                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.environment) || 0),
-                        poster: (importReport.importedSubjectCounts?.poster || 0) + (Number(postImportSceneSubjectReport.importedSubjectCounts.poster) || 0),
+                        character: (importReport.importedSubjectCounts?.character || 0) + (Number(mergedScenePostReport.importedSubjectCounts.character) || 0),
+                        prop: (importReport.importedSubjectCounts?.prop || 0) + (Number(mergedScenePostReport.importedSubjectCounts.prop) || 0),
+                        environment: (importReport.importedSubjectCounts?.environment || 0) + (Number(mergedScenePostReport.importedSubjectCounts.environment) || 0),
+                        poster: (importReport.importedSubjectCounts?.poster || 0) + (Number(mergedScenePostReport.importedSubjectCounts.poster) || 0),
                     };
                 }
             }
@@ -8731,9 +8806,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
             if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
+                const mergedRestartScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
                 importReport = {
                     ...importReport,
-                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                    sceneSubjectPostImportReport: mergedRestartScenePostReport,
                 };
             }
 
@@ -9177,7 +9253,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (analysisUiReport && typeof analysisUiReport === 'object') {
                 const newImportReport = {
                     ...analysisUiReport.importReport,
-                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                    sceneSubjectPostImportReport: syncScenePostImportCheckedCount(
+                        analysisUiReport.importReport || {},
+                        postImportSceneSubjectReport
+                    ),
                 };
                 if (postImportSceneSubjectReport?.dbRunInsertedCounts) {
                     newImportReport.dbRunInsertedCounts = postImportSceneSubjectReport.dbRunInsertedCounts;
@@ -9730,108 +9809,87 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const isSceneBeatsOnlyRerun = runTag === 'scene_beats_only_rerun';
         if (reportStatus !== 'completed') return;
 
-        ensureAnalysisFallbackState(activeEpisode.id);
+        const fallbackState = ensureAnalysisFallbackState(activeEpisode.id);
+        const reportKey = `${activeEpisode.id}:${analysisUiReport?.startedAt || 0}:${analysisUiReport?.durationMs || 0}:${runTag}:sceneAttempts=${Number(fallbackState?.sceneBeatsAttempts || 0)}:assetAttempts=${Number(fallbackState?.assetAttempts || 0)}`;
+        if (autoZeroReportHandledRef.current.key === reportKey) return;
         if (analysisFallbackRetryRef.current.running) return;
-
-        const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
-            ? analysisUiReport.importReport
-            : {};
-        const scenePostReport = (importReport.sceneSubjectPostImportReport && typeof importReport.sceneSubjectPostImportReport === 'object')
-            ? importReport.sceneSubjectPostImportReport
-            : {};
-
-        const firstFiniteNumber = (...values) => {
-            for (const value of values) {
-                const numberValue = Number(value);
-                if (Number.isFinite(numberValue)) return numberValue;
-            }
-            return null;
-        };
-
-        const counts = {
-            scenes: firstFiniteNumber(
-                importReport?.dbPersistedCounts?.scenes?.currentEpisode,
-                scenePostReport?.checkedSceneCount,
-                Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows.length : null,
-                (Number(importReport?.importStats?.scenesCreated || 0) + Number(importReport?.importStats?.scenesUpdated || 0)) || null,
-                importReport?.importStats?.scenesCreated,
-                importReport?.dbRunInsertedCounts?.scenes?.created
-            ),
-            characters: firstFiniteNumber(
-                importReport?.dbPersistedCounts?.entities?.character,
-                importReport?.importedSubjectCounts?.character,
-                importReport?.dbRunInsertedCounts?.entities?.character
-            ),
-            props: firstFiniteNumber(
-                importReport?.dbPersistedCounts?.entities?.prop,
-                importReport?.importedSubjectCounts?.prop,
-                importReport?.dbRunInsertedCounts?.entities?.prop
-            ),
-            environments: firstFiniteNumber(
-                importReport?.dbPersistedCounts?.entities?.environment,
-                importReport?.importedSubjectCounts?.environment,
-                importReport?.dbRunInsertedCounts?.entities?.environment
-            ),
-            posters: firstFiniteNumber(
-                importReport?.dbPersistedCounts?.entities?.poster,
-                importReport?.dbPersistedCounts?.entities?.cover,
-                importReport?.importedSubjectCounts?.poster,
-                importReport?.dbRunInsertedCounts?.entities?.poster,
-                importReport?.dbRunInsertedCounts?.entities?.cover
-            ),
-        };
-
-        const subjectCategories = new Set((phase2RerunDisplayEntries || []).map((item) => item.category).filter(Boolean));
-        const pendingAssetTargets = [];
-        const pendingLabels = [];
-        const addAssetTargetIfZero = (key, labelZh, targets) => {
-            if (counts[key] !== 0) return;
-            if (!subjectCategories.has(key)) return;
-            pendingLabels.push(labelZh);
-            pendingAssetTargets.push(...targets);
-        };
-
-        addAssetTargetIfZero('characters', '角色', ['characters']);
-        addAssetTargetIfZero('props', '道具', ['props']);
-        addAssetTargetIfZero('environments', '场景/环境', ['environments']);
-        addAssetTargetIfZero('posters', '封面/海报', ['posters', 'covers']);
-
-        const shouldRerunScenes = counts.scenes === 0
-            && canAttemptAnalysisFallback(activeEpisode.id, 'scene_beats')
-            && Boolean(buildStage1RestartSourceText())
-            && Boolean(resolveSubjectIndexTextForAssetRerun());
-
-        if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
-
-        const shouldRerunAssets = pendingAssetTargets.length > 0
-            && canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen');
-
-        if (!shouldRerunScenes && !shouldRerunAssets) {
-            onLog?.(
-                `[Auto Zero Report Rerun] skipped: fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} per category).`,
-                'warning'
-            );
-            return;
-        }
 
         analysisFallbackRetryRef.current.running = true;
 
         (async () => {
             try {
-                let resolvedSceneCount = counts.scenes;
-                if (resolvedSceneCount === 0) {
-                    const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-                    const dbSceneCount = Array.isArray(dbScenes) ? dbScenes.length : 0;
-                    if (dbSceneCount > 0) {
-                        resolvedSceneCount = dbSceneCount;
-                        onLog?.(
-                            `[Auto Zero Report Rerun] import report showed scenes=0, but episode DB already has ${dbSceneCount} scene(s); skipping scene beats rerun.`,
-                            'info'
-                        );
-                    }
+                const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
+                    ? analysisUiReport.importReport
+                    : {};
+                const scenePostReport = (importReport.sceneSubjectPostImportReport && typeof importReport.sceneSubjectPostImportReport === 'object')
+                    ? importReport.sceneSubjectPostImportReport
+                    : {};
+
+                const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                const dbSceneCount = Array.isArray(dbScenes) ? dbScenes.length : 0;
+                const resolvedSceneCount = resolveImportReportSceneCount(importReport, scenePostReport, dbSceneCount);
+                const hasPersistedSceneMarkdown = Boolean(String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim());
+
+                const subjectIndexText = resolveSubjectIndexTextForAssetRerun();
+                const subjectIndexEntries = parseSubjectIndexEntriesForAssetRerun(subjectIndexText);
+                const expectedAssetCategories = new Set(
+                    (subjectIndexEntries || []).map((entry) => String(entry?.category || '').trim()).filter(Boolean)
+                );
+
+                const assetCategorySpecs = [
+                    { key: 'characters', labelZh: '角色', targets: ['characters'], reportType: 'character' },
+                    { key: 'props', labelZh: '道具', targets: ['props'], reportType: 'prop' },
+                    { key: 'environments', labelZh: '场景/环境', targets: ['environments'], reportType: 'environment' },
+                    { key: 'posters', labelZh: '封面/海报', targets: ['posters', 'covers'], reportType: 'poster' },
+                ];
+
+                const pendingAssetTargets = [];
+                const pendingLabels = [];
+                for (const spec of assetCategorySpecs) {
+                    if (!expectedAssetCategories.has(spec.key)) continue;
+                    const insertedCount = resolveImportReportAssetInsertedCount(importReport, spec.reportType);
+                    if (insertedCount > 0) continue;
+                    pendingLabels.push(spec.labelZh);
+                    spec.targets.forEach((target) => {
+                        if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
+                    });
                 }
 
-                if (shouldRerunScenes && resolvedSceneCount === 0) {
+                const shouldRerunScenes = resolvedSceneCount === 0
+                    && !hasPersistedSceneMarkdown
+                    && canAttemptAnalysisFallback(activeEpisode.id, 'scene_beats')
+                    && Boolean(buildStage1RestartSourceText())
+                    && Boolean(subjectIndexText);
+
+                if (resolvedSceneCount > 0 && onLog) {
+                    onLog?.(`[Auto Zero Report Rerun] scene count resolved=${resolvedSceneCount}; skipping scene beats auto-rerun.`, 'info');
+                } else if (hasPersistedSceneMarkdown && onLog) {
+                    onLog?.('[Auto Zero Report Rerun] scene markdown already persisted; skipping scene beats auto-rerun.', 'info');
+                }
+
+                if (pendingAssetTargets.length > 0 && onLog) {
+                    onLog?.(
+                        `[Auto Zero Report Rerun] zero-count asset categories detected from report: ${pendingLabels.join('、')} (expected from subject index=${expectedAssetCategories.size}).`,
+                        'warning'
+                    );
+                } else if (expectedAssetCategories.size > 0 && onLog) {
+                    onLog?.('[Auto Zero Report Rerun] asset inserted counts look healthy; skipping asset auto-rerun.', 'info');
+                }
+
+                if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
+
+                const shouldRerunAssets = pendingAssetTargets.length > 0
+                    && canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen');
+
+                if (!shouldRerunScenes && !shouldRerunAssets) {
+                    onLog?.(
+                        `[Auto Zero Report Rerun] skipped: fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} per category).`,
+                        'warning'
+                    );
+                    return;
+                }
+
+                if (shouldRerunScenes) {
                     recordAnalysisFallbackAttempt(activeEpisode.id, 'scene_beats');
                     const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'scene_beats');
                     onLog?.(
@@ -9854,10 +9912,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         return;
                     }
                     const targetEntityTypes = Array.from(new Set(pendingAssetTargets));
-                    onLog?.(`[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')}.`, 'warning');
+                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'asset_gen');
+                    onLog?.(
+                        `[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')} (remaining auto retries: ${remaining}).`,
+                        'warning'
+                    );
                     setAnalysisFlowStatus({
                         phase: 'assets_gen',
-                        message: t(`检查报告发现 ${pendingLabels.join('、')} 为 0，正在自动单独重跑对应资产类型一次...`, `Report found zero-count asset categories (${pendingLabels.join(', ')}). Auto-rerunning once...`),
+                        message: t(
+                            `检查报告发现 ${pendingLabels.join('、')} 为 0，正在自动单独重跑对应资产类型（剩余 ${remaining} 次）...`,
+                            `Report found zero-count asset categories (${pendingLabels.join(', ')}). Auto-rerunning (${remaining} auto retries left)...`
+                        ),
                     });
                     await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
                 }
@@ -9865,23 +9930,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const detail = String(error?.message || error || 'unknown error');
                 onLog?.(`[Auto Zero Report Rerun] failed: ${detail}`, 'warning');
             } finally {
+                autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
                 analysisFallbackRetryRef.current.running = false;
             }
         })();
     }, [
+        activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.id,
         analysisUiReport,
         buildStage1RestartSourceText,
         canAttemptAnalysisFallback,
         ensureAnalysisFallbackState,
+        fetchScenes,
         getAnalysisFallbackRemaining,
         handleRetryPhase2,
         handleRerunSceneBeatsOnly,
         isAnalyzing,
         isRetryingPhase2,
-        fetchScenes,
         onLog,
-        phase2RerunDisplayEntries,
+        parseSubjectIndexEntriesForAssetRerun,
         recordAnalysisFallbackAttempt,
         resolveSubjectIndexTextForAssetRerun,
         t,
