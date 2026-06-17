@@ -2843,6 +2843,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (sceneCheck.reason && onLog) {
                 onLog(`Scene markdown precheck skipped: ${sceneCheck.reason}`, 'info');
             }
+            const dbScenesWithoutMarkdown = await fetchScenes(stableEpisodeId).catch(() => []);
+            const dbSceneCountWithoutMarkdown = Array.isArray(dbScenesWithoutMarkdown) ? dbScenesWithoutMarkdown.length : 0;
+            if (dbSceneCountWithoutMarkdown > 0) {
+                if (onLog) onLog(`Scene markdown precheck: no parseable markdown text, but episode already has ${dbSceneCountWithoutMarkdown} scene(s) in DB.`, 'info');
+                return {
+                    checked: true,
+                    hasSceneMarkdown: true,
+                    isConsistent: true,
+                    repaired: false,
+                    reason: 'db_scenes_already_imported',
+                    dbCount: dbSceneCountWithoutMarkdown,
+                };
+            }
             return {
                 checked: true,
                 hasSceneMarkdown: false,
@@ -2856,6 +2869,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const headers = Array.isArray(parsed?.headers) ? parsed.headers : [];
         const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
         if (!headers.length || !rows.length) {
+            const dbScenesUnparseable = await fetchScenes(stableEpisodeId).catch(() => []);
+            const dbSceneCountUnparseable = Array.isArray(dbScenesUnparseable) ? dbScenesUnparseable.length : 0;
+            if (dbSceneCountUnparseable > 0) {
+                if (onLog) onLog(`Scene markdown precheck: markdown table unparseable, but episode already has ${dbSceneCountUnparseable} scene(s) in DB.`, 'info');
+                return {
+                    checked: true,
+                    hasSceneMarkdown: true,
+                    isConsistent: true,
+                    repaired: false,
+                    reason: 'db_scenes_already_imported',
+                    dbCount: dbSceneCountUnparseable,
+                };
+            }
             return {
                 checked: true,
                 hasSceneMarkdown: false,
@@ -3288,7 +3314,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
-        const resolvedStage2RawText = String(stage2RawText || '').trim();
+        const resolvedStage2RawText = String(
+            stage2RawText || activeEpisode?.ai_scene_analysis_scene_markdown || ''
+        ).trim();
         const stage1ScriptInput = String(activeEpisode?.script_content || rawContent || '').trim();
         const projectContextJson = (() => {
             try {
@@ -3343,8 +3371,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim());
 
-        const stage2SceneMarkdownFromStage2 = String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim();
-        const stage2SceneMarkdownFromAnalysis = String(normalizeLlmMarkdownTable(resolvedAnalysisRawText || '') || '').trim();
+        const stage2SceneMarkdownFromStage2 = isSceneMarkdownTableText(resolvedStage2RawText)
+            ? String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim()
+            : '';
+        const stage2SceneMarkdownFromAnalysis = isSceneMarkdownTableText(resolvedAnalysisRawText)
+            ? String(normalizeLlmMarkdownTable(resolvedAnalysisRawText || '') || '').trim()
+            : '';
         let stage2SceneMarkdown = String(stage2SceneMarkdownFromStage2 || stage2SceneMarkdownFromAnalysis || '').trim();
         if (parsedSceneArrangementText) {
             if (stage2SceneMarkdown) {
@@ -3482,7 +3514,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             },
         };
-    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, normalizeLlmMarkdownTable, project?.global_info, rawContent]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.script_content, extractAnalysisSections, extractProjectVisualBackfillJsonText, extractPureSubjectIndexText, extractStage1AdaptedScriptBody, getAnalysisEntitiesPayloadFromJsonText, normalizeLlmMarkdownTable, project?.global_info, rawContent]);
 
     const parseStageOutputsObject = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -3538,8 +3570,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return buildStageOutputsObject({
             analysisRawText: llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '',
             assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
+            stage2RawText: activeEpisode?.ai_scene_analysis_scene_markdown || '',
         });
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, llmResultContent, normalizeLlmMarkdownTable, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, llmResultContent, normalizeLlmMarkdownTable, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -6767,6 +6800,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableEpisodeId = activeEpisode?.id;
         if (!stableEpisodeId) return false;
 
+        const existingDbScenes = await fetchScenes(stableEpisodeId).catch(() => []);
+        if (Array.isArray(existingDbScenes) && existingDbScenes.length > 0) {
+            onLog?.(
+                `Scene arrangement regeneration skipped: episode already has ${existingDbScenes.length} imported scene(s) in DB.`,
+                'info'
+            );
+            return false;
+        }
+
         const isAutomatic = options?.manual !== true;
         if (isAutomatic && !canAttemptAnalysisFallback(stableEpisodeId, 'scene_regen')) {
             onLog?.(
@@ -7079,7 +7121,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
-        const sceneAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+        const sceneAnalysisText = String(
+            activeEpisode?.ai_scene_analysis_scene_markdown
+            || activeEpisode?.ai_scene_analysis_result
+            || ''
+        ).trim();
 
         let preflightSceneSyncNotice = '';
         let scenePreflightResult = null;
@@ -7148,6 +7194,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode?.ai_entity_design_result,
         activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.ai_scene_analysis_subject_index,
         buildSubjectConsistencyReport,
         ensureSceneTableConsistencyBeforePhase2,
@@ -9244,23 +9291,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return String(match?.[1] || '').trim();
         };
 
+        const resolveCoreFieldsFromObject = (obj = {}) => {
+            const subjectNo = String(
+                obj.subject_no ?? obj.id ?? obj['编号'] ?? ''
+            ).trim();
+            const subjectType = String(
+                obj.subject_type ?? obj.type ?? obj['类型'] ?? obj['类别'] ?? ''
+            ).trim();
+            const subjectName = String(
+                obj.subject_name_exact
+                ?? obj.subject_name_zh
+                ?? obj.subject_name
+                ?? obj.name
+                ?? obj['名称']
+                ?? obj['名字']
+                ?? ''
+            ).trim();
+            return { subjectNo, subjectType, subjectName };
+        };
+
         const entries = [];
         const seen = new Set();
-        const pushEntry = ({ rawType, subjectNo, name, sourceLine, sourceBlock, rowIndex }) => {
-            const mapped = mapSubjectIndexTypeToRerunTarget(rawType);
+        const pushEntry = ({ rowObject = null, fieldOrder = null, rawType, subjectNo, name, sourceLine, sourceBlock, rowIndex }) => {
+            const normalizedObject = (rowObject && typeof rowObject === 'object') ? rowObject : {};
+            const core = resolveCoreFieldsFromObject(normalizedObject);
+            const finalSubjectType = String(rawType || core.subjectType || '').trim();
+            const finalSubjectNo = String(subjectNo || core.subjectNo || '').trim();
+            const finalName = String(name || core.subjectName || '').trim();
+
+            const mapped = mapSubjectIndexTypeToRerunTarget(finalSubjectType);
             if (!mapped.category || !mapped.targetEntityTypes.length) return;
-            const displayName = String(name || subjectNo || '').trim();
+            const displayName = String(finalName || finalSubjectNo || '').trim();
             if (!displayName || isDummySubject(displayName)) return;
-            const key = `${mapped.category}:${normalizeSubjectKey(displayName) || displayName}:${subjectNo || rowIndex || entries.length}`;
+            const key = `${mapped.category}:${normalizeSubjectKey(displayName) || displayName}:${finalSubjectNo || rowIndex || entries.length}`;
             if (seen.has(key)) return;
             seen.add(key);
             entries.push({
                 key,
-                subjectNo: String(subjectNo || '').trim(),
+                subjectNo: finalSubjectNo,
                 name: displayName,
-                type: normalizeSubjectIndexTypeForAssetTask(rawType),
+                type: normalizeSubjectIndexTypeForAssetTask(finalSubjectType),
                 category: mapped.category,
                 targetEntityTypes: mapped.targetEntityTypes,
+                fields: normalizedObject,
+                fieldOrder: Array.isArray(fieldOrder) ? fieldOrder.map((field) => String(field || '').trim()).filter(Boolean) : Object.keys(normalizedObject),
                 sourceText: String(sourceBlock || sourceLine || '').trim(),
                 sourceLine: String(sourceLine || sourceBlock || '').trim(),
             });
@@ -9277,7 +9351,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const rawType = cleanCell(row[typeIdx]);
                     const subjectNo = noIdx >= 0 ? cleanCell(row[noIdx]) : '';
                     const name = nameIdx >= 0 ? cleanCell(row[nameIdx]) : cleanCell(row.find((cell, cellIdx) => cellIdx !== typeIdx && cellIdx !== noIdx && String(cell || '').trim()) || '');
+                    const rowObject = headers.reduce((acc, header, headerIdx) => {
+                        acc[String(header || '').trim()] = cleanCell(row[headerIdx]);
+                        return acc;
+                    }, {});
                     pushEntry({
+                        rowObject,
+                        fieldOrder: headers,
                         rawType,
                         subjectNo,
                         name,
@@ -9303,7 +9383,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || getKeyValue(normalizedLine, 'subject_name_en')
                 || cells.slice(2).find((cell) => cell && !/^subject_/i.test(cell))
                 || '';
-            pushEntry({ rawType, subjectNo, name, sourceLine: line, sourceBlock: line, rowIndex: idx });
+            const rowObject = {};
+            const keyValueMatches = Array.from(normalizedLine.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([^|\n`]*)/g));
+            if (keyValueMatches.length > 0) {
+                keyValueMatches.forEach((match) => {
+                    const fieldKey = String(match?.[1] || '').trim();
+                    if (!fieldKey) return;
+                    rowObject[fieldKey] = String(match?.[2] || '').trim();
+                });
+            }
+            if (!Object.keys(rowObject).length) {
+                rowObject.subject_no = subjectNo;
+                rowObject.subject_type = rawType;
+                rowObject.subject_name_exact = name;
+            } else {
+                if (rowObject.subject_no == null && subjectNo) rowObject.subject_no = subjectNo;
+                if (rowObject.subject_type == null && rawType) rowObject.subject_type = rawType;
+                if (rowObject.subject_name_exact == null && name) rowObject.subject_name_exact = name;
+            }
+            pushEntry({
+                rowObject,
+                fieldOrder: Object.keys(rowObject),
+                rawType,
+                subjectNo,
+                name,
+                sourceLine: line,
+                sourceBlock: line,
+                rowIndex: idx,
+            });
         });
 
         return entries;
@@ -9314,16 +9421,72 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         [parseSubjectIndexEntriesForAssetRerun, resolveSubjectIndexTextForAssetRerun]
     );
 
+    const getSubjectFieldValueByAliases = useCallback((fields, aliases = []) => {
+        if (!fields || typeof fields !== 'object') return '';
+        const normalizedMap = {};
+        Object.entries(fields).forEach(([key, value]) => {
+            const stableKey = String(key || '').trim();
+            if (!stableKey) return;
+            normalizedMap[stableKey] = String(value ?? '');
+            normalizedMap[stableKey.toLowerCase()] = String(value ?? '');
+            normalizedMap[stableKey.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_')] = String(value ?? '');
+        });
+        for (const alias of aliases) {
+            const stableAlias = String(alias || '').trim();
+            if (!stableAlias) continue;
+            const candidates = [
+                stableAlias,
+                stableAlias.toLowerCase(),
+                stableAlias.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_'),
+            ];
+            for (const candidate of candidates) {
+                if (Object.prototype.hasOwnProperty.call(normalizedMap, candidate)) {
+                    return String(normalizedMap[candidate] ?? '').trim();
+                }
+            }
+        }
+        return '';
+    }, []);
+
     const buildSingleSubjectIndexTextForRerun = useCallback((entry) => {
-        const subjectNo = String(entry?.subjectNo || '').trim();
-        const subjectType = String(entry?.type || '').trim();
-        const subjectName = String(entry?.name || '').trim();
+        const rawFields = (entry?.fields && typeof entry.fields === 'object') ? entry.fields : {};
+        const normalizedFields = {};
+        Object.entries(rawFields).forEach(([key, value]) => {
+            const stableKey = String(key || '').trim();
+            if (!stableKey) return;
+            normalizedFields[stableKey] = String(value ?? '').trim();
+        });
+        const subjectType = String(entry?.type || getSubjectFieldValueByAliases(normalizedFields, ['subject_type', 'type', '类型', '类别']) || '').trim();
+        const subjectName = String(
+            entry?.name
+            || getSubjectFieldValueByAliases(normalizedFields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])
+            || ''
+        ).trim();
+        const subjectNo = String(entry?.subjectNo || getSubjectFieldValueByAliases(normalizedFields, ['subject_no', 'id', '编号']) || '').trim();
         if (!subjectType || !subjectName) return '';
-        return buildMarkdownTable(
-            ['subject_no', 'subject_type', 'subject_name_exact'],
-            [[subjectNo, subjectType, subjectName]]
-        );
-    }, [buildMarkdownTable]);
+
+        if (!normalizedFields.subject_type) normalizedFields.subject_type = subjectType;
+        if (!normalizedFields.subject_name_exact) normalizedFields.subject_name_exact = subjectName;
+        if (subjectNo && !normalizedFields.subject_no) normalizedFields.subject_no = subjectNo;
+
+        const preferredOrder = Array.isArray(entry?.fieldOrder) ? entry.fieldOrder : [];
+        const headers = [];
+        const headerSeen = new Set();
+        preferredOrder.forEach((key) => {
+            const stableKey = String(key || '').trim();
+            if (!stableKey || headerSeen.has(stableKey)) return;
+            headers.push(stableKey);
+            headerSeen.add(stableKey);
+        });
+        Object.keys(normalizedFields).forEach((key) => {
+            if (headerSeen.has(key)) return;
+            headers.push(key);
+            headerSeen.add(key);
+        });
+
+        const row = headers.map((key) => String(normalizedFields[key] ?? '').trim());
+        return buildMarkdownTable(headers, [row]);
+    }, [buildMarkdownTable, getSubjectFieldValueByAliases]);
 
     const phase2RerunDisplayEntries = useMemo(() => {
         const deletedMap = (phase2RerunModal?.deletedSubjectKeys && typeof phase2RerunModal.deletedSubjectKeys === 'object')
@@ -9337,17 +9500,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (deletedMap[originalEntry.key]) return acc;
 
             const patch = editsMap[originalEntry.key] || {};
-            const nextType = String(patch.type ?? originalEntry.type ?? '').trim();
+            const nextFields = (patch.fields && typeof patch.fields === 'object')
+                ? patch.fields
+                : ((originalEntry.fields && typeof originalEntry.fields === 'object') ? originalEntry.fields : {});
+            const nextFieldOrder = Array.isArray(patch.fieldOrder) ? patch.fieldOrder : (Array.isArray(originalEntry.fieldOrder) ? originalEntry.fieldOrder : []);
+            const nextType = String(getSubjectFieldValueByAliases(nextFields, ['subject_type', 'type', '类型', '类别']) || originalEntry.type || '').trim();
+            const nextSubjectNo = String(getSubjectFieldValueByAliases(nextFields, ['subject_no', 'id', '编号']) || originalEntry.subjectNo || '').trim();
+            const nextName = String(
+                getSubjectFieldValueByAliases(nextFields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])
+                || originalEntry.name
+                || ''
+            ).trim();
             const mapped = mapSubjectIndexTypeToRerunTarget(nextType);
             if (!mapped.category || !mapped.targetEntityTypes?.length) return acc;
 
             const merged = {
                 ...originalEntry,
-                subjectNo: String(patch.subjectNo ?? originalEntry.subjectNo ?? '').trim(),
-                name: String(patch.name ?? originalEntry.name ?? '').trim(),
+                subjectNo: nextSubjectNo,
+                name: nextName,
                 type: nextType,
                 category: mapped.category,
                 targetEntityTypes: mapped.targetEntityTypes,
+                fields: nextFields,
+                fieldOrder: nextFieldOrder,
             };
             if (!merged.name) return acc;
             const sourceText = buildSingleSubjectIndexTextForRerun(merged);
@@ -9361,6 +9536,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }, []);
     }, [
         buildSingleSubjectIndexTextForRerun,
+        getSubjectFieldValueByAliases,
         mapSubjectIndexTypeToRerunTarget,
         phase2RerunModal?.deletedSubjectKeys,
         phase2RerunModal?.subjectEdits,
@@ -9418,32 +9594,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const beginEditPhase2RerunEntry = useCallback((entry) => {
         if (!entry?.key) return;
+        const entryFields = (entry.fields && typeof entry.fields === 'object') ? entry.fields : {};
+        const clonedFields = Object.entries(entryFields).reduce((acc, [key, value]) => {
+            const stableKey = String(key || '').trim();
+            if (!stableKey) return acc;
+            acc[stableKey] = String(value ?? '');
+            return acc;
+        }, {});
         setPhase2RerunModal((prev) => ({
             ...prev,
             editingSubjectKey: entry.key,
             subjectEdits: {
                 ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}),
                 [entry.key]: {
-                    subjectNo: String(entry.subjectNo || '').trim(),
-                    name: String(entry.name || '').trim(),
-                    type: String(entry.type || '').trim(),
+                    fields: clonedFields,
+                    fieldOrder: Array.isArray(entry.fieldOrder) ? [...entry.fieldOrder] : Object.keys(clonedFields),
                 },
             },
         }));
     }, []);
 
-    const updatePhase2RerunEntryEditField = useCallback((entryKey, field, value) => {
-        if (!entryKey || !field) return;
+    const updatePhase2RerunEntryEditField = useCallback((entryKey, fieldKey, value) => {
+        if (!entryKey || !fieldKey) return;
         setPhase2RerunModal((prev) => {
             const prevEdits = (prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {};
             const currentEdit = (prevEdits[entryKey] && typeof prevEdits[entryKey] === 'object') ? prevEdits[entryKey] : {};
+            const currentFields = (currentEdit.fields && typeof currentEdit.fields === 'object') ? currentEdit.fields : {};
             return {
                 ...prev,
                 subjectEdits: {
                     ...prevEdits,
                     [entryKey]: {
                         ...currentEdit,
-                        [field]: String(value ?? ''),
+                        fields: {
+                            ...currentFields,
+                            [fieldKey]: String(value ?? ''),
+                        },
                     },
                 },
             };
@@ -9453,8 +9639,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const savePhase2RerunEntryEdit = useCallback((entryKey) => {
         if (!entryKey) return;
         const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
-        const nextName = String(draft?.name || '').trim();
-        const nextType = String(draft?.type || '').trim();
+        const fields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
+        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_exact', 'subject_name_zh', 'subject_name', 'name', '名称', '名字'])).trim();
+        const nextType = String(getSubjectFieldValueByAliases(fields, ['subject_type', 'type', '类型', '类别'])).trim();
         if (!nextName) {
             alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
             return;
@@ -9465,7 +9652,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
-    }, [mapSubjectIndexTypeToRerunTarget, phase2RerunModal?.subjectEdits, t]);
+    }, [getSubjectFieldValueByAliases, mapSubjectIndexTypeToRerunTarget, phase2RerunModal?.subjectEdits, t]);
 
     useEffect(() => {
         if (!phase2RerunModal.open) return;
@@ -9515,6 +9702,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     subjectNo: selected.subjectNo,
                     name: selected.name,
                     type: selected.type,
+                    fields: (selected.fields && typeof selected.fields === 'object') ? selected.fields : {},
                 },
             };
         }
@@ -9564,6 +9752,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             scenes: firstFiniteNumber(
                 importReport?.dbPersistedCounts?.scenes?.currentEpisode,
                 scenePostReport?.checkedSceneCount,
+                Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows.length : null,
+                (Number(importReport?.importStats?.scenesCreated || 0) + Number(importReport?.importStats?.scenesUpdated || 0)) || null,
                 importReport?.importStats?.scenesCreated,
                 importReport?.dbRunInsertedCounts?.scenes?.created
             ),
@@ -9628,7 +9818,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         (async () => {
             try {
-                if (shouldRerunScenes) {
+                let resolvedSceneCount = counts.scenes;
+                if (resolvedSceneCount === 0) {
+                    const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                    const dbSceneCount = Array.isArray(dbScenes) ? dbScenes.length : 0;
+                    if (dbSceneCount > 0) {
+                        resolvedSceneCount = dbSceneCount;
+                        onLog?.(
+                            `[Auto Zero Report Rerun] import report showed scenes=0, but episode DB already has ${dbSceneCount} scene(s); skipping scene beats rerun.`,
+                            'info'
+                        );
+                    }
+                }
+
+                if (shouldRerunScenes && resolvedSceneCount === 0) {
                     recordAnalysisFallbackAttempt(activeEpisode.id, 'scene_beats');
                     const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'scene_beats');
                     onLog?.(
@@ -9676,6 +9879,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         handleRerunSceneBeatsOnly,
         isAnalyzing,
         isRetryingPhase2,
+        fetchScenes,
         onLog,
         phase2RerunDisplayEntries,
         recordAnalysisFallbackAttempt,
@@ -10647,6 +10851,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             const active = phase2RerunModal.subjectKey === item.key;
                                             const isEditing = phase2RerunModal.editingSubjectKey === item.key;
                                             const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
+                                            const draftFields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
+                                            const draftFieldOrder = Array.isArray(draft.fieldOrder) ? draft.fieldOrder : (Array.isArray(item.fieldOrder) ? item.fieldOrder : Object.keys(draftFields));
+                                            const editableFieldKeys = draftFieldOrder.length > 0
+                                                ? draftFieldOrder
+                                                : Object.keys(draftFields);
                                             return (
                                                 <div
                                                     key={item.key}
@@ -10688,29 +10897,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     <div className="mt-1 text-[11px] text-white/45 truncate">{item.sourceLine}</div>
                                                     {isEditing && (
                                                         <div className="mt-2 rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
-                                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                                                <input
-                                                                    value={String(draft.subjectNo ?? item.subjectNo ?? '')}
-                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'subjectNo', event.target.value)}
-                                                                    placeholder={t('实体编号', 'Subject No')}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
-                                                                />
-                                                                <select
-                                                                    value={String(draft.type ?? item.type ?? '')}
-                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'type', event.target.value)}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
-                                                                >
-                                                                    <option value="character">{t('角色 (character)', 'Character')}</option>
-                                                                    <option value="prop">{t('道具 (prop)', 'Prop')}</option>
-                                                                    <option value="environment">{t('环境 (environment)', 'Environment')}</option>
-                                                                    <option value="cover_poster">{t('封面/海报 (cover_poster)', 'Cover/Poster')}</option>
-                                                                </select>
-                                                                <input
-                                                                    value={String(draft.name ?? item.name ?? '')}
-                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, 'name', event.target.value)}
-                                                                    placeholder={t('实体名称', 'Entity Name')}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
-                                                                />
+                                                            <div className="text-[11px] text-white/55">
+                                                                {t('可编辑该 subject 的全部字段（将按编辑后的完整字段参与重跑）。', 'All parsed fields of this subject are editable and will be used for rerun.')}
+                                                            </div>
+                                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                                {editableFieldKeys.map((fieldKey) => {
+                                                                    const stableKey = String(fieldKey || '').trim();
+                                                                    if (!stableKey) return null;
+                                                                    const rawValue = String(draftFields[stableKey] ?? '');
+                                                                    const isLongText = rawValue.length > 80 || /description|detail|prompt|narrative/i.test(stableKey);
+                                                                    return (
+                                                                        <label key={`${item.key}-${stableKey}`} className="flex flex-col gap-1">
+                                                                            <span className="text-[11px] text-white/60">{stableKey}</span>
+                                                                            {isLongText ? (
+                                                                                <textarea
+                                                                                    value={rawValue}
+                                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
+                                                                                    rows={3}
+                                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50 resize-y"
+                                                                                />
+                                                                            ) : (
+                                                                                <input
+                                                                                    value={rawValue}
+                                                                                    onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
+                                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50"
+                                                                                />
+                                                                            )}
+                                                                        </label>
+                                                                    );
+                                                                })}
                                                             </div>
                                                             <div className="flex items-center justify-end gap-2">
                                                                 <button
