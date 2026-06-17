@@ -57,7 +57,7 @@ from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect, cast, String, func
-from app.db.session import get_db, SessionLocal, DB_POOL_CAPACITY_EFFECTIVE
+from app.db.session import get_db, SessionLocal, DB_POOL_CAPACITY_EFFECTIVE, engine
 from app.models import all_models as models
 from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
