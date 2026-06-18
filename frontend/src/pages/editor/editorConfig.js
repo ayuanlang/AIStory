@@ -127,6 +127,14 @@ export const MODEL_OPTIONS = {
     }
 };
 
+export const isSeedance2VideoBaseModel = (baseModel) => {
+    const normalized = String(baseModel || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized.startsWith('doubao-seedance-2')) return true;
+    if (normalized.startsWith('ep-doubao-seedance-2')) return true;
+    return /^seedance[-_]?2(?:$|[-_.])/.test(normalized);
+};
+
 export const getSettingSourceByCategory = (settings, category) => {
     const active = (settings || []).find((item) => item?.category === category && item?.is_active);
     if (!active) return 'unset';

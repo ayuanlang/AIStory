@@ -20444,11 +20444,8 @@ def _build_shot_prompts(
             _add_scene_subject_candidate(match.group(1), candidates)
         return candidates
 
-    def _build_filtered_scene_subject_index() -> str:
+    def _build_filtered_scene_subject_index() -> Tuple[str, set]:
         scene_subject_keys = _extract_scene_subject_candidates()
-        if not scene_subject_keys:
-            return ""
-
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
         subject_index_text = sanitize_subject_index_text(
             getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
@@ -20456,12 +20453,13 @@ def _build_shot_prompts(
         if not subject_index_text and episode:
             subject_index_text = sanitize_subject_index_text(getattr(episode, "ai_scene_analysis_result", None))
         if not subject_index_text:
-            return ""
+            return "", set()
 
         header_lines: List[str] = []
         separator_lines: List[str] = []
         kept_rows: List[str] = []
         seen_rows: set = set()
+        index_subject_keys: set = set()
 
         for raw_line in str(subject_index_text).splitlines():
             line = str(raw_line or "")
@@ -20474,11 +20472,18 @@ def _build_shot_prompts(
             is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 4
             if is_subject_row:
                 row_candidates = [parts[0], parts[2], parts[3]]
-                if any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates):
+                keep_row = not scene_subject_keys
+                if not keep_row:
+                    keep_row = any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates)
+                if keep_row:
                     row_key = re.sub(r"\s+", "", stripped).lower()
                     if row_key not in seen_rows:
                         kept_rows.append(line)
                         seen_rows.add(row_key)
+                        for candidate in row_candidates[1:]:
+                            key = _scene_subject_compare_key(candidate)
+                            if key:
+                                index_subject_keys.add(key)
                 continue
 
             is_table_header = "|" in stripped and re.search(r"(?i)subject_no|subject_type|subject_name|name_zh|name_en", stripped)
@@ -20489,13 +20494,42 @@ def _build_shot_prompts(
             if is_table_separator:
                 separator_lines = [line]
 
+        if not kept_rows and scene_subject_keys:
+            # Fallback: if scene fields failed to expose candidates, inject the full
+            # subject index so downstream shot generation still receives authoritative entities.
+            for raw_line in str(subject_index_text).splitlines():
+                line = str(raw_line or "")
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                normalized_line = stripped.strip("|").strip()
+                parts = [part.strip() for part in normalized_line.split("|")]
+                is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 4
+                if not is_subject_row:
+                    continue
+                row_key = re.sub(r"\s+", "", stripped).lower()
+                if row_key in seen_rows:
+                    continue
+                kept_rows.append(line)
+                seen_rows.add(row_key)
+                for candidate in [parts[2], parts[3]]:
+                    key = _scene_subject_compare_key(candidate)
+                    if key:
+                        index_subject_keys.add(key)
+            logger.info(
+                "[_build_shot_prompts] subject index fallback to full list scene_id=%s candidate_count=%s rows=%s",
+                getattr(scene, "id", None),
+                len(scene_subject_keys),
+                len(kept_rows),
+            )
+
         if not kept_rows:
             logger.info(
                 "[_build_shot_prompts] filtered scene subject index has no matching rows scene_id=%s candidate_count=%s",
                 getattr(scene, "id", None),
                 len(scene_subject_keys),
             )
-            return ""
+            return "", set()
 
         lines = [
             "# Scene Subject Index",
@@ -20510,7 +20544,67 @@ def _build_shot_prompts(
             len(scene_subject_keys),
             len(kept_rows),
         )
-        return "\n".join(lines).strip() + "\n"
+        return "\n".join(lines).strip() + "\n", index_subject_keys
+
+    def _entity_matches_subject_index_keys(ent: Entity, index_keys: set) -> bool:
+        if not index_keys:
+            return False
+        for alias in [getattr(ent, "name", None), getattr(ent, "name_en", None)]:
+            key = _scene_subject_compare_key(alias)
+            if key and key in index_keys:
+                return True
+        return False
+
+    def _build_subject_image_prompt_section(index_keys: set) -> str:
+        if not index_keys:
+            return ""
+
+        prompt_lines: List[str] = []
+        seen_entity_keys: set = set()
+        for ent in project_entities:
+            if not _entity_matches_subject_index_keys(ent, index_keys):
+                continue
+            entity_key = _scene_subject_compare_key(getattr(ent, "name", None))
+            if not entity_key or entity_key in seen_entity_keys:
+                continue
+            seen_entity_keys.add(entity_key)
+
+            generation_prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
+            if not generation_prompt_cn:
+                logger.info(
+                    "[_build_shot_prompts] subject index entity missing generation_prompt_cn scene_id=%s entity=%s",
+                    getattr(scene, "id", None),
+                    getattr(ent, "name", None),
+                )
+                continue
+
+            normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "entity"
+            if normalized_type == "character":
+                subject_ref = f"CHAR:[@{ent.name}]"
+            elif normalized_type == "prop":
+                subject_ref = f"PROP:[{ent.name}]"
+            elif normalized_type == "environment":
+                subject_ref = f"ENV:[{ent.name}]"
+            else:
+                subject_ref = f"COVER:[{ent.name}]"
+
+            prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={generation_prompt_cn}")
+
+        if not prompt_lines:
+            return ""
+
+        logger.info(
+            "[_build_shot_prompts] injected subject image prompts scene_id=%s count=%s",
+            getattr(scene, "id", None),
+            len(prompt_lines),
+        )
+        return (
+            "# Scene Subject Image Prompts (CN)\n"
+            "Authoritative Chinese image-generation prompts for entities listed in Scene Subject Index above. "
+            "When writing Video Content (CN), inherit stable visual identity, costume, material, and spatial anchors from these prompts; do not rename or reinvent subjects.\n"
+            + "\n".join(prompt_lines)
+            + "\n"
+        )
 
     env_narrative = ""
     env_narratives_map = {}
@@ -20678,7 +20772,8 @@ def _build_shot_prompts(
             parts.append(f"[{name}]: {desc}")
         env_narrative = "\n".join(parts)
     
-    scene_subject_index_section = _build_filtered_scene_subject_index()
+    scene_subject_index_section, scene_subject_index_keys = _build_filtered_scene_subject_index()
+    subject_image_prompt_section = _build_subject_image_prompt_section(scene_subject_index_keys)
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -20716,7 +20811,7 @@ def _build_shot_prompts(
 | **Core Goal** | {core_goal_text} |
 
 {scene_subject_index_section}
-
+{subject_image_prompt_section}
 # Instruction
 1. Analyze the script and break it down into shots.
 """
@@ -29484,6 +29579,51 @@ class ShotMediaBatchStartRequest(BaseModel):
     system_api_id: Optional[int] = None
     draft_mode: Optional[bool] = False
     use_prev_video: Optional[bool] = False
+    sd2_auto_duration: Optional[bool] = False
+
+
+def _read_system_api_base_model_row(row: Any) -> str:
+    return str(getattr(row, "base_model", "") or "").strip()
+
+
+def _is_seedance2_base_model(base_model: Any) -> bool:
+    candidate = str(base_model or "").strip().lower()
+    if not candidate:
+        return False
+    if candidate.startswith("doubao-seedance-2"):
+        return True
+    if candidate.startswith("ep-doubao-seedance-2"):
+        return True
+    return bool(re.match(r"^seedance[-_]?2(?:$|[-_.])", candidate))
+
+
+def _resolve_shot_video_duration_value(
+    *,
+    shot_duration: Any,
+    sd2_auto_duration: bool = False,
+    base_model: Optional[str] = None,
+    system_api_id: Optional[int] = None,
+    db: Optional[Session] = None,
+) -> float:
+    table_duration = 5.0
+    try:
+        table_duration = float(str(shot_duration or 5).strip() or 5)
+    except Exception:
+        table_duration = 5.0
+
+    resolved_base_model = str(base_model or "").strip()
+    if not resolved_base_model and system_api_id and db is not None:
+        try:
+            from backend.app.models.all_models import SystemAPISetting
+            row = db.query(SystemAPISetting).filter(SystemAPISetting.id == int(system_api_id)).first()
+            if row:
+                resolved_base_model = _read_system_api_base_model_row(row)
+        except Exception:
+            pass
+
+    if bool(sd2_auto_duration) and _is_seedance2_base_model(resolved_base_model):
+        return -1.0
+    return table_duration
 
 
 def _sanitize_filename_part(value: Optional[str], max_len: int = 48) -> str:
@@ -37948,11 +38088,13 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             bool(batch_ref_info.get("fallback_to_refs")),
         )
 
-        duration_val = 5.0
-        try:
-            duration_val = float(str(shot.duration or 5).strip() or 5)
-        except Exception:
-            duration_val = 5.0
+        batch_status = _read_shot_media_batch_status(episode) if episode else {}
+        duration_val = _resolve_shot_video_duration_value(
+            shot_duration=shot.duration,
+            sd2_auto_duration=bool((batch_status or {}).get("sd2_auto_duration")),
+            system_api_id=system_api_id,
+            db=item_db,
+        )
 
         multi_prompt_payload = None
         if video_prompt_cn:
@@ -37960,7 +38102,6 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 {"prompt": video_prompt, "type": "en"},
                 {"prompt": video_prompt_cn, "type": "zh"}
             ]
-        batch_status = _read_shot_media_batch_status(episode) if episode else {}
         video_req = VideoGenerationRequest(
             draft_mode=bool((batch_status or {}).get("draft_mode")),
             prompt=video_prompt,
@@ -38699,11 +38840,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             bool(batch_ref_info.get("fallback_to_refs")),
                         )
 
-                        duration_val = 5.0
-                        try:
-                            duration_val = float(str(shot.duration or 5).strip() or 5)
-                        except Exception:
-                            duration_val = 5.0
+                        batch_status = _read_shot_media_batch_status(episode) if episode else {}
+                        duration_val = _resolve_shot_video_duration_value(
+                            shot_duration=shot.duration,
+                            sd2_auto_duration=bool((batch_status or {}).get("sd2_auto_duration")),
+                            system_api_id=system_api_id,
+                            db=db,
+                        )
 
                         multi_prompt_payload = None
                         if video_prompt_cn:
@@ -38711,7 +38854,6 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 {"prompt": video_prompt, "type": "en"},
                                 {"prompt": video_prompt_cn, "type": "zh"}
                             ]
-                        batch_status = _read_shot_media_batch_status(episode) if episode else {}
                         video_req = VideoGenerationRequest(
                             draft_mode=bool((batch_status or {}).get("draft_mode")),
                             prompt=video_prompt,
@@ -38924,6 +39066,7 @@ def start_shot_media_batch_job(
         "max_concurrency": batch_max_concurrency,
         "overwrite_existing": bool(req.overwrite_existing),
         "draft_mode": bool(req.draft_mode),
+        "sd2_auto_duration": bool(req.sd2_auto_duration),
         "total": len(shot_ids),
         "completed": 0,
         "success": 0,

@@ -1151,7 +1151,7 @@ class MediaGenerationService:
         if callback_url and callback_url != "-1":
             task_payload["callback_url"] = callback_url
         
-        if duration:
+        if duration is not None:
             try:
                 task_payload["duration"] = int(duration)
             except:
@@ -2658,7 +2658,12 @@ class MediaGenerationService:
             resolved_setting_id = None
 
         runtime_enum_catalog = self._load_system_api_runtime_enum_catalog(resolved_setting_id)
-        model_hint = str(active_config.get("model") or tool_conf.get("model") or "").strip().lower()
+        config_base_model = str(
+            active_config.get("base_model") or tool_conf.get("base_model") or ""
+        ).strip().lower()
+        model_hint = config_base_model or str(
+            active_config.get("model") or tool_conf.get("model") or ""
+        ).strip().lower()
         prefer_higher_seedance_duration = bool(category == "Video" and "seedance" in model_hint)
         seedance_resolution_override = None
         if category == "Video" and "seedance" in model_hint:
@@ -2698,7 +2703,18 @@ class MediaGenerationService:
 
         if category in {"Video", "Voice"}:
             allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-            if isinstance(allowed_durations, list) and allowed_durations and effective_duration is not None:
+            is_seedance2_auto_duration = (
+                effective_duration == -1
+                and self._is_seedance2_base_model(
+                    active_config.get("base_model") or tool_conf.get("base_model"),
+                )
+            )
+            if (
+                not is_seedance2_auto_duration
+                and isinstance(allowed_durations, list)
+                and allowed_durations
+                and effective_duration is not None
+            ):
                 mapped_duration = self._map_duration_nearest(
                     effective_duration,
                     allowed_durations,
@@ -2707,7 +2723,11 @@ class MediaGenerationService:
                 if mapped_duration is not None:
                     effective_duration = int(mapped_duration)
             max_duration = runtime_enum_catalog.get("max_duration")
-            if effective_duration is not None and max_duration is not None:
+            if (
+                not is_seedance2_auto_duration
+                and effective_duration is not None
+                and max_duration is not None
+            ):
                 try:
                     max_duration_num = int(float(max_duration))
                     if max_duration_num > 0 and effective_duration > max_duration_num:
@@ -3404,6 +3424,22 @@ class MediaGenerationService:
             promoted.id,
         )
         return promoted
+
+    def _read_system_api_base_model(self, setting: Any) -> str:
+        return str(getattr(setting, "base_model", "") or "").strip()
+
+    def _is_seedance2_base_model(self, base_model: Any) -> bool:
+        candidate = str(base_model or "").strip().lower()
+        if not candidate:
+            return False
+        if candidate.startswith("doubao-seedance-2"):
+            return True
+        if candidate.startswith("ep-doubao-seedance-2"):
+            return True
+        return bool(re.match(r"^seedance[-_]?2(?:$|[-_.])", candidate))
+
+    def _is_seedance2_video_model(self, base_model: Any) -> bool:
+        return self._is_seedance2_base_model(base_model)
 
     def _normalize_provider_name(self, provider: Optional[str], category: Optional[str] = None) -> str:
         raw = str(provider or "").strip().lower()
@@ -8490,9 +8526,12 @@ class MediaGenerationService:
             duration_in = int(float(duration or tool_conf.get("duration") or 5))
         except Exception:
             duration_in = 5
-        if duration_in <= 0:
+        is_seedance2_model = self._is_seedance2_base_model(
+            config.get("base_model") or tool_conf.get("base_model"),
+        )
+        if duration_in <= 0 and not (is_seedance2_model and duration_in == -1):
             duration_in = 5
-        if allowed_duration_values:
+        if allowed_duration_values and not (is_seedance2_model and duration_in == -1):
             mapped_duration = self._map_duration_nearest(duration_in, allowed_duration_values, prefer_higher_on_tie=False)
             if mapped_duration is not None:
                 duration_in = int(mapped_duration)
@@ -9885,9 +9924,14 @@ class MediaGenerationService:
             payload["ratio"] = normalized_ratio
 
         try:
-            payload["duration"] = int(duration or tool_conf.get("duration") or 5)
+            payload["duration"] = int(duration if duration is not None else (tool_conf.get("duration") if tool_conf.get("duration") is not None else 5))
         except Exception:
             payload["duration"] = 5
+        if is_seedance2 and payload.get("duration") == -1:
+            logger.info(
+                "[ZLHubSeedance2] auto_duration | trace_id=%s duration=-1",
+                zlhub_trace_id,
+            )
 
         for source_key, target_key in (("resolution", "resolution"), ("generate_audio", "generate_audio")):
             value = tool_conf.get(source_key)

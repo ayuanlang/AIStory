@@ -124,6 +124,7 @@ import {
     MODEL_OPTIONS,
     getSettingSourceByCategory,
     formatProviderModelEndpointError,
+    isSeedance2VideoBaseModel,
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
@@ -302,7 +303,122 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const functionApiConfigs = useFunctionApis();
+    const [sd2AutoDuration, setSd2AutoDuration] = useState(() => {
+        try {
+            const stored = localStorage.getItem('aiStory_sd2AutoDuration');
+            return stored === null ? true : stored === 'true';
+        } catch {
+            return true;
+        }
+    });
+    const [selectedVideoApiId, setSelectedVideoApiId] = useState(() => {
+        try {
+            return Number(localStorage.getItem('func_api_generate_videos') || 0) || null;
+        } catch {
+            return null;
+        }
+    });
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+
+    const selectedGenerateVideosApi = useMemo(() => {
+        const apiList = functionApiConfigs?.generate_videos || [];
+        if (!apiList.length) return null;
+        const matched = apiList.find((item) => Number(item?.system_api_id) === Number(selectedVideoApiId));
+        if (matched) return matched;
+        return apiList.find((item) => !item?.is_fallback) || apiList[0] || null;
+    }, [functionApiConfigs, selectedVideoApiId]);
+
+    const isSelectedVideoApiSeedance2 = useMemo(
+        () => isSeedance2VideoBaseModel(selectedGenerateVideosApi?.system_api_base_model),
+        [selectedGenerateVideosApi]
+    );
+    const isSd2AutoDurationActive = isSelectedVideoApiSeedance2 && sd2AutoDuration;
+    const manualDurationBeforeSd2AutoRef = useRef('');
+
+    const applySd2AutoDurationToEditingShot = useCallback((enable) => {
+        if (!editingShot) return;
+        const current = String(editingShot.duration ?? '').trim();
+        if (enable) {
+            if (current !== '-1') {
+                manualDurationBeforeSd2AutoRef.current = current || '5';
+                setEditingShot((prev) => (prev ? { ...prev, duration: '-1' } : prev));
+            }
+        } else if (current === '-1') {
+            const restore = String(manualDurationBeforeSd2AutoRef.current || '5').trim() || '5';
+            setEditingShot((prev) => (prev ? { ...prev, duration: restore } : prev));
+        }
+    }, [editingShot]);
+
+    useEffect(() => {
+        if (!editingShot || !isSd2AutoDurationActive) return;
+        const current = String(editingShot.duration ?? '').trim();
+        if (current !== '-1') {
+            manualDurationBeforeSd2AutoRef.current = current || '5';
+            setEditingShot((prev) => {
+                if (!prev || String(prev.duration ?? '').trim() === '-1') return prev;
+                return { ...prev, duration: '-1' };
+            });
+        }
+    }, [editingShot?.id, isSd2AutoDurationActive]);
+
+    useEffect(() => {
+        if (!editingShot || isSelectedVideoApiSeedance2) return;
+        const current = String(editingShot.duration ?? '').trim();
+        if (current === '-1') {
+            const restore = String(manualDurationBeforeSd2AutoRef.current || '5').trim() || '5';
+            setEditingShot((prev) => (prev ? { ...prev, duration: restore } : prev));
+        }
+    }, [editingShot?.id, isSelectedVideoApiSeedance2]);
+
+    useEffect(() => {
+        const syncSelectedVideoApi = (event) => {
+            const detailKey = String(event?.detail?.storageKey || '');
+            if (detailKey && detailKey !== 'func_api_generate_videos') return;
+            try {
+                const next = Number(localStorage.getItem('func_api_generate_videos') || 0) || null;
+                setSelectedVideoApiId(next);
+            } catch {
+                setSelectedVideoApiId(null);
+            }
+        };
+        const handleStorage = (event) => {
+            if (event?.key !== 'func_api_generate_videos') return;
+            syncSelectedVideoApi({ detail: { storageKey: 'func_api_generate_videos' } });
+        };
+        window.addEventListener('storage', handleStorage);
+        window.addEventListener('aistory:function-api-changed', syncSelectedVideoApi);
+        return () => {
+            window.removeEventListener('storage', handleStorage);
+            window.removeEventListener('aistory:function-api-changed', syncSelectedVideoApi);
+        };
+    }, []);
+
+    const getShotDurationDisplayValue = useCallback((shotDuration) => {
+        if (isSd2AutoDurationActive) return '-1';
+        const normalized = String(shotDuration ?? '').trim();
+        return normalized || '';
+    }, [isSd2AutoDurationActive]);
+
+    const resolveShotVideoDurationParam = useCallback((shotDuration) => {
+        const normalized = String(shotDuration ?? '').trim();
+        if (normalized === '-1') return -1;
+        const tableDuration = parseFloat(shotDuration);
+        const fallbackDuration = Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
+        if (isSd2AutoDurationActive) {
+            return -1;
+        }
+        return fallbackDuration;
+    }, [isSd2AutoDurationActive]);
+
+    const handleToggleSd2AutoDuration = useCallback((checked) => {
+        setSd2AutoDuration(checked);
+        try {
+            localStorage.setItem('aiStory_sd2AutoDuration', String(checked));
+        } catch {}
+        if (isSelectedVideoApiSeedance2) {
+            applySd2AutoDurationToEditingShot(checked);
+        }
+    }, [applySd2AutoDurationToEditingShot, isSelectedVideoApiSeedance2]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
@@ -7697,8 +7813,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 // IF we don't accidentally override the first frame.
             }
             
-            // Duration Logic: Use Shot Duration (s) if valid, else default to 5
-            const durParam = parseFloat(editingShot.duration) || 5;
+            // Duration Logic: Seedance2 auto duration uses -1; otherwise use shot table duration.
+            const durParam = resolveShotVideoDurationParam(editingShot.duration);
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
@@ -8928,6 +9044,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 shot_ids: targetShotIds,
                 draft_mode: isDraftMode,
                 use_prev_video: mode === 'videos' ? usePrevVideo : false,
+                sd2_auto_duration: mode === 'videos' ? sd2AutoDuration : false,
                 overwrite_existing: false,
                 system_api_id: mode === 'videos' ? (Number(localStorage.getItem('func_api_generate_videos')) || undefined) : undefined,
             });
@@ -9401,6 +9518,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 <input type="checkbox" className="hidden" checked={usePrevVideo} onChange={(e) => handleToggleUsePrevVideo(e.target.checked)} />
                                 <span className={usePrevVideo ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('上镜续写', 'Shot Continuation')}</span>
                             </label>
+                            {isSelectedVideoApiSeedance2 && (
+                                <>
+                                    <div className="w-px h-3 bg-white/10 mx-1"></div>
+                                    <label className="flex items-center gap-1.5 cursor-pointer text-xs group transition-colors" title={t('开启后 Seedance2 视频时长传 -1，由模型自动决定；关闭则使用表中 Duration(s) 数值。', 'When enabled, Seedance2 requests use duration -1 for model auto timing; when disabled, use the shot Duration (s) value from the table.')}>
+                                        <div className={`w-3.5 h-3.5 rounded-sm border flex flex-shrink-0 items-center justify-center transition-colors ${sd2AutoDuration ? 'bg-primary border-primary' : 'border-white/30 group-hover:border-white/50 bg-black/20'}`}>
+                                            {sd2AutoDuration && <Check className="w-2.5 h-2.5 text-white" />}
+                                        </div>
+                                        <input type="checkbox" className="hidden" checked={sd2AutoDuration} onChange={(e) => handleToggleSd2AutoDuration(e.target.checked)} />
+                                        <span className={sd2AutoDuration ? "text-primary font-medium" : "text-white/80 group-hover:text-white"}>{t('sd2自动时长', 'SD2 Auto Duration')}</span>
+                                    </label>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -9507,7 +9636,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         </div>
                                     )}
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
-                                        {shot.duration || '0s'}
+                                        {getShotDurationDisplayValue(shot.duration) || '0s'}
                                     </div>
                                     {(isGeneratingThisShot || isCroppingThisShot) && (
                                         <div className="absolute bottom-2 left-2 bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none flex items-center gap-1">
@@ -9525,9 +9654,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             {shot.shot_name || t('未命名', 'Untitled')}
                                         </h3>
                                         {/* Optional: Show duration if available, keep it minimal */}
-                                        {shot.duration && (
+                                        {getShotDurationDisplayValue(shot.duration) && (
                                             <span className="text-[10px] text-muted-foreground bg-white/5 px-1.5 py-0.5 rounded ml-2 whitespace-nowrap">
-                                                {shot.duration}
+                                                {getShotDurationDisplayValue(shot.duration)}
                                             </span>
                                         )}
                                     </div>
@@ -9687,11 +9816,24 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 <div className="flex items-center gap-1 ml-2 md:gap-2">
                                     <label className="text-xs font-normal text-muted-foreground">Duration(s):</label>
                                     <input 
-                                        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-sm font-normal text-white focus:border-primary/50 focus:outline-none w-16" 
-                                        value={editingShot.duration || ''} 
-                                        onChange={e => setEditingShot({...editingShot, duration: e.target.value})}
+                                        className={`bg-black/30 border border-white/10 rounded px-2 py-1 text-sm font-normal text-white focus:border-primary/50 focus:outline-none w-16 ${isSd2AutoDurationActive ? 'text-primary border-primary/40' : ''}`}
+                                        value={getShotDurationDisplayValue(editingShot.duration)}
+                                        onChange={e => {
+                                            if (isSd2AutoDurationActive) return;
+                                            setEditingShot({...editingShot, duration: e.target.value});
+                                        }}
+                                        readOnly={isSd2AutoDurationActive}
                                         placeholder="e.g. 5"
                                     />
+                                    {isSelectedVideoApiSeedance2 && (
+                                        <label className="flex items-center gap-1 cursor-pointer text-[11px] text-muted-foreground hover:text-white/80" title={t('开启后视频生成传 -1 自动时长；关闭则使用左侧 Duration(s)', 'When enabled, video generation sends -1 for auto duration; when disabled, use Duration (s) on the left')}>
+                                            <div className={`w-3 h-3 rounded-sm border flex items-center justify-center ${sd2AutoDuration ? 'bg-primary border-primary' : 'border-white/30 bg-black/20'}`}>
+                                                {sd2AutoDuration && <Check className="w-2 h-2 text-white" />}
+                                            </div>
+                                            <input type="checkbox" className="hidden" checked={sd2AutoDuration} onChange={(e) => handleToggleSd2AutoDuration(e.target.checked)} />
+                                            <span className={sd2AutoDuration ? 'text-primary' : ''}>{t('sd2自动时长', 'SD2 Auto Duration')}</span>
+                                        </label>
+                                    )}
                                 </div>
                             </h3>
                             <div className="flex items-center gap-2">
@@ -10942,7 +11084,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         : (modalType === 'end'
                                                             ? persistedEndMeta
                                                             : (modalType === 'video' ? persistedVideoMeta : null)));
-                                                const shotConfiguredDuration = String(editingShot?.duration ?? '').trim();
+                                                const shotConfiguredDuration = getShotDurationDisplayValue(editingShot?.duration);
 
                                                 const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
@@ -11574,8 +11716,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         min="0"
                                                                         step="0.1"
                                                                         value={shotConfiguredDuration}
-                                                                        onChange={(e) => setEditingShot(prev => ({ ...(prev || {}), duration: e.target.value }))}
-                                                                        className="w-full bg-black/30 border border-white/10 rounded p-2 text-sm text-white"
+                                                                        onChange={(e) => {
+                                                                            if (isSd2AutoDurationActive) return;
+                                                                            setEditingShot(prev => ({ ...(prev || {}), duration: e.target.value }));
+                                                                        }}
+                                                                        readOnly={isSd2AutoDurationActive}
+                                                                        className={`w-full bg-black/30 border border-white/10 rounded p-2 text-sm text-white ${isSd2AutoDurationActive ? 'text-primary border-primary/40' : ''}`}
                                                                         placeholder="5"
                                                                     />
                                                                     <div className="text-[11px] text-muted-foreground">

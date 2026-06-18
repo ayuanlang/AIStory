@@ -10326,6 +10326,7 @@ def get_all_function_api_configs(
                     "system_api_id": sys_api.id,
                     "system_api_name": sys_api.name,
                     "system_api_model": sys_api.model or "",
+                    "system_api_base_model": _read_system_api_base_model(sys_api),
                     "priority": item.get("priority", 0),
                     "is_fallback": item.get("is_fallback", False),
                     "alias": item.get("alias") or sys_api.model or sys_api.name or f"API {sys_api.id}",
@@ -10340,6 +10341,9 @@ def get_all_function_api_configs(
         result.append({"function_name": func_name, "api_settings": valid_settings})
         
     return result
+
+def _read_system_api_base_model(sys_api: Any) -> str:
+    return str(getattr(sys_api, "base_model", "") or "").strip()
 
 @router.post("/settings/system/function_api_configs/sync-pricing-descriptions")
 def sync_function_api_pricing_descriptions(
