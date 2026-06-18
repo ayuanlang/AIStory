@@ -20415,15 +20415,30 @@ def _build_shot_prompts(
             values.append(cleaned)
         return values
 
+    def _extract_tagged_scene_subjects(raw_value: Any) -> List[str]:
+        values: List[str] = []
+        text = str(raw_value or "")
+        for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", text):
+            cleaned = _clean_br(match.group(1))
+            if cleaned:
+                values.append(cleaned)
+        return values
+
     for raw_field_value in [scene.environment_name, scene.linked_characters, scene.key_props]:
         for part in _split_scene_editor_subjects(raw_field_value):
             relevant_names.add(part)
             part_key = _scene_subject_compare_key(part)
             if part_key:
                 relevant_name_keys.add(part_key)
+    # Keep the legacy candidate mode: parse tagged subjects from scene content.
+    for part in _extract_tagged_scene_subjects(scene.core_scene_info):
+        relevant_names.add(part)
+        part_key = _scene_subject_compare_key(part)
+        if part_key:
+            relevant_name_keys.add(part_key)
 
     logger.info(
-        "[_build_shot_prompts] scene editor subject candidates scene_id=%s names=%s keys=%s",
+        "[_build_shot_prompts] scene subject candidates merged scene_id=%s names=%s keys=%s",
         getattr(scene, "id", None),
         len(relevant_names),
         len(relevant_name_keys),
@@ -20442,6 +20457,8 @@ def _build_shot_prompts(
         for value in [scene.environment_name, scene.linked_characters, scene.key_props]:
             for part in _split_scene_editor_subjects(value):
                 _add_scene_subject_candidate(part, candidates)
+        for part in _extract_tagged_scene_subjects(scene.core_scene_info):
+            _add_scene_subject_candidate(part, candidates)
         return candidates
 
     def _build_filtered_scene_subject_index() -> Tuple[str, set]:

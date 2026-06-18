@@ -13,7 +13,7 @@ import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Set
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
-import { getEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
+import { getEpisodeAnalysisRun, releaseEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -65,6 +65,8 @@ import {
     refinePrompt,
     analyzeScene,
     waitForAsyncTask,
+    isAsyncTaskPollInFlight,
+    api,
     stopAsyncTask,
     fetchPrompt,
     fetchMe,
@@ -115,6 +117,23 @@ import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken }
 
 /** Max automatic fallback reruns for scene beats / asset generation (excluding the initial run). */
 const MAX_ANALYSIS_FALLBACK_ATTEMPTS = 2;
+
+const TERMINAL_ASYNC_TASK_STATUSES = new Set([
+    'completed', 'success', 'succeeded', 'done', 'finished',
+    'failed', 'error', 'timeout', 'canceled', 'cancelled', 'stopped',
+]);
+
+const peekAsyncTaskTerminalStatus = async (taskId) => {
+    const id = String(taskId || '').trim();
+    if (!id) return null;
+    try {
+        const res = await api.get(`/tasks/${id}`, { params: { _ts: Date.now() }, timeout: 15000 });
+        const status = String(res?.data?.status || '').trim().toLowerCase();
+        return TERMINAL_ASYNC_TASK_STATUSES.has(status) ? status : null;
+    } catch (_) {
+        return null;
+    }
+};
 
 const firstPositiveFiniteNumber = (...values) => {
     for (const value of values) {
@@ -4391,6 +4410,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisStopRequestedRef = useRef(false);
     const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
+    const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
+    const detachedAnalysisRunEpisodeRef = useRef(null);
+    const mountResumeReadyRef = useRef(false);
     const scriptEditorMountedRef = useRef(true);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
@@ -5720,6 +5742,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (getEpisodeAnalysisRun(activeEpisode.id)?.promise) return;
         if (analysisResumeInFlightRef.current || analysisRunInFlightRef.current) return;
         if (isRetryingPhase2 || phase2GenerationInFlightRef.current || analysisFallbackRetryRef.current.running) return;
+        if (isAsyncTaskPollInFlight(marker.taskId)) {
+            if (onLog) onLog?.('[Analysis Resume] Task poll already active; skipping duplicate marker resume.', 'info');
+            return;
+        }
 
         if (Number(marker?.phase) === 2) {
             if (clearStalePhase2AssetMarkerIfDesignExists(activeEpisode.id, 'resume-guard')) return;
@@ -6249,10 +6275,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (entry.taskId) {
             setActiveAnalysisTaskId(String(entry.taskId));
         }
-        setAnalysisFlowStatus({
-            phase: entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
-            message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
-        });
+        if (!analysisRunInFlightRef.current) {
+            setAnalysisFlowStatus({
+                phase: entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
+                message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
+            });
+        }
         setAnalysisUiReport((prev) => (prev?.status === 'running' ? prev : {
             status: 'running',
             startedAt,
@@ -6328,42 +6356,76 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const tryResumePendingAnalysis = useCallback(async () => {
         if (!activeEpisode?.id) return;
-        const pendingMarker = loadAnalysisTaskMarker(activeEpisode.id);
-        const activeRun = getEpisodeAnalysisRun(activeEpisode.id);
-        const hasPendingWork = Boolean(pendingMarker?.taskId || activeRun?.promise);
-        if (!hasPendingWork && (isAnalyzing || isRetryingPhase2)) return;
+        const episodeId = activeEpisode.id;
+        if (analysisResumeCoordinatorRef.current.running && analysisResumeCoordinatorRef.current.episodeId === episodeId) return;
         if (analysisResumeInFlightRef.current || phase2GenerationInFlightRef.current || isRetryingPhase2) return;
         if (analysisFallbackRetryRef.current.running) return;
 
-        await clearStaleAnalysisMarkerIfEpisodeComplete(activeEpisode.id, activeEpisode, 'resume-precheck');
-        clearStalePhase2AssetMarkerIfDesignExists(activeEpisode.id, 'resume-precheck');
+        const pendingMarker = loadAnalysisTaskMarker(episodeId);
+        const activeRun = getEpisodeAnalysisRun(episodeId);
+        const hasPendingWork = Boolean(pendingMarker?.taskId || activeRun?.promise);
+        if (!hasPendingWork && (isAnalyzing || isRetryingPhase2)) return;
 
-        const refreshedRun = getEpisodeAnalysisRun(activeEpisode.id);
-        if (refreshedRun?.promise) {
-            await reattachToExistingAnalysisRun(refreshedRun);
-            return;
-        }
+        analysisResumeCoordinatorRef.current = { running: true, episodeId };
+        try {
+            await clearStaleAnalysisMarkerIfEpisodeComplete(episodeId, activeEpisode, 'resume-precheck');
+            clearStalePhase2AssetMarkerIfDesignExists(episodeId, 'resume-precheck');
 
-        const marker = loadAnalysisTaskMarker(activeEpisode.id);
-        if (!marker?.taskId) {
-            resetBootstrapAnalysisUiIfIdle();
-            return;
+            const refreshedRun = getEpisodeAnalysisRun(episodeId);
+            if (refreshedRun?.promise) {
+                if (analysisRunInFlightRef.current) {
+                    return;
+                }
+                if (detachedAnalysisRunEpisodeRef.current !== episodeId) {
+                    return;
+                }
+                detachedAnalysisRunEpisodeRef.current = null;
+                await reattachToExistingAnalysisRun(refreshedRun);
+                return;
+            }
+
+            const marker = loadAnalysisTaskMarker(episodeId);
+            if (!marker?.taskId) {
+                resetBootstrapAnalysisUiIfIdle();
+                return;
+            }
+            if (Number(marker?.phase) === 2 && clearStalePhase2AssetMarkerIfDesignExists(episodeId, 'pending-resume-guard')) {
+                resetBootstrapAnalysisUiIfIdle();
+                return;
+            }
+
+            const terminalStatus = await peekAsyncTaskTerminalStatus(marker.taskId);
+            if (terminalStatus) {
+                clearAnalysisTaskMarker(episodeId);
+                releaseEpisodeAnalysisRun(episodeId);
+                resetBootstrapAnalysisUiIfIdle();
+                if (onLog) {
+                    onLog?.(`[Analysis Resume] Cleared stale marker; backend task already ${terminalStatus}.`, 'info');
+                }
+                return;
+            }
+
+            if (isAsyncTaskPollInFlight(marker.taskId)) {
+                bootstrapPendingAnalysisUi();
+                return;
+            }
+
+            bootstrapPendingAnalysisUi();
+            await resumeAnalysisFromTaskMarker(marker);
+        } finally {
+            analysisResumeCoordinatorRef.current = { running: false, episodeId: null };
         }
-        if (Number(marker?.phase) === 2 && clearStalePhase2AssetMarkerIfDesignExists(activeEpisode.id, 'pending-resume-guard')) {
-            resetBootstrapAnalysisUiIfIdle();
-            return;
-        }
-        bootstrapPendingAnalysisUi();
-        resumeAnalysisFromTaskMarker(marker);
     }, [
         activeEpisode,
         activeEpisode?.id,
         bootstrapPendingAnalysisUi,
+        clearAnalysisTaskMarker,
         clearStaleAnalysisMarkerIfEpisodeComplete,
         clearStalePhase2AssetMarkerIfDesignExists,
         isAnalyzing,
         isRetryingPhase2,
         loadAnalysisTaskMarker,
+        onLog,
         reattachToExistingAnalysisRun,
         resetBootstrapAnalysisUiIfIdle,
         resumeAnalysisFromTaskMarker,
@@ -6371,6 +6433,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         scriptEditorMountedRef.current = true;
+        mountResumeReadyRef.current = false;
         let cancelled = false;
         (async () => {
             if (!activeEpisode?.id) return;
@@ -6378,14 +6441,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await clearStaleAnalysisMarkerIfEpisodeComplete(activeEpisode.id, activeEpisode, 'mount-precheck');
             if (cancelled) return;
             await tryResumePendingAnalysis();
+            if (!cancelled) mountResumeReadyRef.current = true;
         })();
         return () => {
             // Keep backend analysis running when this view unmounts (tab/page switch).
             // Explicit cancellation should only happen via the "stop task" action.
             scriptEditorMountedRef.current = false;
+            mountResumeReadyRef.current = false;
             cancelled = true;
             const episodeId = latestActiveEpisodeIdRef.current;
             if (episodeId) {
+                if (getEpisodeAnalysisRun(episodeId)?.promise) {
+                    detachedAnalysisRunEpisodeRef.current = episodeId;
+                }
                 persistAnalysisSessionSnapshot(episodeId);
                 const stillRunning = Boolean(
                     getEpisodeAnalysisRun(episodeId)?.promise
@@ -6403,6 +6471,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         const refreshPendingAnalysis = () => {
+            if (!mountResumeReadyRef.current) return;
             if (document.visibilityState !== 'visible') return;
             tryResumePendingAnalysis();
         };
@@ -7810,25 +7879,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
         const forceRegenerate = forceRegenerateRef.current;
         forceRegenerateRef.current = false;
-        const resumeState = await prepareSceneAnalysisResumeState();
-        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
-            return;
-        }
-        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
-        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
-            if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
-            return;
-        }
-        
         const episodeId = activeEpisode?.id;
-        let analysisPipelineFinished = false;
-        let analysisError = null;
-        let analysisCanceled = false;
 
         const existingRun = episodeId ? getEpisodeAnalysisRun(episodeId) : null;
         if (existingRun?.promise) {
             return reattachToExistingAnalysisRun(existingRun);
         }
+        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
+            if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
+            return;
+        }
+
+        const resumeState = await prepareSceneAnalysisResumeState();
+        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+            return;
+        }
+        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
+
+        let analysisPipelineFinished = false;
+        let analysisError = null;
+        let analysisCanceled = false;
 
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
@@ -8350,21 +8420,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const forceRegenerate = forceRegenerateRef.current;
         forceRegenerateRef.current = false;
+        const episodeId = activeEpisode.id;
+
+        const existingRun = getEpisodeAnalysisRun(episodeId);
+        if (existingRun?.promise) {
+            return reattachToExistingAnalysisRun(existingRun);
+        }
+        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
+            if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
+            return;
+        }
+
         const resumeState = await prepareSceneAnalysisResumeState();
         if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
         const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
-        if (analysisRunInFlightRef.current || analysisResumeInFlightRef.current) {
-            if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
-            return;
-        }
-
-        const episodeId = activeEpisode.id;
-        const existingRun = getEpisodeAnalysisRun(episodeId);
-        if (existingRun?.promise) {
-            return reattachToExistingAnalysisRun(existingRun);
-        }
 
         let analysisPipelineFinished = false;
         let analysisError = null;
