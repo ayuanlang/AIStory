@@ -25,7 +25,8 @@ import {
     generateProjectStoryGlobal,
     analyzeProjectNovel,
     generateProjectCharacterProfile,
-    fetchEpisodes, 
+    fetchEpisodes,
+    fetchEpisode, 
     createEpisode, 
     updateEpisode,
     updateEpisodeSegments,
@@ -130,9 +131,39 @@ const peekAsyncTaskTerminalStatus = async (taskId) => {
         const res = await api.get(`/tasks/${id}`, { params: { _ts: Date.now() }, timeout: 15000 });
         const status = String(res?.data?.status || '').trim().toLowerCase();
         return TERMINAL_ASYNC_TASK_STATUSES.has(status) ? status : null;
-    } catch (_) {
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        const detail = String(error?.response?.data?.detail || error?.message || '').trim().toLowerCase();
+        if (status === 404 || detail.includes('task not found') || detail.includes('not found')) {
+            return 'not_found';
+        }
         return null;
     }
+};
+
+const isEpisodeAnalysisTaskLive = (episodeId, {
+    loadAnalysisTaskMarker,
+    isAnalyzing = false,
+    isRetryingPhase2 = false,
+    analysisRunInFlight = false,
+    analysisResumeInFlight = false,
+    phase2GenerationInFlight = false,
+} = {}) => {
+    const id = Number(episodeId || 0);
+    if (!id) return false;
+
+    if (isAnalyzing || isRetryingPhase2) return true;
+    if (analysisRunInFlight || analysisResumeInFlight || phase2GenerationInFlight) return true;
+
+    const marker = typeof loadAnalysisTaskMarker === 'function' ? loadAnalysisTaskMarker(id) : null;
+    const markerTaskId = String(marker?.taskId || '').trim();
+    if (markerTaskId && isAsyncTaskPollInFlight(markerTaskId)) return true;
+
+    const activeRun = getEpisodeAnalysisRun(id);
+    const runTaskId = String(activeRun?.taskId || markerTaskId || '').trim();
+    if (activeRun?.promise && runTaskId && isAsyncTaskPollInFlight(runTaskId)) return true;
+
+    return false;
 };
 
 const firstPositiveFiniteNumber = (...values) => {
@@ -373,6 +404,21 @@ const clearAnalysisSessionProgressSnapshot = (episodeId) => {
     } catch (_) {
         // Ignore localStorage failures.
     }
+};
+
+const isPersistedAnalysisProgressRunning = (progressUi) => {
+    if (!progressUi || progressUi.dismissed === true) return false;
+    const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
+        ? progressUi.flowStatus
+        : { phase: 'idle', message: '' };
+    const uiReport = (progressUi.uiReport && typeof progressUi.uiReport === 'object') ? progressUi.uiReport : null;
+    const flowHistory = Array.isArray(progressUi.flowHistory) ? progressUi.flowHistory : [];
+    const phase = String(flowStatus?.phase || 'idle').trim().toLowerCase();
+    const reportStatus = String(uiReport?.status || '').trim().toLowerCase();
+    if (reportStatus === 'running') return true;
+    if (phase && !['idle', 'completed', 'failed', 'warning'].includes(phase)) return true;
+    if (flowHistory.some((item) => !item?.endedAt)) return true;
+    return false;
 };
 
 const hasPersistedEntityDesignPayload = (rawText) => {
@@ -3436,9 +3482,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         
         if (!hasSceneIdCol) {
-            // Log rejected table headers for debugging: prevents Subject Index tables from being stored as scenes markdown
-            const headersList = (parsed.headers || []).join(' | ');
-            console.warn('[normalizeLlmMarkdownTable] Rejected table (missing Scene ID column). Headers:', headersList);
             return '';
         }
 
@@ -3446,10 +3489,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const n = normalizeHeader(h);
             return n.includes('sceneno') || n.includes('场次序号') || n === '场次';
         });
-
-        // Log accepted table for debugging: scenes markdown normalization successful
-        const headersList = (parsed.headers || []).join(' | ');
-        console.info('[normalizeLlmMarkdownTable] Accepted Scenes Table. Headers:', headersList, 'Row count:', (parsed.rows || []).length);
 
         const normalizedRows = (parsed.rows || []).map((row, idx) => {
             const next = [...row];
@@ -4094,9 +4133,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
-        setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
-        setLlmAssetRawResultContent(activeEpisode?.ai_entity_design_result || '');
+        const skipAiArtifactSync = Boolean(
+            analysisRunInFlightRef.current
+            || isAnalyzing
+            || isRetryingPhase2
+        );
+        if (!skipAiArtifactSync) {
+            setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
+            setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
+            setLlmAssetRawResultContent(activeEpisode?.ai_entity_design_result || '');
+            const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
+            const storedText = typeof stored === 'string' ? stored : '';
+            setLlmRawResultContent(storedText);
+            setLlmResultContent(normalizeLlmMarkdownTable(storedText));
+        }
         setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
         setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
         const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
@@ -4105,11 +4155,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } else {
             setSelectedReuseSubjectIds([]);
         }
-
-        const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
-        const storedText = typeof stored === 'string' ? stored : '';
-        setLlmRawResultContent(storedText);
-        setLlmResultContent(normalizeLlmMarkdownTable(storedText));
 
         if (!activeEpisode?.script_content) {
             setSegments([]);
@@ -4208,7 +4253,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setSegments([]);
             setIsRawMode(true);
         }
-    }, [activeEpisode]);
+    }, [activeEpisode, isAnalyzing, isRetryingPhase2, normalizeLlmMarkdownTable]);
 
     useEffect(() => {
         let mounted = true;
@@ -4473,6 +4518,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const autoImportRunningRef = useRef(false);
     const latestIsAnalyzingRef = useRef(false);
     const latestActiveEpisodeIdRef = useRef(null);
+    const lastScriptLeaveNoticeAtRef = useRef(0);
+    const lastTryResumePendingAnalysisAtRef = useRef(0);
     const lastAutoSubjectsImportRef = useRef({ signature: '', result: null });
     const lastSubjectsImportIncompleteAlertRef = useRef('');
     const lastPersistPayloadSignatureRef = useRef({});
@@ -4629,6 +4676,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return Boolean(phase && phase !== 'idle');
     }, []);
 
+    const clearAnalysisProgressUiState = useCallback((episodeId, { persist = true } = {}) => {
+        const id = Number(episodeId || activeEpisode?.id || 0);
+        analysisTimerStartedAtRef.current = 0;
+        setIsAnalyzing(false);
+        setActiveAnalysisTaskId('');
+        setAnalysisFlowStatus({ phase: 'idle', message: '' });
+        setAnalysisFlowStatusHistory([]);
+        setAnalysisUiReport(null);
+        if (persist && id) {
+            clearAnalysisSessionProgressSnapshot(id);
+        }
+    }, [activeEpisode?.id]);
+
     const restoreAnalysisProgressFromSession = useCallback((episodeId) => {
         const id = Number(episodeId || 0);
         if (!id) return false;
@@ -4636,6 +4696,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const progressUi = snapshot?.progressUi;
         if (!progressUi || progressUi.dismissed === true) {
             analysisProgressDismissedRef.current = Boolean(progressUi?.dismissed);
+            return false;
+        }
+        if (isPersistedAnalysisProgressRunning(progressUi)) {
             return false;
         }
         analysisProgressDismissedRef.current = false;
@@ -4941,10 +5004,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
-        if (!projectId || !activeEpisode?.id) return;
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) return;
         try {
-            const eps = await fetchEpisodes(projectId);
-            const fresh = (eps || []).find(e => e.id === activeEpisode.id);
+            const fresh = await fetchEpisode(episodeId);
             const dbText = String((fresh && fresh[resultField]) || '');
 
             // Only update if user hasn't diverged from last loaded content.
@@ -4970,11 +5033,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             // non-fatal
             console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
         }
-    }, [projectId, activeEpisode?.id, llmAssetRawResultContent, llmRawResultContent, normalizeLlmMarkdownTable]);
+    }, [activeEpisode?.id, llmAssetRawResultContent, llmRawResultContent, normalizeLlmMarkdownTable]);
 
     const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500, resultField = 'ai_scene_analysis_result', expectedResultKind = '' } = {}) => {
-        const sleepMs = Math.max(1500, Number(intervalMs || 3500));
-        if (!projectId || !activeEpisode?.id) {
+        const sleepMs = Math.max(5000, Number(intervalMs || 3500));
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) {
             await new Promise(r => setTimeout(r, sleepMs));
             return '';
         }
@@ -4987,13 +5051,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         while (Date.now() < deadline) {
             try {
-                const eps = await fetchEpisodes(projectId);
-                const fresh = (eps || []).find(e => e.id === activeEpisode.id);
-                // Dynamically check the target field
+                const fresh = await fetchEpisode(episodeId);
                 const dbText = String((fresh && fresh[resultField]) || '').trim();
                 
-                // Strictly guard: ensure the DB result has actually advanced and contains structural completeness flags.
-                // We do NOT want to accept a truncated, half-written string that got saved by an aborted task.
                 const expectedKind = String(expectedResultKind || '').trim().toLowerCase();
                 const hasSceneBeatsMarker = Boolean(normalizeLlmMarkdownTable(dbText));
                 const hasSubjectIndexMarker = /###?\s*Subject\s*Index/i.test(dbText) || /subject_no\s*=\s*/i.test(dbText) || /\|\s*subject_no\s*\|\s*subject_type\s*\|/i.test(dbText);
@@ -5008,10 +5068,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (_) {
                 // Non-fatal polling fallback; keep waiting.
             }
-            await new Promise(resolve => setTimeout(resolve, Math.max(1500, Number(intervalMs || 3500))));
+            await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         return '';
-    }, [projectId, activeEpisode?.id, normalizeLlmMarkdownTable]);
+    }, [activeEpisode?.id, normalizeLlmMarkdownTable]);
+
+    const ANALYSIS_EPISODE_RECOVERY_PROBE_MS = 30000;
 
     const awaitAnalyzeSceneWithRecovery = useCallback(async (invokeAnalyze, { startedAt = Date.now(), baselineText = '', resultField = 'ai_scene_analysis_result', expectedResultKind = '' } = {}) => {
         throwIfAnalysisStopped();
@@ -5030,15 +5092,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 resolvedError = err;
             });
 
-        // 重新计算超时时间，确保从每次调用开始计时，至少给足60分钟以处理深度回退和排队延迟
-        const actualStartedAt = Date.now(); 
-        const deadline = actualStartedAt + 60 * 60 * 1000;
+        const deadline = Date.now() + 60 * 60 * 1000;
         while (!settled && Date.now() < deadline) {
             throwIfAnalysisStopped();
+            await new Promise((resolve) => setTimeout(resolve, ANALYSIS_EPISODE_RECOVERY_PROBE_MS));
+            if (settled) break;
             const recoveredText = await waitForEpisodeAnalysisResultUpdate({
                 baselineText,
-                timeoutMs: 8000,
-                intervalMs: 3000,
+                timeoutMs: 15000,
+                intervalMs: 6000,
                 resultField,
                 expectedResultKind,
             });
@@ -6395,13 +6457,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [isAnalyzing, activeEpisode?.id]);
 
     const resetBootstrapAnalysisUiIfIdle = useCallback(() => {
-        const marker = loadAnalysisTaskMarker(activeEpisode?.id);
-        const activeRun = getEpisodeAnalysisRun(activeEpisode?.id);
-        if (marker?.taskId || activeRun?.promise || analysisResumeInFlightRef.current) return;
-        setIsAnalyzing(false);
-        setActiveAnalysisTaskId('');
-        setAnalysisFlowStatus((prev) => (prev?.phase === 'idle' ? prev : { phase: 'idle', message: '' }));
-    }, [activeEpisode?.id, loadAnalysisTaskMarker]);
+        const episodeId = activeEpisode?.id;
+        if (!episodeId) return;
+        const marker = loadAnalysisTaskMarker(episodeId);
+        const stillLive = isEpisodeAnalysisTaskLive(episodeId, {
+            loadAnalysisTaskMarker,
+            analysisResumeInFlight: analysisResumeInFlightRef.current,
+            analysisRunInFlight: analysisRunInFlightRef.current,
+            phase2GenerationInFlight: phase2GenerationInFlightRef.current,
+        });
+        if (marker?.taskId || stillLive) return;
+        clearAnalysisProgressUiState(episodeId);
+    }, [activeEpisode?.id, clearAnalysisProgressUiState, loadAnalysisTaskMarker]);
 
     const reattachToExistingAnalysisRun = useCallback(async (entry) => {
         if (!activeEpisode?.id || !entry?.promise || analysisResumeInFlightRef.current) return false;
@@ -6511,7 +6578,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await clearStaleAnalysisMarkerIfEpisodeComplete(episodeId, activeEpisode, 'resume-precheck');
             clearStalePhase2AssetMarkerIfDesignExists(episodeId, 'resume-precheck');
 
-            const refreshedRun = getEpisodeAnalysisRun(episodeId);
+            let refreshedRun = getEpisodeAnalysisRun(episodeId);
+            if (refreshedRun?.promise) {
+                const runTaskId = String(refreshedRun.taskId || loadAnalysisTaskMarker(episodeId)?.taskId || '').trim();
+                const runLive = analysisRunInFlightRef.current
+                    || analysisResumeInFlightRef.current
+                    || (runTaskId && isAsyncTaskPollInFlight(runTaskId));
+                if (!runLive) {
+                    releaseEpisodeAnalysisRun(episodeId, refreshedRun.promise);
+                    refreshedRun = null;
+                }
+            }
             if (refreshedRun?.promise) {
                 if (analysisRunInFlightRef.current) {
                     return;
@@ -6538,9 +6615,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (terminalStatus) {
                 clearAnalysisTaskMarker(episodeId);
                 releaseEpisodeAnalysisRun(episodeId);
+                detachedAnalysisRunEpisodeRef.current = null;
                 resetBootstrapAnalysisUiIfIdle();
                 if (onLog) {
-                    onLog?.(`[Analysis Resume] Cleared stale marker; backend task already ${terminalStatus}.`, 'info');
+                    const reason = terminalStatus === 'not_found'
+                        ? 'backend task no longer exists (server may have restarted)'
+                        : `backend task already ${terminalStatus}`;
+                    onLog?.(`[Analysis Resume] Cleared stale marker; ${reason}.`, 'info');
                 }
                 return;
             }
@@ -6572,35 +6653,55 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     useEffect(() => {
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId) return;
+
         scriptEditorMountedRef.current = true;
         mountResumeReadyRef.current = false;
         let cancelled = false;
         (async () => {
-            if (!activeEpisode?.id) return;
-            ensureAnalysisFallbackState(activeEpisode.id);
-            restoreAnalysisProgressFromSession(activeEpisode.id);
-            await clearStaleAnalysisMarkerIfEpisodeComplete(activeEpisode.id, activeEpisode, 'mount-precheck');
+            ensureAnalysisFallbackState(episodeId);
+            await clearStaleAnalysisMarkerIfEpisodeComplete(episodeId, activeEpisode, 'mount-precheck');
             if (cancelled) return;
+            restoreAnalysisProgressFromSession(episodeId);
             await tryResumePendingAnalysis();
+            if (cancelled) return;
+            if (!isEpisodeAnalysisTaskLive(episodeId, {
+                loadAnalysisTaskMarker,
+                isAnalyzing: latestIsAnalyzingRef.current,
+                analysisRunInFlight: analysisRunInFlightRef.current,
+                analysisResumeInFlight: analysisResumeInFlightRef.current,
+                phase2GenerationInFlight: phase2GenerationInFlightRef.current,
+            })) {
+                resetBootstrapAnalysisUiIfIdle();
+            }
             if (!cancelled) mountResumeReadyRef.current = true;
         })();
+
         return () => {
             // Keep backend analysis running when this view unmounts (tab/page switch).
             // Explicit cancellation should only happen via the "stop task" action.
             scriptEditorMountedRef.current = false;
             mountResumeReadyRef.current = false;
             cancelled = true;
-            const episodeId = latestActiveEpisodeIdRef.current;
-            if (episodeId) {
-                if (getEpisodeAnalysisRun(episodeId)?.promise) {
-                    detachedAnalysisRunEpisodeRef.current = episodeId;
-                }
-                persistAnalysisSessionSnapshot(episodeId);
-                const stillRunning = Boolean(
-                    getEpisodeAnalysisRun(episodeId)?.promise
-                    || loadAnalysisTaskMarker(episodeId)?.taskId
-                );
-                if (stillRunning && onLog) {
+            const leavingEpisodeId = Number(latestActiveEpisodeIdRef.current || episodeId);
+            if (!leavingEpisodeId) return;
+
+            if (getEpisodeAnalysisRun(leavingEpisodeId)?.promise) {
+                detachedAnalysisRunEpisodeRef.current = leavingEpisodeId;
+            }
+            persistAnalysisSessionSnapshot(leavingEpisodeId);
+            const stillRunning = isEpisodeAnalysisTaskLive(leavingEpisodeId, {
+                loadAnalysisTaskMarker,
+                isAnalyzing: latestIsAnalyzingRef.current,
+                analysisRunInFlight: analysisRunInFlightRef.current,
+                analysisResumeInFlight: analysisResumeInFlightRef.current,
+                phase2GenerationInFlight: phase2GenerationInFlightRef.current,
+            });
+            if (stillRunning && onLog) {
+                const now = Date.now();
+                if (now - lastScriptLeaveNoticeAtRef.current > 3000) {
+                    lastScriptLeaveNoticeAtRef.current = now;
                     onLog?.(
                         '已离开剧本页，分析任务仍在后台运行。返回剧本页后会自动恢复进度；全局日志面板仍可查看后续输出。',
                         'info'
@@ -6608,12 +6709,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
         };
-    }, [activeEpisode, activeEpisode?.id, clearStaleAnalysisMarkerIfEpisodeComplete, ensureAnalysisFallbackState, loadAnalysisTaskMarker, onLog, persistAnalysisSessionSnapshot, restoreAnalysisProgressFromSession, tryResumePendingAnalysis]);
+        // Intentionally keyed by episode id only — avoid re-running cleanup when activeEpisode object reference changes during analysis.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeEpisode?.id]);
 
     useEffect(() => {
         const refreshPendingAnalysis = () => {
             if (!mountResumeReadyRef.current) return;
             if (document.visibilityState !== 'visible') return;
+            const now = Date.now();
+            if (now - lastTryResumePendingAnalysisAtRef.current < 5000) return;
+            lastTryResumePendingAnalysisAtRef.current = now;
             tryResumePendingAnalysis();
         };
         document.addEventListener('visibilitychange', refreshPendingAnalysis);
@@ -7721,11 +7827,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         forceRegenerateRef.current = true;
-        await clearAnalysisOutputsForRestart();
+        analysisProgressDismissedRef.current = false;
+        setIsAnalyzing(true);
+        beginAnalysisRestartUi(Date.now());
 
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
-        
-        setIsAnalyzing(true); // Disable button immediately
         
         if (!projectLanguage) {
             const ok = await confirmUiMessage(t(
@@ -7734,12 +7840,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
             if (!ok) {
                 setIsAnalyzing(false);
+                forceRegenerateRef.current = false;
                 return;
             }
             if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
         }
-
-        setAnalysisFlowStatus({ phase: 'idle', message: '' });
 
         const stage1Input = ensureStage1ProjectContextInjected(actualContent);
 
@@ -7773,7 +7878,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
-    async function clearAnalysisOutputsForRestart() {
+    async function clearAnalysisOutputsForRestart({ preserveProgressUi = false, deferWorkspaceUiReset = false } = {}) {
         if (!activeEpisode?.id) return;
 
         try {
@@ -7781,8 +7886,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             releaseEpisodeAnalysisRun(activeEpisode.id);
             clearAnalysisTaskMarker(activeEpisode.id);
-            clearAnalysisSessionProgressSnapshot(activeEpisode.id);
-            analysisTimerStartedAtRef.current = 0;
+            if (!preserveProgressUi) {
+                clearAnalysisSessionProgressSnapshot(activeEpisode.id);
+                analysisTimerStartedAtRef.current = 0;
+            }
 
             const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
             if (existingScenes && existingScenes.length > 0) {
@@ -7800,19 +7907,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             }
 
-            setLlmRawResultContent('');
-            setLlmResultContent('');
-            setLlmAssetRawResultContent('');
-            setSubjectIndexText('');
-            setAdaptationText('');
-            setAnalysisRuntimeMeta(null);
-            setAnalysisUiReport(null);
-            setAnalysisFlowStatus({ phase: 'idle', message: '' });
-            lastLoadedAnalysisRef.current = null;
+            if (!deferWorkspaceUiReset) {
+                setLlmRawResultContent('');
+                setLlmResultContent('');
+                setLlmAssetRawResultContent('');
+                setSubjectIndexText('');
+                setAdaptationText('');
+                setAnalysisRuntimeMeta(null);
+                lastLoadedAnalysisRef.current = null;
+            }
+
+            if (!preserveProgressUi) {
+                setAnalysisUiReport(null);
+                setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            }
         } catch (clearErr) {
             if (onLog) onLog(`AI Script Analysis restart clear warning: ${clearErr?.message || clearErr}`, 'warning');
         }
     }
+
+    const beginAnalysisRestartUi = useCallback((startedAt = Date.now()) => {
+        analysisProgressDismissedRef.current = false;
+        beginAnalysisTimer(startedAt);
+        setAnalysisFlowStatusHistory([]);
+        setAnalysisFlowStatus({
+            phase: 'script_opt',
+            message: t('正在准备重新分析，请稍候...', 'Preparing to rerun analysis...'),
+        });
+        setAnalysisUiReport({
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            phaseTimings: null,
+            importReport: null,
+            runtimeMeta: null,
+            warning: '',
+            error: '',
+        });
+    }, [beginAnalysisTimer, t]);
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
         const sceneAnalysisText = String(
@@ -8088,10 +8220,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         if (onLog) onLog("Starting AI Script Analysis...", "start");
 
-        // When force-regenerating, clear existing scenes and episode analysis fields so
-        // the new results are imported fresh rather than merged onto stale data.
         if (forceRegenerate && activeEpisode?.id) {
-            await clearAnalysisOutputsForRestart();
+            await clearAnalysisOutputsForRestart({ preserveProgressUi: true, deferWorkspaceUiReset: true });
         }
 
         let llmReturned = false;
@@ -8597,11 +8727,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let analysisError = null;
         let analysisCanceled = false;
 
-        // When force-regenerating, clear existing scenes and episode analysis fields.
-        if (forceRegenerate && activeEpisode?.id) {
-            await clearAnalysisOutputsForRestart();
-        }
-
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -8643,6 +8768,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             error: '',
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
+
+        if (forceRegenerate && activeEpisode?.id) {
+            await clearAnalysisOutputsForRestart({ preserveProgressUi: true, deferWorkspaceUiReset: true });
+        }
 
         let llmReturned = false;
         let runtimeMeta = null;

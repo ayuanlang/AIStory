@@ -266,6 +266,14 @@ const isTaskNotFoundPollingError = (error) => {
         return detail.includes('task not found');
 };
 
+const isResourceExhaustedPollingError = (error) => {
+    const code = String(error?.code || '').trim().toUpperCase();
+    const message = String(error?.message || '').trim().toLowerCase();
+    return code === 'ERR_INSUFFICIENT_RESOURCES'
+        || message.includes('err_insufficient_resources')
+        || message.includes('insufficient resources');
+};
+
 async function pollTask(taskId, {
     interval = LLM_POLL_INTERVAL,
     timeout = LLM_POLL_TIMEOUT,
@@ -334,6 +342,10 @@ const err = new Error('Task polling received an invalid response format (not an 
         } catch (error) {
             if (error.isTaskFailure || error.isCanceled) {
                 throw error;
+            }
+            if (isResourceExhaustedPollingError(error)) {
+                await new Promise(r => setTimeout(r, Math.max(interval * 4, 15000)));
+                continue;
             }
             if (isTaskNotFoundPollingError(error)) {
                 const now = Date.now();

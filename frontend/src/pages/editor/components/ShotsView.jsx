@@ -792,7 +792,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
-    const shotsRef = useRef([]);
     const allEpisodeShotsRef = useRef([]);
     const editingShotRef = useRef(null);
     const jointDiptychApplyInFlightRef = useRef(new Map());
@@ -1498,10 +1497,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return applyGeneratingStateChange(prev, stableShotId, key, value);
         });
     }, [applyGeneratingStateChange, setStoredShotGeneratingState, shots, editingShot, getShotEndFrameUrl]);
-
-    useEffect(() => {
-        shotsRef.current = Array.isArray(shots) ? shots : [];
-    }, [shots]);
 
     useEffect(() => {
         editingShotRef.current = editingShot || null;

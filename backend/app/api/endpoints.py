@@ -20976,7 +20976,7 @@ def _build_shot_regenerate_prompts(
 def _persist_scene_shot_generation_result(
     *,
     db: Session,
-    scene: Scene,
+    scene_id: int,
     raw_text: str,
     markdown_text: str,
     rows: List[Dict[str, Any]],
@@ -20993,11 +20993,16 @@ def _persist_scene_shot_generation_result(
         "usage": usage or {},
         "warnings": [],
     }
+    # The original ORM instance may be detached after _release_db_connection;
+    # reload a session-bound instance before applying updates.
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
     scene.ai_shots_result = str(markdown_text or "")
     db.commit()
     logger.info(
         "[shot_generation.persist] saved scene_id=%s markdown_len=%s rows=%s",
-        getattr(scene, "id", None),
+        scene_id,
         len(scene.ai_shots_result or ""),
         len(result_wrapper.get("content") or []),
     )
@@ -22006,7 +22011,7 @@ async def ai_generate_shots(
         # 6. Persist staging result only (no DB-shot import here)
         result_wrapper = _persist_scene_shot_generation_result(
             db=db,
-            scene=scene,
+            scene_id=scene_id,
             raw_text=raw_text_original,
             markdown_text=response_content,
             rows=shots_data,
