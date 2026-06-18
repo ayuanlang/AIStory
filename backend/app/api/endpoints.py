@@ -20424,12 +20424,37 @@ def _build_shot_prompts(
                 values.append(cleaned)
         return values
 
+    def _extract_scene_subjects_from_markdown_rows(raw_value: Any) -> List[str]:
+        values: List[str] = []
+        text = str(raw_value or "")
+        if not text.strip():
+            return values
+        row_patterns = [
+            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Environment\s*Anchor|环境锚点)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
+            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Linked\s*Characters|关联角色)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
+            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Key\s*Props|关键道具)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
+        ]
+        for pattern in row_patterns:
+            for match in re.finditer(pattern, text):
+                cell_value = str(match.group(1) or "").strip()
+                if not cell_value:
+                    continue
+                values.extend(_split_scene_editor_subjects(cell_value))
+        return values
+
     for raw_field_value in [scene.environment_name, scene.linked_characters, scene.key_props]:
         for part in _split_scene_editor_subjects(raw_field_value):
             relevant_names.add(part)
             part_key = _scene_subject_compare_key(part)
             if part_key:
                 relevant_name_keys.add(part_key)
+    # Compatibility: if scene content includes markdown rows for these fields,
+    # parse them as additional candidates.
+    for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
+        relevant_names.add(part)
+        part_key = _scene_subject_compare_key(part)
+        if part_key:
+            relevant_name_keys.add(part_key)
     # Keep the legacy candidate mode: parse tagged subjects from scene content.
     for part in _extract_tagged_scene_subjects(scene.core_scene_info):
         relevant_names.add(part)
@@ -20457,6 +20482,8 @@ def _build_shot_prompts(
         for value in [scene.environment_name, scene.linked_characters, scene.key_props]:
             for part in _split_scene_editor_subjects(value):
                 _add_scene_subject_candidate(part, candidates)
+        for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
+            _add_scene_subject_candidate(part, candidates)
         for part in _extract_tagged_scene_subjects(scene.core_scene_info):
             _add_scene_subject_candidate(part, candidates)
         return candidates
