@@ -306,9 +306,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [sd2AutoDuration, setSd2AutoDuration] = useState(() => {
         try {
             const stored = localStorage.getItem('aiStory_sd2AutoDuration');
-            return stored === null ? true : stored === 'true';
+            return stored === null ? false : stored === 'true';
         } catch {
-            return true;
+            return false;
         }
     });
     const [selectedVideoApiId, setSelectedVideoApiId] = useState(() => {
@@ -333,42 +333,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         [selectedGenerateVideosApi]
     );
     const isSd2AutoDurationActive = isSelectedVideoApiSeedance2 && sd2AutoDuration;
-    const manualDurationBeforeSd2AutoRef = useRef('');
-
-    const applySd2AutoDurationToEditingShot = useCallback((enable) => {
-        if (!editingShot) return;
-        const current = String(editingShot.duration ?? '').trim();
-        if (enable) {
-            if (current !== '-1') {
-                manualDurationBeforeSd2AutoRef.current = current || '5';
-                setEditingShot((prev) => (prev ? { ...prev, duration: '-1' } : prev));
-            }
-        } else if (current === '-1') {
-            const restore = String(manualDurationBeforeSd2AutoRef.current || '5').trim() || '5';
-            setEditingShot((prev) => (prev ? { ...prev, duration: restore } : prev));
-        }
-    }, [editingShot]);
-
-    useEffect(() => {
-        if (!editingShot || !isSd2AutoDurationActive) return;
-        const current = String(editingShot.duration ?? '').trim();
-        if (current !== '-1') {
-            manualDurationBeforeSd2AutoRef.current = current || '5';
-            setEditingShot((prev) => {
-                if (!prev || String(prev.duration ?? '').trim() === '-1') return prev;
-                return { ...prev, duration: '-1' };
-            });
-        }
-    }, [editingShot?.id, isSd2AutoDurationActive]);
-
-    useEffect(() => {
-        if (!editingShot || isSelectedVideoApiSeedance2) return;
-        const current = String(editingShot.duration ?? '').trim();
-        if (current === '-1') {
-            const restore = String(manualDurationBeforeSd2AutoRef.current || '5').trim() || '5';
-            setEditingShot((prev) => (prev ? { ...prev, duration: restore } : prev));
-        }
-    }, [editingShot?.id, isSelectedVideoApiSeedance2]);
 
     useEffect(() => {
         const syncSelectedVideoApi = (event) => {
@@ -410,15 +374,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return fallbackDuration;
     }, [isSd2AutoDurationActive]);
 
-    const handleToggleSd2AutoDuration = useCallback((checked) => {
-        setSd2AutoDuration(checked);
-        try {
-            localStorage.setItem('aiStory_sd2AutoDuration', String(checked));
-        } catch {}
-        if (isSelectedVideoApiSeedance2) {
-            applySd2AutoDurationToEditingShot(checked);
-        }
-    }, [applySd2AutoDurationToEditingShot, isSelectedVideoApiSeedance2]);
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
@@ -537,6 +492,47 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [shotIdFilter, setShotIdFilter] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [shots, setShots] = useState([]);
+    const shotsRef = useRef([]);
+    useEffect(() => {
+        shotsRef.current = Array.isArray(shots) ? shots : [];
+    }, [shots]);
+
+    const readShotTableDuration = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return '5';
+        const tableShot = shotsRef.current.find((item) => String(item?.id) === stableShotId);
+        const raw = tableShot?.duration ?? tableShot?.['Duration (s)'] ?? '';
+        const normalized = String(raw ?? '').trim();
+        if (normalized && normalized !== '-1') return normalized;
+        return '5';
+    }, []);
+
+    const restoreEditingShotDurationFromTable = useCallback(() => {
+        if (!editingShot?.id) return;
+        const restore = readShotTableDuration(editingShot.id);
+        setEditingShot((prev) => {
+            if (!prev) return prev;
+            if (String(prev.duration ?? '').trim() === restore) return prev;
+            return { ...prev, duration: restore };
+        });
+    }, [editingShot?.id, readShotTableDuration, setEditingShot]);
+
+    const handleToggleSd2AutoDuration = useCallback((checked) => {
+        setSd2AutoDuration(checked);
+        try {
+            localStorage.setItem('aiStory_sd2AutoDuration', String(checked));
+        } catch {}
+        if (!checked) {
+            restoreEditingShotDurationFromTable();
+        }
+    }, [restoreEditingShotDurationFromTable]);
+
+    useEffect(() => {
+        if (!editingShot?.id || isSd2AutoDurationActive) return;
+        const current = String(editingShot.duration ?? '').trim();
+        if (current !== '-1') return;
+        restoreEditingShotDurationFromTable();
+    }, [editingShot?.id, editingShot?.duration, isSd2AutoDurationActive, restoreEditingShotDurationFromTable]);
     const [isShotsLoading, setIsShotsLoading] = useState(false);
     const [hasShotInitialLoadCompleted, setHasShotInitialLoadCompleted] = useState(false);
     const [selectedShotIds, setSelectedShotIds] = useState([]);

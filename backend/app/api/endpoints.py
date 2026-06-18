@@ -119,7 +119,12 @@ from datetime import datetime, timedelta
 from jose import jwt, JWTError
 from app.core.config import settings
 from app.core.homepage_referral import parse_homepage_referral_token
-from app.core.entity_token import normalize_entity_token
+from app.core.entity_token import (
+    entity_subject_keys_match,
+    normalize_entity_token,
+    subject_compare_key,
+    subject_compare_key_variants,
+)
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import File, UploadFile, Form
 import shutil
@@ -20350,10 +20355,10 @@ def _build_shot_prompts(
     subject_packets = []
     
     def _scene_subject_compare_key(value: Any) -> str:
-        normalized = normalize_entity_token(value)
-        normalized = re.sub(r"(?i)^(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*", "", normalized).strip()
-        normalized = normalized.strip("[](){}@#：: ").strip()
-        return re.sub(r"\s+", "", normalized).lower()
+        return subject_compare_key(value)
+
+    def _scene_subject_compare_keys(value: Any) -> set:
+        return subject_compare_key_variants(value)
 
     # Identify relevant entity names from scene editor fields only:
     # environment anchor + linked characters (comma-separated) + key props.
@@ -20397,27 +20402,58 @@ def _build_shot_prompts(
                 if not cell_value:
                     continue
                 values.extend(_split_scene_editor_subjects(cell_value))
+                values.extend(_extract_tagged_scene_subjects(cell_value))
         return values
 
-    for raw_field_value in [scene.environment_name, scene.linked_characters, scene.key_props]:
+    def _extract_environment_context_from_text(raw_value: Any) -> str:
+        text = str(raw_value or "")
+        if not text.strip():
+            return ""
+
+        row_patterns = [
+            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Environment\s*Context|环境上下文|环境描述)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
+        ]
+        for pattern in row_patterns:
+            match = re.search(pattern, text)
+            if match:
+                cell_value = str(match.group(1) or "").strip()
+                if cell_value and cell_value.upper() != "N/A":
+                    return cell_value
+
+        block_patterns = [
+            r"(?im)\*\*\{Environment\s*Context\}\*\*\s*[:：]\s*(.+?)(?=\n\s*(?:-\s*\*\*\{|\*\*\{|\|))",
+            r"(?im)\{Environment\s*Context\}\s*[:：]\s*(.+?)(?=\n\s*(?:-\s*\*\*\{|\*\*\{|\|))",
+        ]
+        for pattern in block_patterns:
+            match = re.search(pattern, text, flags=re.DOTALL)
+            if match:
+                block_value = str(match.group(1) or "").strip()
+                if block_value:
+                    return block_value
+        return ""
+
+    def _register_scene_subject_candidate(raw_value: Any) -> None:
+        text = str(raw_value or "").strip()
+        if not text:
+            return
+        relevant_names.add(text)
+        for key in _scene_subject_compare_keys(text):
+            if key:
+                relevant_name_keys.add(key)
+
+    scene_editor_fields = [scene.environment_name, scene.linked_characters, scene.key_props]
+    for raw_field_value in scene_editor_fields:
         for part in _split_scene_editor_subjects(raw_field_value):
-            relevant_names.add(part)
-            part_key = _scene_subject_compare_key(part)
-            if part_key:
-                relevant_name_keys.add(part_key)
+            _register_scene_subject_candidate(part)
+        for part in _extract_tagged_scene_subjects(raw_field_value):
+            _register_scene_subject_candidate(part)
     # Compatibility: if scene content includes markdown rows for these fields,
     # parse them as additional candidates.
     for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
-        relevant_names.add(part)
-        part_key = _scene_subject_compare_key(part)
-        if part_key:
-            relevant_name_keys.add(part_key)
+        _register_scene_subject_candidate(part)
     # Keep the legacy candidate mode: parse tagged subjects from scene content.
     for part in _extract_tagged_scene_subjects(scene.core_scene_info):
-        relevant_names.add(part)
-        part_key = _scene_subject_compare_key(part)
-        if part_key:
-            relevant_name_keys.add(part_key)
+        _register_scene_subject_candidate(part)
 
     logger.info(
         "[_build_shot_prompts] scene subject candidates merged scene_id=%s names=%s keys=%s",
@@ -20427,17 +20463,16 @@ def _build_shot_prompts(
     )
 
     def _add_scene_subject_candidate(value: Any, target: set) -> None:
-        text = str(value or "").strip()
-        if not text:
-            return
-        key = _scene_subject_compare_key(text)
-        if key:
-            target.add(key)
+        for key in _scene_subject_compare_keys(value):
+            if key:
+                target.add(key)
 
     def _extract_scene_subject_candidates() -> set:
         candidates: set = set()
-        for value in [scene.environment_name, scene.linked_characters, scene.key_props]:
+        for value in scene_editor_fields:
             for part in _split_scene_editor_subjects(value):
+                _add_scene_subject_candidate(part, candidates)
+            for part in _extract_tagged_scene_subjects(value):
                 _add_scene_subject_candidate(part, candidates)
         for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
             _add_scene_subject_candidate(part, candidates)
@@ -20584,11 +20619,10 @@ def _build_shot_prompts(
     def _entity_matches_candidate_keys(ent: Entity, candidate_keys: set) -> bool:
         if not candidate_keys:
             return False
+        alias_keys: set = set()
         for alias in [getattr(ent, "name", None), getattr(ent, "name_en", None)]:
-            key = _scene_subject_compare_key(alias)
-            if key and key in candidate_keys:
-                return True
-        return False
+            alias_keys.update(_scene_subject_compare_keys(alias))
+        return entity_subject_keys_match(alias_keys, candidate_keys)
 
     def _build_subject_image_prompt_section(candidate_keys: set) -> str:
         if not candidate_keys:
@@ -20660,8 +20694,8 @@ def _build_shot_prompts(
         # logger.info(f"Checking entity: {ent.name} (Aliases: {ent_aliases})") 
 
         for alias in ent_aliases:
-            alias_key = _scene_subject_compare_key(alias)
-            if alias_key and alias_key in relevant_name_keys:
+            alias_keys = _scene_subject_compare_keys(alias)
+            if entity_subject_keys_match(alias_keys, relevant_name_keys):
                 is_relevant = True
                 logger.info(f"[_build_shot_prompts] Match found: Entity '{ent.name}' matches scene editor candidates")
                 break
@@ -20671,13 +20705,13 @@ def _build_shot_prompts(
             # Check if this is the Environment Anchor to capture narrative for Scenario Content
             if scene.environment_name:
                  # Check against all scene environment anchor parts from editor field.
-                 env_part_keys = {
-                     _scene_subject_compare_key(p)
-                     for p in _split_scene_editor_subjects(scene.environment_name)
-                     if _scene_subject_compare_key(p)
-                 }
+                 env_part_keys: set = set()
+                 for p in _split_scene_editor_subjects(scene.environment_name):
+                     env_part_keys.update(_scene_subject_compare_keys(p))
+                 for p in _extract_tagged_scene_subjects(scene.environment_name):
+                     env_part_keys.update(_scene_subject_compare_keys(p))
                  for alias in ent_aliases:
-                      if _scene_subject_compare_key(alias) in env_part_keys:
+                      if entity_subject_keys_match(_scene_subject_compare_keys(alias), env_part_keys):
                            logger.info(f"[_build_shot_prompts] Environment Match: {ent.name}")
                            # Priority: description_cn (custom_attributes) > narrative_description > description
                            desc_cn = None
@@ -20808,10 +20842,31 @@ def _build_shot_prompts(
         for name, desc in env_narratives_map.items():
             parts.append(f"[{name}]: {desc}")
         env_narrative = "\n".join(parts)
+
+    if not env_narrative:
+        env_narrative = _extract_environment_context_from_text(scene.core_scene_info).strip()
+        if env_narrative:
+            logger.info(
+                "[_build_shot_prompts] using Environment Context from core_scene_info scene_id=%s",
+                getattr(scene, "id", None),
+            )
     
     scene_subject_keys = _extract_scene_subject_candidates()
     scene_subject_index_section, _ = _build_filtered_scene_subject_index(scene_subject_keys)
     subject_image_prompt_section = _build_subject_image_prompt_section(scene_subject_keys)
+
+    entity_section = ""
+    if entity_descriptions:
+        entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
+
+    subject_packet_section = ""
+    if subject_packets:
+        subject_packet_section = (
+            "# Relevant Subject Packets\n"
+            "Authoritative upstream subject descriptions for this scene. For each shot, first decide Associated Entities, then inherit only the matching subject packets into Shot Logic and Video Content (CN). Preserve stable identity/state/dependency semantics; do not rename or reinvent them.\n"
+            + "\n".join(subject_packets)
+            + "\n"
+        )
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -20850,6 +20905,8 @@ def _build_shot_prompts(
 
 {scene_subject_index_section}
 {subject_image_prompt_section}
+{subject_packet_section}
+{entity_section}
 # Instruction
 1. Analyze the script and break it down into shots.
 """
