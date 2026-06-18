@@ -20392,33 +20392,42 @@ def _build_shot_prompts(
     entity_descriptions = []
     subject_packets = []
     
-    # Identify relevant entity names from Scene data
-    relevant_names = set()
-    
-    def _clean_br(s):
-        return normalize_entity_token(s)
-
-    if scene.linked_characters:
-        # Split by comma and handle potential variations
-        parts = [_clean_br(p) for p in scene.linked_characters.split(',') if p.strip()]
-        relevant_names.update(parts)
-
-    if scene.key_props:
-        parts = [_clean_br(p) for p in scene.key_props.split(',') if p.strip()]
-        relevant_names.update(parts)
-        
-    if scene.environment_name:
-        # Environment name might also be a comma-separated list
-        parts = [_clean_br(p) for p in scene.environment_name.split(',') if p.strip()]
-        relevant_names.update(parts)
-    
-    logger.info(f"[_build_shot_prompts] Relevant Names from Scene (cleaned): {relevant_names}")
-
     def _scene_subject_compare_key(value: Any) -> str:
         normalized = normalize_entity_token(value)
         normalized = re.sub(r"(?i)^(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*", "", normalized).strip()
         normalized = normalized.strip("[](){}@#：: ").strip()
         return re.sub(r"\s+", "", normalized).lower()
+
+    # Identify relevant entity names from scene editor fields only:
+    # environment anchor + linked characters (comma-separated) + key props.
+    relevant_names: set = set()
+    relevant_name_keys: set = set()
+
+    def _clean_br(s):
+        return normalize_entity_token(s)
+
+    def _split_scene_editor_subjects(raw_value: Any) -> List[str]:
+        values: List[str] = []
+        for part in re.split(r"[,，、;；\n]+", str(raw_value or "")):
+            cleaned = _clean_br(part)
+            if not cleaned:
+                continue
+            values.append(cleaned)
+        return values
+
+    for raw_field_value in [scene.environment_name, scene.linked_characters, scene.key_props]:
+        for part in _split_scene_editor_subjects(raw_field_value):
+            relevant_names.add(part)
+            part_key = _scene_subject_compare_key(part)
+            if part_key:
+                relevant_name_keys.add(part_key)
+
+    logger.info(
+        "[_build_shot_prompts] scene editor subject candidates scene_id=%s names=%s keys=%s",
+        getattr(scene, "id", None),
+        len(relevant_names),
+        len(relevant_name_keys),
+    )
 
     def _add_scene_subject_candidate(value: Any, target: set) -> None:
         text = str(value or "").strip()
@@ -20430,18 +20439,9 @@ def _build_shot_prompts(
 
     def _extract_scene_subject_candidates() -> set:
         candidates: set = set()
-        for value in [scene.linked_characters, scene.key_props, scene.environment_name]:
-            for part in re.split(r"[,，、;；\n]+", str(value or "")):
+        for value in [scene.environment_name, scene.linked_characters, scene.key_props]:
+            for part in _split_scene_editor_subjects(value):
                 _add_scene_subject_candidate(part, candidates)
-
-        source_text = "\n".join([
-            str(scene.linked_characters or ""),
-            str(scene.key_props or ""),
-            str(scene.environment_name or ""),
-            str(scene.core_scene_info or ""),
-        ])
-        for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", source_text):
-            _add_scene_subject_candidate(match.group(1), candidates)
         return candidates
 
     def _build_filtered_scene_subject_index() -> Tuple[str, set]:
@@ -20625,22 +20625,24 @@ def _build_shot_prompts(
         # logger.info(f"Checking entity: {ent.name} (Aliases: {ent_aliases})") 
 
         for alias in ent_aliases:
-            alias_clean = alias.strip().lower()
-            for rn in relevant_names:
-                if rn.strip().lower() == alias_clean:
-                    is_relevant = True
-                    logger.info(f"[_build_shot_prompts] Match found: Entity '{ent.name}' matches scene ref '{rn}'")
-                    break
-            if is_relevant: break
+            alias_key = _scene_subject_compare_key(alias)
+            if alias_key and alias_key in relevant_name_keys:
+                is_relevant = True
+                logger.info(f"[_build_shot_prompts] Match found: Entity '{ent.name}' matches scene editor candidates")
+                break
         
         # If relevant, try to extract Description field
         if is_relevant:
             # Check if this is the Environment Anchor to capture narrative for Scenario Content
             if scene.environment_name:
-                 # Check against all scene environment parts
-                 env_parts = [_clean_br(p).lower() for p in scene.environment_name.split(',') if p.strip()]
+                 # Check against all scene environment anchor parts from editor field.
+                 env_part_keys = {
+                     _scene_subject_compare_key(p)
+                     for p in _split_scene_editor_subjects(scene.environment_name)
+                     if _scene_subject_compare_key(p)
+                 }
                  for alias in ent_aliases:
-                      if alias.strip().lower() in env_parts:
+                      if _scene_subject_compare_key(alias) in env_part_keys:
                            logger.info(f"[_build_shot_prompts] Environment Match: {ent.name}")
                            # Priority: description_cn (custom_attributes) > narrative_description > description
                            desc_cn = None
