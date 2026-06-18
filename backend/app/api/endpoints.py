@@ -83,7 +83,13 @@ from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config, get_script_analysis_flow_config
 from app.services.script_analysis_flow import (
     build_script_analysis_flow_plan,
+    extract_scene_markdown_text_from_analyze_result,
+    import_analyze_scene_stage_result,
+    import_scene_markdown_stage,
+    persist_analyze_scene_stage_result,
+    resolve_analyze_scene_stage,
     SCENES_BLOCK_END_TOKEN,
+    STAGE_SCENE_MARKDOWN,
     get_script_analysis_flow_registry,
     normalize_node_status,
     raise_progress_issue,
@@ -91,6 +97,7 @@ from app.services.script_analysis_flow import (
     SCENES_BLOCK_START_TOKEN,
     sync_scene_units_from_script_text,
     upsert_pipeline_node_status,
+    validate_analyze_scene_llm_finish_reason,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
@@ -6387,21 +6394,7 @@ class ProgressReconcileRequest(BaseModel):
 
 
 def _extract_scene_markdown_text_from_result(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    if not isinstance(result, dict):
-        return ""
-    for key in ("adapted_script", "scenes_markdown", "content", "result"):
-        value = result.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    data = result.get("data")
-    if isinstance(data, dict):
-        for key in ("adapted_script", "scenes_markdown", "content"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-    return ""
+    return extract_scene_markdown_text_from_analyze_result(result)
 
 
 def _extract_analysis_text_from_result(result: Any) -> str:
@@ -6616,7 +6609,7 @@ async def sync_scene_units_progress(
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
 
-    summary = sync_scene_units_from_script_text(
+    summary = import_scene_markdown_stage(
         db,
         project_id=int(request.project_id),
         episode_id=int(request.episode_id),
@@ -6633,7 +6626,7 @@ async def sync_scene_units_progress(
         progress_percent=100.0,
     )
     db.commit()
-    return {"status": "ok", "summary": summary}
+    return {"status": "ok", "summary": summary.get("sync_result") or summary}
 
 
 @router.get("/prompts/scene-analysis/progress/episodes/{episode_id}")
@@ -7484,93 +7477,32 @@ async def run_scene_analysis_flow_node(
                 )
 
             if node_key == "scene_markdown":
+                # Step 4: import staged scene markdown into progress scene units only.
                 scene_markdown_started_perf = time.perf_counter()
-                parsed_text = _extract_scene_markdown_text_from_result(result)
-                parsed_text_len = len(str(parsed_text or ""))
-                logger.info(
-                    "[场景编排2.2] LLM结果提取完成 | project_id=%s | episode_id=%s | text_len=%s",
-                    node_project_id,
-                    node_episode_id,
-                    parsed_text_len,
-                )
-                if parsed_text.strip():
-                    try:
-                        sync_started_perf = time.perf_counter()
-                        logger.info(
-                            "[场景编排2.2] 开始同步场景单元 | project_id=%s | episode_id=%s",
-                            node_project_id,
-                            node_episode_id,
-                        )
-                        sync_result = sync_scene_units_from_script_text(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_text=parsed_text,
-                            script_id=f"episode:{node_episode_id}",
-                        )
-                        sync_elapsed_ms = int((time.perf_counter() - sync_started_perf) * 1000)
-                        logger.info(
-                            "[场景编排2.2] 场景单元同步完成 | project_id=%s | episode_id=%s | scene_count=%s | scene_ids=%s | parse_source=%s | sync_elapsed_ms=%s",
-                            node_project_id,
-                            node_episode_id,
-                            int(sync_result.get("scene_count") or 0),
-                            sync_result.get("scene_ids") or [],
-                            sync_result.get("parse_source") or "unknown",
-                            sync_elapsed_ms,
-                        )
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name=node_key,
-                            status="success",
-                            progress_percent=100.0,
-                        )
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name="scene_planning",
-                            status="success",
-                            progress_percent=100.0,
-                        )
-                    except Exception as parse_exc:
-                        logger.exception(
-                            "[场景编排2.2] 场景解析/同步失败 | project_id=%s | episode_id=%s | error=%s",
-                            node_project_id,
-                            node_episode_id,
-                            parse_exc,
-                        )
-                        parse_error_code = str(getattr(parse_exc, "code", "") or "SCENE_PARSE_ERROR")
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name=node_key,
-                            status="failed",
-                            error_code=parse_error_code,
-                            error_message=str(parse_exc),
-                        )
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=f"episode:{node_episode_id}",
-                            node_name="scene_planning",
-                            status="failed",
-                            error_code=parse_error_code,
-                            error_message=str(parse_exc),
-                        )
-                        db.commit()
-                        raise HTTPException(status_code=422, detail=parse_error_code)
-                else:
-                    logger.warning(
-                        "[场景编排2.2] scene_markdown 节点返回空文本，跳过 scene_units 同步 | project_id=%s | episode_id=%s",
+                try:
+                    import_started_perf = time.perf_counter()
+                    logger.info(
+                        "[场景编排2.2] Step 4 开始导入场景单元 | project_id=%s | episode_id=%s",
                         node_project_id,
                         node_episode_id,
+                    )
+                    import_result = import_analyze_scene_stage_result(
+                        db=db,
+                        stage_key=STAGE_SCENE_MARKDOWN,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        analyze_result=result,
+                        script_id=f"episode:{node_episode_id}",
+                    ) or {}
+                    import_elapsed_ms = int((time.perf_counter() - import_started_perf) * 1000)
+                    logger.info(
+                        "[场景编排2.2] Step 4 场景单元导入完成 | project_id=%s | episode_id=%s | scene_count=%s | scene_ids=%s | parse_source=%s | import_elapsed_ms=%s",
+                        node_project_id,
+                        node_episode_id,
+                        int(import_result.get("scene_count") or 0),
+                        import_result.get("scene_ids") or [],
+                        import_result.get("parse_source") or "unknown",
+                        import_elapsed_ms,
                     )
                     upsert_pipeline_node_status(
                         db,
@@ -7578,12 +7510,69 @@ async def run_scene_analysis_flow_node(
                         episode_id=node_episode_id,
                         script_id=f"episode:{node_episode_id}",
                         node_name=node_key,
+                        status="success",
+                        progress_percent=100.0,
+                    )
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name="scene_planning",
+                        status="success",
+                        progress_percent=100.0,
+                    )
+                except HTTPException as import_http_exc:
+                    import_detail = str(getattr(import_http_exc, "detail", "") or "")
+                    if import_detail == "SCENE_MARKDOWN_EMPTY":
+                        logger.warning(
+                            "[场景编排2.2] scene_markdown 节点返回空文本，跳过 scene_units 同步 | project_id=%s | episode_id=%s",
+                            node_project_id,
+                            node_episode_id,
+                        )
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=f"episode:{node_episode_id}",
+                            node_name=node_key,
+                            status="failed",
+                            error_code="SCENE_MARKDOWN_EMPTY",
+                            error_message="scene_markdown node returned empty text",
+                        )
+                        db.commit()
+                        raise
+                    raise
+                except Exception as parse_exc:
+                    logger.exception(
+                        "[场景编排2.2] 场景解析/同步失败 | project_id=%s | episode_id=%s | error=%s",
+                        node_project_id,
+                        node_episode_id,
+                        parse_exc,
+                    )
+                    parse_error_code = str(getattr(parse_exc, "code", "") or "SCENE_PARSE_ERROR")
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name=node_key,
                         status="failed",
-                        error_code="SCENE_MARKDOWN_EMPTY",
-                        error_message="scene_markdown node returned empty text",
+                        error_code=parse_error_code,
+                        error_message=str(parse_exc),
+                    )
+                    upsert_pipeline_node_status(
+                        db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        script_id=f"episode:{node_episode_id}",
+                        node_name="scene_planning",
+                        status="failed",
+                        error_code=parse_error_code,
+                        error_message=str(parse_exc),
                     )
                     db.commit()
-                    raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_EMPTY")
+                    raise HTTPException(status_code=422, detail=parse_error_code)
                 scene_markdown_elapsed_ms = int((time.perf_counter() - scene_markdown_started_perf) * 1000)
                 logger.info(
                     "[场景编排2.2] 节点后处理完成 | project_id=%s | episode_id=%s | post_elapsed_ms=%s",
@@ -9063,27 +9052,21 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         prompt_file_lower = str(getattr(request, "prompt_file", "") or "").strip().lower()
         mode_lower = str(effective_scene_analysis_mode or "").strip().lower()
         function_name_lower = str(getattr(request, "function_name", "") or "").strip().lower()
-        is_scene_beats_stage = bool(
-            function_name_lower in {"script_analysis_stage_2_2_beats"}
-            or "scene_planning_2_2" in prompt_file_lower
-            or mode_lower in {"beats_generation", "scene_planning_beats", "scene_beats_only"}
+        stage_ctx = resolve_analyze_scene_stage(
+            effective_scene_analysis_mode=effective_scene_analysis_mode,
+            prompt_file=getattr(request, "prompt_file", ""),
+            function_name=getattr(request, "function_name", ""),
         )
-        is_subject_index_extraction_stage = bool(
-            function_name_lower in {"script_analysis_stage_2_1_assets_extraction", "assets_extraction"}
-            or "scene_planning_2_1" in prompt_file_lower
-            or mode_lower in {"assets_extraction", "stage2_1", "stage_2_1"}
-        )
+        is_scene_beats_stage = stage_ctx.is_scene_beats_stage
+        is_subject_index_extraction_stage = stage_ctx.is_subject_index_extraction_stage
+        is_script_optimization_stage = stage_ctx.is_script_optimization_stage
+        is_entity_design_phase = stage_ctx.is_entity_design_phase
         is_subject_index_consumer_stage = bool(
             "scene_planning_2_2" in prompt_file_lower
             or "entity_design" in prompt_file_lower
             or "subject_generation" in prompt_file_lower
             or mode_lower.startswith("2_pass_generate_assets")
             or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats"}
-        )
-        is_script_optimization_stage = bool(
-            function_name_lower in {"script_analysis_stage_1_script_optimization", "script_optimization"}
-            or "scene_planning_1_script_optimization" in prompt_file_lower
-            or mode_lower in {"script_optimization", "stage1", "stage_1"}
         )
 
         def _trim_to_scenes_block(raw_text: Any) -> str:
@@ -9973,9 +9956,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         _release_db_connection(db, "analyze_scene_llm_call")
 
-        # 1. Execute required Phase based on mode natively
-        is_entity_design_phase = (effective_scene_analysis_mode == "entity_design" or (effective_scene_analysis_mode or "").startswith("2_pass_generate_assets"))
-        
+        # Step 1: LLM call (all stages share the same transport loop).
         # Execute the LLM loop generically for all modes
         try:
             loop1_res = await _run_loop(messages)
@@ -10078,26 +10059,29 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "dedup_total_chars": dedup_total_chars,
         })
 
-        if finish_reason in ("incomplete", "error"):
-            logger.error(f"[analyze_scene] LLM returned finish_reason={finish_reason}; rejecting partial output.")
-            
-            # 记录断开的内容哪怕它不完整，以防止丢失上游(可能已扣费)的部分生成结果
-            # 这会将部分结果保存到 DB 的 llm_call_logs 表中
+        # Step 2: validate transport result (no staging persist on incomplete/error).
+        try:
+            validate_analyze_scene_llm_finish_reason(
+                finish_reason=finish_reason,
+                result_content=result_content,
+                provider=(config or {}).get("provider", ""),
+                model=(config or {}).get("model", ""),
+                episode_id=getattr(request, "episode_id", None),
+            )
+        except HTTPException as transport_exc:
             llm_service._safe_log_json("LLM_STREAM_INCOMPLETE_REJECTED", {
                 "provider": (config or {}).get("provider", ""),
                 "model": (config or {}).get("model", ""),
                 "episode_id": getattr(request, "episode_id", None),
-                "error": f"LLM connection dropped prematurely (reason: {finish_reason}).",
+                "error": str(getattr(transport_exc, "detail", "") or ""),
                 "response": {
                     "partial_content_len": len(result_content or ""),
-                    "partial_content": result_content
-                }
+                    "partial_content": result_content,
+                },
             })
-            
-            raise HTTPException(status_code=502, detail=f"LLM connection dropped prematurely (reason: {finish_reason}). Please retry.")
+            raise
 
-        # Persist raw LLM output as soon as it is available so phase-1/phase-2
-        # source text is retained even if later validation or billing fails.
+        # Step 3: persist staging fields only (no scenes/entities/shots import).
         saved_to_episode = False
         persisted_field_name = None
         persisted_chars_readback = None
@@ -10112,76 +10096,49 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
 
-            if effective_scene_analysis_mode == "entity_design" or (effective_scene_analysis_mode or "").startswith("2_pass_generate_assets"):
-                persisted_field_name = "ai_entity_design_result"
-                episode.ai_entity_design_result = result_content
-                logger.info(
-                    "[analyze_scene] Persisted raw phase2 output to ai_entity_design_result episode_id=%s chars=%s",
-                    episode_id,
-                    len(result_content or ""),
-                )
-            elif is_scene_beats_stage:
-                persisted_field_name = "ai_scene_analysis_scene_markdown"
-                episode.ai_scene_analysis_scene_markdown = result_content
-                logger.info(
-                    "[analyze_scene] Persisted stage2.2 output to ai_scene_analysis_scene_markdown episode_id=%s chars=%s",
-                    episode_id,
-                    len(result_content or ""),
-                )
-            else:
-                persisted_field_name = "ai_scene_analysis_result"
-                episode.ai_scene_analysis_result = result_content
-                # Keep subject index isolated to Stage 2.1 assets extraction output.
-                # Stage 2.2 scene markdown should not overwrite the subject index slot.
-                if is_subject_index_extraction_stage:
-                    episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
-                logger.info(
-                    "[analyze_scene] Persisted raw phase1 output to ai_scene_analysis_result episode_id=%s chars=%s",
-                    episode_id,
-                    len(result_content or ""),
-                )
-
-            saved_to_episode = True
-            debug_meta["saved_to_episode"] = True
-            debug_meta["saved_episode_id"] = episode_id
-            debug_meta["saved_field"] = persisted_field_name
             try:
-                db.commit()
-                try:
-                    db.refresh(episode)
-                except Exception:
-                    pass
+                persist_result = persist_analyze_scene_stage_result(
+                    db=db,
+                    episode=episode,
+                    result_content=result_content,
+                    stage_ctx=stage_ctx,
+                )
+            except Exception:
+                db.rollback()
+                raise
 
-                if persisted_field_name == "ai_entity_design_result":
-                    persisted_chars_readback = len(str(getattr(episode, "ai_entity_design_result", "") or ""))
-                elif persisted_field_name == "ai_scene_analysis_scene_markdown":
-                    persisted_chars_readback = len(str(getattr(episode, "ai_scene_analysis_scene_markdown", "") or ""))
-                else:
-                    persisted_chars_readback = len(str(getattr(episode, "ai_scene_analysis_result", "") or ""))
-                debug_meta["saved_chars_readback"] = persisted_chars_readback
+            saved_to_episode = bool(persist_result.get("saved_to_episode"))
+            persisted_field_name = persist_result.get("saved_field")
+            persisted_chars_readback = int(persist_result.get("saved_chars_readback") or 0)
+            debug_meta["saved_to_episode"] = saved_to_episode
+            debug_meta["saved_episode_id"] = persist_result.get("saved_episode_id")
+            debug_meta["saved_field"] = persisted_field_name
+            debug_meta["saved_chars_readback"] = persisted_chars_readback
+            debug_meta["stage_key"] = persist_result.get("stage_key")
+            if saved_to_episode:
                 logger.info(
-                    "[analyze_scene] persisted_readback episode_id=%s field=%s chars=%s raw_total_chars=%s dedup_total_chars=%s output_chars=%s",
+                    "[analyze_scene] persisted_readback episode_id=%s field=%s chars=%s raw_total_chars=%s dedup_total_chars=%s output_chars=%s stage_key=%s",
                     episode_id,
                     persisted_field_name,
                     persisted_chars_readback,
                     raw_total_chars,
                     dedup_total_chars,
                     len(result_content or ""),
+                    persist_result.get("stage_key"),
                 )
-            except Exception:
-                db.rollback()
-                raise
         else:
             debug_meta["saved_to_episode"] = False
             debug_meta["saved_field"] = None
             debug_meta["saved_chars_readback"] = 0
+            debug_meta["stage_key"] = stage_ctx.stage_key
             logger.warning(
-                "[analyze_scene] no_episode_id_skip_persist provider=%s model=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s",
+                "[analyze_scene] no_episode_id_skip_persist provider=%s model=%s output_chars=%s raw_total_chars=%s dedup_total_chars=%s stage_key=%s",
                 (config or {}).get("provider"),
                 (config or {}).get("model"),
                 len(result_content or ""),
                 raw_total_chars,
                 dedup_total_chars,
+                stage_ctx.stage_key,
             )
 
         # Phase 1/2 guard: Subject Index completeness warning is only for
@@ -20488,8 +20445,42 @@ def _build_shot_prompts(
             _add_scene_subject_candidate(part, candidates)
         return candidates
 
-    def _build_filtered_scene_subject_index() -> Tuple[str, set]:
-        scene_subject_keys = _extract_scene_subject_candidates()
+    def _normalize_subject_index_row_type(raw_type: Any) -> str:
+        value = str(raw_type or "").strip().lower()
+        value = re.sub(r"[\s_\-]+", "", value)
+        mapping = {
+            "character": "character",
+            "characters": "character",
+            "角色": "character",
+            "char": "character",
+            "prop": "prop",
+            "props": "prop",
+            "道具": "prop",
+            "environment": "environment",
+            "environments": "environment",
+            "env": "environment",
+            "场景": "environment",
+            "环境": "environment",
+            "poster": "poster",
+            "posters": "poster",
+            "海报": "poster",
+            "cover": "cover",
+            "covers": "cover",
+            "封面": "cover",
+            "coverposter": "cover",
+            "封面海报": "cover",
+        }
+        return mapping.get(value, "")
+
+    def _is_subject_index_row(parts: List[str], normalized_line: str) -> bool:
+        if len(parts) < 4:
+            return False
+        if not re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE):
+            return False
+        row_type = _normalize_subject_index_row_type(parts[1] if len(parts) > 1 else "")
+        return bool(row_type)
+
+    def _build_filtered_scene_subject_index(scene_subject_keys: set) -> Tuple[str, set]:
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
         subject_index_text = sanitize_subject_index_text(
             getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
@@ -20513,7 +20504,7 @@ def _build_shot_prompts(
 
             normalized_line = stripped.strip("|").strip()
             parts = [part.strip() for part in normalized_line.split("|")]
-            is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 4
+            is_subject_row = _is_subject_index_row(parts, normalized_line)
             if is_subject_row:
                 row_candidates = [parts[0], parts[2], parts[3]]
                 keep_row = not scene_subject_keys
@@ -20548,7 +20539,7 @@ def _build_shot_prompts(
                     continue
                 normalized_line = stripped.strip("|").strip()
                 parts = [part.strip() for part in normalized_line.split("|")]
-                is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 4
+                is_subject_row = _is_subject_index_row(parts, normalized_line)
                 if not is_subject_row:
                     continue
                 row_key = re.sub(r"\s+", "", stripped).lower()
@@ -20590,23 +20581,23 @@ def _build_shot_prompts(
         )
         return "\n".join(lines).strip() + "\n", index_subject_keys
 
-    def _entity_matches_subject_index_keys(ent: Entity, index_keys: set) -> bool:
-        if not index_keys:
+    def _entity_matches_candidate_keys(ent: Entity, candidate_keys: set) -> bool:
+        if not candidate_keys:
             return False
         for alias in [getattr(ent, "name", None), getattr(ent, "name_en", None)]:
             key = _scene_subject_compare_key(alias)
-            if key and key in index_keys:
+            if key and key in candidate_keys:
                 return True
         return False
 
-    def _build_subject_image_prompt_section(index_keys: set) -> str:
-        if not index_keys:
+    def _build_subject_image_prompt_section(candidate_keys: set) -> str:
+        if not candidate_keys:
             return ""
 
         prompt_lines: List[str] = []
         seen_entity_keys: set = set()
         for ent in project_entities:
-            if not _entity_matches_subject_index_keys(ent, index_keys):
+            if not _entity_matches_candidate_keys(ent, candidate_keys):
                 continue
             entity_key = _scene_subject_compare_key(getattr(ent, "name", None))
             if not entity_key or entity_key in seen_entity_keys:
@@ -20616,7 +20607,7 @@ def _build_shot_prompts(
             generation_prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
             if not generation_prompt_cn:
                 logger.info(
-                    "[_build_shot_prompts] subject index entity missing generation_prompt_cn scene_id=%s entity=%s",
+                    "[_build_shot_prompts] candidate-matched entity missing generation_prompt_cn scene_id=%s entity=%s",
                     getattr(scene, "id", None),
                     getattr(ent, "name", None),
                 )
@@ -20644,7 +20635,7 @@ def _build_shot_prompts(
         )
         return (
             "# Scene Subject Image Prompts (CN)\n"
-            "Authoritative Chinese image-generation prompts for entities listed in Scene Subject Index above. "
+            "Authoritative Chinese image-generation prompts for candidate-matched scene entities. "
             "When writing Video Content (CN), inherit stable visual identity, costume, material, and spatial anchors from these prompts; do not rename or reinvent subjects.\n"
             + "\n".join(prompt_lines)
             + "\n"
@@ -20818,8 +20809,9 @@ def _build_shot_prompts(
             parts.append(f"[{name}]: {desc}")
         env_narrative = "\n".join(parts)
     
-    scene_subject_index_section, scene_subject_index_keys = _build_filtered_scene_subject_index()
-    subject_image_prompt_section = _build_subject_image_prompt_section(scene_subject_index_keys)
+    scene_subject_keys = _extract_scene_subject_candidates()
+    scene_subject_index_section, _ = _build_filtered_scene_subject_index(scene_subject_keys)
+    subject_image_prompt_section = _build_subject_image_prompt_section(scene_subject_keys)
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -20922,6 +20914,37 @@ def _build_shot_regenerate_prompts(
         f"{safe_instructions}\n"
     )
     return system_prompt, user_prompt
+
+
+def _persist_scene_shot_generation_result(
+    *,
+    db: Session,
+    scene: Scene,
+    raw_text: str,
+    markdown_text: str,
+    rows: List[Dict[str, Any]],
+    usage: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Persist LLM shot-generation output to scene staging storage only.
+    This method does NOT import into Shot table.
+    """
+    result_wrapper = {
+        "timestamp": now_bj_iso(),
+        "raw_text": str(raw_text or ""),
+        "content": list(rows or []),
+        "usage": usage or {},
+        "warnings": [],
+    }
+    scene.ai_shots_result = str(markdown_text or "")
+    db.commit()
+    logger.info(
+        "[shot_generation.persist] saved scene_id=%s markdown_len=%s rows=%s",
+        getattr(scene, "id", None),
+        len(scene.ai_shots_result or ""),
+        len(result_wrapper.get("content") or []),
+    )
+    return result_wrapper
 
 @router.get("/scenes/{scene_id}/ai_prompt_preview")
 def ai_prompt_preview(
@@ -21923,23 +21946,16 @@ async def ai_generate_shots(
                 detail="Shot generation output may have lost rows during markdown parsing; regenerate before apply.",
             )
 
-        # 6. Save to DB (Scheme A)
-        # scenes.ai_shots_result stores the original LLM markdown response text
-        # for read-only auditing in the scene editor.
-        from datetime import datetime
+        # 6. Persist staging result only (no DB-shot import here)
+        result_wrapper = _persist_scene_shot_generation_result(
+            db=db,
+            scene=scene,
+            raw_text=raw_text_original,
+            markdown_text=response_content,
+            rows=shots_data,
+            usage=usage,
+        )
 
-        result_wrapper = {
-            "timestamp": now_bj_iso(),
-            "raw_text": raw_text_original,
-            "content": shots_data,
-            "usage": usage,
-            "warnings": [],
-        }
-
-        scene.ai_shots_result = response_content
-        db.commit()
-        
-        logger.info(f"[ai_generate_shots] Saved raw markdown to scene.ai_shots_result; parsed_shots={len(shots_data)} scene_id={scene_id}")
         logger.info(
             f"[ai_generate_shots] response_ready scene_id={scene_id} "
             f"response_keys={list(result_wrapper.keys())} content_count={len(result_wrapper.get('content') or [])}"
@@ -22316,6 +22332,265 @@ def update_scene_latest_ai_result(
         "content": validated_rows,
     }
 
+
+def _import_scene_shot_rows_to_db(
+    *,
+    scene_id: int,
+    db: Session,
+    scene: Scene,
+    episode: Episode,
+    project: Project,
+    shots_data: List[Dict[str, Any]],
+    skipped_row_errors: Optional[List[str]] = None,
+) -> List[Shot]:
+    """
+    Import validated shot rows into Shot table.
+    This method is DB-import only and does NOT call LLM or write staged LLM markdown.
+    """
+    skipped_row_errors = list(skipped_row_errors or [])
+
+    # 1) Extract and normalize associated entities text only (no auto-create).
+    try:
+        if shots_data:
+            existing_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
+            entity_map = {e.name: e for e in existing_entities}
+            new_entities_buffer = set()
+
+            for s_data in shots_data:
+                assoc_str = s_data.get("Associated Entities", "")
+                if assoc_str and assoc_str.lower() != "none" and assoc_str.strip():
+                    potential_names = [n.strip() for n in re.split(r'[,\uff0c]', assoc_str) if n.strip()]
+                    cleaned_names = []
+                    for name in potential_names:
+                        if name in entity_map:
+                            cleaned_names.append(name)
+                        elif name in new_entities_buffer:
+                            cleaned_names.append(name)
+                        else:
+                            cleaned_names.append(name)
+                    s_data["Associated Entities"] = ", ".join(cleaned_names)
+    except Exception as e:
+        logger.error(f"[Import] Entity auto-linking failed: {e}")
+
+    # 2) Replace scene shots with imported rows.
+    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    old_shot_map = {(str(s.shot_id or "").strip()): s for s in existing_shots if str(s.shot_id or "").strip()}
+    db.query(Shot).filter(Shot.scene_id == scene_id).delete()
+
+    def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
+        text = str(raw_text or "").strip()
+        if not text:
+            return "", "", "", ""
+        lines = [ln.strip() for ln in re.split(r"\n|<br\\s*/?>", text) if ln and ln.strip()]
+        start_cn = ""
+        video_cn = ""
+        keyframes_cn = ""
+        end_cn = ""
+        for ln in lines:
+            lower_ln = ln.lower()
+            if (
+                lower_ln.startswith("start frame:")
+                or lower_ln.startswith("start frame cn:")
+                or lower_ln.startswith("start:")
+                or ln.startswith("起始帧:")
+                or ln.startswith("起始帧：")
+            ):
+                start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
+                video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+            if (
+                lower_ln.startswith("keyframes:")
+                or lower_ln.startswith("keyframes cn:")
+                or lower_ln.startswith("keyframe:")
+                or ln.startswith("关键帧:")
+                or ln.startswith("关键帧：")
+            ):
+                keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+            if (
+                lower_ln.startswith("end frame:")
+                or lower_ln.startswith("end frame cn:")
+                or lower_ln.startswith("end:")
+                or ln.startswith("收尾帧:")
+                or ln.startswith("收尾帧：")
+                or ln.startswith("结束帧:")
+                or ln.startswith("结束帧：")
+            ):
+                end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
+                continue
+
+        if not start_cn and not video_cn and not keyframes_cn and not end_cn:
+            return text, text, text, text
+        if not end_cn and start_cn:
+            end_cn = start_cn
+        return start_cn, video_cn, keyframes_cn, end_cn
+
+    known_col_aliases = [
+        "Shot ID", "shot_id", "镜头ID",
+        "Shot Name", "shot_name", "镜头名称",
+        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号",
+        "Start Frame", "start_frame", "起始帧",
+        "End Frame", "end_frame", "结束帧",
+        "Video Content", "video_content", "视频内容",
+        "Duration (s)", "Duration", "duration", "时长", "时长(s)",
+        "Associated Entities", "associated_entities", "关联实体",
+        "Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）",
+        "Keyframes", "keyframes", "关键帧",
+        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
+        "Start Frame (CN)", "start_frame_cn", "起始帧（中文）",
+        "Video Content (CN)", "video_prompt_cn", "视频内容（中文）",
+        "Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文",
+        "End Frame (CN)", "end_frame_cn", "结束帧（中文）",
+    ]
+    known_col_norm_set = {_normalize_shot_markdown_col_key(k) for k in known_col_aliases}
+
+    for idx, s_data in enumerate(shots_data):
+        try:
+            dur_val = 2.0
+            raw_duration = _pick_shot_cell(s_data, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+            if raw_duration:
+                match = re.search(r"[\d\.]+", str(raw_duration))
+                dur_val = float(match.group()) if match else 2.0
+        except Exception:
+            dur_val = 2.0
+
+        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
+        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
+        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
+        associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
+        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
+        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
+        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
+        shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
+        shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "镜头名称"], "Shot")
+
+        prompt_cn_combined = _pick_shot_cell(
+            s_data,
+            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词"],
+            "",
+        )
+        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
+        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
+        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
+        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
+
+        if prompt_cn_combined:
+            start_cn_fallback, video_cn_fallback, keyframes_cn_fallback, end_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
+            if not start_frame_cn_text:
+                start_frame_cn_text = start_cn_fallback
+            if not end_frame_cn_text:
+                end_frame_cn_text = end_cn_fallback
+            if not video_prompt_cn_text:
+                video_prompt_cn_text = video_cn_fallback
+            if not keyframes_cn_text:
+                keyframes_cn_text = keyframes_cn_fallback
+
+        technical_notes_payload: Dict[str, Any] = {}
+        if start_frame_cn_text:
+            technical_notes_payload["start_frame_cn"] = start_frame_cn_text
+        if video_prompt_cn_text:
+            technical_notes_payload["video_prompt_cn"] = video_prompt_cn_text
+        if keyframes_cn_text:
+            technical_notes_payload["keyframes_cn"] = keyframes_cn_text
+        if end_frame_cn_text:
+            technical_notes_payload["end_frame_cn"] = end_frame_cn_text
+        if start_frame_cn_text or video_prompt_cn_text or keyframes_cn_text or end_frame_cn_text:
+            technical_notes_payload["shot_prompt_cn"] = "<br>".join([
+                f"起始帧：{start_frame_cn_text or ''}",
+                f"视频：{video_prompt_cn_text or ''}",
+                f"关键帧：{keyframes_cn_text or ''}",
+                f"收尾帧：{end_frame_cn_text or ''}",
+            ])
+
+        extra_columns: Dict[str, str] = {}
+        if isinstance(s_data, dict):
+            for raw_key, raw_val in s_data.items():
+                nk = _normalize_shot_markdown_col_key(raw_key)
+                if nk in known_col_norm_set:
+                    continue
+                val = str(raw_val or "").strip()
+                if not val:
+                    continue
+                rule = SHOT_MARKDOWN_COLUMN_WHITELIST.get(nk)
+                if rule and rule.get("target") == "tech_field":
+                    tech_key = str(rule.get("field") or "").strip()
+                    if tech_key:
+                        technical_notes_payload[tech_key] = val
+                        continue
+                extra_columns[str(raw_key)] = val
+        if extra_columns:
+            technical_notes_payload["shot_extra_columns"] = extra_columns
+
+        old_shot = old_shot_map.get(str(shot_id_text).strip())
+        preserved_image_url = None
+        preserved_video_url = None
+        if old_shot:
+            preserved_image_url = old_shot.image_url
+            preserved_video_url = old_shot.video_url
+            try:
+                old_tech = json.loads(old_shot.technical_notes) if old_shot.technical_notes else {}
+                for k, v in old_tech.items():
+                    if k.endswith("_url") or k.endswith("_urls") or k in {"start_frame_supported", "supports_start_frame"}:
+                        if k not in technical_notes_payload:
+                            technical_notes_payload[k] = v
+            except Exception:
+                pass
+
+        shot = Shot(
+            scene_id=scene_id,
+            project_id=project.id,
+            episode_id=episode.id,
+            shot_id=shot_id_text,
+            shot_name=shot_name_text,
+            scene_code=scene_code_text,
+            start_frame=start_frame_text,
+            end_frame=end_frame_text,
+            video_content=video_content_text,
+            duration=str(dur_val),
+            associated_entities=associated_entities_text,
+            shot_logic_cn=shot_logic_cn_text,
+            keyframes=keyframes_text,
+            prompt=video_content_text,
+            image_url=preserved_image_url,
+            video_url=preserved_video_url,
+            technical_notes=(json.dumps(technical_notes_payload, ensure_ascii=False) if technical_notes_payload else None),
+        )
+        db.add(shot)
+
+    db.commit()
+
+    applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    if skipped_row_errors:
+        try:
+            for shot in applied_shots:
+                notes_obj = {}
+                if getattr(shot, "technical_notes", None):
+                    try:
+                        notes_obj = json.loads(shot.technical_notes) if isinstance(shot.technical_notes, str) else {}
+                    except Exception:
+                        notes_obj = {}
+                notes_obj["import_warnings"] = list(
+                    dict.fromkeys([str(x or "").strip() for x in skipped_row_errors if str(x or "").strip()])
+                )
+                shot.technical_notes = json.dumps(notes_obj, ensure_ascii=False)
+            db.commit()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+        except Exception:
+            db.rollback()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+
+    logger.info(
+        "[shot_import.apply] applied scene_id=%s episode_id=%s project_id=%s rows=%s skipped=%s",
+        scene_id,
+        getattr(episode, "id", None),
+        getattr(project, "id", None),
+        len(applied_shots),
+        len(skipped_row_errors),
+    )
+    return applied_shots
+
 @router.post("/scenes/{scene_id}/apply_ai_result")
 def apply_scene_ai_result(
     scene_id: int,
@@ -22379,265 +22654,15 @@ def apply_scene_ai_result(
             skipped_row_errors[:5],
         )
                  
-    # 2. Extract and Auto-Link Entities (System Import Feature)
-    try:
-        if shots_data:
-            existing_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
-            entity_map = {e.name: e for e in existing_entities}
-            
-            new_entities_buffer = set()
-            
-            for s_data in shots_data:
-                assoc_str = s_data.get("Associated Entities", "")
-                if assoc_str and assoc_str.lower() != "none" and assoc_str.strip():
-                    # Split by comma or common separators
-                    potential_names = [n.strip() for n in re.split(r'[,\uff0c]', assoc_str) if n.strip()]
-                    
-                    cleaned_names = []
-                    for name in potential_names:
-                        # Check exist
-                        if name in entity_map:
-                            cleaned_names.append(name)
-                        elif name in new_entities_buffer:
-                            cleaned_names.append(name)
-                        else:
-                            # Do not auto-create subjects/entities from imported shots.
-                            # Keep the name as plain associated_entities text only.
-                            cleaned_names.append(name)
-                    
-                    # Update data with cleaned names (optional, normalized)
-                    s_data["Associated Entities"] = ", ".join(cleaned_names)
-
-    except Exception as e:
-        logger.error(f"[Import] Entity auto-linking failed: {e}")
-        # Continue with raw data if linking fails
-
-    # 3. Apply to DB (Delete old, Insert new)
-    # Note: We should probably keep existing shots if the user wants partial update, 
-    # but the requirement implies "Modify and Re-import", which usually means "This is the new list".
-    # Existing logic was "delete all", so we stick to that for "Apply".
-    
-    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
-    old_shot_map = {(str(s.shot_id or "").strip()): s for s in existing_shots if str(s.shot_id or "").strip()}
-
-    db.query(Shot).filter(Shot.scene_id == scene_id).delete()
-    
-    def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
-        text = str(raw_text or "").strip()
-        if not text:
-            return "", "", "", ""
-        lines = [ln.strip() for ln in re.split(r"\n|<br\\s*/?>", text) if ln and ln.strip()]
-        start_cn = ""
-        video_cn = ""
-        keyframes_cn = ""
-        end_cn = ""
-        for ln in lines:
-            lower_ln = ln.lower()
-            if (
-                lower_ln.startswith("start frame:")
-                or lower_ln.startswith("start frame cn:")
-                or lower_ln.startswith("start:")
-                or ln.startswith("起始帧:")
-                or ln.startswith("起始帧：")
-            ):
-                start_cn = re.sub(r"^(start\s*frame\s*(cn)?\s*:|start\s*:|起始帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
-                continue
-            if lower_ln.startswith("video:") or lower_ln.startswith("video cn:") or ln.startswith("视频:") or ln.startswith("视频提示词:"):
-                video_cn = re.sub(r"^(video\s*(cn)?\s*:|视频提示词\s*[:：]|视频\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
-                continue
-            if (
-                lower_ln.startswith("keyframes:")
-                or lower_ln.startswith("keyframes cn:")
-                or lower_ln.startswith("keyframe:")
-                or ln.startswith("关键帧:")
-                or ln.startswith("关键帧：")
-            ):
-                keyframes_cn = re.sub(r"^(key\s*frames?\s*(cn)?\s*:|关键帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
-                continue
-            if (
-                lower_ln.startswith("end frame:")
-                or lower_ln.startswith("end frame cn:")
-                or lower_ln.startswith("end:")
-                or ln.startswith("收尾帧:")
-                or ln.startswith("收尾帧：")
-                or ln.startswith("结束帧:")
-                or ln.startswith("结束帧：")
-            ):
-                end_cn = re.sub(r"^(end\s*frame\s*(cn)?\s*:|end\s*:|收尾帧\s*[:：]|结束帧\s*[:：])", "", ln, flags=re.IGNORECASE).strip()
-                continue
-
-        if not start_cn and not video_cn and not keyframes_cn and not end_cn:
-            # Backward-compatible fallback: treat one-line CN as shared text for 4 fields.
-            return text, text, text, text
-
-        if not end_cn and start_cn:
-            end_cn = start_cn
-        return start_cn, video_cn, keyframes_cn, end_cn
-
-    known_col_aliases = [
-        "Shot ID", "shot_id", "镜头ID",
-        "Shot Name", "shot_name", "镜头名称",
-        "Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号",
-        "Start Frame", "start_frame", "起始帧",
-        "End Frame", "end_frame", "结束帧",
-        "Video Content", "video_content", "视频内容",
-        "Duration (s)", "Duration", "duration", "时长", "时长(s)",
-        "Associated Entities", "associated_entities", "关联实体",
-        "Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）",
-        "Keyframes", "keyframes", "关键帧",
-        "Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词",
-        "Start Frame (CN)", "start_frame_cn", "起始帧（中文）",
-        "Video Content (CN)", "video_prompt_cn", "视频内容（中文）",
-        "Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文",
-        "End Frame (CN)", "end_frame_cn", "结束帧（中文）",
-    ]
-    known_col_norm_set = {_normalize_shot_markdown_col_key(k) for k in known_col_aliases}
-
-    for idx, s_data in enumerate(shots_data):
-        # Dur parsing
-        try:
-            dur_val = 2.0
-            raw_duration = _pick_shot_cell(s_data, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
-            if raw_duration:
-                match = re.search(r"[\d\.]+", str(raw_duration))
-                dur_val = float(match.group()) if match else 2.0
-        except:
-            dur_val = 2.0
-        
-        # Mapping Keys from LLM Table Headers to DB Columns
-        # Headers: Shot ID, Shot Name, Start Frame, End Frame, Video Content, Duration (s), Keyframes, Associated Entities, Shot Logic (CN)
-        
-        start_frame_text = _pick_shot_cell(s_data, ["Start Frame", "start_frame", "起始帧"], "")
-        end_frame_text = _pick_shot_cell(s_data, ["End Frame", "end_frame", "结束帧"], "")
-        video_content_text = _pick_shot_cell(s_data, ["Video Content", "video_content", "视频内容"], "")
-        associated_entities_text = _pick_shot_cell(s_data, ["Associated Entities", "associated_entities", "关联实体"], "")
-        shot_logic_cn_text = _pick_shot_cell(s_data, ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"], "")
-        keyframes_text = _pick_shot_cell(s_data, ["Keyframes", "keyframes", "关键帧"], "NO")
-        scene_code_text = _pick_shot_cell(s_data, ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场次号"], scene.scene_no or "")
-        shot_id_text = _pick_shot_cell(s_data, ["Shot ID", "shot_id", "镜头ID"], str(idx + 1))
-        shot_name_text = _pick_shot_cell(s_data, ["Shot Name", "shot_name", "镜头名称"], "Shot")
-
-        prompt_cn_combined = _pick_shot_cell(
-            s_data,
-            ["Prompt (CN)", "Prompts (CN)", "Prompt CN", "prompt_cn", "提示词（中文）", "中文提示词"],
-            "",
-        )
-        start_frame_cn_text = _pick_shot_cell(s_data, ["Start Frame (CN)", "start_frame_cn", "起始帧（中文）"], "")
-        video_prompt_cn_text = _pick_shot_cell(s_data, ["Video Content (CN)", "video_prompt_cn", "视频内容（中文）"], "")
-        keyframes_cn_text = _pick_shot_cell(s_data, ["Keyframes (CN)", "keyframes_cn", "关键帧（中文）", "关键帧中文"], "")
-        end_frame_cn_text = _pick_shot_cell(s_data, ["End Frame (CN)", "end_frame_cn", "结束帧（中文）"], "")
-
-        if prompt_cn_combined:
-            start_cn_fallback, video_cn_fallback, keyframes_cn_fallback, end_cn_fallback = _split_combined_cn_prompt(prompt_cn_combined)
-            if not start_frame_cn_text:
-                start_frame_cn_text = start_cn_fallback
-            if not end_frame_cn_text:
-                end_frame_cn_text = end_cn_fallback
-            if not video_prompt_cn_text:
-                video_prompt_cn_text = video_cn_fallback
-            if not keyframes_cn_text:
-                keyframes_cn_text = keyframes_cn_fallback
-
-        technical_notes_payload: Dict[str, Any] = {}
-        if start_frame_cn_text:
-            technical_notes_payload["start_frame_cn"] = start_frame_cn_text
-        if video_prompt_cn_text:
-            technical_notes_payload["video_prompt_cn"] = video_prompt_cn_text
-        if keyframes_cn_text:
-            technical_notes_payload["keyframes_cn"] = keyframes_cn_text
-        if end_frame_cn_text:
-            technical_notes_payload["end_frame_cn"] = end_frame_cn_text
-        if start_frame_cn_text or video_prompt_cn_text or keyframes_cn_text or end_frame_cn_text:
-            technical_notes_payload["shot_prompt_cn"] = "<br>".join([
-                f"起始帧：{start_frame_cn_text or ''}",
-                f"视频：{video_prompt_cn_text or ''}",
-                f"关键帧：{keyframes_cn_text or ''}",
-                f"收尾帧：{end_frame_cn_text or ''}",
-            ])
-
-        # Persist newly added/unknown markdown columns for round-trip safety.
-        extra_columns: Dict[str, str] = {}
-        if isinstance(s_data, dict):
-            for raw_key, raw_val in s_data.items():
-                nk = _normalize_shot_markdown_col_key(raw_key)
-                if nk in known_col_norm_set:
-                    continue
-                val = str(raw_val or "").strip()
-                if not val:
-                    continue
-                rule = SHOT_MARKDOWN_COLUMN_WHITELIST.get(nk)
-                if rule and rule.get("target") == "tech_field":
-                    tech_key = str(rule.get("field") or "").strip()
-                    if tech_key:
-                        technical_notes_payload[tech_key] = val
-                        continue
-                extra_columns[str(raw_key)] = val
-        if extra_columns:
-            technical_notes_payload["shot_extra_columns"] = extra_columns
-
-        old_shot = old_shot_map.get(str(shot_id_text).strip())
-        preserved_image_url = None
-        preserved_video_url = None
-        if old_shot:
-            preserved_image_url = old_shot.image_url
-            preserved_video_url = old_shot.video_url
-            try:
-                old_tech = json.loads(old_shot.technical_notes) if old_shot.technical_notes else {}
-                for k, v in old_tech.items():
-                    if k.endswith("_url") or k.endswith("_urls") or k in {"start_frame_supported", "supports_start_frame"}:
-                        if k not in technical_notes_payload:
-                            technical_notes_payload[k] = v
-            except:
-                pass
-
-        shot = Shot(
-            scene_id=scene_id,
-            project_id=project.id,
-            episode_id=episode.id,
-
-            shot_id=shot_id_text,
-            shot_name=shot_name_text,
-            scene_code=scene_code_text,
-
-            start_frame=start_frame_text,
-            end_frame=end_frame_text,
-            video_content=video_content_text,
-            duration=str(dur_val),
-
-            associated_entities=associated_entities_text,
-            shot_logic_cn=shot_logic_cn_text,
-            keyframes=keyframes_text,
-
-            # Legacy/Internal
-            prompt=video_content_text,
-            image_url=preserved_image_url,
-            video_url=preserved_video_url,
-            technical_notes=(json.dumps(technical_notes_payload, ensure_ascii=False) if technical_notes_payload else None),
-        )
-        db.add(shot)
-        
-    db.commit()
-    
-    # Return the real shots
-    applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
-    if skipped_row_errors:
-        try:
-            for shot in applied_shots:
-                notes_obj = {}
-                if getattr(shot, "technical_notes", None):
-                    try:
-                        notes_obj = json.loads(shot.technical_notes) if isinstance(shot.technical_notes, str) else {}
-                    except Exception:
-                        notes_obj = {}
-                notes_obj["import_warnings"] = list(dict.fromkeys([str(x or "").strip() for x in skipped_row_errors if str(x or "").strip()]))
-                shot.technical_notes = json.dumps(notes_obj, ensure_ascii=False)
-            db.commit()
-            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
-        except Exception:
-            db.rollback()
-            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
-
-    return applied_shots
+    return _import_scene_shot_rows_to_db(
+        scene_id=scene_id,
+        db=db,
+        scene=scene,
+        episode=episode,
+        project=project,
+        shots_data=shots_data,
+        skipped_row_errors=skipped_row_errors,
+    )
 
 @router.get("/scenes/{scene_id}/shots", response_model=List[ShotOut])
 def read_shots(

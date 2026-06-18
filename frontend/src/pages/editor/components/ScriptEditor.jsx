@@ -322,8 +322,15 @@ const getAnalysisSessionStorageKey = (episodeId) => {
 const loadAnalysisSessionSnapshot = (episodeId) => {
     try {
         const key = getAnalysisSessionStorageKey(episodeId);
-        if (!key || !window?.sessionStorage) return null;
-        const raw = window.sessionStorage.getItem(key);
+        if (!key || !window?.localStorage) return null;
+        let raw = window.localStorage.getItem(key);
+        if (!raw && window?.sessionStorage) {
+            raw = window.sessionStorage.getItem(key);
+            if (raw) {
+                window.localStorage.setItem(key, raw);
+                window.sessionStorage.removeItem(key);
+            }
+        }
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         return parsed && typeof parsed === 'object' ? parsed : null;
@@ -335,10 +342,36 @@ const loadAnalysisSessionSnapshot = (episodeId) => {
 const saveAnalysisSessionSnapshot = (episodeId, snapshot) => {
     try {
         const key = getAnalysisSessionStorageKey(episodeId);
-        if (!key || !window?.sessionStorage || !snapshot || typeof snapshot !== 'object') return;
-        window.sessionStorage.setItem(key, JSON.stringify(snapshot));
+        if (!key || !window?.localStorage || !snapshot || typeof snapshot !== 'object') return;
+        window.localStorage.setItem(key, JSON.stringify(snapshot));
+        try {
+            window.sessionStorage?.removeItem(key);
+        } catch (_) {
+            // Ignore sessionStorage cleanup failures.
+        }
     } catch (_) {
-        // Ignore sessionStorage failures.
+        // Ignore localStorage failures.
+    }
+};
+
+const clearAnalysisSessionProgressSnapshot = (episodeId) => {
+    try {
+        const id = Number(episodeId || 0);
+        if (!id) return;
+        const prev = loadAnalysisSessionSnapshot(id);
+        if (!prev || typeof prev !== 'object') return;
+        saveAnalysisSessionSnapshot(id, {
+            ...prev,
+            progressUi: {
+                dismissed: false,
+                flowStatus: { phase: 'idle', message: '' },
+                flowHistory: [],
+                uiReport: null,
+            },
+            savedAt: Date.now(),
+        });
+    } catch (_) {
+        // Ignore localStorage failures.
     }
 };
 
@@ -455,6 +488,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         running: false,
     });
     const autoZeroReportHandledRef = useRef({ key: '', handledAt: 0 });
+    const analysisTimerStartedAtRef = useRef(0);
     const lastSceneImportSuccessRef = useRef({ episodeId: null, count: 0, at: 0 });
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
@@ -1085,9 +1119,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
     }, []);
 
+    const beginAnalysisTimer = useCallback((startedAt = Date.now()) => {
+        const ts = Number(startedAt || Date.now());
+        analysisTimerStartedAtRef.current = Number.isFinite(ts) && ts > 0 ? ts : Date.now();
+        setAnalysisHeartbeatTick(0);
+    }, []);
+
     useEffect(() => {
         if (!isAnalyzing) {
             setAnalysisHeartbeatTick(0);
+            analysisTimerStartedAtRef.current = 0;
             return;
         }
 
@@ -1100,7 +1141,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const analysisHeartbeatElapsedMs = useMemo(() => {
         if (!isAnalyzing) return 0;
-        const startedAt = Number(analysisUiReport?.startedAt || 0);
+        const startedAt = Number(
+            analysisTimerStartedAtRef.current
+            || analysisUiReport?.startedAt
+            || 0
+        );
         if (!Number.isFinite(startedAt) || startedAt <= 0) return 0;
         return Math.max(0, Date.now() - startedAt);
     }, [isAnalyzing, analysisUiReport?.startedAt, analysisHeartbeatTick]);
@@ -3225,9 +3270,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const shouldSetRunningReport = options?.setRunningReport !== false;
         if (shouldSetRunningReport) {
+            const restartStartedAt = Date.now();
+            beginAnalysisTimer(restartStartedAt);
             setAnalysisUiReport(prev => ({
                 status: 'running',
-                startedAt: Number(prev?.startedAt || Date.now()) || Date.now(),
+                startedAt: restartStartedAt,
                 durationMs: 0,
                 phaseTimings: prev?.phaseTimings || null,
                 importReport: prev?.importReport || null,
@@ -3263,7 +3310,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             repairedCount: Array.isArray(repairedDbScenes) ? repairedDbScenes.length : 0,
             importReport: repairImportReport || null,
         };
-    }, [activeEpisode?.id, deleteScene, doImportText, fetchScenes, onLog, parseMarkdownTable, t, validateAutoSceneTableImport]);
+    }, [activeEpisode?.id, beginAnalysisTimer, deleteScene, doImportText, fetchScenes, onLog, parseMarkdownTable, t, validateAutoSceneTableImport]);
 
     
 
@@ -4600,9 +4647,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
         setAnalysisFlowStatus(flowStatus);
         setAnalysisFlowStatusHistory(flowHistory);
-        if (uiReport) setAnalysisUiReport(uiReport);
+        if (uiReport) {
+            setAnalysisUiReport(uiReport);
+            if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
+                beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
+            }
+        }
         return true;
-    }, [hasPersistableAnalysisProgress]);
+    }, [beginAnalysisTimer, hasPersistableAnalysisProgress]);
 
     const dismissAnalysisProgressPanel = useCallback(() => {
         analysisProgressDismissedRef.current = true;
@@ -4782,13 +4834,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const elapsedMs = Math.max(0, Date.now() - startedAt);
         const taskId = String(activeRun?.taskId || marker?.taskId || '').trim();
 
+        beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         if (taskId) setActiveAnalysisTaskId(taskId);
         setAnalysisFlowStatus({
             phase: phase === 2 ? 'assets_gen' : (phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
             message: t('后台分析任务进行中，正在恢复连接...', 'Background analysis task in progress, reconnecting...'),
         });
-        setAnalysisUiReport((prev) => (prev?.status === 'running' ? prev : {
+        setAnalysisUiReport({
             status: 'running',
             startedAt,
             durationMs: elapsedMs,
@@ -4797,9 +4850,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             runtimeMeta: null,
             warning: '',
             error: '',
-        }));
+        });
         return true;
-    }, [activeEpisode?.id, clearStalePhase2AssetMarkerIfDesignExists, loadAnalysisTaskMarker, t]);
+    }, [activeEpisode?.id, beginAnalysisTimer, clearStalePhase2AssetMarkerIfDesignExists, loadAnalysisTaskMarker, t]);
 
     const isRecoverableAnalysisError = useCallback((error) => {
         if (!error || isTaskCanceledError(error)) return false;
@@ -5838,6 +5891,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const markerStartedAt = Number(marker?.startedAt || 0);
         const startedAt = (Number.isFinite(markerStartedAt) && markerStartedAt > 0) ? markerStartedAt : Date.now();
         const elapsedMs = Math.max(0, Date.now() - startedAt);
+        beginAnalysisTimer(startedAt);
         const remainingTimeoutMs = Math.max(0, ANALYSIS_TASK_MAX_AGE_MS - elapsedMs);
         const markerTaskIds = Array.from(new Set([
             String(marker?.taskId || '').trim(),
@@ -6312,6 +6366,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode?.id,
         ANALYSIS_TASK_MAX_AGE_MS,
+        beginAnalysisTimer,
         buildSubjectConsistencyReport,
         clearAnalysisTaskMarker,
         clearStalePhase2AssetMarkerIfDesignExists,
@@ -6354,6 +6409,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const startedAt = Number(entry.startedAt || Date.now());
         const elapsedMs = Math.max(0, Date.now() - startedAt);
+        beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         if (entry.taskId) {
             setActiveAnalysisTaskId(String(entry.taskId));
@@ -6364,7 +6420,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
             });
         }
-        setAnalysisUiReport((prev) => (prev?.status === 'running' ? prev : {
+        setAnalysisUiReport({
             status: 'running',
             startedAt,
             durationMs: elapsedMs,
@@ -6373,7 +6429,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             runtimeMeta: null,
             warning: '',
             error: '',
-        }));
+        });
 
         try {
             await entry.promise;
@@ -6429,6 +6485,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return true;
     }, [
         activeEpisode?.id,
+        beginAnalysisTimer,
         isTaskCanceledError,
         loadAnalysisTaskMarker,
         localizeAnalysisFailureMessage,
@@ -7722,6 +7779,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             if (onLog) onLog('AI Script Analysis restart: clearing existing outputs and scenes...', 'process');
 
+            releaseEpisodeAnalysisRun(activeEpisode.id);
+            clearAnalysisTaskMarker(activeEpisode.id);
+            clearAnalysisSessionProgressSnapshot(activeEpisode.id);
+            analysisTimerStartedAtRef.current = 0;
+
             const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
             if (existingScenes && existingScenes.length > 0) {
                 await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
@@ -7965,9 +8027,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         forceRegenerateRef.current = false;
         const episodeId = activeEpisode?.id;
 
-        const existingRun = episodeId ? getEpisodeAnalysisRun(episodeId) : null;
-        if (existingRun?.promise) {
-            return reattachToExistingAnalysisRun(existingRun);
+        if (forceRegenerate && episodeId) {
+            releaseEpisodeAnalysisRun(episodeId);
+        } else {
+            const existingRun = episodeId ? getEpisodeAnalysisRun(episodeId) : null;
+            if (existingRun?.promise) {
+                return reattachToExistingAnalysisRun(existingRun);
+            }
         }
         if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
@@ -8003,6 +8069,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const runAnalysisPipeline = async () => {
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
+        beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({
@@ -8507,9 +8574,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         forceRegenerateRef.current = false;
         const episodeId = activeEpisode.id;
 
-        const existingRun = getEpisodeAnalysisRun(episodeId);
-        if (existingRun?.promise) {
-            return reattachToExistingAnalysisRun(existingRun);
+        if (forceRegenerate) {
+            releaseEpisodeAnalysisRun(episodeId);
+        } else {
+            const existingRun = getEpisodeAnalysisRun(episodeId);
+            if (existingRun?.promise) {
+                return reattachToExistingAnalysisRun(existingRun);
+            }
         }
         if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
@@ -8550,6 +8621,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const runAnalysisPipeline = async () => {
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
+        beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({

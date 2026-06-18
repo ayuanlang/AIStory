@@ -9,6 +9,26 @@ from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
 from app.models import all_models as models
+from .analyze_scene_stages import (
+    STAGE_ASSETS_EXTRACTION,
+    STAGE_ENTITY_DESIGN,
+    STAGE_GENERIC,
+    STAGE_SCENE_MARKDOWN,
+    STAGE_SCRIPT_OPTIMIZATION,
+    AnalyzeSceneStageContext,
+    extract_scene_markdown_text_from_analyze_result,
+    import_analyze_scene_stage_result,
+    import_scene_markdown_stage,
+    persist_analyze_scene_stage_result,
+    persist_assets_extraction_stage,
+    persist_entity_design_stage,
+    persist_generic_analyze_scene_stage,
+    persist_scene_markdown_stage,
+    persist_script_optimization_stage,
+    resolve_analyze_scene_stage,
+    validate_analyze_scene_llm_finish_reason,
+    validate_scene_markdown_import_text,
+)
 from .registry import (
     DEFAULT_STAGE3_AUTO_START,
     SCRIPT_ANALYSIS_FLOW_CONFIG_KEY,
@@ -587,11 +607,17 @@ def resolve_progress_issue(
 
 
 __all__ = [
+    "AnalyzeSceneStageContext",
     "DEFAULT_STAGE3_AUTO_START",
     "NODE_STATUS_VALUES",
     "SCENES_BLOCK_END_TOKEN",
     "SCENES_BLOCK_START_TOKEN",
     "SCRIPT_ANALYSIS_FLOW_CONFIG_KEY",
+    "STAGE_ASSETS_EXTRACTION",
+    "STAGE_ENTITY_DESIGN",
+    "STAGE_GENERIC",
+    "STAGE_SCENE_MARKDOWN",
+    "STAGE_SCRIPT_OPTIMIZATION",
     "SceneMarkerParseError",
     "build_script_analysis_flow_plan",
     "get_script_analysis_flow_registry",
@@ -599,8 +625,20 @@ __all__ = [
     "normalize_script_analysis_flow_config",
     "parse_scene_units_from_markers",
     "parse_scene_units_from_scenes_table",
+    "extract_scene_markdown_text_from_analyze_result",
+    "import_analyze_scene_stage_result",
+    "import_scene_markdown_stage",
+    "persist_analyze_scene_stage_result",
+    "persist_assets_extraction_stage",
+    "persist_entity_design_stage",
+    "persist_generic_analyze_scene_stage",
+    "persist_scene_markdown_stage",
+    "persist_script_optimization_stage",
     "raise_progress_issue",
+    "resolve_analyze_scene_stage",
     "resolve_progress_issue",
     "sync_scene_units_from_script_text",
     "upsert_pipeline_node_status",
+    "validate_analyze_scene_llm_finish_reason",
+    "validate_scene_markdown_import_text",
 ]
