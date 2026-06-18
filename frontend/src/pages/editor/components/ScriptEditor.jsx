@@ -1154,10 +1154,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [analysisFlowStatus]);
 
     useEffect(() => {
-        if (!isAnalyzing && analysisFlowStatus?.phase === 'idle' && !analysisUiReport) {
-            setAnalysisFlowStatusHistory([]);
-        }
-    }, [analysisFlowStatus?.phase, analysisUiReport, isAnalyzing]);
+        latestAnalysisProgressUiRef.current = {
+            flowStatus: analysisFlowStatus,
+            flowHistory: analysisFlowStatusHistory,
+            uiReport: analysisUiReport,
+        };
+    }, [analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport]);
 
     useEffect(() => {
         if (isAnalyzing) return;
@@ -4413,6 +4415,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
     const detachedAnalysisRunEpisodeRef = useRef(null);
     const mountResumeReadyRef = useRef(false);
+    const analysisProgressDismissedRef = useRef(false);
+    const latestAnalysisProgressUiRef = useRef({
+        flowStatus: { phase: 'idle', message: '' },
+        flowHistory: [],
+        uiReport: null,
+    });
     const scriptEditorMountedRef = useRef(true);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
@@ -4533,7 +4541,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const persistAnalysisSessionSnapshot = useCallback((episodeId) => {
         const id = Number(episodeId || 0);
         if (!id) return;
+        const prev = loadAnalysisSessionSnapshot(id) || {};
+        const ui = latestAnalysisProgressUiRef.current;
+        const dismissed = analysisProgressDismissedRef.current;
+        const progressUi = dismissed
+            ? {
+                dismissed: true,
+                flowStatus: { phase: 'idle', message: '' },
+                flowHistory: [],
+                uiReport: null,
+            }
+            : {
+                dismissed: false,
+                flowStatus: (ui.flowStatus && typeof ui.flowStatus === 'object')
+                    ? ui.flowStatus
+                    : { phase: 'idle', message: '' },
+                flowHistory: Array.isArray(ui.flowHistory) ? ui.flowHistory : [],
+                uiReport: (ui.uiReport && typeof ui.uiReport === 'object') ? ui.uiReport : null,
+            };
         saveAnalysisSessionSnapshot(id, {
+            ...prev,
             episodeId: id,
             autoZeroReportHandledKey: String(autoZeroReportHandledRef.current?.key || ''),
             fallbackRetry: {
@@ -4543,9 +4570,65 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneRegenAttempts: Number(analysisFallbackRetryRef.current?.sceneRegenAttempts || 0),
                 running: false,
             },
+            progressUi,
             savedAt: Date.now(),
         });
     }, []);
+
+    const hasPersistableAnalysisProgress = useCallback((flowStatus, flowHistory, uiReport) => {
+        if (Array.isArray(flowHistory) && flowHistory.length > 0) return true;
+        if (uiReport && typeof uiReport === 'object') return true;
+        const phase = String(flowStatus?.phase || '').trim().toLowerCase();
+        return Boolean(phase && phase !== 'idle');
+    }, []);
+
+    const restoreAnalysisProgressFromSession = useCallback((episodeId) => {
+        const id = Number(episodeId || 0);
+        if (!id) return false;
+        const snapshot = loadAnalysisSessionSnapshot(id);
+        const progressUi = snapshot?.progressUi;
+        if (!progressUi || progressUi.dismissed === true) {
+            analysisProgressDismissedRef.current = Boolean(progressUi?.dismissed);
+            return false;
+        }
+        analysisProgressDismissedRef.current = false;
+        const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
+            ? progressUi.flowStatus
+            : { phase: 'idle', message: '' };
+        const flowHistory = Array.isArray(progressUi.flowHistory) ? progressUi.flowHistory : [];
+        const uiReport = (progressUi.uiReport && typeof progressUi.uiReport === 'object') ? progressUi.uiReport : null;
+        if (!hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
+        setAnalysisFlowStatus(flowStatus);
+        setAnalysisFlowStatusHistory(flowHistory);
+        if (uiReport) setAnalysisUiReport(uiReport);
+        return true;
+    }, [hasPersistableAnalysisProgress]);
+
+    const dismissAnalysisProgressPanel = useCallback(() => {
+        analysisProgressDismissedRef.current = true;
+        setAnalysisFlowStatus({ phase: 'idle', message: '' });
+        setAnalysisFlowStatusHistory([]);
+        setAnalysisUiReport(null);
+        if (activeEpisode?.id) {
+            persistAnalysisSessionSnapshot(activeEpisode.id);
+        }
+    }, [activeEpisode?.id, persistAnalysisSessionSnapshot]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id || analysisProgressDismissedRef.current) return;
+        if (!hasPersistableAnalysisProgress(analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport)) return;
+        const timer = setTimeout(() => {
+            persistAnalysisSessionSnapshot(activeEpisode.id);
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [
+        activeEpisode?.id,
+        analysisFlowStatus,
+        analysisFlowStatusHistory,
+        analysisUiReport,
+        hasPersistableAnalysisProgress,
+        persistAnalysisSessionSnapshot,
+    ]);
 
     const getAnalysisTaskStorageKey = useCallback((episodeId) => {
         if (!episodeId) return '';
@@ -6438,6 +6521,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         (async () => {
             if (!activeEpisode?.id) return;
             ensureAnalysisFallbackState(activeEpisode.id);
+            restoreAnalysisProgressFromSession(activeEpisode.id);
             await clearStaleAnalysisMarkerIfEpisodeComplete(activeEpisode.id, activeEpisode, 'mount-precheck');
             if (cancelled) return;
             await tryResumePendingAnalysis();
@@ -6467,7 +6551,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
         };
-    }, [activeEpisode, activeEpisode?.id, clearStaleAnalysisMarkerIfEpisodeComplete, ensureAnalysisFallbackState, loadAnalysisTaskMarker, onLog, persistAnalysisSessionSnapshot, tryResumePendingAnalysis]);
+    }, [activeEpisode, activeEpisode?.id, clearStaleAnalysisMarkerIfEpisodeComplete, ensureAnalysisFallbackState, loadAnalysisTaskMarker, onLog, persistAnalysisSessionSnapshot, restoreAnalysisProgressFromSession, tryResumePendingAnalysis]);
 
     useEffect(() => {
         const refreshPendingAnalysis = () => {
@@ -7917,6 +8001,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         lastAutoSubjectsImportRef.current = { signature: '', result: null };
         const startedAt = Date.now();
         const runAnalysisPipeline = async () => {
+        analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -8463,6 +8548,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const startedAt = Date.now();
         const runAnalysisPipeline = async () => {
+        analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -9388,6 +9474,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let importReport = null;
         let runtimeMeta = null;
 
+        analysisProgressDismissedRef.current = false;
         setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
         analysisStopRequestedRef.current = false;
@@ -9727,6 +9814,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         phase2RetryOptionsRef.current = options;
         analysisStopRequestedRef.current = false;
+        analysisProgressDismissedRef.current = false;
         activeAnalysisTaskIdsRef.current.clear();
         setActiveAnalysisTaskId('');
         setIsRetryingPhase2(true);
@@ -11053,11 +11141,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         {!isAnalyzing && (
                             <button
                                 type="button"
-                                onClick={() => {
-                                    setAnalysisFlowStatus({ phase: 'idle', message: '' });
-                                    setAnalysisFlowStatusHistory([]);
-                                    setAnalysisUiReport(null);
-                                }}
+                                onClick={dismissAnalysisProgressPanel}
                                 className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
                             >
                                 {t('关闭', 'Close')}
