@@ -303,14 +303,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     
     const { generationConfig, saveToolConfig, savedToolConfigs, llmConfig } = useStore();
     const functionApiConfigs = useFunctionApis();
-    const [sd2AutoDuration, setSd2AutoDuration] = useState(() => {
-        try {
-            const stored = localStorage.getItem('aiStory_sd2AutoDuration');
-            return stored === null ? false : stored === 'true';
-        } catch {
-            return false;
-        }
-    });
+    const [sd2AutoDuration, setSd2AutoDuration] = useState(false);
     const [selectedVideoApiId, setSelectedVideoApiId] = useState(() => {
         try {
             return Number(localStorage.getItem('func_api_generate_videos') || 0) || null;
@@ -360,18 +353,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const getShotDurationDisplayValue = useCallback((shotDuration) => {
         if (isSd2AutoDurationActive) return '-1';
         const normalized = String(shotDuration ?? '').trim();
+        if (normalized === '-1') return '';
         return normalized || '';
     }, [isSd2AutoDurationActive]);
 
     const resolveShotVideoDurationParam = useCallback((shotDuration) => {
-        const normalized = String(shotDuration ?? '').trim();
-        if (normalized === '-1') return -1;
-        const tableDuration = parseFloat(shotDuration);
-        const fallbackDuration = Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
         if (isSd2AutoDurationActive) {
             return -1;
         }
-        return fallbackDuration;
+        const normalized = String(shotDuration ?? '').trim();
+        if (normalized === '-1') return 5;
+        const tableDuration = parseFloat(shotDuration);
+        return Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
     }, [isSd2AutoDurationActive]);
 
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -519,9 +512,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const handleToggleSd2AutoDuration = useCallback((checked) => {
         setSd2AutoDuration(checked);
-        try {
-            localStorage.setItem('aiStory_sd2AutoDuration', String(checked));
-        } catch {}
         if (!checked) {
             restoreEditingShotDurationFromTable();
         }
