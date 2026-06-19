@@ -343,6 +343,40 @@ const Editor = ({
         });
     }, [resolveEpisodeOrderNumber]);
 
+    const DEFERRED_EPISODE_FIELDS = useMemo(() => ([
+        'script_content',
+        'ai_scene_analysis_result',
+        'ai_scene_analysis_scene_markdown',
+        'ai_scene_analysis_subject_index',
+        'ai_scene_analysis_adaptation',
+        'ai_entity_design_result',
+        'ai_stage_outputs',
+        'character_profiles',
+    ]), []);
+
+    const mergeEpisodeListWithCachedFields = useCallback((incomingEps, previousEps) => {
+        const prevById = new Map(
+            (Array.isArray(previousEps) ? previousEps : []).map((ep) => [String(ep.id), ep])
+        );
+        return sortEpisodesForEditor(incomingEps).map((ep) => {
+            const previous = prevById.get(String(ep.id));
+            if (!previous) return ep;
+
+            const merged = { ...previous, ...ep };
+            for (const field of DEFERRED_EPISODE_FIELDS) {
+                const incomingValue = ep[field];
+                const cachedValue = previous[field];
+                if ((incomingValue === undefined || incomingValue === null) && cachedValue != null) {
+                    merged[field] = cachedValue;
+                }
+            }
+            if (ep.script_content === undefined && previous._fullLoaded) {
+                merged._fullLoaded = previous._fullLoaded;
+            }
+            return merged;
+        });
+    }, [DEFERRED_EPISODE_FIELDS, sortEpisodesForEditor]);
+
     const resolveEpisodeDisplayNumber = useCallback((episode) => {
         const directNumber = Number(episode?.episode_number);
         if (Number.isFinite(directNumber) && directNumber > 0) return directNumber;
@@ -350,8 +384,11 @@ const Editor = ({
     }, []);
 
     const hydrateEpisodesState = useCallback((eps) => {
-        const normalized = sortEpisodesForEditor(eps);
-        setEpisodes(normalized);
+        let normalized = [];
+        setEpisodes((prev) => {
+            normalized = mergeEpisodeListWithCachedFields(eps, prev);
+            return normalized;
+        });
         if (normalized.length > 0) {
             setActiveEpisodeId((prev) => {
                 const hasActiveEpisode = !!prev && normalized.some((ep) => String(ep.id) === String(prev));
@@ -361,7 +398,7 @@ const Editor = ({
             setActiveEpisodeId(null);
         }
         return normalized;
-    }, [sortEpisodesForEditor]);
+    }, [mergeEpisodeListWithCachedFields]);
 
     const refreshEpisodesForEditor = useCallback(async () => {
         if (!id) return [];
@@ -2755,8 +2792,7 @@ const Editor = ({
             
             // Always refresh episodes to show new scripts/scenes
             const fresh = await fetchEpisodes(id);
-            const sortedFresh = sortEpisodesForEditor(fresh);
-            setEpisodes(sortedFresh);
+            setEpisodes((prev) => mergeEpisodeListWithCachedFields(fresh, prev));
 
             if (reloadRequired) {
                 // Force Overview refresh if needed

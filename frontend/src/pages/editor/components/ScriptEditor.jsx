@@ -378,6 +378,7 @@ const slimAnalysisUiReportForSnapshot = (uiReport) => {
         durationMs: uiReport.durationMs,
         warning: uiReport.warning,
         error: uiReport.error,
+        reviewIssues: Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : [],
         runTag: uiReport.runTag,
         resolvedSceneImportCount: uiReport.resolvedSceneImportCount,
         resolvedAssetHandledCounts: uiReport.resolvedAssetHandledCounts,
@@ -541,6 +542,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
+    const [analysisReviewIssues, setAnalysisReviewIssues] = useState([]);
     const analysisFallbackRetryRef = useRef({
         episodeId: null,
         sceneBeatsAttempts: 0,
@@ -1149,6 +1151,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             },
         };
     }, [analysisUiReport]);
+
+    const displayedReviewIssues = useMemo(() => {
+        if (Array.isArray(analysisReviewIssues) && analysisReviewIssues.length > 0) {
+            return analysisReviewIssues;
+        }
+        if (Array.isArray(analysisUiReport?.reviewIssues) && analysisUiReport.reviewIssues.length > 0) {
+            return analysisUiReport.reviewIssues;
+        }
+        return [];
+    }, [analysisReviewIssues, analysisUiReport?.reviewIssues]);
 
     const computeAnalysisPhaseTimings = useCallback((marks) => {
         const toNumber = (v) => {
@@ -2423,6 +2435,56 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return Array.from(new Set(issues));
     };
 
+    const localizeFollowupIssueForDisplay = useCallback((issue) => {
+        const text = String(issue || '').trim();
+        if (!text) return '';
+        const missingMatch = text.match(/missing subjects in JSON\s*->\s*(.+)$/i);
+        if (missingMatch?.[1]) {
+            return t(
+                `实体一致性：场景/清单提到但资产 JSON 缺失：${missingMatch[1]}`,
+                `Entity consistency: mentioned in scenes/list but missing in asset JSON: ${missingMatch[1]}`
+            );
+        }
+        if (/Subject Index\/Entities consistency check failed/i.test(text)) {
+            return t('实体一致性：角色/道具/场景清单与资产 JSON 不一致。', 'Entity consistency: subject list does not match asset JSON.');
+        }
+        if (/^Analysis warning:\s*/i.test(text)) {
+            return text.replace(/^Analysis warning:\s*/i, `${t('分析告警', 'Analysis warning')}: `);
+        }
+        return text;
+    }, [t]);
+
+    const buildAnalysisReviewIssues = useCallback((subjectReport, followupIssues = []) => {
+        const fromFollowup = (followupIssues || [])
+            .map((item) => localizeFollowupIssueForDisplay(item))
+            .filter(Boolean);
+        if (fromFollowup.length > 0) {
+            return Array.from(new Set(fromFollowup));
+        }
+        if (subjectReport && !subjectReport.ok) {
+            const missing = Array.isArray(subjectReport.missing) ? subjectReport.missing.filter(Boolean) : [];
+            if (missing.length > 0) {
+                return [t(
+                    `实体一致性：场景/清单提到但资产 JSON 缺失：${missing.join('、')}`,
+                    `Entity consistency: mentioned in scenes/list but missing in asset JSON: ${missing.join(', ')}`
+                )];
+            }
+            if (subjectReport.message) return [String(subjectReport.message).trim()];
+        }
+        return [];
+    }, [localizeFollowupIssueForDisplay, t]);
+
+    const buildAnalysisReviewWarningMessage = useCallback((issues, { maxItems = 8 } = {}) => {
+        const list = (issues || []).map((item) => String(item || '').trim()).filter(Boolean);
+        if (list.length === 0) return '';
+        const shown = list.slice(0, maxItems);
+        const lines = shown.map((item, idx) => `${idx + 1}. ${item}`);
+        const more = list.length > maxItems
+            ? `\n${t(`（另有 ${list.length - maxItems} 项未展开）`, `(+${list.length - maxItems} more not shown)`)}`
+            : '';
+        return `${t('检测到以下问题，建议核对后点击「修正生成结果」重跑：', 'Issues detected. Review them and click "Refine Generated Result" to rerun:')}\n${lines.join('\n')}${more}`;
+    }, [t]);
+
     const saveEpisodeInfoFields = async (fields = {}) => {
         if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
         const mergedEpisodeInfo = {
@@ -2447,7 +2509,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalysisAttentionNotes(mergedAttentionNotes);
             try {
                 await saveAnalysisAttentionNotesValue(mergedAttentionNotes);
-                if (onLog) onLog('First-pass issues were written to analysis attention notes.', 'info');
+                if (onLog) onLog('First-pass issues were recorded in the local review notes.', 'info');
             } catch (saveErr) {
                 if (onLog) onLog(`Failed to persist first-pass issues: ${saveErr?.message || saveErr}`, 'warning');
             }
@@ -2455,6 +2517,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         return followupIssues;
     };
+
+    const publishAnalysisReviewFindings = useCallback(async ({
+        subjectReport = null,
+        integrityWarnings = [],
+        importWarningMessage = '',
+    } = {}) => {
+        const followupIssues = await persistFirstPassIssuesToAttentionNotes(
+            subjectReport,
+            integrityWarnings,
+            importWarningMessage ? [importWarningMessage] : []
+        );
+        const reviewIssues = buildAnalysisReviewIssues(subjectReport, followupIssues);
+        setAnalysisReviewIssues(reviewIssues);
+        if (reviewIssues.length > 0) {
+            const message = buildAnalysisReviewWarningMessage(reviewIssues);
+            setAnalysisFlowStatus({ phase: 'warning', message });
+            if (onLog) {
+                onLog(`Analysis review issues (${reviewIssues.length}):\n${reviewIssues.map((item, idx) => `${idx + 1}. ${item}`).join('\n')}`, 'warning');
+            }
+        }
+        return { followupIssues, reviewIssues };
+    }, [analysisAttentionNotes, buildAnalysisReviewIssues, buildAnalysisReviewWarningMessage, onLog]);
 
     const buildSupplementSubmissionInput = ({ generatedContent = '', subjectCheckText = '', attentionNotes = '' }) => {
         const base = String(generatedContent || '').trim();
@@ -4160,13 +4244,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         const normalizedScriptContent = trimScriptForInputDisplay(activeEpisode?.script_content);
+        const hasAuthoritativeScriptContent = Object.prototype.hasOwnProperty.call(activeEpisode, 'script_content')
+            && activeEpisode.script_content != null
+            && String(activeEpisode.script_content).length > 0;
 
-        if (activeEpisode?.script_content) {
+        if (hasAuthoritativeScriptContent) {
             setRawContent((prev) => (prev === normalizedScriptContent ? prev : normalizedScriptContent));
+        } else if (!Object.prototype.hasOwnProperty.call(activeEpisode, 'script_content')) {
+            // List endpoint omits script_content; keep local editor state until full episode loads.
         } else if (!rawContentRef.current) {
             setRawContent((prev) => (prev === '' ? prev : ''));
-        } else {
-            console.warn("[ScriptEditor] activeEpisode has no script_content, but rawContent exists. Ignoring clear.");
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(activeEpisode, 'script_content')) {
+            return;
         }
 
         if (lastEpisodeSegmentsScriptKeyRef.current === scriptContentKey) {
@@ -4768,6 +4859,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
         setAnalysisUiReport(null);
+        setAnalysisReviewIssues([]);
         if (persist && id) {
             clearAnalysisSessionProgressSnapshot(id);
         }
@@ -4796,6 +4888,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatusHistory(flowHistory);
         if (uiReport) {
             setAnalysisUiReport(uiReport);
+            setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
             if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
                 beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
             }
@@ -4808,6 +4901,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
         setAnalysisUiReport(null);
+        setAnalysisReviewIssues([]);
         if (activeEpisode?.id) {
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
@@ -6415,15 +6509,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseMarks.persistFinishedAt = Date.now();
             }
 
+            let resumeReviewIssues = [];
             try {
                 const firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
                 setSubjectConsistencyReport(firstPassReport);
-                if (!firstPassReport.ok) {
-                    setAnalysisFlowStatus({
-                        phase: 'warning',
-                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
-                    });
-                }
+                const { reviewIssues } = await publishAnalysisReviewFindings({
+                    subjectReport: firstPassReport,
+                });
+                resumeReviewIssues = reviewIssues;
             } catch (_) {
                 // non-blocking
             }
@@ -6443,7 +6536,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
-                warning: importWarningMessage,
+                warning: [importWarningMessage, resumeReviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(resumeReviewIssues) : '']
+                    .map((item) => String(item || '').trim())
+                    .filter(Boolean)
+                    .join('\n\n'),
+                reviewIssues: resumeReviewIssues,
                 error: '',
             }));
 
@@ -8553,15 +8650,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let firstPassReport = null;
             try {
                 firstPassReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true, persist: true });
-                if (firstPassReport && !firstPassReport.ok) {
-                    setAnalysisFlowStatus({
-                        phase: 'warning',
-                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
-                    });
-                    setTimeout(() => {
-                        setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
-                    }, 5000);
-                }
             } catch (consistencyErr) {
                 firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
                 setSubjectConsistencyReport(firstPassReport);
@@ -8569,18 +8657,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             firstPassReport = firstPassReport || buildSubjectConsistencyReport(analyzedText || '');
-            const followupIssues = await persistFirstPassIssuesToAttentionNotes(
-                firstPassReport,
+            const { reviewIssues } = await publishAnalysisReviewFindings({
+                subjectReport: firstPassReport,
                 integrityWarnings,
-                importWarningMessage ? [importWarningMessage] : []
-            );
-            if (followupIssues.length > 0) {
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
-                });
-                if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
-            }
+                importWarningMessage,
+            });
 
             let aiShotsBatchStarted = false;
             try {
@@ -8616,6 +8697,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .map(item => String(item || '').trim())
                 .filter(Boolean)
                 .join('；');
+            const reviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -8625,7 +8707,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
-                warning: combinedReportWarning,
+                warning: [combinedReportWarning, reviewWarningText]
+                    .map((item) => String(item || '').trim())
+                    .filter(Boolean)
+                    .join('\n\n'),
+                reviewIssues,
                 error: '',
             }));
 
@@ -8633,6 +8719,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            const reviewSuffix = reviewIssues.length > 0
+                ? t(`（另有 ${reviewIssues.length} 项待复核，见下方问题列表）`, ` (${reviewIssues.length} issue(s) need review; see list below)`)
+                : '';
             
             const appendStoryboardNotice = (baseZh, baseEn) => {
                 if (!aiShotsBatchStarted) return t(baseZh, baseEn);
@@ -8641,13 +8730,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: postImportMissingItems > 0
+                message: (postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
                             ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
                             : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + reviewSuffix,
             });
 
             if (onLog) onLog("AI Analysis applied and saved.");
@@ -9273,15 +9362,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let firstPassReport = null;
             try {
                 firstPassReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true, persist: true });
-                if (firstPassReport && !firstPassReport.ok) {
-                    setAnalysisFlowStatus({
-                        phase: 'warning',
-                        message: t('实体一致性检查告警：请查看提示后继续。', 'Entity consistency warning: review the message and continue.'),
-                    });
-                    setTimeout(() => {
-                        setAnalysisFlowStatus(prev => (prev?.phase === 'warning' ? { phase: 'idle', message: '' } : prev));
-                    }, 5000);
-                }
             } catch (consistencyErr) {
                 firstPassReport = buildSubjectConsistencyReport(analyzedText || '');
                 setSubjectConsistencyReport(firstPassReport);
@@ -9289,18 +9369,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             firstPassReport = firstPassReport || buildSubjectConsistencyReport(analyzedText || '');
-            const followupIssues = await persistFirstPassIssuesToAttentionNotes(
-                firstPassReport,
+            const { reviewIssues } = await publishAnalysisReviewFindings({
+                subjectReport: firstPassReport,
                 integrityWarnings,
-                importWarningMessage ? [importWarningMessage] : []
-            );
-            if (followupIssues.length > 0) {
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t('首轮检测到问题，已写入补充说明。请点击“修正生成结果”。', 'First-pass issues were saved to attention notes. Click "Refine Generated Result" for a second pass.'),
-                });
-                if (onLog) onLog(`First-pass issues detected (${followupIssues.length}). Waiting for manual supplement submit.`, 'warning');
-            }
+                importWarningMessage,
+            });
 
             let aiShotsBatchStarted = false;
             try {
@@ -9336,6 +9409,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .map(item => String(item || '').trim())
                 .filter(Boolean)
                 .join('；');
+            const advancedReviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -9345,7 +9419,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
-                warning: combinedReportWarning,
+                warning: [combinedReportWarning, advancedReviewWarningText]
+                    .map((item) => String(item || '').trim())
+                    .filter(Boolean)
+                    .join('\n\n'),
+                reviewIssues,
                 error: '',
             }));
 
@@ -9353,6 +9431,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            const advancedReviewSuffix = reviewIssues.length > 0
+                ? t(`（另有 ${reviewIssues.length} 项待复核，见下方问题列表）`, ` (${reviewIssues.length} issue(s) need review; see list below)`)
+                : '';
             
             const appendStoryboardNotice = (baseZh, baseEn) => {
                 if (!aiShotsBatchStarted) return t(baseZh, baseEn);
@@ -9361,13 +9442,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: postImportMissingItems > 0
+                message: (postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
                             ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
                             : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + advancedReviewSuffix,
             });
 
             setShowAnalysisModal(false);
@@ -10088,7 +10169,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const handleRetryPhase2 = async (options = {}) => {
         if (!activeEpisode?.id) return;
-        if (phase2GenerationInFlightRef.current || analysisFallbackRetryRef.current.running) {
+        const autoZeroCaller = Boolean(options?.autoZeroReportRerun);
+        if (phase2GenerationInFlightRef.current || (analysisFallbackRetryRef.current.running && !autoZeroCaller)) {
             onLog?.('[Stage 3 Asset Design] Skipped duplicate asset rerun while Stage 3 is already running.', 'warning');
             return;
         }
@@ -11525,7 +11607,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 }
                                             </span>
                                         </div>
-                                        <div className="mt-1 opacity-95">{displayMessage || item.message}</div>
+                                        <div className="mt-1 opacity-95 whitespace-pre-wrap">{displayMessage || item.message}</div>
                                         {highlightHint && (
                                             <div className={`mt-1.5 rounded-md border px-2 py-1.5 text-[11px] font-semibold leading-snug ${isLatest ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.15)] animate-pulse' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200/90'}`}>
                                                 🎨 {highlightHint}
@@ -11602,8 +11684,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
                                 {String(analysisUiReport?.warning || '').trim() && (
-                                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100">
+                                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100 whitespace-pre-wrap">
                                         <span className="font-medium">⚠️ {t('提示', 'Notice')}:</span> {String(analysisUiReport.warning).trim()}
+                                    </div>
+                                )}
+                                {displayedReviewIssues.length > 0 && (
+                                    <div className="rounded-md border border-amber-400/35 bg-amber-500/10 px-2.5 py-2 text-amber-100 space-y-2">
+                                        <div className="font-medium">⚠️ {t('待复核问题', 'Issues to review')}</div>
+                                        <ol className="list-decimal list-inside space-y-1 text-xs whitespace-pre-wrap">
+                                            {displayedReviewIssues.map((issue, idx) => (
+                                                <li key={`review-issue-${idx}`}>{issue}</li>
+                                            ))}
+                                        </ol>
+                                        <div className="pt-1 space-y-2">
+                                            <textarea
+                                                value={analysisAttentionNotes}
+                                                onChange={(e) => setAnalysisAttentionNotes(e.target.value)}
+                                                placeholder={t('可补充修正要求（选填），例如：统一角色命名、补全缺失道具、同一场景不要拆太碎。', 'Optional refinement notes, e.g. unify character names or fill missing props.')}
+                                                className="w-full h-20 bg-black/30 border border-amber-400/20 rounded-md px-3 py-2 text-xs text-amber-50 focus:outline-none focus:border-amber-300/40 custom-scrollbar resize-none"
+                                            />
+                                            <div className="flex flex-wrap justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSupplementSubmitClick}
+                                                    disabled={isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim()}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-bold ${isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim() ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/30'}`}
+                                                >
+                                                    {t('修正生成结果', 'Refine Generated Result')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSaveAnalysisAttentionNotes}
+                                                    disabled={isSavingAnalysisAttentionNotes}
+                                                    className={`px-3 py-1.5 rounded-md text-xs font-bold ${isSavingAnalysisAttentionNotes ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'}`}
+                                                >
+                                                    {isSavingAnalysisAttentionNotes ? t('保存中...', 'Saving...') : t('保存补充说明', 'Save Notes')}
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
