@@ -3570,6 +3570,7 @@ export const runSceneAnalysisFlowNode = async (payload = {}) => {
     return (await api.post('/prompts/scene-analysis/flow/run-node', enrichedPayload)).data;
 };
 export const syncSceneUnitsProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/sync-scene-units', payload || {})).data;
+export const resetSceneOrchestrationProgress = async (payload = {}) => (await api.post('/prompts/scene-analysis/progress/reset-scene-orchestration', payload || {})).data;
 export const getEpisodeProgressSnapshot = async (episodeId) => (await api.get(`/prompts/scene-analysis/progress/episodes/${episodeId}`)).data;
 export const getProjectProgressOverview = async (projectId) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/overview`)).data;
 export const getProjectProgressIssues = async (projectId, params = {}) => (await api.get(`/prompts/scene-analysis/progress/projects/${projectId}/issues`, { params: params || {} })).data;

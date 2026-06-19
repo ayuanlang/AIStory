@@ -365,6 +365,7 @@ class ScriptProgressSceneUnit(Base):
     scene_id = Column(String, index=True, nullable=False)
     scene_order = Column(Integer, nullable=True)
     scene_text = Column(Text, nullable=True)
+    scene_markdown = Column(Text, nullable=True)
     marker_start_token = Column(String, nullable=True)
     marker_end_token = Column(String, nullable=True)
     parse_status = Column(String, default="success")

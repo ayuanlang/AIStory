@@ -124,9 +124,9 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "depends_on": ["script_optimization", "assets_extraction"],
             "outputs": ["scenes_markdown"],
             "persist_targets": ["episode.ai_stage_outputs.stage2_2", "scene_rows"],
-            "injection_chain": ["frontend.stage1_project_context", "frontend.stage2_1_subject_index", "backend.analyze_scene.project_metadata"],
+            "injection_chain": ["frontend.stage1_project_context", "backend.analyze_scene.project_metadata", "backend.analyze_scene.persisted_subject_index"],
             "auto_start": True,
-            "fan_out": None,
+            "fan_out": "per_scene",
             "status": "planned",
         },
         {

@@ -39,3 +39,4 @@ class AnalyzeSceneRequest(BaseModel):
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
     analysis_trace_id: Optional[str] = None
+    skip_episode_persist: Optional[bool] = False

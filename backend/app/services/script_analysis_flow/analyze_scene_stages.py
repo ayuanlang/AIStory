@@ -313,6 +313,8 @@ def import_scene_markdown_stage(
     episode_id: int,
     script_text: str,
     script_id: Optional[str] = None,
+    partial: bool = False,
+    target_scene_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     from app.services.script_analysis_flow import sync_scene_units_from_script_text
 
@@ -323,6 +325,8 @@ def import_scene_markdown_stage(
         episode_id=int(episode_id),
         script_text=script_text,
         script_id=script_id,
+        partial=bool(partial),
+        target_scene_id=str(target_scene_id or '').strip() or None,
     )
     logger.info(
         "[analyze_scene.import] stage=%s project_id=%s episode_id=%s scene_count=%s parse_source=%s",

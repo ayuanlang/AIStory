@@ -899,7 +899,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                                 onClick={handleSupplementSubjects}
                                 disabled={supplementingSubjects}
                                 className="shrink-0 inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/12 px-2 py-0.5 text-[10px] font-semibold text-amber-100 hover:bg-amber-400/20 disabled:opacity-60 disabled:cursor-not-allowed"
-                                title={missingSubjectTitle || t('存在缺失 subjects，点击补充实体', 'Missing subjects detected. Click to supplement entities.')}
+                                title={missingSubjectTitle || t('存在缺失 subjects，点击前往资产生成重跑', 'Missing subjects detected. Click to open asset generation rerun.')}
                             >
                                 {supplementingSubjects ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
                                 <span>{missingSubjectCount}</span>
@@ -945,7 +945,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                             >
                                 <div className="flex items-center gap-1 font-semibold">
                                     {supplementingSubjects ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
-                                    <span>{t(`缺失 ${missingSubjectCount} 个 subjects，点击一键补齐实体`, `Missing ${missingSubjectCount} subjects. Click to supplement entities.`)}</span>
+                                    <span>{t(`缺失 ${missingSubjectCount} 个 subjects，点击前往资产生成重跑`, `Missing ${missingSubjectCount} subjects. Click to open asset generation rerun.`)}</span>
                                 </div>
                                 <div className="mt-1 line-clamp-2 text-amber-50/80">{subjectGap?.missing?.map((item) => item.name).join(' / ')}</div>
                             </button>
@@ -1041,7 +1041,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
     );
 };
 
-export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, uiLang = 'zh' }) => {
+export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, onSwitchToScriptAssetRerun, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
@@ -4471,9 +4471,14 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                                     onGenerateShots={handleGenerateShots}
                                     onStopGenerateShots={handleStopGenerateShots}
                                     onSupplementShots={handleOpenShotSupplementMenu}
-                                    onSupplementSubjects={(sceneCandidate) => {
-                                        setEditingScene(sceneCandidate);
-                                        return handleRegenerateScene(null, sceneCandidate);
+                                    onSupplementSubjects={(sceneCandidate, gapReport) => {
+                                        if (typeof onSwitchToScriptAssetRerun !== 'function') return;
+                                        const missing = Array.isArray(gapReport?.missing) ? gapReport.missing : [];
+                                        onSwitchToScriptAssetRerun({
+                                            sceneId: sceneCandidate?.id ?? null,
+                                            sceneLabel: String(sceneCandidate?.scene_no || sceneCandidate?.scene_name || '').trim(),
+                                            missingSubjects: missing,
+                                        });
                                     }}
                                     onDelete={handleDeleteScene}
                                     sceneCostData={sceneCostMap[scene.id] || null}

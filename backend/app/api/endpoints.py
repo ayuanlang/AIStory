@@ -83,10 +83,15 @@ from app.services.system_api_runtime_cache import resolve_system_api_cached
 from app.api.settings import get_scene_analysis_system_config, get_project_cost_estimation_config, get_script_analysis_flow_config
 from app.services.script_analysis_flow import (
     build_script_analysis_flow_plan,
+    extract_adapted_script_from_beats_user_input,
     extract_scene_markdown_text_from_analyze_result,
     import_analyze_scene_stage_result,
     import_scene_markdown_stage,
+    merge_scenes_table_markdown_outputs,
+    parse_scene_units_from_markers,
+    patch_episode_scene_markdown_by_scene,
     persist_analyze_scene_stage_result,
+    resolve_scene_units_for_markdown_orchestration,
     resolve_analyze_scene_stage,
     SCENES_BLOCK_END_TOKEN,
     STAGE_SCENE_MARKDOWN,
@@ -95,9 +100,13 @@ from app.services.script_analysis_flow import (
     raise_progress_issue,
     resolve_progress_issue,
     SCENES_BLOCK_START_TOKEN,
+    SceneMarkerParseError,
+    sync_scene_units_from_markers,
     sync_scene_units_from_script_text,
+    update_scene_unit_orchestration_status,
     upsert_pipeline_node_status,
     validate_analyze_scene_llm_finish_reason,
+    wrap_scene_unit_as_script_block,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
@@ -6378,6 +6387,15 @@ class SceneUnitsSyncRequest(BaseModel):
     episode_id: int
     script_text: str
     script_id: Optional[str] = None
+    prefer_markers: Optional[bool] = False
+    partial: Optional[bool] = False
+    target_scene_id: Optional[str] = None
+
+
+class SceneOrchestrationResetRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    scene_ids: Optional[List[str]] = None
 
 
 class ProgressAutoOrchestrateRequest(BaseModel):
@@ -6418,6 +6436,284 @@ def _extract_analysis_text_from_result(result: Any) -> str:
             if isinstance(value, str) and value.strip():
                 return value
     return ""
+
+
+def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_text: str) -> str:
+    source = str(user_text or "")
+    adapted = str(adapted_script_text or "").strip()
+    if not source.strip():
+        return adapted
+    marker_match = re.search(r"(\[优化后剧本[^\]]*\]\s*\n)([\s\S]*)$", source)
+    if marker_match:
+        return f"{source[:marker_match.start(2)]}{adapted}".strip()
+    if SCENES_BLOCK_START_TOKEN in source:
+        start_idx = source.find(SCENES_BLOCK_START_TOKEN)
+        return f"{source[:start_idx].rstrip()}\n\n{adapted}".strip()
+    return f"{source.rstrip()}\n\n{adapted}".strip()
+
+
+async def _run_scene_markdown_node_per_scene(
+    *,
+    raw_payload: Dict[str, Any],
+    current_user: User,
+    db: Session,
+    node_project_id: int,
+    node_episode_id: int,
+) -> Any:
+    user_text = str(raw_payload.get("text") or "")
+    adapted_script_text = extract_adapted_script_from_beats_user_input(user_text)
+
+    episode_adaptation_text = ""
+    if node_episode_id > 0:
+        episode_row = db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
+        if episode_row is not None:
+            episode_adaptation_text = str(getattr(episode_row, "ai_scene_analysis_adaptation", "") or "").strip()
+
+    scene_units, scene_units_source = resolve_scene_units_for_markdown_orchestration(
+        db,
+        user_text=user_text,
+        adapted_script_text=adapted_script_text,
+        project_id=node_project_id,
+        episode_id=node_episode_id,
+        episode_adaptation_text=episode_adaptation_text,
+    )
+
+    if not scene_units:
+        raise HTTPException(
+            status_code=422,
+            detail=f"SCENE_MARKDOWN_UNITS_UNAVAILABLE:{scene_units_source}",
+        )
+
+    if len(scene_units) == 1:
+        unit = scene_units[0]
+        single_scene_block = wrap_scene_unit_as_script_block(unit)
+        single_scene_instruction = (
+            f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
+            "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+        )
+        single_payload = dict(raw_payload)
+        single_payload["text"] = _replace_adapted_script_in_beats_user_input(
+            f"{single_scene_instruction}\n\n{user_text}",
+            single_scene_block,
+        )
+        return await analyze_scene(
+            AnalyzeSceneRequest(**single_payload),
+            current_user=current_user,
+            db=db,
+            async_mode="0",
+        )
+
+    script_id = f"episode:{node_episode_id}"
+    total_scenes = len(scene_units)
+    sync_source_text = adapted_script_text or episode_adaptation_text or user_text
+    if node_project_id > 0 and node_episode_id > 0:
+        try:
+            sync_scene_units_from_markers(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_text=sync_source_text,
+                script_id=script_id,
+            )
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=script_id,
+                node_name="scene_markdown",
+                status="running",
+                progress_percent=5.0,
+                error_message=f"synced {total_scenes} scene units before parallel orchestration (source={scene_units_source})",
+            )
+            for unit in scene_units:
+                update_scene_unit_orchestration_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    scene_id=unit.scene_id,
+                    import_status="queued",
+                    parse_status="success",
+                    parse_error_code=None,
+                )
+            db.commit()
+        except SceneMarkerParseError as sync_exc:
+            logger.warning(
+                "[scene_markdown] scene unit sync before orchestration failed | project_id=%s episode_id=%s err=%s",
+                node_project_id,
+                node_episode_id,
+                sync_exc,
+            )
+
+    max_concurrency = _resolve_user_batch_parallel_limit(
+        getattr(current_user, "is_active", USER_ACTIVE_LEVEL_DEFAULT),
+    )
+    logger.info(
+        "[scene_markdown] parallel orchestration start scenes=%s concurrency=%s source=%s project_id=%s episode_id=%s",
+        total_scenes,
+        max_concurrency,
+        scene_units_source,
+        node_project_id,
+        node_episode_id,
+    )
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+    progress_lock = asyncio.Lock()
+    completed_count = 0
+
+    async def _run_one_scene(index: int, unit: Any) -> Tuple[int, str, Any]:
+        nonlocal completed_count
+        async with semaphore:
+            task_db = SessionLocal()
+            try:
+                if node_project_id > 0 and node_episode_id > 0:
+                    update_scene_unit_orchestration_status(
+                        task_db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        scene_id=unit.scene_id,
+                        import_status="running",
+                        parse_status="success",
+                        parse_error_code=None,
+                    )
+                    task_db.commit()
+
+                single_scene_block = wrap_scene_unit_as_script_block(unit)
+                single_scene_instruction = (
+                    f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
+                    "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+                )
+                scene_payload = dict(raw_payload)
+                scene_payload["skip_episode_persist"] = True
+                scene_payload["text"] = _replace_adapted_script_in_beats_user_input(
+                    f"{single_scene_instruction}\n\n{user_text}",
+                    single_scene_block,
+                )
+                result = await analyze_scene(
+                    AnalyzeSceneRequest(**scene_payload),
+                    current_user=current_user,
+                    db=task_db,
+                    async_mode="0",
+                )
+                scene_text = _extract_analysis_text_from_result(result).strip()
+                if not scene_text:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"SCENE_MARKDOWN_EMPTY_FOR_SCENE:{unit.scene_id}",
+                    )
+
+                if node_episode_id > 0:
+                    episode_row = task_db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
+                    if episode_row is not None:
+                        patch_episode_scene_markdown_by_scene(
+                            task_db,
+                            episode=episode_row,
+                            scene_id=unit.scene_id,
+                            markdown=scene_text,
+                            scene_order=index,
+                        )
+
+                if node_project_id > 0 and node_episode_id > 0:
+                    update_scene_unit_orchestration_status(
+                        task_db,
+                        project_id=node_project_id,
+                        episode_id=node_episode_id,
+                        scene_id=unit.scene_id,
+                        import_status="success",
+                        parse_status="success",
+                        scene_markdown=scene_text,
+                        parse_error_code=None,
+                    )
+                    task_db.commit()
+
+                async with progress_lock:
+                    completed_count += 1
+                    if node_project_id > 0 and node_episode_id > 0:
+                        progress = 5.0 + (85.0 * completed_count / max(total_scenes, 1))
+                        upsert_pipeline_node_status(
+                            db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            script_id=script_id,
+                            node_name="scene_markdown",
+                            status="running",
+                            progress_percent=progress,
+                            error_message=f"completed {completed_count}/{total_scenes}: {unit.scene_id}",
+                        )
+                        db.commit()
+
+                return index, unit.scene_id, scene_text, result
+            except Exception as scene_exc:
+                if node_project_id > 0 and node_episode_id > 0:
+                    error_code = (
+                        f"SCENE_MARKDOWN_EMPTY_FOR_SCENE:{unit.scene_id}"
+                        if isinstance(scene_exc, HTTPException)
+                        and str(getattr(scene_exc, "detail", "")).startswith("SCENE_MARKDOWN_EMPTY_FOR_SCENE:")
+                        else "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
+                    )
+                    try:
+                        update_scene_unit_orchestration_status(
+                            task_db,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            scene_id=unit.scene_id,
+                            import_status="failed",
+                            parse_status="failed",
+                            parse_error_code=error_code,
+                        )
+                        task_db.commit()
+                    except Exception:
+                        task_db.rollback()
+                raise
+            finally:
+                task_db.close()
+
+    outcomes = await asyncio.gather(
+        *[_run_one_scene(index, unit) for index, unit in enumerate(scene_units, start=1)],
+        return_exceptions=True,
+    )
+
+    per_scene_outputs: List[str] = []
+    per_scene_results: List[Dict[str, Any]] = []
+    last_result: Any = None
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+        _index, scene_id, scene_text, result = outcome
+        per_scene_outputs.append(scene_text)
+        per_scene_results.append(
+            {
+                "scene_id": str(scene_id),
+                "scene_order": int(_index),
+                "markdown": scene_text,
+            }
+        )
+        last_result = result
+
+    merged_text = merge_scenes_table_markdown_outputs(per_scene_outputs)
+    if not merged_text:
+        raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_MERGE_FAILED")
+
+    if isinstance(last_result, dict):
+        merged_result = dict(last_result)
+        merged_result["result"] = merged_text
+        merged_result["content"] = merged_text
+        merged_result["scenes_markdown"] = merged_text
+        merged_result["per_scene_count"] = total_scenes
+        merged_result["per_scene_parallel"] = max_concurrency
+        merged_result["per_scene_source"] = scene_units_source
+        merged_result["per_scene_persist_mode"] = "by_scene"
+        merged_result["per_scene_outputs"] = per_scene_results
+        return merged_result
+    return {
+        "result": merged_text,
+        "content": merged_text,
+        "scenes_markdown": merged_text,
+        "per_scene_count": total_scenes,
+        "per_scene_parallel": max_concurrency,
+        "per_scene_source": scene_units_source,
+        "per_scene_persist_mode": "by_scene",
+        "per_scene_outputs": per_scene_results,
+    }
 
 
 def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
@@ -6614,24 +6910,108 @@ async def sync_scene_units_progress(
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
 
-    summary = import_scene_markdown_stage(
-        db,
-        project_id=int(request.project_id),
-        episode_id=int(request.episode_id),
-        script_text=request.script_text,
-        script_id=request.script_id,
-    )
+    script_id = request.script_id or f"episode:{int(request.episode_id)}"
+    if request.prefer_markers:
+        sync_result = sync_scene_units_from_markers(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_text=request.script_text,
+            script_id=script_id,
+        )
+        summary = {
+            "stage_key": STAGE_SCENE_MARKDOWN,
+            "import_target": "script_progress_scene_units",
+            "scene_count": int(sync_result.get("scene_count") or 0),
+            "scene_ids": list(sync_result.get("scene_ids") or []),
+            "parse_source": sync_result.get("parse_source"),
+            "sync_result": sync_result,
+        }
+    else:
+        summary = import_scene_markdown_stage(
+            db=db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            script_text=request.script_text,
+            script_id=script_id,
+            partial=bool(request.partial),
+            target_scene_id=str(request.target_scene_id or "").strip() or None,
+        )
     upsert_pipeline_node_status(
         db,
         project_id=int(request.project_id),
         episode_id=int(request.episode_id),
-        script_id=request.script_id,
+        script_id=script_id,
         node_name="scene_planning",
         status="success",
         progress_percent=100.0,
     )
     db.commit()
     return {"status": "ok", "summary": summary.get("sync_result") or summary}
+
+
+@router.post("/prompts/scene-analysis/progress/reset-scene-orchestration")
+async def reset_scene_orchestration_progress(
+    request: SceneOrchestrationResetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(request.episode_id)).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+    if int(request.project_id) != int(episode.project_id):
+        raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+
+    requested_scene_ids = [
+        str(scene_id or "").strip()
+        for scene_id in (request.scene_ids or [])
+        if str(scene_id or "").strip()
+    ]
+    rows = (
+        db.query(ScriptProgressSceneUnit)
+        .filter(
+            ScriptProgressSceneUnit.project_id == int(request.project_id),
+            ScriptProgressSceneUnit.episode_id == int(request.episode_id),
+        )
+        .all()
+    )
+    reset_scene_ids: List[str] = []
+    for row in rows:
+        scene_id = str(getattr(row, "scene_id", "") or "").strip()
+        if not scene_id:
+            continue
+        if requested_scene_ids and scene_id not in requested_scene_ids:
+            continue
+        update_scene_unit_orchestration_status(
+            db,
+            project_id=int(request.project_id),
+            episode_id=int(request.episode_id),
+            scene_id=scene_id,
+            import_status="queued",
+            parse_status="success",
+            scene_markdown=None,
+            parse_error_code=None,
+        )
+        reset_scene_ids.append(scene_id)
+
+    script_id = f"episode:{int(request.episode_id)}"
+    upsert_pipeline_node_status(
+        db,
+        project_id=int(request.project_id),
+        episode_id=int(request.episode_id),
+        script_id=script_id,
+        node_name="scene_markdown",
+        status="running",
+        progress_percent=0.0,
+        error_message=f"reset orchestration for {len(reset_scene_ids)} scene(s)",
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "reset_scene_ids": reset_scene_ids,
+        "reset_count": len(reset_scene_ids),
+    }
 
 
 @router.get("/prompts/scene-analysis/progress/episodes/{episode_id}")
@@ -6663,6 +7043,7 @@ async def get_episode_progress_snapshot(
                 "parse_status": row.parse_status,
                 "import_status": row.import_status,
                 "parse_error_code": row.parse_error_code,
+                "scene_markdown": str(getattr(row, "scene_markdown", "") or "").strip(),
                 "updated_at": row.updated_at,
             }
             for row in rows
@@ -7438,6 +7819,14 @@ async def run_scene_analysis_flow_node(
                         error_message="project_visual_backfill missing, auto-retrying once",
                     )
                     db.commit()
+            elif node_key == "scene_markdown":
+                result = await _run_scene_markdown_node_per_scene(
+                    raw_payload=raw_payload,
+                    current_user=current_user,
+                    db=db,
+                    node_project_id=node_project_id,
+                    node_episode_id=node_episode_id,
+                )
             else:
                 result = await analyze_scene(AnalyzeSceneRequest(**raw_payload), current_user=current_user, db=db, async_mode="0")
         except Exception as exc:
@@ -7482,23 +7871,41 @@ async def run_scene_analysis_flow_node(
                 )
 
             if node_key == "scene_markdown":
-                # Step 4: import staged scene markdown into progress scene units only.
+                # Step 4: per-scene parallel orchestration already persisted scene units individually.
                 scene_markdown_started_perf = time.perf_counter()
+                per_scene_parallel = isinstance(result, dict) and bool(result.get("per_scene_parallel"))
                 try:
                     import_started_perf = time.perf_counter()
-                    logger.info(
-                        "[场景编排2.2] Step 4 开始导入场景单元 | project_id=%s | episode_id=%s",
-                        node_project_id,
-                        node_episode_id,
-                    )
-                    import_result = import_analyze_scene_stage_result(
-                        db=db,
-                        stage_key=STAGE_SCENE_MARKDOWN,
-                        project_id=node_project_id,
-                        episode_id=node_episode_id,
-                        analyze_result=result,
-                        script_id=f"episode:{node_episode_id}",
-                    ) or {}
+                    if per_scene_parallel:
+                        logger.info(
+                            "[场景编排2.2] Step 4 skipped merged import; per-scene outputs already persisted | project_id=%s | episode_id=%s | scene_count=%s",
+                            node_project_id,
+                            node_episode_id,
+                            len((result or {}).get("per_scene_outputs") or []),
+                        )
+                        import_result = {
+                            "scene_count": len((result or {}).get("per_scene_outputs") or []),
+                            "scene_ids": [
+                                str(item.get("scene_id") or "").strip()
+                                for item in ((result or {}).get("per_scene_outputs") or [])
+                                if str(item.get("scene_id") or "").strip()
+                            ],
+                            "parse_source": "per_scene_parallel",
+                        }
+                    else:
+                        logger.info(
+                            "[场景编排2.2] Step 4 开始导入场景单元 | project_id=%s | episode_id=%s",
+                            node_project_id,
+                            node_episode_id,
+                        )
+                        import_result = import_analyze_scene_stage_result(
+                            db=db,
+                            stage_key=STAGE_SCENE_MARKDOWN,
+                            project_id=node_project_id,
+                            episode_id=node_episode_id,
+                            analyze_result=result,
+                            script_id=f"episode:{node_episode_id}",
+                        ) or {}
                     import_elapsed_ms = int((time.perf_counter() - import_started_perf) * 1000)
                     logger.info(
                         "[场景编排2.2] Step 4 场景单元导入完成 | project_id=%s | episode_id=%s | scene_count=%s | scene_ids=%s | parse_source=%s | import_elapsed_ms=%s",
@@ -9239,10 +9646,25 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             if not text.strip():
                 return ""
 
+            # Frontend Stage 2.2 handoff wrapper (legacy); backend injects Subject Index once from episode data.
+            text = re.sub(
+                r"(?is)^\s*\[Stage\s*2[\-_]\s*1\s+Subject\s*Index[^\]]*\].*?```subject_index\s*.*?```\s*",
+                "",
+                text,
+            ).strip()
+            text = re.sub(
+                r"(?is)```subject_index\s*.*?```\s*",
+                "",
+                text,
+            ).strip()
+
             marker_patterns = [
                 r"(?im)^\s*#{1,6}\s*【上游提取的资产清单\s*Subject\s*Index】\s*$",
                 r"(?im)^\s*#{1,6}\s*Subject\s*Index\s*$",
                 r"(?im)^\s*#{1,6}\s*【.*Subject\s*Index.*】\s*$",
+                r"(?im)^\s*\[Stage\s*2[\-_]\s*1\s+Subject\s*Index[^\]]*\]\s*$",
+                r"(?im)^\s*\[Saved Subject Index Injection[^\]]*\]\s*$",
+                r"(?im)^\s*\[Upstream Subject Index Injection[^\]]*\]\s*$",
             ]
             cut_positions: List[int] = []
             for pattern in marker_patterns:
@@ -9320,19 +9742,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 canonical_stage_text = _sanitize_scene_beats_stage_text(request.text)
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
-                embedded_subject_index_for_prompt = _extract_embedded_subject_index_from_stage_text(request.text)
-                subject_index_blocks = [saved_subject_index_block]
-                if (
-                    embedded_subject_index_for_prompt
-                    and embedded_subject_index_for_prompt.strip() != persisted_subject_index_for_prompt.strip()
-                ):
-                    subject_index_blocks.append(
-                        "[Upstream Subject Index Injection - Supplemental]\n"
-                        "The following Subject Index is provided by the current Stage 2.1 -> 2.2 handoff.\n"
-                        "Use it as supplemental context ONLY when it does not conflict with the authoritative saved block above.\n\n"
-                        f"{embedded_subject_index_for_prompt}"
-                    )
-                user_content = f"{chr(10).join([b + chr(10) for b in subject_index_blocks]).strip()}\n\nScript to Analyze:\n\n{canonical_stage_text}"
+                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
             elif is_subject_index_consumer_stage:
                 canonical_stage_text = str(request.text or "")
                 if should_trim_before_submit:
@@ -10090,7 +10500,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         saved_to_episode = False
         persisted_field_name = None
         persisted_chars_readback = None
-        if getattr(request, "episode_id", None):
+        if getattr(request, "episode_id", None) and not bool(getattr(request, "skip_episode_persist", False)):
             episode_id = request.episode_id
             episode = db.query(Episode).filter(Episode.id == episode_id).first()
             if episode and not current_user_is_superuser:
@@ -20349,10 +20759,8 @@ def _build_shot_prompts(
     project_context_section = str(project_context.get("project_context_section") or "")
 
     # Scene Info
-    # Entities - Fetch project entities and match with Linked Characters / Environment
+    # Fetch project entities only for Environment Context enrichment in Core Scene Info.
     project_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
-    entity_descriptions = []
-    subject_packets = []
     
     def _scene_subject_compare_key(value: Any) -> str:
         return subject_compare_key(value)
@@ -20603,7 +21011,7 @@ def _build_shot_prompts(
 
         lines = [
             "# Scene Subject Index",
-            "Authoritative filtered Subject Index for this scene only. Use this as the single asset/entity list; do not infer or reuse subjects outside this list.",
+            "Authoritative filtered Subject Index for this scene only. Use subject_no/subject_type/subject_name fields as the sole entity naming source; do not infer subjects outside this list and do not expect generation_prompt_cn/en blocks in the user prompt.",
         ]
         lines.extend(header_lines)
         lines.extend(separator_lines if header_lines else [])
@@ -20616,257 +21024,15 @@ def _build_shot_prompts(
         )
         return "\n".join(lines).strip() + "\n", index_subject_keys
 
-    def _entity_matches_candidate_keys(ent: Entity, candidate_keys: set) -> bool:
-        if not candidate_keys:
-            return False
-        alias_keys: set = set()
-        for alias in [getattr(ent, "name", None), getattr(ent, "name_en", None)]:
-            alias_keys.update(_scene_subject_compare_keys(alias))
-        return entity_subject_keys_match(alias_keys, candidate_keys)
-
-    def _build_subject_image_prompt_section(candidate_keys: set) -> str:
-        if not candidate_keys:
-            return ""
-
-        prompt_lines: List[str] = []
-        seen_entity_keys: set = set()
-        for ent in project_entities:
-            if not _entity_matches_candidate_keys(ent, candidate_keys):
-                continue
-            entity_key = _scene_subject_compare_key(getattr(ent, "name", None))
-            if not entity_key or entity_key in seen_entity_keys:
-                continue
-            seen_entity_keys.add(entity_key)
-
-            generation_prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
-            if not generation_prompt_cn:
-                logger.info(
-                    "[_build_shot_prompts] candidate-matched entity missing generation_prompt_cn scene_id=%s entity=%s",
-                    getattr(scene, "id", None),
-                    getattr(ent, "name", None),
-                )
-                continue
-
-            normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "entity"
-            if normalized_type == "character":
-                subject_ref = f"CHAR:[@{ent.name}]"
-            elif normalized_type == "prop":
-                subject_ref = f"PROP:[{ent.name}]"
-            elif normalized_type == "environment":
-                subject_ref = f"ENV:[{ent.name}]"
-            else:
-                subject_ref = f"COVER:[{ent.name}]"
-
-            prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={generation_prompt_cn}")
-
-        if not prompt_lines:
-            return ""
-
+    env_narrative = _extract_environment_context_from_text(scene.core_scene_info).strip()
+    if env_narrative:
         logger.info(
-            "[_build_shot_prompts] injected subject image prompts scene_id=%s count=%s",
+            "[_build_shot_prompts] using Environment Context from core_scene_info scene_id=%s",
             getattr(scene, "id", None),
-            len(prompt_lines),
-        )
-        return (
-            "# Scene Subject Image Prompts (CN)\n"
-            "Authoritative Chinese image-generation prompts for candidate-matched scene entities. "
-            "When writing Video Content (CN), inherit stable visual identity, costume, material, and spatial anchors from these prompts; do not rename or reinvent subjects.\n"
-            + "\n".join(prompt_lines)
-            + "\n"
         )
 
-    env_narrative = ""
-    env_narratives_map = {}
-
-    def _trim_packet_text(value: Any, limit: int = 420) -> str:
-        text = re.sub(r"\s+", " ", str(value or "")).strip()
-        if not text:
-            return ""
-        if len(text) <= limit:
-            return text
-        return text[: limit - 3].rstrip() + "..."
-
-    for ent in project_entities:
-        # Check relevancy (Case-insensitive check, considering name_en)
-        is_relevant = False
-        ent_aliases = [n for n in [ent.name, ent.name_en] if n]
-        
-        # logger.info(f"Checking entity: {ent.name} (Aliases: {ent_aliases})") 
-
-        for alias in ent_aliases:
-            alias_keys = _scene_subject_compare_keys(alias)
-            if entity_subject_keys_match(alias_keys, relevant_name_keys):
-                is_relevant = True
-                logger.info(f"[_build_shot_prompts] Match found: Entity '{ent.name}' matches scene editor candidates")
-                break
-        
-        # If relevant, try to extract Description field
-        if is_relevant:
-            # Check if this is the Environment Anchor to capture narrative for Scenario Content
-            if scene.environment_name:
-                 # Check against all scene environment anchor parts from editor field.
-                 env_part_keys: set = set()
-                 for p in _split_scene_editor_subjects(scene.environment_name):
-                     env_part_keys.update(_scene_subject_compare_keys(p))
-                 for p in _extract_tagged_scene_subjects(scene.environment_name):
-                     env_part_keys.update(_scene_subject_compare_keys(p))
-                 for alias in ent_aliases:
-                      if entity_subject_keys_match(_scene_subject_compare_keys(alias), env_part_keys):
-                           logger.info(f"[_build_shot_prompts] Environment Match: {ent.name}")
-                           # Priority: description_cn (custom_attributes) > narrative_description > description
-                           desc_cn = None
-                           
-                           # Safe Custom Attributes Parsing
-                           custom_attrs = ent.custom_attributes
-                           if isinstance(custom_attrs, str):
-                                try: custom_attrs = json.loads(custom_attrs)
-                                except: custom_attrs = {}
-                                
-                           if custom_attrs and isinstance(custom_attrs, dict):
-                               desc_cn = custom_attrs.get('description_cn') or custom_attrs.get('description_CN')
-                           
-                           if desc_cn:
-                               new_narrative = desc_cn
-                               logger.info(f"[_build_shot_prompts] Found Env Narrative from Custom Attrs")
-                           elif ent.narrative_description:
-                                new_narrative = ent.narrative_description
-                                logger.info(f"[_build_shot_prompts] Found Env Narrative from Narrative Desc")
-                           elif ent.description:
-                                # Use description directly if others are missing
-                                new_narrative = ent.description
-                                logger.info(f"[_build_shot_prompts] Found Env Narrative from Description")
-                           else:
-                                new_narrative = ""
-
-                           if new_narrative:
-                               env_narratives_map[ent.name] = new_narrative
-                           break
-
-            desc_parts = []
-            normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "entity"
-            if normalized_type == "character":
-                subject_ref = f"CHAR:[@{ent.name}]"
-            elif normalized_type == "prop":
-                subject_ref = f"PROP:[{ent.name}]"
-            elif normalized_type == "environment":
-                subject_ref = f"ENV:[{ent.name}]"
-            else:
-                subject_ref = f"COVER:[{ent.name}]"
-            
-            # 0. Anchor Description (Critical for AI Visualization)
-            if ent.anchor_description:
-                desc_parts.append(f"Anchor Description: {ent.anchor_description}")
-            else:
-                logger.warning(f"[_build_shot_prompts] Entity {ent.name} missing anchor_description")
-
-            # 1. Narrative Description (New Column Priority)
-            if ent.narrative_description:
-                 desc_parts.append(f"Description: {ent.narrative_description}")
-            elif ent.description:
-                 # Fallback regex extraction from blob
-                 match = re.search(r'(?:Description|描述)[:：]\s*(.*)', ent.description, re.IGNORECASE)
-                 if match:
-                      desc_parts.append(f"Description: {match.group(1).strip()}")
-            
-            # 1.5 Character Specifics
-            if ent.type and ent.type.lower() == 'character':
-                 if ent.appearance_cn:
-                      desc_parts.append(f"Appearance: {ent.appearance_cn}")
-                 else:
-                      logger.warning(f"[_build_shot_prompts] Character {ent.name} missing appearance_cn")
-
-                 if ent.clothing:
-                      desc_parts.append(f"Clothing: {ent.clothing}")
-
-            # 2. Visual Params
-            if ent.visual_params:
-                desc_parts.append(f"Visual: {ent.visual_params}")
-            
-            # 3. Atmosphere
-            if ent.atmosphere:
-                desc_parts.append(f"Atmosphere: {ent.atmosphere}")
-
-            packet_parts = [f"name={ent.name}", f"type={normalized_type}"]
-            if ent.name_en:
-                packet_parts.append(f"name_en={_trim_packet_text(ent.name_en, 120)}")
-            if ent.anchor_description:
-                packet_parts.append(f"anchor={_trim_packet_text(ent.anchor_description, 220)}")
-
-            primary_description = ent.narrative_description or ent.description
-            extracted_description = ""
-            if primary_description:
-                extracted_description = _trim_packet_text(primary_description, 320)
-            if extracted_description:
-                packet_parts.append(f"description={extracted_description}")
-
-            if normalized_type == 'character':
-                if ent.appearance_cn:
-                    packet_parts.append(f"appearance_cn={_trim_packet_text(ent.appearance_cn, 220)}")
-                if ent.clothing:
-                    packet_parts.append(f"clothing={_trim_packet_text(ent.clothing, 180)}")
-                if ent.action_characteristics:
-                    packet_parts.append(f"action_characteristics={_trim_packet_text(ent.action_characteristics, 180)}")
-                if ent.role:
-                    packet_parts.append(f"role={_trim_packet_text(ent.role, 120)}")
-                if ent.archetype:
-                    packet_parts.append(f"archetype={_trim_packet_text(ent.archetype, 120)}")
-            elif normalized_type == 'prop':
-                if ent.visual_params:
-                    packet_parts.append(f"visual_params={_trim_packet_text(ent.visual_params, 220)}")
-            else:
-                if ent.atmosphere:
-                    packet_parts.append(f"atmosphere={_trim_packet_text(ent.atmosphere, 180)}")
-                if ent.visual_params:
-                    packet_parts.append(f"visual_params={_trim_packet_text(ent.visual_params, 220)}")
-
-            if ent.generation_prompt_en:
-                packet_parts.append(f"generation_prompt_en={_trim_packet_text(ent.generation_prompt_en, 420)}")
-            if ent.generation_prompt_cn:
-                packet_parts.append(f"generation_prompt_cn={_trim_packet_text(ent.generation_prompt_cn, 320)}")
-
-            if ent.visual_dependencies:
-                packet_parts.append(f"visual_dependencies={_trim_packet_text(json.dumps(ent.visual_dependencies, ensure_ascii=False), 220)}")
-            if ent.dependency_strategy:
-                packet_parts.append(f"dependency_strategy={_trim_packet_text(json.dumps(ent.dependency_strategy, ensure_ascii=False), 220)}")
-
-            subject_packets.append(f"- {subject_ref} | " + " | ".join(packet_parts))
-
-            if desc_parts:
-                entity_descriptions.append(f"[{ent.name}] " + " | ".join(desc_parts))
-            else:
-                logger.warning(f"[_build_shot_prompts] Entity {ent.name} matched but has no description parts")
-
-    # Format concatenated environment narrative
-    if env_narratives_map:
-        parts = []
-        for name, desc in env_narratives_map.items():
-            parts.append(f"[{name}]: {desc}")
-        env_narrative = "\n".join(parts)
-
-    if not env_narrative:
-        env_narrative = _extract_environment_context_from_text(scene.core_scene_info).strip()
-        if env_narrative:
-            logger.info(
-                "[_build_shot_prompts] using Environment Context from core_scene_info scene_id=%s",
-                getattr(scene, "id", None),
-            )
-    
     scene_subject_keys = _extract_scene_subject_candidates()
     scene_subject_index_section, _ = _build_filtered_scene_subject_index(scene_subject_keys)
-    subject_image_prompt_section = _build_subject_image_prompt_section(scene_subject_keys)
-
-    entity_section = ""
-    if entity_descriptions:
-        entity_section = "# Entity Reference\n" + "\n".join(entity_descriptions) + "\n"
-
-    subject_packet_section = ""
-    if subject_packets:
-        subject_packet_section = (
-            "# Relevant Subject Packets\n"
-            "Authoritative upstream subject descriptions for this scene. For each shot, first decide Associated Entities, then inherit only the matching subject packets into Shot Logic and Video Content (CN). Preserve stable identity/state/dependency semantics; do not rename or reinvent them.\n"
-            + "\n".join(subject_packets)
-            + "\n"
-        )
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -20904,9 +21070,6 @@ def _build_shot_prompts(
 | **Core Goal** | {core_goal_text} |
 
 {scene_subject_index_section}
-{subject_image_prompt_section}
-{subject_packet_section}
-{entity_section}
 # Instruction
 1. Analyze the script and break it down into shots.
 """
@@ -20961,7 +21124,7 @@ def _build_shot_regenerate_prompts(
 
     user_prompt = (
         "# Scene Context Reference\n"
-        "The following block is the authoritative current scene context, including scene text and entity descriptions.\n\n"
+        "The following block is the authoritative current scene context, including project context, scene text, and subject index.\n\n"
         f"{str(base_user_prompt or '').strip()}\n\n"
         f"{runtime_rules}\n"
         "# Current Staged Shot Markdown (Authoritative Baseline)\n"

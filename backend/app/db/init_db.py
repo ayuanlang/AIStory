@@ -1595,6 +1595,20 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             # Do not crash startup; but keep visibility
             # raise
 
+        try:
+            inspector = inspect(engine)
+            if inspector.has_table('script_progress_scene_units'):
+                existing_scene_unit_columns = [c['name'] for c in inspector.get_columns('script_progress_scene_units')]
+                if 'scene_markdown' not in existing_scene_unit_columns:
+                    with engine.begin() as conn:
+                        if engine.dialect.name == 'postgresql':
+                            conn.execute(text("ALTER TABLE script_progress_scene_units ADD COLUMN IF NOT EXISTS scene_markdown TEXT"))
+                        else:
+                            conn.execute(text("ALTER TABLE script_progress_scene_units ADD COLUMN scene_markdown TEXT"))
+                    logger.info("Ensured script_progress_scene_units.scene_markdown exists")
+        except Exception as e:
+            logger.error(f"script_progress_scene_units migration failed: {e}")
+
         # 3. Verify Users
         inspector = inspect(engine)
         final_cols = [c['name'] for c in inspector.get_columns('users')]
