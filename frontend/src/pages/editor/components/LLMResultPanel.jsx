@@ -11,31 +11,22 @@ export default function LLMResultPanel({
         () => (Array.isArray(stageCards) ? stageCards.filter(Boolean) : []),
         [stageCards]
     );
-    const [collapsedCards, setCollapsedCards] = React.useState(() => ({}));
+    const [collapsedOverrides, setCollapsedOverrides] = React.useState(() => ({}));
     const [editMode, setEditMode] = React.useState({});
     const [editContents, setEditContents] = React.useState({});
     const [savingStates, setSavingStates] = React.useState({});
 
-    React.useEffect(() => {
-        setCollapsedCards((prev) => {
-            const next = {};
-            let hasChanges = false;
-            normalizedCards.forEach((card) => {
-                const key = String(card.key || card.title || '');
-                const value = Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true;
-                next[key] = value;
-                if (!Object.prototype.hasOwnProperty.call(prev, key) || prev[key] !== value) {
-                    hasChanges = true;
-                }
-            });
-
-            if (!hasChanges && Object.keys(prev).length === normalizedCards.length) {
-                return prev;
-            }
-
-            return next;
+    const collapsedCards = React.useMemo(() => {
+        const merged = {};
+        normalizedCards.forEach((card) => {
+            const key = String(card.key || card.title || '').trim();
+            if (!key) return;
+            merged[key] = Object.prototype.hasOwnProperty.call(collapsedOverrides, key)
+                ? collapsedOverrides[key]
+                : true;
         });
-    }, [normalizedCards]);
+        return merged;
+    }, [collapsedOverrides, normalizedCards]);
 
     return (
         <div className="flex flex-col gap-3 p-4 border border-white/10 rounded-lg bg-black/20 h-auto overflow-y-visible custom-scrollbar">
@@ -66,7 +57,7 @@ export default function LLMResultPanel({
                             } else {
                                 setEditContents(p => ({ ...p, [cardKey]: String(card.content || '') }));
                                 setEditMode(p => ({ ...p, [cardKey]: true }));
-                                setCollapsedCards(p => ({ ...p, [cardKey]: false }));
+                                setCollapsedOverrides(p => ({ ...p, [cardKey]: false }));
                             }
                         };
                         
@@ -94,7 +85,7 @@ export default function LLMResultPanel({
                                     <div className="flex items-center gap-2 flex-wrap justify-end">
                                         <button
                                             type="button"
-                                            onClick={() => setCollapsedCards((prev) => ({ ...prev, [cardKey]: !isCollapsed }))}
+                                            onClick={() => setCollapsedOverrides((prev) => ({ ...prev, [cardKey]: !isCollapsed }))}
                                             className="px-2 py-1 rounded-md bg-white/10 hover:bg-white/15 text-[11px] font-bold text-white/80 border border-white/10 flex items-center gap-1"
                                         >
                                             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isCollapsed ? '' : 'rotate-180'}`} />

@@ -370,6 +370,21 @@ const loadAnalysisSessionSnapshot = (episodeId) => {
     }
 };
 
+const slimAnalysisUiReportForSnapshot = (uiReport) => {
+    if (!uiReport || typeof uiReport !== 'object') return null;
+    return {
+        status: uiReport.status,
+        startedAt: uiReport.startedAt,
+        durationMs: uiReport.durationMs,
+        warning: uiReport.warning,
+        error: uiReport.error,
+        runTag: uiReport.runTag,
+        resolvedSceneImportCount: uiReport.resolvedSceneImportCount,
+        resolvedAssetHandledCounts: uiReport.resolvedAssetHandledCounts,
+        stage3SubtasksOk: uiReport.stage3SubtasksOk,
+    };
+};
+
 const saveAnalysisSessionSnapshot = (episodeId, snapshot) => {
     try {
         const key = getAnalysisSessionStorageKey(episodeId);
@@ -549,6 +564,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [userPrompt, setUserPrompt] = useState('');
     const [isSuperuser, setIsSuperuser] = useState(false);
     const isSuperuserRef = useRef(false);
+    const rawContentRef = useRef('');
+    const lastEpisodeSyncScriptKeyRef = useRef('');
+    const lastEpisodeReuseSubjectIdsKeyRef = useRef('');
+    const lastEpisodeSegmentsScriptKeyRef = useRef('');
+    rawContentRef.current = rawContent;
     const SUBJECT_INDEX_PARSE_ERROR = '第二阶段返回未完成或被截断，未解析到完整的资产清单区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
 
         const extractAnalysisSections = useCallback((rawText) => {
@@ -999,27 +1019,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         if (!activeEpisode) return;
         const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
-        if (authoritativeSubjectText) {
-            const extractedSections = extractAnalysisSections(authoritativeSubjectText);
-            const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
-            const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-            const extractedText = extractPureSubjectIndexText(
-                persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '')
-            );
-            const extractedAdaptationText = persistedAdaptationText || (
-                /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)
-                    ? String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim()
-                    : ''
-            );
+        if (!authoritativeSubjectText) return;
 
-            if (extractedText !== subjectIndexText) {
-                setSubjectIndexText(extractedText);
-            }
-            if (extractedAdaptationText !== adaptationText) {
-                setAdaptationText(extractedAdaptationText);
-            }
-        }
-    }, [llmRawResultContent, llmResultContent, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.id, adaptationText, extractAnalysisSections, extractPureSubjectIndexText, subjectIndexText]);
+        const extractedSections = extractAnalysisSections(authoritativeSubjectText);
+        const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+        const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+        const extractedText = extractPureSubjectIndexText(
+            persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '')
+        );
+        const extractedAdaptationText = persistedAdaptationText || (
+            /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)
+                ? String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim()
+                : ''
+        );
+
+        setSubjectIndexText((prev) => (extractedText !== prev ? extractedText : prev));
+        setAdaptationText((prev) => (extractedAdaptationText !== prev ? extractedAdaptationText : prev));
+    }, [
+        llmRawResultContent,
+        llmResultContent,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.id,
+        extractAnalysisSections,
+        extractPureSubjectIndexText,
+        extractStage1AdaptedScriptBody,
+    ]);
 
     const [subjectConsistencyReport, setSubjectConsistencyReport] = useState(null);
     const [subjectConsistencyResultText, setSubjectConsistencyResultText] = useState('');
@@ -1240,9 +1266,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 createdAt: now,
                 endedAt: null,
             });
-            return next;
+            return next.length > 80 ? next.slice(-80) : next;
         });
-    }, [analysisFlowStatus]);
+    }, [analysisFlowStatus?.phase, analysisFlowStatus?.message, analysisFlowStatus?.highlightHint]);
 
     useEffect(() => {
         latestAnalysisProgressUiRef.current = {
@@ -4105,6 +4131,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     useEffect(() => {
+        if (!activeEpisode) return;
+
+        const scriptContentKey = `${activeEpisode.id || 0}:${String(activeEpisode.script_content || '')}`;
+        const analysisBusy = Boolean(
+            isAnalyzing
+            || isRetryingPhase2
+            || analysisRunInFlightRef.current
+        );
+        if (analysisBusy && lastEpisodeSyncScriptKeyRef.current === scriptContentKey) {
+            return;
+        }
+        lastEpisodeSyncScriptKeyRef.current = scriptContentKey;
+
         const trimScriptForInputDisplay = (raw) => {
             const text = String(raw || '');
             if (!text.trim()) return '';
@@ -4123,42 +4162,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalizedScriptContent = trimScriptForInputDisplay(activeEpisode?.script_content);
 
         if (activeEpisode?.script_content) {
-            setRawContent(normalizedScriptContent);
+            setRawContent((prev) => (prev === normalizedScriptContent ? prev : normalizedScriptContent));
+        } else if (!rawContentRef.current) {
+            setRawContent((prev) => (prev === '' ? prev : ''));
         } else {
-            // Guard: Do not wipe if user has typed something and backend returned empty by mistake
-            if (!rawContent) {
-                setRawContent('');
-            } else {
-                console.warn("[ScriptEditor] activeEpisode has no script_content, but rawContent exists. Ignoring clear.");
-            }
+            console.warn("[ScriptEditor] activeEpisode has no script_content, but rawContent exists. Ignoring clear.");
         }
 
-        const skipAiArtifactSync = Boolean(
-            analysisRunInFlightRef.current
-            || isAnalyzing
-            || isRetryingPhase2
-        );
-        if (!skipAiArtifactSync) {
-            setSubjectIndexText(activeEpisode?.ai_scene_analysis_subject_index || '');
-            setAdaptationText(activeEpisode?.ai_scene_analysis_adaptation || '');
-            setLlmAssetRawResultContent(activeEpisode?.ai_entity_design_result || '');
-            const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
-            const storedText = typeof stored === 'string' ? stored : '';
-            setLlmRawResultContent(storedText);
-            setLlmResultContent(normalizeLlmMarkdownTable(storedText));
+        if (lastEpisodeSegmentsScriptKeyRef.current === scriptContentKey) {
+            return;
         }
-        setAnalysisAttentionNotes(String(activeEpisode?.episode_info?.analysis_attention_notes || ''));
-        setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
-        const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
-        if (Array.isArray(persistedIds)) {
-            setSelectedReuseSubjectIds(persistedIds.map(x => String(x)));
-        } else {
-            setSelectedReuseSubjectIds([]);
-        }
+        lastEpisodeSegmentsScriptKeyRef.current = scriptContentKey;
 
         if (!activeEpisode?.script_content) {
-            setSegments([]);
-            setIsRawMode(true);
+            setSegments((prev) => (prev.length === 0 ? prev : []));
+            setIsRawMode((prev) => (prev ? prev : true));
             return;
         }
 
@@ -4173,8 +4191,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
              
              const headerIdx = lines.findIndex(l => l.includes("Paragraph ID") || l.includes("Content (Revised)"));
              if (headerIdx === -1) {
-                 setSegments([]);
-                 setIsRawMode(true);
+                 setSegments((prev) => (prev.length === 0 ? prev : []));
+                 setIsRawMode((prev) => (prev ? prev : true));
                  return;
              }
 
@@ -4201,8 +4219,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                  setSegments(parsed);
                  setIsRawMode(false);
              } else {
-                 setSegments([]);
-                 setIsRawMode(true);
+                 setSegments((prev) => (prev.length === 0 ? prev : []));
+                 setIsRawMode((prev) => (prev ? prev : true));
              }
              return;
         }
@@ -4250,10 +4268,76 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setSegments(parsed);
             setIsRawMode(false);
         } else {
-            setSegments([]);
-            setIsRawMode(true);
+            setSegments((prev) => (prev.length === 0 ? prev : []));
+            setIsRawMode((prev) => (prev ? prev : true));
         }
-    }, [activeEpisode, isAnalyzing, isRetryingPhase2, normalizeLlmMarkdownTable]);
+    }, [
+        activeEpisode?.id,
+        activeEpisode?.script_content,
+        isAnalyzing,
+        isRetryingPhase2,
+    ]);
+
+    useEffect(() => {
+        if (!activeEpisode) return;
+
+        const skipAiArtifactSync = Boolean(
+            analysisRunInFlightRef.current
+            || isAnalyzing
+            || isRetryingPhase2
+        );
+        if (!skipAiArtifactSync) {
+            const nextSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '');
+            const nextAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '');
+            const nextAssetRaw = String(activeEpisode?.ai_entity_design_result || '');
+            const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
+            const storedText = typeof stored === 'string' ? stored : '';
+            const nextLlmResultContent = normalizeLlmMarkdownTable(storedText);
+
+            setSubjectIndexText((prev) => (prev === nextSubjectIndexText ? prev : nextSubjectIndexText));
+            setAdaptationText((prev) => (prev === nextAdaptationText ? prev : nextAdaptationText));
+            setLlmAssetRawResultContent((prev) => (prev === nextAssetRaw ? prev : nextAssetRaw));
+            setLlmRawResultContent((prev) => (prev === storedText ? prev : storedText));
+            setLlmResultContent((prev) => (prev === nextLlmResultContent ? prev : nextLlmResultContent));
+        }
+
+        const nextAttentionNotes = String(activeEpisode?.episode_info?.analysis_attention_notes || '');
+        const nextConsistencyText = String(activeEpisode?.episode_info?.subject_check_result || '');
+        setAnalysisAttentionNotes((prev) => (prev === nextAttentionNotes ? prev : nextAttentionNotes));
+        setSubjectConsistencyResultText((prev) => (prev === nextConsistencyText ? prev : nextConsistencyText));
+
+        const persistedIds = activeEpisode?.episode_info?.reuse_subject_asset_ids;
+        const reuseIdsKey = `${activeEpisode.id || 0}:${
+            Array.isArray(persistedIds)
+                ? persistedIds.map((item) => String(item)).join(',')
+                : ''
+        }`;
+        if (reuseIdsKey !== lastEpisodeReuseSubjectIdsKeyRef.current) {
+            lastEpisodeReuseSubjectIdsKeyRef.current = reuseIdsKey;
+            const nextReuseIds = reuseIdsKey ? reuseIdsKey.split(',').filter(Boolean) : [];
+            setSelectedReuseSubjectIds((prev) => {
+                if (prev.length === nextReuseIds.length && prev.every((value, index) => value === nextReuseIds[index])) {
+                    return prev;
+                }
+                return nextReuseIds;
+            });
+        }
+    }, [
+        activeEpisode?.id,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.episode_info?.analysis_attention_notes,
+        activeEpisode?.episode_info?.subject_check_result,
+        Array.isArray(activeEpisode?.episode_info?.reuse_subject_asset_ids)
+            ? `${activeEpisode.id || 0}:${activeEpisode.episode_info.reuse_subject_asset_ids.map((item) => String(item)).join(',')}`
+            : `${activeEpisode?.id || 0}:`,
+        isAnalyzing,
+        isRetryingPhase2,
+        normalizeLlmMarkdownTable,
+    ]);
 
     useEffect(() => {
         let mounted = true;
@@ -4650,8 +4734,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 flowStatus: (ui.flowStatus && typeof ui.flowStatus === 'object')
                     ? ui.flowStatus
                     : { phase: 'idle', message: '' },
-                flowHistory: Array.isArray(ui.flowHistory) ? ui.flowHistory : [],
-                uiReport: (ui.uiReport && typeof ui.uiReport === 'object') ? ui.uiReport : null,
+                flowHistory: Array.isArray(ui.flowHistory) ? ui.flowHistory.slice(-80) : [],
+                uiReport: slimAnalysisUiReportForSnapshot(ui.uiReport),
             };
         saveAnalysisSessionSnapshot(id, {
             ...prev,
@@ -5034,6 +5118,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             console.warn('[ScriptEditor] Failed to refresh analysis from DB', e);
         }
     }, [activeEpisode?.id, llmAssetRawResultContent, llmRawResultContent, normalizeLlmMarkdownTable]);
+
+    const refreshAnalysisFromDBRef = useRef(refreshAnalysisFromDB);
+    refreshAnalysisFromDBRef.current = refreshAnalysisFromDB;
 
     const waitForEpisodeAnalysisResultUpdate = useCallback(async ({ baselineText = '', timeoutMs = 600000, intervalMs = 3500, resultField = 'ai_scene_analysis_result', expectedResultKind = '' } = {}) => {
         const sleepMs = Math.max(5000, Number(intervalMs || 3500));
@@ -6733,13 +6820,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         // On episode change/remount, prefer parent-provided field; fallback to DB refresh.
         const initial = activeEpisode?.ai_scene_analysis_result || '';
-        setLlmRawResultContent(initial);
-        setLlmResultContent(normalizeLlmMarkdownTable(initial));
-        setSubjectConsistencyResultText(String(activeEpisode?.episode_info?.subject_check_result || ''));
-        setAnalysisRuntimeMeta(null);
+        const normalizedInitial = normalizeLlmMarkdownTable(initial);
+        setLlmRawResultContent((prev) => (prev === initial ? prev : initial));
+        setLlmResultContent((prev) => (prev === normalizedInitial ? prev : normalizedInitial));
+        const nextConsistencyText = String(activeEpisode?.episode_info?.subject_check_result || '');
+        setSubjectConsistencyResultText((prev) => (prev === nextConsistencyText ? prev : nextConsistencyText));
+        setAnalysisRuntimeMeta((prev) => (prev === null ? prev : null));
         lastLoadedAnalysisRef.current = initial;
+        lastEpisodeSegmentsScriptKeyRef.current = '';
+        lastEpisodeSyncScriptKeyRef.current = '';
+        lastEpisodeReuseSubjectIdsKeyRef.current = '';
         if (!initial) {
-            refreshAnalysisFromDB();
+            refreshAnalysisFromDBRef.current();
         }
     }, [activeEpisode?.id, normalizeLlmMarkdownTable]);
 
@@ -10548,10 +10640,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const exists = currentKey && filteredPhase2RerunSubjectEntries.some((item) => item.key === currentKey);
         if (exists) return;
         const fallback = filteredPhase2RerunSubjectEntries[0] || phase2RerunDisplayEntries.find((item) => item.category === phase2RerunModal.category) || phase2RerunDisplayEntries[0] || null;
-        if (!fallback?.key && !currentKey) return;
+        const nextKey = String(fallback?.key || '').trim();
+        if (!nextKey && !currentKey) return;
+        if (nextKey === currentKey) return;
         setPhase2RerunModal((prev) => ({
             ...prev,
-            subjectKey: fallback?.key || '',
+            subjectKey: nextKey,
         }));
     }, [
         filteredPhase2RerunSubjectEntries,
@@ -11507,72 +11601,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div>
                                     <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
                                 </div>
-                                {(() => {
-                                    const subtaskReports = Array.isArray(analysisUiReport?.importReport?.sceneSubjectPostImportReport?.subtaskReports)
-                                        ? analysisUiReport.importReport.sceneSubjectPostImportReport.subtaskReports
-                                        : [];
-                                    if (!subtaskReports.length) return null;
-                                    const failedCount = subtaskReports.filter((item) => String(item?.status || '').trim().toLowerCase() !== 'ok').length;
-                                    return (
-                                        <div className="rounded-md border border-sky-400/30 bg-sky-500/10 px-2.5 py-2">
-                                            <div className="font-medium text-sky-100 mb-2 flex items-center justify-between gap-2">
-                                                <span>🧵 {t('并发子任务导入明细', 'Parallel Subtask Import Details')}</span>
-                                                {failedCount > 0 && (
-                                                    <button
-                                                        onClick={handleRerunFailedAssetSubtasks}
-                                                        disabled={isRetryingPhase2 || isAnalyzing}
-                                                        className={`px-2 py-1 rounded text-[10px] font-bold border ${isRetryingPhase2 || isAnalyzing ? 'bg-white/5 text-white/40 border-white/10 cursor-not-allowed' : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/40 text-amber-100'}`}
-                                                        title={t('自动识别失败路由并仅重跑失败路由', 'Auto detect failed routes and rerun failed routes only')}
-                                                    >
-                                                        {isRetryingPhase2 ? t('重跑中...', 'Rerunning...') : t('重跑失败路由', 'Rerun Failed Routes')}
-                                                    </button>
-                                                )}
-                                            </div>
-                                            <div className="space-y-1.5">
-                                                {subtaskReports.map((item, idx) => {
-                                                    const status = String(item?.status || '').trim().toLowerCase();
-                                                    const isOk = status === 'ok';
-                                                    const statusText = isOk
-                                                        ? t('成功', 'OK')
-                                                        : (status === 'import_failed'
-                                                            ? t('导入失败', 'Import Failed')
-                                                            : (status === 'incomplete_return'
-                                                                ? t('返回不完整', 'Incomplete Return')
-                                                                : t('LLM失败', 'LLM Failed')));
-                                                    return (
-                                                        <div
-                                                            key={`${String(item?.traceId || item?.key || 'subtask')}-${idx}`}
-                                                            className={`rounded border px-2 py-1.5 text-[11px] ${isOk ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-400/40 bg-amber-500/10 text-amber-100'}`}
-                                                        >
-                                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                                                <span className="font-semibold">{String(item?.key || `slot${idx + 1}`)}</span>
-                                                                <span className="opacity-90">{t('状态', 'Status')}: {statusText}</span>
-                                                                <span className="opacity-90">{t('新增', 'Created')}: {Number(item?.created || 0)}</span>
-                                                                <span className="opacity-90">{t('跳过', 'Skipped')}: {Number(item?.skipped || 0)}</span>
-                                                            </div>
-                                                            <div className="mt-1 opacity-80 break-all">
-                                                                trace_id: {String(item?.traceId || '-')}
-                                                            </div>
-                                                            <div className="opacity-80 break-all">
-                                                                session_id: {String(item?.importSessionId || '-')}
-                                                            </div>
-                                                            {String(item?.error || '').trim() && (
-                                                                <div className="mt-1 text-red-200/90 break-words">
-                                                                    {t('错误', 'Error')}: {String(item.error).trim()}
-                                                                </div>
-                                                            )}
-                                                            {String(item?.recommendation || '').trim() && (
-                                                                <div className="mt-1 text-amber-100/95 break-words">
-                                                                    {t('处理建议', 'Suggestion')}: {String(item.recommendation).trim()}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
                                 {String(analysisUiReport?.warning || '').trim() && (
                                     <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100">
                                         <span className="font-medium">⚠️ {t('提示', 'Notice')}:</span> {String(analysisUiReport.warning).trim()}
