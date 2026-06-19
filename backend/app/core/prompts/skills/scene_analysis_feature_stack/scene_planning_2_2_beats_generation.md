@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
-# Prompt Updated At: 2026-06-19 26:30:00 +08:00
+# Prompt Updated At: 2026-06-20 20:00:00 +08:00
 
 # Skill 1-2-2: 视听继承与标准化映射
 
@@ -12,7 +12,8 @@
 - **Core Scene Info 完整性（最高优先级）**：`Core Scene Info` 列必须**完整包含** Stage 1 对应 Scene 的全部可核销信息，不得遗漏、概括、缩写或“同上/见前/略”。允许按字段模板压缩排版，但**信息零丢失**；Stage 1 已写的每一条动作链、对白/OS/V.O.、**对白拆句判定**、微反应、听众反应、全员反馈、环境切换、站位表达式、FG/MG/BG、建置更新、转场、首节拍技巧、表情细节、间歇插帧、状态触发，都必须能在 `Core Scene Info` 中逐条检索到对应落点（主要在 `{Beats}` 及各继承字段）。禁止把 Stage 1 内容只留在 `Adapted Script Text` 或表格外列而不写入 `Core Scene Info`。
 - **继承范围**：剧情结构、Scene/Beat 边界、对白/OS/V.O.、**对白拆句判定**、动作链、微表情/微动作/微反应、每场细节特写、心理可视化、环境补充、主/衍生环境、站位表达式、**逐 Beat 观察视角—环境—建置三联**、观察视角、轴线、环境切至/返回、转场、动作路径、说话动作切口、听众状态、间歇可视片段、首节拍技巧、景深层次建置（FG/MG/BG）、Beat 建置更新判定。
 - **标准格式**：场景说明字段继承 Stage 1；**资产实体命名唯一权威源**为 Stage 2-1 `Subject Index`。
-- **实体命名唯一权威源（强制）**：Stage 1 仅提供自然语言称呼与交互语义，**不含**资产分类。所有资产实体引用——含 `ENV:`/`CHAR:`/`PROP:`、`Environment Name`、`Linked Characters`、`Key Props`、`{登场实体}`、Beat 内 `{空间}`/`{景深层次}`/`{环境交互}`/`{关键感知焦点}`/`{结果落位}`、`Observer View`、`Base Environment Reference` 及任何锚点/依赖引用——**必须且只能**使用 `Subject Index` 中 `subject_name_zh` / `subject_name_en` 的逐字原名；**禁止**引用 Stage 1 `Adapted Script`、【主环境】/【衍生环境】/【Scene实体覆盖】等字段中的称呼、简称、别名、概括名或示例名；**禁止**引用本表 `Core Scene Info` 自然语言里已出现的非 Index 实体名；**禁止**自行新建、翻译、缩写、同义替换、补词或修正标点/空格/大小写。Stage 1 叙述中的实体称呼仅作语义核销依据，落表时必须**替换为** Subject Index 标准名。Stage 1 无 `ENV:`/`CHAR:`/`PROP:` 前缀属正常，不得因此沿用 Stage 1 原名输出。Stage 1 与 Subject Index 命名冲突时**一律以 Subject Index 为准**，并在 `{覆盖核销}` 标注 `实体名不一致已按Subject Index校正`。
+- **标准实体表达转换（强制，双源交集）**：凡**同时**满足以下两项的实体——① 已列入输入 `Subject Index`；② 在 Stage 1 剧本信息（`Adapted Script`、单场【场景说明】、Beat 循环、【Scene实体覆盖】、对白/动作/环境切换等任一字段）中有对应语义出现——输出时**必须**转换为标准实体表达方式：按 Index `subject_type` 选用 `CHAR:`/`ENV:`/`PROP:` 前缀，名称逐字取自 `subject_name_zh`/`subject_name_en`（格式 `TYPE:[名称]`；角色沿用 `CHAR:[@名称]` 惯例）。Stage 1 自然语言称呼、简称、别名、概括名**仅作语义核销与映射依据**，落表时一律替换为标准表达；**禁止**在 `{登场实体}`、`Environment Name`、`Linked Characters`、`Key Props`、Beat 内 `{空间}`/`{景深层次}`/`{环境交互}`/`{关键感知焦点}`/`{结果落位}`、`Observer View`、`Base Environment Reference` 及任何锚点/依赖引用中保留 Stage 1 原名。
+- **实体命名唯一权威源（强制）**：Stage 1 仅提供自然语言称呼与交互语义，**不含**资产分类。所有资产实体引用——含上述标准实体表达的全部落位——**必须且只能**使用 `Subject Index` 中 `subject_name_zh` / `subject_name_en` 的逐字原名；**禁止**引用 Stage 1 `Adapted Script`、【主环境】/【衍生环境】/【Scene实体覆盖】等字段中的称呼、简称、别名、概括名或示例名；**禁止**引用本表 `Core Scene Info` 自然语言里已出现的非 Index 实体名；**禁止**自行新建、翻译、缩写、同义替换、补词或修正标点/空格/大小写。Stage 1 无 `ENV:`/`CHAR:`/`PROP:` 前缀属正常，不得因此沿用 Stage 1 原名输出。Stage 1 与 Subject Index 命名冲突时**一律以 Subject Index 为准**，并在 `{覆盖核销}` 标注 `实体名不一致已按Subject Index校正`。
 - **边界锁定**：Scene、Beat、主环境数量与顺序继承 Stage 1；`Subject Index` 已有实体必须按剧情功能落地到对应 Scene/Beat；禁止新增、合并、拆分、重命名。
 - **缺口处理**：`Subject Index` 缺实体，或 Stage 1 缺动作/对白/切换证据时写 `{覆盖核销}`。`Subject Index` 已有但 Stage 1 未显式写出的实体不算缺口，必须主动安置。
 - **禁止**：剧情改写、对白优化、心理扩写、动作加戏、道具补创、空间/轴线/转场补建、镜头方案设计。
@@ -43,10 +44,10 @@
 - **补入不加戏**：补入 `ENV/CHAR/PROP` 仅用于空间承接、观察方向、道具位置、阻隔关系、感知焦点、状态延续；不得新增动作、对白、情绪、因果事件。
 - **对白/群体/时长**：对白保留说话人、OS/V.O.、**成稿原文（含 Stage 1 情绪标点，逐字继承）**、voice_type、tone、speed、volume、`标点意图`（若 Stage 1 已写）；未说话者写闭口/倾听/None。群体按 Stage 1 粒度。`Equivalent Duration` 仅按 Stage 1 已写内容估算。  
 - **对白拆句判定继承（强制）**：每场须在 `Core Scene Info` 写入 `{对白拆句判定}`，完整继承 Stage 1【对白拆句判定】：`已拆句|未拆句|无对白` 及依据/对照表；禁止省略或只在 Beat 内隐含而不写 Scene 级字段。Stage 1 缺该字段时在 `{覆盖核销}` 写 `上游对白拆句判定缺口`。  
-- **输出前完整性自检（强制）**：逐 Scene 对照 Stage 1 输入，确认 `Core Scene Info` 已覆盖：全部 Scene 级字段（**含 {对白拆句判定}**）、全部 Beat 数量与顺序、每条对白/OS/V.O. 原文、每个动作链节点、每次环境切换、**每个 Beat 的 Observer View 与视角—环境—建置一致性**、每次建置更新与 FG/MG/BG、全部听众/全员反馈、全部 Subject Index 应落地实体。任一输入项在 `Core Scene Info` 中不可检索 → 必须补写；确实无法映射才在 `{覆盖核销}` 标缺口，禁止静默省略。**实体命名自检**：逐条核对输出中每个 `CHAR:`/`ENV:`/`PROP:` 及表格实体列是否与 Subject Index 逐字一致；发现 Stage 1/Core Scene Info 非 Index 名 → 必须改回 Index 原名后再输出。
+- **输出前完整性自检（强制）**：逐 Scene 对照 Stage 1 输入，确认 `Core Scene Info` 已覆盖：全部 Scene 级字段（**含 {对白拆句判定}**）、全部 Beat 数量与顺序、每条对白/OS/V.O. 原文、每个动作链节点、每次环境切换、**每个 Beat 的 Observer View 与视角—环境—建置一致性**、每次建置更新与 FG/MG/BG、全部听众/全员反馈、全部 Subject Index 应落地实体。任一输入项在 `Core Scene Info` 中不可检索 → 必须补写；确实无法映射才在 `{覆盖核销}` 标缺口，禁止静默省略。**实体命名自检**：逐条交叉核对——凡 Index 与 Stage 1 剧本**双源均出现**的实体，输出中是否已全部转为 `CHAR:`/`ENV:`/`PROP:` 标准表达；逐条核对输出中每个标准实体引用及表格实体列是否与 Subject Index 逐字一致；发现 Stage 1/Core Scene Info 非 Index 名或未加类型前缀 → 必须改回 Index 标准表达后再输出。
 
 ## Core Scene Info 字段
-> **总原则**：以下每个字段均须从 Stage 1 / Subject Index **完整继承**输入信息；缺项标缺口，有项必写，禁止留空或“略”。Beat 级细节统一落入 `{Beats}`，Scene 级细节落入对应 Scene 字段；两者合计必须覆盖输入全部内容。**实体命名例外**：叙述性内容继承 Stage 1，但一切资产实体标识符**只认 Subject Index**，不得混用 Stage 1 或 Core Scene Info 中的其他称呼。
+> **总原则**：以下每个字段均须从 Stage 1 / Subject Index **完整继承**输入信息；缺项标缺口，有项必写，禁止留空或“略”。Beat 级细节统一落入 `{Beats}`，Scene 级细节落入对应 Scene 字段；两者合计必须覆盖输入全部内容。**实体命名例外**：叙述性内容继承 Stage 1，但凡 Index 与 Stage 1 剧本双源均出现的实体，输出时必须转换为 `CHAR:`/`ENV:`/`PROP:` 标准表达，名称**只认 Subject Index**，不得混用 Stage 1 自然语言称呼或 Core Scene Info 中的非 Index 名。
 - **{细节特写规划}**：继承 Stage 1【细节特写规划】；每场至少 1 处；缺失标上游缺口。  
 - **{核销源}**：继承 Stage 1【核销源】；缺失标上游缺口。
 - **{故事内核}**：继承叙事目标、冲突态势、本场落点。

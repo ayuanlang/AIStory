@@ -499,6 +499,117 @@ const isDummySubject = (itemName) => {
     return ['subjectindex', 'subjectsindex', 'sceneanalysis', 'entities', 'character', 'characters', 'prop', 'props', 'environment', 'environments', 'role', 'roles', 'item', 'items', 'scene', 'scenes', '角色', '道具', '场景', '人物', '环境', '物件'].includes(lcName);
 };
 
+const SUBJECT_INDEX_STANDARD_HEADERS = [
+    'subject_no',
+    'subject_type',
+    'subject_name_zh',
+    'subject_name_en',
+    'base_entity',
+    'dependency_reference',
+    'entity_attributes',
+    'script_entity_coverage',
+];
+
+const SUBJECT_INDEX_LONG_TEXT_FIELDS = new Set([
+    'entity_attributes',
+    'script_entity_coverage',
+    'description',
+    'description_cn',
+    'narrative_description',
+]);
+
+const SUBJECT_INDEX_FIELD_LABELS = {
+    subject_no: { zh: '编号', en: 'Subject No' },
+    subject_type: { zh: '类型', en: 'Type' },
+    subject_name_zh: { zh: '中文名', en: 'Name (ZH)' },
+    subject_name_en: { zh: '英文名', en: 'Name (EN)' },
+    base_entity: { zh: '基准实体', en: 'Base Entity' },
+    dependency_reference: { zh: '依赖引用', en: 'Dependency Reference' },
+    entity_attributes: { zh: '实体属性', en: 'Entity Attributes' },
+    script_entity_coverage: { zh: '剧本覆盖', en: 'Script Coverage' },
+};
+
+const resolveSubjectFieldValueByAliases = (fields, aliases = []) => {
+    if (!fields || typeof fields !== 'object') return '';
+    const normalizedMap = {};
+    Object.entries(fields).forEach(([key, value]) => {
+        const stableKey = String(key || '').trim();
+        if (!stableKey) return;
+        normalizedMap[stableKey] = String(value ?? '');
+        normalizedMap[stableKey.toLowerCase()] = String(value ?? '');
+        normalizedMap[stableKey.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_')] = String(value ?? '');
+    });
+    for (const alias of aliases) {
+        const stableAlias = String(alias || '').trim();
+        if (!stableAlias) continue;
+        const candidates = [
+            stableAlias,
+            stableAlias.toLowerCase(),
+            stableAlias.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_'),
+        ];
+        for (const candidate of candidates) {
+            if (Object.prototype.hasOwnProperty.call(normalizedMap, candidate)) {
+                return String(normalizedMap[candidate] ?? '').trim();
+            }
+        }
+    }
+    return '';
+};
+
+const normalizeSubjectIndexEntryFields = (rawFields = {}, entry = {}) => {
+    const merged = {};
+    if (rawFields && typeof rawFields === 'object') {
+        Object.entries(rawFields).forEach(([key, value]) => {
+            const stableKey = String(key || '').trim();
+            if (!stableKey) return;
+            merged[stableKey] = String(value ?? '').trim();
+        });
+    }
+
+    const aliasGroups = {
+        subject_no: ['subject_no', 'id', '编号'],
+        subject_type: ['subject_type', 'type', '类型', '类别'],
+        subject_name_zh: ['subject_name_zh', 'subject_name_exact', 'subject_name', 'name', '名称', '名字'],
+        subject_name_en: ['subject_name_en', 'name_en', 'english_name', 'en_name'],
+        base_entity: ['base_entity', 'base_entity_zh', '基准实体'],
+        dependency_reference: ['dependency_reference', 'dependency', '依赖引用'],
+        entity_attributes: ['entity_attributes', 'attributes', '实体属性'],
+        script_entity_coverage: ['script_entity_coverage', 'coverage', '剧本覆盖'],
+    };
+
+    const resolved = {};
+    Object.entries(aliasGroups).forEach(([canonical, aliases]) => {
+        let value = String(merged[canonical] || '').trim();
+        if (!value) {
+            value = resolveSubjectFieldValueByAliases(merged, aliases);
+        }
+        if (!value && canonical === 'subject_name_zh') {
+            value = String(entry?.name || '').trim();
+        }
+        if (!value && canonical === 'subject_no') {
+            value = String(entry?.subjectNo || '').trim();
+        }
+        if (!value && canonical === 'subject_type') {
+            value = String(entry?.type || '').trim();
+        }
+        resolved[canonical] = value;
+    });
+
+    SUBJECT_INDEX_STANDARD_HEADERS.forEach((header) => {
+        if (!Object.prototype.hasOwnProperty.call(resolved, header)) {
+            resolved[header] = '';
+        }
+    });
+
+    Object.entries(merged).forEach(([key, value]) => {
+        const stableKey = String(key || '').trim();
+        if (!stableKey || SUBJECT_INDEX_STANDARD_HEADERS.includes(stableKey)) return;
+        resolved[stableKey] = String(value ?? '').trim();
+    });
+
+    return resolved;
+};
+
 const SUBJECT_CONSISTENCY_CHECK_ENABLED = false;
 
 const createSkippedSubjectConsistencyReport = () => ({
@@ -11577,8 +11688,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 type: normalizeSubjectIndexTypeForAssetTask(finalSubjectType),
                 category: mapped.category,
                 targetEntityTypes: mapped.targetEntityTypes,
-                fields: normalizedObject,
-                fieldOrder: Array.isArray(fieldOrder) ? fieldOrder.map((field) => String(field || '').trim()).filter(Boolean) : Object.keys(normalizedObject),
+                fields: normalizeSubjectIndexEntryFields(normalizedObject, {
+                    subjectNo: finalSubjectNo,
+                    name: displayName,
+                    type: normalizeSubjectIndexTypeForAssetTask(finalSubjectType),
+                }),
+                fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
                 sourceText: String(sourceBlock || sourceLine || '').trim(),
                 sourceLine: String(sourceLine || sourceBlock || '').trim(),
             });
@@ -11665,72 +11780,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         [parseSubjectIndexEntriesForAssetRerun, resolveSubjectIndexTextForAssetRerun]
     );
 
-    const getSubjectFieldValueByAliases = useCallback((fields, aliases = []) => {
-        if (!fields || typeof fields !== 'object') return '';
-        const normalizedMap = {};
-        Object.entries(fields).forEach(([key, value]) => {
-            const stableKey = String(key || '').trim();
-            if (!stableKey) return;
-            normalizedMap[stableKey] = String(value ?? '');
-            normalizedMap[stableKey.toLowerCase()] = String(value ?? '');
-            normalizedMap[stableKey.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_')] = String(value ?? '');
-        });
-        for (const alias of aliases) {
-            const stableAlias = String(alias || '').trim();
-            if (!stableAlias) continue;
-            const candidates = [
-                stableAlias,
-                stableAlias.toLowerCase(),
-                stableAlias.toLowerCase().replace(/[^a-z0-9_\u4e00-\u9fa5]+/g, '_'),
-            ];
-            for (const candidate of candidates) {
-                if (Object.prototype.hasOwnProperty.call(normalizedMap, candidate)) {
-                    return String(normalizedMap[candidate] ?? '').trim();
-                }
-            }
-        }
-        return '';
-    }, []);
+    const getSubjectFieldValueByAliases = useCallback((fields, aliases = []) => (
+        resolveSubjectFieldValueByAliases(fields, aliases)
+    ), []);
+
+    const buildFullSubjectIndexTextFromEntries = useCallback((entries) => {
+        const rows = (entries || []).map((entry) => {
+            const fields = normalizeSubjectIndexEntryFields(entry?.fields, entry);
+            return SUBJECT_INDEX_STANDARD_HEADERS.map((header) => String(fields[header] ?? '').trim());
+        }).filter((row) => row.some((cell) => String(cell || '').trim()));
+
+        if (!rows.length) return '';
+        return `### Subject Index\n\n${buildMarkdownTable(SUBJECT_INDEX_STANDARD_HEADERS, rows)}`.trim();
+    }, [buildMarkdownTable]);
 
     const buildSingleSubjectIndexTextForRerun = useCallback((entry) => {
-        const rawFields = (entry?.fields && typeof entry.fields === 'object') ? entry.fields : {};
-        const normalizedFields = {};
-        Object.entries(rawFields).forEach(([key, value]) => {
-            const stableKey = String(key || '').trim();
-            if (!stableKey) return;
-            normalizedFields[stableKey] = String(value ?? '').trim();
-        });
-        const subjectType = String(entry?.type || getSubjectFieldValueByAliases(normalizedFields, ['subject_type', 'type', '类型', '类别']) || '').trim();
+        const normalizedFields = normalizeSubjectIndexEntryFields(entry?.fields, entry);
+        const subjectType = String(entry?.type || normalizedFields.subject_type || '').trim();
         const subjectName = String(
-            entry?.name
-            || getSubjectFieldValueByAliases(normalizedFields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])
+            normalizedFields.subject_name_zh
+            || entry?.name
             || ''
         ).trim();
-        const subjectNo = String(entry?.subjectNo || getSubjectFieldValueByAliases(normalizedFields, ['subject_no', 'id', '编号']) || '').trim();
         if (!subjectType || !subjectName) return '';
 
-        if (!normalizedFields.subject_type) normalizedFields.subject_type = subjectType;
-        if (!normalizedFields.subject_name_exact) normalizedFields.subject_name_exact = subjectName;
-        if (subjectNo && !normalizedFields.subject_no) normalizedFields.subject_no = subjectNo;
+        normalizedFields.subject_type = subjectType;
+        normalizedFields.subject_name_zh = subjectName;
+        if (!normalizedFields.subject_no && entry?.subjectNo) normalizedFields.subject_no = String(entry.subjectNo).trim();
 
-        const preferredOrder = Array.isArray(entry?.fieldOrder) ? entry.fieldOrder : [];
-        const headers = [];
-        const headerSeen = new Set();
-        preferredOrder.forEach((key) => {
-            const stableKey = String(key || '').trim();
-            if (!stableKey || headerSeen.has(stableKey)) return;
-            headers.push(stableKey);
-            headerSeen.add(stableKey);
-        });
-        Object.keys(normalizedFields).forEach((key) => {
-            if (headerSeen.has(key)) return;
-            headers.push(key);
-            headerSeen.add(key);
-        });
-
+        const extraHeaders = Object.keys(normalizedFields).filter((key) => !SUBJECT_INDEX_STANDARD_HEADERS.includes(key));
+        const headers = [...SUBJECT_INDEX_STANDARD_HEADERS, ...extraHeaders];
         const row = headers.map((key) => String(normalizedFields[key] ?? '').trim());
         return buildMarkdownTable(headers, [row]);
-    }, [buildMarkdownTable, getSubjectFieldValueByAliases]);
+    }, [buildMarkdownTable]);
 
     const phase2RerunDisplayEntries = useMemo(() => {
         const deletedMap = (phase2RerunModal?.deletedSubjectKeys && typeof phase2RerunModal.deletedSubjectKeys === 'object')
@@ -11751,7 +11833,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextType = String(getSubjectFieldValueByAliases(nextFields, ['subject_type', 'type', '类型', '类别']) || originalEntry.type || '').trim();
             const nextSubjectNo = String(getSubjectFieldValueByAliases(nextFields, ['subject_no', 'id', '编号']) || originalEntry.subjectNo || '').trim();
             const nextName = String(
-                getSubjectFieldValueByAliases(nextFields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])
+                getSubjectFieldValueByAliases(nextFields, ['subject_name_zh', 'subject_name_exact', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])
                 || originalEntry.name
                 || ''
             ).trim();
@@ -11765,8 +11847,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 type: nextType,
                 category: mapped.category,
                 targetEntityTypes: mapped.targetEntityTypes,
-                fields: nextFields,
-                fieldOrder: nextFieldOrder,
+                fields: normalizeSubjectIndexEntryFields(nextFields, {
+                    ...originalEntry,
+                    subjectNo: nextSubjectNo,
+                    name: nextName,
+                    type: nextType,
+                }),
+                fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
             };
             if (!merged.name) return acc;
             const sourceText = buildSingleSubjectIndexTextForRerun(merged);
@@ -11788,15 +11875,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const filteredPhase2RerunSubjectEntries = useMemo(() => {
+        const mode = String(phase2RerunModal.mode || 'all').trim();
         const category = String(phase2RerunModal.category || '').trim();
         const query = String(phase2RerunModal.query || '').trim().toLowerCase();
         return phase2RerunDisplayEntries.filter((item) => {
-            if (category && item.category !== category) return false;
+            if ((mode === 'category' || mode === 'single') && category && item.category !== category) return false;
             if (!query) return true;
             return [item.subjectNo, item.name, item.type, item.sourceLine]
                 .some((value) => String(value || '').toLowerCase().includes(query));
         });
-    }, [phase2RerunDisplayEntries, phase2RerunModal.category, phase2RerunModal.query]);
+    }, [phase2RerunDisplayEntries, phase2RerunModal.category, phase2RerunModal.mode, phase2RerunModal.query]);
 
     const openPhase2RerunModal = useCallback((patch = {}) => {
         const nextCategory = String(patch.category || phase2RerunModal.category || 'characters').trim();
@@ -11886,21 +11974,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const beginEditPhase2RerunEntry = useCallback((entry) => {
         if (!entry?.key) return;
-        const entryFields = (entry.fields && typeof entry.fields === 'object') ? entry.fields : {};
-        const clonedFields = Object.entries(entryFields).reduce((acc, [key, value]) => {
-            const stableKey = String(key || '').trim();
-            if (!stableKey) return acc;
-            acc[stableKey] = String(value ?? '');
-            return acc;
-        }, {});
+        const normalizedFields = normalizeSubjectIndexEntryFields(entry?.fields, entry);
         setPhase2RerunModal((prev) => ({
             ...prev,
             editingSubjectKey: entry.key,
             subjectEdits: {
                 ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}),
                 [entry.key]: {
-                    fields: clonedFields,
-                    fieldOrder: Array.isArray(entry.fieldOrder) ? [...entry.fieldOrder] : Object.keys(clonedFields),
+                    fields: normalizedFields,
+                    fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
                 },
             },
         }));
@@ -11932,7 +12014,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!entryKey) return;
         const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
         const fields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
-        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_exact', 'subject_name_zh', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])).trim();
+        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_zh', 'subject_name_exact', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])).trim();
         const nextType = String(getSubjectFieldValueByAliases(fields, ['subject_type', 'type', '类型', '类别'])).trim();
         if (!nextName) {
             alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
@@ -11977,10 +12059,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        const editedSubjectIndexText = buildFullSubjectIndexTextFromEntries(phase2RerunDisplayEntries);
+        const hasEdits = Object.keys(phase2RerunModal?.subjectEdits || {}).length > 0;
+        const hasDeletions = Object.keys(phase2RerunModal?.deletedSubjectKeys || {}).length > 0;
+        const resolvedEditedText = editedSubjectIndexText || sourceText;
+
         let retryOptions = {};
         if (mode === 'category') {
             const option = assetRerunCategoryOptions.find((item) => item.key === phase2RerunModal.category) || assetRerunCategoryOptions[0];
-            retryOptions = { targetEntityTypes: option.targetEntityTypes };
+            retryOptions = {
+                targetEntityTypes: option.targetEntityTypes,
+                explicitSubjectIndexText: resolvedEditedText,
+            };
         } else if (mode === 'single') {
             const selected = filteredPhase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey)
                 || filteredPhase2RerunSubjectEntries[0]
@@ -11996,21 +12086,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     subjectNo: selected.subjectNo,
                     name: selected.name,
                     type: selected.type,
-                    fields: (selected.fields && typeof selected.fields === 'object') ? selected.fields : {},
+                    fields: normalizeSubjectIndexEntryFields(selected.fields, selected),
                 },
             };
+        } else {
+            retryOptions = { explicitSubjectIndexText: resolvedEditedText };
         }
 
         setPhase2RerunModal((prev) => ({ ...prev, open: false }));
+
+        if ((hasEdits || hasDeletions) && resolvedEditedText) {
+            try {
+                setSubjectIndexText(extractPureSubjectIndexText(resolvedEditedText));
+                await persistLlmResultContent(resolvedEditedText, 'ai_scene_analysis_subject_index', { source: 'asset-rerun-subject-index-edit' });
+            } catch (error) {
+                console.warn('Failed to persist edited Subject Index before asset rerun:', error);
+            }
+        }
+
         await handleRetryPhase2(retryOptions);
     }, [
         assetRerunCategoryOptions,
+        buildFullSubjectIndexTextFromEntries,
+        extractPureSubjectIndexText,
         filteredPhase2RerunSubjectEntries,
         handleRetryPhase2,
-        phase2RerunModal.category,
-        phase2RerunModal.mode,
-        phase2RerunModal.subjectKey,
+        persistLlmResultContent,
         phase2RerunDisplayEntries,
+        phase2RerunModal.category,
+        phase2RerunModal.deletedSubjectKeys,
+        phase2RerunModal.mode,
+        phase2RerunModal.subjectEdits,
+        phase2RerunModal.subjectKey,
         resolveSubjectIndexTextForAssetRerun,
         t,
     ]);
@@ -13317,7 +13424,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div className="rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-emerald-100">
                                     <div className="font-semibold">{t('将重新生成全部资产类型', 'All asset types will be regenerated')}</div>
                                     <div className="mt-1 text-xs text-emerald-100/75">
-                                        {t('包括角色、道具、环境与封面/海报。', 'Includes characters, props, environments, posters and covers.')}
+                                        {t('包括角色、道具、环境与封面/海报；可在下方编辑 Subject Index 各实体字段。', 'Includes characters, props, environments, posters and covers. Edit Subject Index fields below.')}
                                     </div>
                                 </div>
                             )}
@@ -13356,12 +13463,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {t('将仅重跑所选分类', 'Only the selected category will be regenerated')}
                                     </div>
                                     <div className="mt-1 text-xs text-sky-100/75">
-                                        {t('系统会从当前 Subject Index 中筛出该分类，再进入资产设计。', 'The current Subject Index will be filtered to this category before asset design.')}
+                                        {t('系统会从当前 Subject Index 中筛出该分类，再进入资产设计；可在下方编辑各实体字段。', 'The current Subject Index will be filtered to this category before asset design. You can edit entity fields below.')}
                                     </div>
                                 </div>
                             )}
 
-                            {phase2RerunModal.mode === 'single' && (
+                            {(phase2RerunModal.mode === 'all' || phase2RerunModal.mode === 'category' || phase2RerunModal.mode === 'single') && (
                                 <div className="space-y-3">
                                     <input
                                         value={phase2RerunModal.query || ''}
@@ -13369,16 +13476,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         placeholder={t('搜索编号或实体名...', 'Search subject number or name...')}
                                         className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none focus:border-purple-400/50"
                                     />
-                                    <div className="rounded-lg border border-white/10 bg-black/20 max-h-[280px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
+                                    <div className="rounded-lg border border-white/10 bg-black/20 max-h-[360px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
                                         {filteredPhase2RerunSubjectEntries.length > 0 ? filteredPhase2RerunSubjectEntries.map((item) => {
-                                            const active = phase2RerunModal.subjectKey === item.key;
+                                            const isSingleMode = phase2RerunModal.mode === 'single';
+                                            const active = isSingleMode && phase2RerunModal.subjectKey === item.key;
                                             const isEditing = phase2RerunModal.editingSubjectKey === item.key;
                                             const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
-                                            const draftFields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
-                                            const draftFieldOrder = Array.isArray(draft.fieldOrder) ? draft.fieldOrder : (Array.isArray(item.fieldOrder) ? item.fieldOrder : Object.keys(draftFields));
-                                            const editableFieldKeys = draftFieldOrder.length > 0
-                                                ? draftFieldOrder
-                                                : Object.keys(draftFields);
+                                            const draftFields = (draft.fields && typeof draft.fields === 'object')
+                                                ? draft.fields
+                                                : normalizeSubjectIndexEntryFields(item.fields, item);
+                                            const editableFieldKeys = SUBJECT_INDEX_STANDARD_HEADERS;
                                             return (
                                                 <div
                                                     key={item.key}
@@ -13387,8 +13494,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                                         <button
                                                             type="button"
-                                                            onClick={() => setPhase2RerunModal((prev) => ({ ...prev, subjectKey: item.key }))}
-                                                            className="text-left flex-1 min-w-[180px]"
+                                                            onClick={() => {
+                                                                if (!isSingleMode) return;
+                                                                setPhase2RerunModal((prev) => ({ ...prev, subjectKey: item.key }));
+                                                            }}
+                                                            className={`text-left flex-1 min-w-[180px] ${isSingleMode ? '' : 'cursor-default'}`}
                                                         >
                                                             <div className="flex flex-wrap items-center gap-2">
                                                                 <span className="font-bold">{item.name}</span>
@@ -13401,7 +13511,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                                 type="button"
                                                                 onClick={() => beginEditPhase2RerunEntry(item)}
                                                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-400/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
-                                                                title={t('编辑该实体', 'Edit this entity')}
+                                                                title={t('编辑 Subject Index 字段', 'Edit Subject Index fields')}
                                                             >
                                                                 <Edit3 className="w-3.5 h-3.5" />
                                                                 <span className="text-[11px] font-semibold">{t('编辑', 'Edit')}</span>
@@ -13421,22 +13531,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     {isEditing && (
                                                         <div className="mt-2 rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
                                                             <div className="text-[11px] text-white/55">
-                                                                {t('可编辑该 subject 的全部字段（将按编辑后的完整字段参与重跑）。', 'All parsed fields of this subject are editable and will be used for rerun.')}
+                                                                {t('可编辑 Subject Index 标准字段（编号、类型、中英文名、基准实体、依赖引用、实体属性、剧本覆盖）。', 'Edit standard Subject Index fields: no, type, names, base entity, dependency, attributes, coverage.')}
                                                             </div>
                                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                                 {editableFieldKeys.map((fieldKey) => {
                                                                     const stableKey = String(fieldKey || '').trim();
                                                                     if (!stableKey) return null;
                                                                     const rawValue = String(draftFields[stableKey] ?? '');
-                                                                    const isLongText = rawValue.length > 80 || /description|detail|prompt|narrative/i.test(stableKey);
+                                                                    const fieldLabel = SUBJECT_INDEX_FIELD_LABELS[stableKey];
+                                                                    const labelText = fieldLabel ? t(fieldLabel.zh, fieldLabel.en) : stableKey;
+                                                                    const isLongText = rawValue.length > 80
+                                                                        || SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey)
+                                                                        || /attributes|coverage|dependency/i.test(stableKey);
+                                                                    const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage')
+                                                                        ? 'sm:col-span-2'
+                                                                        : '';
                                                                     return (
-                                                                        <label key={`${item.key}-${stableKey}`} className="flex flex-col gap-1">
-                                                                            <span className="text-[11px] text-white/60">{stableKey}</span>
+                                                                        <label key={`${item.key}-${stableKey}`} className={`flex flex-col gap-1 ${spanClass}`}>
+                                                                            <span className="text-[11px] text-white/60">{labelText}</span>
                                                                             {isLongText ? (
                                                                                 <textarea
                                                                                     value={rawValue}
                                                                                     onChange={(event) => updatePhase2RerunEntryEditField(item.key, stableKey, event.target.value)}
-                                                                                    rows={3}
+                                                                                    rows={stableKey === 'entity_attributes' ? 5 : 3}
                                                                                     className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-purple-400/50 resize-y"
                                                                                 />
                                                                             ) : (
@@ -13453,7 +13570,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                             <div className="flex items-center justify-end gap-2">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }))}
+                                                                    onClick={() => setPhase2RerunModal((prev) => {
+                                                                        const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
+                                                                        delete nextEdits[item.key];
+                                                                        return { ...prev, editingSubjectKey: '', subjectEdits: nextEdits };
+                                                                    })}
                                                                     className="px-2.5 py-1 text-[11px] rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80"
                                                                 >
                                                                     {t('取消', 'Cancel')}
@@ -13472,7 +13593,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             );
                                         }) : (
                                             <div className="px-3 py-6 text-center text-sm text-white/45">
-                                                {t('当前分类下没有可选择的 Subject Index 实体。', 'No selectable Subject Index entity in this category.')}
+                                                {t('当前筛选下没有可编辑的 Subject Index 实体。', 'No editable Subject Index entities under current filters.')}
                                             </div>
                                         )}
                                     </div>
@@ -13495,8 +13616,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <button
                                     type="button"
                                     onClick={confirmPhase2RerunSelection}
-                                    disabled={isRetryingPhase2 || isAnalyzing || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
-                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || isAnalyzing || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
+                                    disabled={isRetryingPhase2 || isAnalyzing || phase2RerunDisplayEntries.length <= 0 || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isRetryingPhase2 || isAnalyzing || phase2RerunDisplayEntries.length <= 0 || (phase2RerunModal.mode === 'single' && filteredPhase2RerunSubjectEntries.length <= 0) ? 'bg-white/5 text-white/35 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-500 text-white'}`}
                                 >
                                     {isRetryingPhase2 ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                                     {t('确认重跑', 'Confirm Rerun')}
