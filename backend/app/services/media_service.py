@@ -1253,13 +1253,19 @@ class MediaGenerationService:
         if not callable(provider_payload_callback):
             provider_payload_callback = None
 
+        try:
+            ark_poll_timeout_seconds = int(tool_conf.get("poll_timeout_seconds") or tool_conf.get("timeout") or 1200)
+            ark_poll_timeout_seconds = min(1800, max(300, ark_poll_timeout_seconds))
+        except Exception:
+            ark_poll_timeout_seconds = 1200
+
         first_result = await self._submit_and_poll_video(
             url=task_endpoint,
             payload=task_payload,
             api_key=dp_token,
             log_tag="ark-seedance",
             extra_metadata=extra_metadata,
-            poll_timeout_seconds=300,
+            poll_timeout_seconds=ark_poll_timeout_seconds,
             pure_callback_mode=pure_callback_mode,
             callback_enabled=callback_enabled,
             callback_ticket=callback_ticket,
@@ -1302,7 +1308,7 @@ class MediaGenerationService:
                         api_key=dp_token,
                         log_tag="ark-seedance",
                         extra_metadata=extra_metadata,
-                        poll_timeout_seconds=300,
+                        poll_timeout_seconds=ark_poll_timeout_seconds,
                         pure_callback_mode=pure_callback_mode,
                         callback_enabled=callback_enabled,
                         callback_ticket=callback_ticket,
@@ -1339,7 +1345,7 @@ class MediaGenerationService:
                         api_key=dp_token,
                         log_tag="ark-seedance",
                         extra_metadata=extra_metadata,
-                        poll_timeout_seconds=300,
+                        poll_timeout_seconds=ark_poll_timeout_seconds,
                         pure_callback_mode=pure_callback_mode,
                         callback_enabled=callback_enabled,
                         callback_ticket=callback_ticket,
