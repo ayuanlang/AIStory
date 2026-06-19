@@ -594,26 +594,32 @@ class MediaGenerationService:
             cleaned_refs = [item for item in ref_image if str(item or "").strip()]
             ref_image = cleaned_refs[0] if cleaned_refs else None
             extra_ref_images = cleaned_refs[1:] if len(cleaned_refs) > 1 else []
-            
-        if not ref_image:
-            return {"error": "seedance 2.0 requires an image reference"}
+
+        reference_video_urls_raw = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
+        reference_video_urls_list: List[str] = []
+        if isinstance(reference_video_urls_raw, list):
+            reference_video_urls_list = [str(item).strip() for item in reference_video_urls_raw if str(item).strip()]
+
+        if not ref_image and not reference_video_urls_list:
+            return {"error": "seedance 2.0 requires at least one image or video reference"}
 
         # Align with other provider paths (e.g. KIE): normalize and refresh
         # managed OSS URLs before downstream submission.
-        try:
-            resolved_ref_image = await self._resolve_ref_for_api_async(
-                ref_image,
-                force_data_uri_for_local=False,
-                prefer_public_upload_url=True,
-            )
-            if resolved_ref_image:
-                ref_image = resolved_ref_image
-                _debug_log(
-                    f"[ark-seedance] reference pre-resolved | preview={_strip_query_from_log_url(str(ref_image)[:300])}",
-                    "info",
+        if ref_image:
+            try:
+                resolved_ref_image = await self._resolve_ref_for_api_async(
+                    ref_image,
+                    force_data_uri_for_local=False,
+                    prefer_public_upload_url=True,
                 )
-        except Exception as resolve_err:
-            logger.warning("Ark Seedance reference pre-resolve failed | error=%s", str(resolve_err)[:300])
+                if resolved_ref_image:
+                    ref_image = resolved_ref_image
+                    _debug_log(
+                        f"[ark-seedance] reference pre-resolved | preview={_strip_query_from_log_url(str(ref_image)[:300])}",
+                        "info",
+                    )
+            except Exception as resolve_err:
+                logger.warning("Ark Seedance reference pre-resolve failed | error=%s", str(resolve_err)[:300])
             
         import json
         import urllib.parse
@@ -861,137 +867,146 @@ class MediaGenerationService:
                 sk,
             )
         
-        asset_id_or_url = ref_image
-        primary_asset_type = _guess_ark_asset_type(ref_image)
-        ref_raw = str(ref_image or "").strip()
-        ref_is_http = ref_raw.lower().startswith(("http://", "https://"))
-        ref_has_ctrl = any(ord(ch) < 32 for ch in ref_raw)
-        ref_has_inner_space = bool(re.search(r"\s", ref_raw))
-        ref_scheme = ""
-        ref_netloc = ""
-        try:
-            parsed_ref = urllib.parse.urlparse(ref_raw)
-            ref_scheme = str(parsed_ref.scheme or "").lower()
-            ref_netloc = str(parsed_ref.netloc or "")
-        except Exception:
-            parsed_ref = None
+        asset_id_or_url = ""
+        primary_asset_type = "Image"
+        asset_rebuild_source_url = ""
 
-        _debug_log(
-            f"[ark-seedance] reference classify | raw_preview={_strip_query_from_log_url(ref_raw)[:300]} "
-            f"scheme={ref_scheme or None} netloc={ref_netloc or None} ref_is_http={ref_is_http} "
-            f"has_ctrl={ref_has_ctrl} has_whitespace={ref_has_inner_space}",
-            "info",
-        )
-
-        if not ref_raw.startswith("asset://"):
-            resolved_public_ref = ref_raw
-            if not ref_is_http:
-                _debug_log(
-                    f"[ark-seedance] private-asset mode requires public URL; trying to resolve upload path | "
-                    f"ref_preview={_strip_query_from_log_url(ref_raw)[:300]}",
-                    "info",
-                )
-                resolved_candidate = await self._resolve_ref_for_api_async(
-                    ref_image,
-                    force_data_uri_for_local=False,
-                    prefer_public_upload_url=True,
-                )
-                resolved_public_ref = str(resolved_candidate or "").strip()
-
-            if not str(resolved_public_ref or "").lower().startswith(("http://", "https://")):
-                return {
-                    "error": "Ark private avatar asset mode requires a publicly accessible HTTP(S) reference image URL"
-                }
-            asset_rebuild_source_url = str(resolved_public_ref or "").strip()
-
+        if ref_image:
+            asset_id_or_url = ref_image
+            primary_asset_type = _guess_ark_asset_type(ref_image)
+            ref_raw = str(ref_image or "").strip()
+            ref_is_http = ref_raw.lower().startswith(("http://", "https://"))
+            ref_has_ctrl = any(ord(ch) < 32 for ch in ref_raw)
+            ref_has_inner_space = bool(re.search(r"\s", ref_raw))
+            ref_scheme = ""
+            ref_netloc = ""
             try:
-                rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref, project_name, primary_asset_type)
-                if not rebuilt_asset_uri:
-                    return {"error": "Failed to register Ark private avatar asset from reference URL"}
-                asset_id_or_url = rebuilt_asset_uri
-            except Exception as e:
-                return {"error": f"Private avatar asset flow raised exception: {e}"}
-        else:
-            try:
-                asset_id = _extract_asset_id_from_uri(ref_raw)
-                if not asset_id:
-                    return {"error": "Invalid asset URI for Ark private avatar mode"}
+                parsed_ref = urllib.parse.urlparse(ref_raw)
+                ref_scheme = str(parsed_ref.scheme or "").lower()
+                ref_netloc = str(parsed_ref.netloc or "")
+            except Exception:
+                parsed_ref = None
 
-                resolved_asset = None
+            _debug_log(
+                f"[ark-seedance] reference classify | raw_preview={_strip_query_from_log_url(ref_raw)[:300]} "
+                f"scheme={ref_scheme or None} netloc={ref_netloc or None} ref_is_http={ref_is_http} "
+                f"has_ctrl={ref_has_ctrl} has_whitespace={ref_has_inner_space}",
+                "info",
+            )
+
+            if not ref_raw.startswith("asset://"):
+                resolved_public_ref = ref_raw
+                if not ref_is_http:
+                    _debug_log(
+                        f"[ark-seedance] private-asset mode requires public URL; trying to resolve upload path | "
+                        f"ref_preview={_strip_query_from_log_url(ref_raw)[:300]}",
+                        "info",
+                    )
+                    resolved_candidate = await self._resolve_ref_for_api_async(
+                        ref_image,
+                        force_data_uri_for_local=False,
+                        prefer_public_upload_url=True,
+                    )
+                    resolved_public_ref = str(resolved_candidate or "").strip()
+
+                if not str(resolved_public_ref or "").lower().startswith(("http://", "https://")):
+                    return {
+                        "error": "Ark private avatar asset mode requires a publicly accessible HTTP(S) reference image URL"
+                    }
+                asset_rebuild_source_url = str(resolved_public_ref or "").strip()
+
                 try:
-                    resolved_asset = _get_asset_info(asset_id, project_name)
-                except Exception:
+                    rebuilt_asset_uri = await _register_private_asset_from_public_url(resolved_public_ref, project_name, primary_asset_type)
+                    if not rebuilt_asset_uri:
+                        return {"error": "Failed to register Ark private avatar asset from reference URL"}
+                    asset_id_or_url = rebuilt_asset_uri
+                except Exception as e:
+                    return {"error": f"Private avatar asset flow raised exception: {e}"}
+            else:
+                try:
+                    asset_id = _extract_asset_id_from_uri(ref_raw)
+                    if not asset_id:
+                        return {"error": "Invalid asset URI for Ark private avatar mode"}
+
                     resolved_asset = None
+                    try:
+                        resolved_asset = _get_asset_info(asset_id, project_name)
+                    except Exception:
+                        resolved_asset = None
 
-                status = str(
-                    (resolved_asset or {}).get("Status")
-                    or (resolved_asset or {}).get("status")
-                    or (resolved_asset or {}).get("Asset", {}).get("Status")
-                    or (resolved_asset or {}).get("Asset", {}).get("status")
-                    or ""
-                ).strip().lower()
-                if status in {"active", "ready", "success", "completed"}:
-                    asset_id_or_url = ref_raw
-                else:
-                    # Recovery path: stale asset IDs may belong to another project.
-                    # Try to discover source URL and re-register into current project.
-                    discovered_source_url = ""
-                    candidate_projects = [
-                        str(tool_conf.get("asset_source_project") or "").strip(),
-                        "default",
-                        "",
-                    ]
-                    for candidate_project in candidate_projects:
-                        if candidate_project == project_name:
-                            continue
-                        try:
-                            info = _get_asset_info(asset_id, candidate_project if candidate_project else None)
-                        except Exception:
-                            continue
-                        source_url = str(
-                            info.get("URL")
-                            or info.get("Url")
-                            or info.get("Asset", {}).get("URL")
-                            or info.get("Asset", {}).get("Url")
-                            or ""
-                        ).strip()
-                        if source_url.lower().startswith(("http://", "https://")):
-                            discovered_source_url = source_url
-                            break
-
-                    if not discovered_source_url:
-                        fallback_source_keys = [
-                            "asset_source_url",
-                            "reference_image_url",
-                            "source_image_url",
-                            "image_url",
+                    status = str(
+                        (resolved_asset or {}).get("Status")
+                        or (resolved_asset or {}).get("status")
+                        or (resolved_asset or {}).get("Asset", {}).get("Status")
+                        or (resolved_asset or {}).get("Asset", {}).get("status")
+                        or ""
+                    ).strip().lower()
+                    if status in {"active", "ready", "success", "completed"}:
+                        asset_id_or_url = ref_raw
+                    else:
+                        # Recovery path: stale asset IDs may belong to another project.
+                        # Try to discover source URL and re-register into current project.
+                        discovered_source_url = ""
+                        candidate_projects = [
+                            str(tool_conf.get("asset_source_project") or "").strip(),
+                            "default",
+                            "",
                         ]
-                        for key in fallback_source_keys:
-                            value = str(tool_conf.get(key) or "").strip()
-                            if value.lower().startswith(("http://", "https://")):
-                                discovered_source_url = value
+                        for candidate_project in candidate_projects:
+                            if candidate_project == project_name:
+                                continue
+                            try:
+                                info = _get_asset_info(asset_id, candidate_project if candidate_project else None)
+                            except Exception:
+                                continue
+                            source_url = str(
+                                info.get("URL")
+                                or info.get("Url")
+                                or info.get("Asset", {}).get("URL")
+                                or info.get("Asset", {}).get("Url")
+                                or ""
+                            ).strip()
+                            if source_url.lower().startswith(("http://", "https://")):
+                                discovered_source_url = source_url
                                 break
 
-                    if not discovered_source_url:
-                        return {
-                            "error": f"Ark private asset not found in project '{project_name}' and no fallback source URL for rebuild",
-                            "submit_failed": True,
-                        }
+                        if not discovered_source_url:
+                            fallback_source_keys = [
+                                "asset_source_url",
+                                "reference_image_url",
+                                "source_image_url",
+                                "image_url",
+                            ]
+                            for key in fallback_source_keys:
+                                value = str(tool_conf.get(key) or "").strip()
+                                if value.lower().startswith(("http://", "https://")):
+                                    discovered_source_url = value
+                                    break
 
-                    rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url, project_name, primary_asset_type)
-                    if not rebuilt_asset_uri:
-                        return {
-                            "error": "Ark private asset rebuild failed after missing asset detection",
-                            "submit_failed": True,
-                        }
-                    asset_rebuild_source_url = discovered_source_url
-                    asset_id_or_url = rebuilt_asset_uri
-            except Exception as e:
-                return {"error": f"Ark private asset validation failed: {e}", "submit_failed": True}
+                        if not discovered_source_url:
+                            return {
+                                "error": f"Ark private asset not found in project '{project_name}' and no fallback source URL for rebuild",
+                                "submit_failed": True,
+                            }
 
-        asset_image_refs: List[str] = [str(asset_id_or_url or "").strip()]
-        asset_rebuild_source_urls: List[str] = [str(asset_rebuild_source_url or "").strip()]
-        asset_ref_types: List[str] = [primary_asset_type]
+                        rebuilt_asset_uri = await _register_private_asset_from_public_url(discovered_source_url, project_name, primary_asset_type)
+                        if not rebuilt_asset_uri:
+                            return {
+                                "error": "Ark private asset rebuild failed after missing asset detection",
+                                "submit_failed": True,
+                            }
+                        asset_rebuild_source_url = discovered_source_url
+                        asset_id_or_url = rebuilt_asset_uri
+                except Exception as e:
+                    return {"error": f"Ark private asset validation failed: {e}", "submit_failed": True}
+
+        asset_image_refs: List[str] = []
+        asset_rebuild_source_urls: List[str] = []
+        asset_ref_types: List[str] = []
+        if str(asset_id_or_url or "").strip():
+            asset_image_refs.append(str(asset_id_or_url or "").strip())
+            asset_rebuild_source_urls.append(str(asset_rebuild_source_url or "").strip())
+            asset_ref_types.append(primary_asset_type)
 
         # Process additional reference media and append them to payload.
         for extra_ref in extra_ref_images:
@@ -1035,9 +1050,61 @@ class MediaGenerationService:
             asset_rebuild_source_urls.append(str(extra_source_url or "").strip())
             asset_ref_types.append(extra_asset_type)
 
+        if reference_video_urls_list:
+            _debug_log(
+                f"[ark-seedance] processing reference videos | count={len(reference_video_urls_list)}",
+                "info",
+            )
+        for video_ref in reference_video_urls_list:
+            video_raw = str(video_ref or "").strip()
+            if not video_raw:
+                continue
+            video_asset_type = "Video"
+
+            try:
+                resolved_video = await self._resolve_ref_for_api_async(
+                    video_raw,
+                    force_data_uri_for_local=False,
+                    prefer_public_upload_url=True,
+                )
+                if resolved_video:
+                    video_raw = str(resolved_video or "").strip()
+            except Exception:
+                pass
+
+            if not video_raw:
+                continue
+
+            video_asset_ref = video_raw
+            video_source_url = ""
+            if not video_raw.startswith("asset://"):
+                if not video_raw.lower().startswith(("http://", "https://")):
+                    return {
+                        "error": "Ark private avatar asset mode requires a publicly accessible HTTP(S) reference video URL",
+                        "submit_failed": True,
+                    }
+                video_source_url = video_raw
+                try:
+                    rebuilt_video_asset = await _register_private_asset_from_public_url(video_raw, project_name, video_asset_type)
+                    if not rebuilt_video_asset:
+                        return {
+                            "error": f"Failed to register Ark private video asset from reference URL: {_strip_query_from_log_url(video_raw)[:200]}",
+                            "submit_failed": True,
+                        }
+                    video_asset_ref = rebuilt_video_asset
+                except Exception as register_err:
+                    return {
+                        "error": f"Private video asset flow raised exception: {register_err}",
+                        "submit_failed": True,
+                    }
+
+            asset_image_refs.append(str(video_asset_ref or "").strip())
+            asset_rebuild_source_urls.append(str(video_source_url or "").strip())
+            asset_ref_types.append(video_asset_type)
+
         asset_image_refs = [item for item in asset_image_refs if item]
         if not asset_image_refs:
-            return {"error": "seedance 2.0 requires at least one valid image reference"}
+            return {"error": "seedance 2.0 requires at least one valid image or video reference"}
                 
         # Fire the generation task
         inner_conf = tool_conf
@@ -1090,10 +1157,19 @@ class MediaGenerationService:
         if not model_id or model_id in ["default", ""]:
             model_id = "doubao-seedance-2-0-260128"
             
-        # Ensure the prompt references the image to satisfy Volcengine requirement
+        # Ensure the prompt references media assets to satisfy Volcengine requirement
         final_prompt = prompt
-        if "图片" not in final_prompt and "素材" not in final_prompt:
-            final_prompt = "图片1中，" + final_prompt
+        prompt_lower = final_prompt.lower()
+        if (
+            "图片" not in final_prompt
+            and "素材" not in final_prompt
+            and "视频" not in final_prompt
+            and "@video" not in prompt_lower
+        ):
+            if reference_video_urls_list and not ref_image:
+                final_prompt = "视频1中，" + final_prompt
+            else:
+                final_prompt = "图片1中，" + final_prompt
 
         ref_url_kind = "asset"
         ref_has_token = False
