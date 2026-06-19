@@ -223,7 +223,6 @@ def resolve_scene_units_for_markdown_orchestration(
     parse_errors: List[str] = []
     candidate_sources = [
         ("adapted_script", adapted_script_text),
-        ("user_text", user_text),
         ("episode_adaptation", episode_adaptation_text),
     ]
     for source_name, source_text in candidate_sources:
@@ -466,7 +465,7 @@ def extract_adapted_script_from_beats_user_input(user_text: str) -> str:
     start_idx = text.find(SCENES_BLOCK_START_TOKEN)
     if start_idx >= 0:
         return text[start_idx:].strip()
-    return text.strip()
+    return ""
 
 
 def merge_scenes_table_markdown_outputs(outputs: List[str]) -> str:

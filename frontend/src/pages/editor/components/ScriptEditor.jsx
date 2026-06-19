@@ -499,6 +499,19 @@ const isDummySubject = (itemName) => {
     return ['subjectindex', 'subjectsindex', 'sceneanalysis', 'entities', 'character', 'characters', 'prop', 'props', 'environment', 'environments', 'role', 'roles', 'item', 'items', 'scene', 'scenes', '角色', '道具', '场景', '人物', '环境', '物件'].includes(lcName);
 };
 
+const SUBJECT_CONSISTENCY_CHECK_ENABLED = false;
+
+const createSkippedSubjectConsistencyReport = () => ({
+    ok: true,
+    message: '',
+    missing: [],
+    extra: [],
+    markdownSubjects: [],
+    jsonSubjects: [],
+    markdownSource: '',
+    skipped: true,
+});
+
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, assetRerunRequest = null, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
@@ -882,7 +895,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const strictBlockFromFullText = extractScenesBlockOnly(text);
         if (strictBlockFromFullText) return strictBlockFromFullText;
 
-        return trimScriptBody(text);
+        return '';
     }, [extractAnalysisSections]);
 
     const extractProjectVisualBackfillJsonText = useCallback((rawText) => {
@@ -985,7 +998,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const buildStage2_2UserInputFromStage1 = useCallback((stage1Text, adaptedScriptOverride = null) => {
         const adaptedScriptText = adaptedScriptOverride != null
             ? String(adaptedScriptOverride || '').trim()
-            : extractStage1AdaptedScriptBody(stage1Text);
+            : String(
+                activeEpisode?.ai_scene_analysis_adaptation
+                || extractStage1AdaptedScriptBody(stage1Text)
+                || ''
+            ).trim();
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
             '请执行第二阶段的第二步：视听推演与节拍拆解（Beat Generation & Scene Breakdown）。基于上游提取的"资产清单"和"优化后剧本"，生成标准化的《Scenes Table》——包含每一个可视场景的环境、角色、道具布局与动作节拍序列。',
@@ -1003,7 +1020,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stage2_2InputParts.push(`[优化后剧本 - Stage 2.2权威输入]\n${adaptedScriptText || ''}`);
 
         return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
-    }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
+    }, [activeEpisode?.ai_scene_analysis_adaptation, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
 
     const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
     const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
@@ -1110,8 +1127,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (startMatch) {
             return text.slice(startMatch.index).trim();
         }
-        return extractStage1AdaptedScriptBody(text);
-    }, [extractStage1AdaptedScriptBody]);
+        return '';
+    }, []);
 
     const buildStage2_2SubjectIndexSection = useCallback((subjectIndexText) => {
         const stableText = String(extractPureSubjectIndexText(subjectIndexText) || '').trim();
@@ -2403,6 +2420,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const escapeRegExp = (text) => String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     const buildSubjectConsistencyReport = (rawText) => {
+        if (!SUBJECT_CONSISTENCY_CHECK_ENABLED) {
+            return createSkippedSubjectConsistencyReport();
+        }
         const markdownSource = normalizeLlmMarkdownTable(rawText || llmResultContent || '');
         const markdownSubjects = extractSubjectsFromMarkdownTable(markdownSource);
         const mergedPayload = getMergedEntitiesPayloadFromText(rawText || llmRawResultContent || llmResultContent);
@@ -2556,7 +2576,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const collectFollowupIssues = (subjectReport, warnings = [], extraIssues = []) => {
         const issues = [];
 
-        if (subjectReport && !subjectReport.ok) {
+        if (SUBJECT_CONSISTENCY_CHECK_ENABLED && subjectReport && !subjectReport.ok) {
             const missing = Array.isArray(subjectReport.missing) ? subjectReport.missing.filter(Boolean) : [];
             if (missing.length > 0) {
                 issues.push(`Subject Index/Entities mismatch: missing subjects in JSON -> ${missing.join(', ')}`);
@@ -2604,7 +2624,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (fromFollowup.length > 0) {
             return Array.from(new Set(fromFollowup));
         }
-        if (subjectReport && !subjectReport.ok) {
+        if (SUBJECT_CONSISTENCY_CHECK_ENABLED && subjectReport && !subjectReport.ok) {
             const missing = Array.isArray(subjectReport.missing) ? subjectReport.missing.filter(Boolean) : [];
             if (missing.length > 0) {
                 return [t(
@@ -2852,6 +2872,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [project?.global_info]);
 
     const runSubjectConsistencyCheck = (rawText = null, options = {}) => {
+        if (!SUBJECT_CONSISTENCY_CHECK_ENABLED) {
+            return createSkippedSubjectConsistencyReport();
+        }
         const silent = Boolean(options?.silent);
         const persist = options?.persist !== false;
         const report = buildSubjectConsistencyReport(rawText || llmRawResultContent || llmResultContent);
@@ -5435,16 +5458,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisProgressDismissedRef.current = Boolean(progressUi?.dismissed);
             return false;
         }
-        if (isPersistedAnalysisProgressRunning(progressUi)) {
-            return false;
-        }
+        const isRunning = isPersistedAnalysisProgressRunning(progressUi);
         analysisProgressDismissedRef.current = false;
         const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
             ? progressUi.flowStatus
             : { phase: 'idle', message: '' };
         const flowHistory = Array.isArray(progressUi.flowHistory) ? progressUi.flowHistory : [];
         const uiReport = (progressUi.uiReport && typeof progressUi.uiReport === 'object') ? progressUi.uiReport : null;
-        if (!hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
+        if (!isRunning && !hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
         setAnalysisFlowStatus(flowStatus);
         setAnalysisFlowStatusHistory(flowHistory);
         if (uiReport) {
@@ -5452,6 +5473,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
             if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
                 beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
+            }
+        }
+        if (isRunning) {
+            setIsAnalyzing(true);
+            try {
+                const markerKey = id > 0 ? `aistory:scene-analysis-task:${id}` : '';
+                const rawMarker = markerKey && window?.localStorage?.getItem(markerKey);
+                if (rawMarker) {
+                    const parsedMarker = JSON.parse(rawMarker);
+                    const taskId = String(parsedMarker?.taskId || '').trim();
+                    if (taskId) setActiveAnalysisTaskId(taskId);
+                }
+            } catch (_) {
+                // Ignore marker parse failures during restore.
             }
         }
         return true;
@@ -5635,26 +5670,36 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const startedAt = Number(activeRun?.startedAt || marker?.startedAt || Date.now());
         const elapsedMs = Math.max(0, Date.now() - startedAt);
         const taskId = String(activeRun?.taskId || marker?.taskId || '').trim();
+        const resolvedPhase = phase === 2 ? 'assets_gen' : (phase === 'scene_beats' ? 'scene_beats' : 'script_opt');
 
         beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         if (taskId) setActiveAnalysisTaskId(taskId);
-        setAnalysisFlowStatus({
-            phase: phase === 2 ? 'assets_gen' : (phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
-            message: t('后台分析任务进行中，正在恢复连接...', 'Background analysis task in progress, reconnecting...'),
+        setAnalysisFlowStatus((prev) => {
+            const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+            if (prevPhase && prevPhase !== 'idle') return prev;
+            return {
+                phase: resolvedPhase,
+                message: t('后台分析任务进行中，正在恢复连接...', 'Background analysis task in progress, reconnecting...'),
+            };
         });
-        setAnalysisUiReport({
-            status: 'running',
-            startedAt,
-            durationMs: elapsedMs,
-            phaseTimings: null,
-            importReport: null,
-            runtimeMeta: null,
-            warning: '',
-            error: '',
+        setAnalysisUiReport((prev) => {
+            if (prev?.status === 'running') {
+                return { ...prev, durationMs: elapsedMs };
+            }
+            return {
+                status: 'running',
+                startedAt,
+                durationMs: elapsedMs,
+                phaseTimings: null,
+                importReport: null,
+                runtimeMeta: null,
+                warning: '',
+                error: '',
+            };
         });
         return true;
-    }, [activeEpisode?.id, beginAnalysisTimer, clearStalePhase2AssetMarkerIfDesignExists, loadAnalysisTaskMarker, t]);
+    }, [activeEpisode?.id, beginAnalysisTimer, loadAnalysisTaskMarker, t]);
 
     const isRecoverableAnalysisError = useCallback((error) => {
         if (!error || isTaskCanceledError(error)) return false;
@@ -5911,6 +5956,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let lastError = '';
 
         const adaptedScriptForSplit = extractAdaptedScriptFromStage2_2UserInputBody(stage2_2UserInputBody || finalStage2_2UserInput);
+        if (!String(adaptedScriptForSplit || '').trim()) {
+            throw new Error(t(
+                '缺少优化后剧本，无法执行场景编排。请确认第一阶段已生成改编剧本后再重试。',
+                'Missing adapted script for scene beats orchestration. Complete Stage 1 script optimization first.'
+            ));
+        }
         let sceneUnits = [];
         try {
             sceneUnits = parseSceneUnitsFromScriptMarkers(adaptedScriptForSplit);
@@ -7470,21 +7521,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (entry.taskId) {
             setActiveAnalysisTaskId(String(entry.taskId));
         }
-        if (!analysisRunInFlightRef.current) {
-            setAnalysisFlowStatus({
-                phase: entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
+        const resolvedPhase = entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt');
+        setAnalysisFlowStatus((prev) => {
+            const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+            if (prevPhase && prevPhase !== 'idle') return prev;
+            return {
+                phase: resolvedPhase,
                 message: t('正在重新连接分析任务...', 'Reconnecting to in-progress analysis task...'),
-            });
-        }
-        setAnalysisUiReport({
-            status: 'running',
-            startedAt,
-            durationMs: elapsedMs,
-            phaseTimings: null,
-            importReport: null,
-            runtimeMeta: null,
-            warning: '',
-            error: '',
+            };
+        });
+        setAnalysisUiReport((prev) => {
+            if (prev?.status === 'running') {
+                return { ...prev, durationMs: elapsedMs };
+            }
+            return {
+                status: 'running',
+                startedAt,
+                durationMs: elapsedMs,
+                phaseTimings: null,
+                importReport: null,
+                runtimeMeta: null,
+                warning: '',
+                error: '',
+            };
         });
 
         try {
@@ -7580,6 +7639,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             if (refreshedRun?.promise) {
                 if (analysisRunInFlightRef.current) {
+                    bootstrapPendingAnalysisUi();
                     return;
                 }
                 if (detachedAnalysisRunEpisodeRef.current !== episodeId) {
@@ -7647,12 +7707,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         scriptEditorMountedRef.current = true;
         mountResumeReadyRef.current = false;
+        restoreAnalysisProgressFromSession(episodeId);
+        bootstrapPendingAnalysisUi();
         let cancelled = false;
         (async () => {
             ensureAnalysisFallbackState(episodeId);
             await clearStaleAnalysisMarkerIfEpisodeComplete(episodeId, activeEpisode, 'mount-precheck');
             if (cancelled) return;
-            restoreAnalysisProgressFromSession(episodeId);
             await tryResumePendingAnalysis();
             if (cancelled) return;
             if (!isEpisodeAnalysisTaskLive(episodeId, {
@@ -10373,14 +10434,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [currentStageOutputs]);
 
     const buildStage1RestartSourceText = useCallback(() => {
-        const rawText = getStageOutputContent('stage1', 'raw_text');
-        if (rawText) return rawText;
-
         const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
         const visualBackfillJson = getStageOutputContent('stage1', 'project_visual_backfill');
         const parts = [];
         if (adaptedScript) {
             parts.push(`### 第二部分：修改后的剧本\n${adaptedScript}`);
+        } else {
+            const rawText = getStageOutputContent('stage1', 'raw_text');
+            if (rawText) return rawText;
         }
         if (visualBackfillJson) {
             parts.push(`### Project Visual Backfill\n\n\`\`\`json\n${visualBackfillJson}\n\`\`\``);

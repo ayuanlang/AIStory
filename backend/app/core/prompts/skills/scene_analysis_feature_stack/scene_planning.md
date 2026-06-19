@@ -123,13 +123,15 @@
 
 ### Subject Index
 
-| subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
-| S002 | character | 角色中文名_战损版 | Character English Name Damaged | Character English Name | 衍生说明... | 原名 |
-| S003 | environment | 环境首视角 | Environment English Front | None | FG/MG/BG设定。光源结构约束与舞台区。严禁混入剧情。 | 墙壁、窗户等 |
-| S004 | prop | 关键道具名 | Prop English Name | None或依赖原名 | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
-| S005 | cover_poster | 影视级宣发海报 | Project Cover Poster | [依赖的核心CHAR/PROP英语名] | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
+| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| S001 | character | 角色中文名 | Character English Name | None | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 衍生说明... | 原名 |
+| S003 | environment | 办公室会客区 | Office Reception Area | None | None | FG/MG/BG设定。光源结构约束与舞台区。严禁混入剧情。 | 墙壁、窗户等 |
+| S004 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | 衍生环境空镜差异... | 主环境名、衍生环境名 |
+| S005 | prop | 关键道具名 | Prop English Name | None | None | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
+| S006 | prop | 关键道具名_点燃态 | Prop English Name Lit | 关键道具名 | Prop English Name | 可持续状态差异... | 剑、点燃 |
+| S007 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
 
 
 ---

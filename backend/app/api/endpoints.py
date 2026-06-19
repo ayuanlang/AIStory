@@ -6505,7 +6505,12 @@ async def _run_scene_markdown_node_per_scene(
 
     script_id = f"episode:{node_episode_id}"
     total_scenes = len(scene_units)
-    sync_source_text = adapted_script_text or episode_adaptation_text or user_text
+    sync_source_text = adapted_script_text or episode_adaptation_text
+    if not sync_source_text:
+        raise HTTPException(
+            status_code=422,
+            detail="SCENE_MARKDOWN_ADAPTED_SCRIPT_MISSING",
+        )
     if node_project_id > 0 and node_episode_id > 0:
         try:
             sync_scene_units_from_markers(
@@ -8862,7 +8867,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 subject_no = str(parts[0] or "").strip()
                 name = str(parts[2] or "").strip()
                 name_en = str(parts[3] or "").strip()
-                dependency_reference = str(parts[4] or "").strip() if len(parts) > 4 else ""
+                base_entity = ""
+                dependency_reference = ""
+                if len(parts) >= 8:
+                    base_entity = str(parts[4] or "").strip()
+                    dependency_reference = str(parts[5] or "").strip()
+                elif len(parts) >= 5:
+                    dependency_reference = str(parts[4] or "").strip()
                 if not subject_no or (not name and not name_en):
                     continue
 
@@ -8871,6 +8882,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "bucket": bucket,
                     "name": name,
                     "name_en": name_en,
+                    "base_entity": base_entity,
                     "dependency_reference": dependency_reference,
                 })
 
@@ -8881,17 +8893,28 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             subject_no = str(record.get("subject_no") or "").strip()
             name = str(record.get("name") or "").strip()
             name_en = str(record.get("name_en") or "").strip()
+            base_entity = str(record.get("base_entity") or "").strip()
+            dependency_reference = str(record.get("dependency_reference") or "").strip()
+            is_derived = bool(
+                base_entity
+                and base_entity.lower() not in {"none", "null", "n/a", "na", "-", "无"}
+            )
+            resolved_base_name_en = dependency_reference if is_derived else name_en
 
             base_obj: Dict[str, Any] = {
                 "subject_no": subject_no,
                 "name": name,
                 "name_en": name_en,
-                "base_name_en": name_en,
+                "base_name_en": resolved_base_name_en,
                 "description_cn": "",
                 "visual_dependencies": [],
                 "dependency_strategy": {
-                    "type": "Original",
-                    "logic": "Recovered from Subject Index because the LLM output missed this entity.",
+                    "type": "Type A" if is_derived else "Original",
+                    "logic": (
+                        f"Recovered from Subject Index; derived from base entity {base_entity}."
+                        if is_derived
+                        else "Recovered from Subject Index because the LLM output missed this entity."
+                    ),
                 },
             }
 
@@ -9041,7 +9064,15 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     item["name_en"] = expected_name_en
                     name_aligned += 1
 
-                if expected_name_en and not str(item.get("base_name_en") or "").strip():
+                expected_base_entity = str(record.get("base_entity") or "").strip()
+                expected_dependency = str(record.get("dependency_reference") or "").strip()
+                is_derived = bool(
+                    expected_base_entity
+                    and expected_base_entity.lower() not in {"none", "null", "n/a", "na", "-", "无"}
+                )
+                if is_derived and expected_dependency and not str(item.get("base_name_en") or "").strip():
+                    item["base_name_en"] = expected_dependency
+                elif expected_name_en and not str(item.get("base_name_en") or "").strip():
                     item["base_name_en"] = expected_name_en
 
                 reconciled[target_bucket].append(item)
@@ -9072,12 +9103,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             missing_base_references: List[str] = []
             for record in records:
                 dependency_reference = str(record.get("dependency_reference") or "").strip()
-                if not dependency_reference or dependency_reference.lower() in {"none", "null", "n/a", "na", "-", "无"}:
-                    continue
-                dep_key = _normalize_subject_compare_key(dependency_reference)
-                if dep_key and dep_key not in subject_index_identity_keys:
-                    derived_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip() or "(unnamed)"
-                    missing_base_references.append(f"{derived_name} -> {dependency_reference}")
+                base_entity = str(record.get("base_entity") or "").strip()
+                derived_name = str(record.get("name") or record.get("name_en") or record.get("subject_no") or "").strip() or "(unnamed)"
+                if dependency_reference and dependency_reference.lower() not in {"none", "null", "n/a", "na", "-", "无"}:
+                    dep_key = _normalize_subject_compare_key(dependency_reference)
+                    if dep_key and dep_key not in subject_index_identity_keys:
+                        missing_base_references.append(f"{derived_name} -> {dependency_reference}")
+                if base_entity and base_entity.lower() not in {"none", "null", "n/a", "na", "-", "无"}:
+                    base_key = _normalize_subject_compare_key(base_entity)
+                    if base_key and base_key not in subject_index_identity_keys:
+                        missing_base_references.append(f"{derived_name} -> base_entity:{base_entity}")
 
             for bucket in ("characters", "props", "environments", "covers", "posters"):
                 actual_keys = set((reconciled_subject_keys.get(bucket) or {}).keys())
@@ -9622,10 +9657,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             return filtered_text
 
         persisted_subject_index_for_prompt = ""
+        episode_adaptation_for_scene_beats = ""
         if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
                 _ep_for_subject_index = db.query(Episode).filter(Episode.id == request.episode_id).first()
                 if _ep_for_subject_index:
+                    episode_adaptation_for_scene_beats = str(
+                        getattr(_ep_for_subject_index, "ai_scene_analysis_adaptation", "") or ""
+                    ).strip()
                     persisted_subject_index_for_prompt = sanitize_subject_index_text(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_subject_index", None)
                     )
@@ -9728,6 +9767,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             text = _collapse_exact_duplicated_text(text)
             return text.strip()
 
+        def _resolve_scene_beats_adapted_script_text(raw_text: Any) -> str:
+            adapted = extract_adapted_script_from_beats_user_input(
+                _sanitize_scene_beats_stage_text(raw_text)
+            )
+            if adapted:
+                return adapted
+            if episode_adaptation_for_scene_beats:
+                return episode_adaptation_for_scene_beats
+            return ""
+
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
@@ -9739,7 +9788,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
             if is_scene_beats_stage:
-                canonical_stage_text = _sanitize_scene_beats_stage_text(request.text)
+                canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text)
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
@@ -9764,7 +9813,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         else:
             request_text_for_prompt = str(request.text or "")
             if is_scene_beats_stage:
-                request_text_for_prompt = _sanitize_scene_beats_stage_text(request_text_for_prompt)
+                request_text_for_prompt = _resolve_scene_beats_adapted_script_text(request_text_for_prompt)
             if should_trim_before_submit:
                 request_text_for_prompt = _trim_to_scenes_block(request_text_for_prompt)
             if is_subject_index_consumer_stage and subject_index_allowed_types_for_request:

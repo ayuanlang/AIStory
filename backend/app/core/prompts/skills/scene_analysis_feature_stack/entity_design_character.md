@@ -77,7 +77,7 @@
 - 清晰度：四面板边缘清楚、纹理可读、清晰度一致；禁止某一格虚软。
 - 排除引擎参数与控制符：`--ar`, `--v`, `--stylize`, `::`, `<lora:...>` 等。
 - **单状态只读**：同一 Subject 只呈现一个造型/状态；需多状态但上游仅一条时回流 Stage 2。
-- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向上一阶段。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `CHAR:[@...]`）。
+- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向上一阶段，命名须与 Subject Index `base_entity` 可追溯（`{基准角色名}_{衍生标识}`）。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `CHAR:[@...]`）。
 - `negative_prompt_en` 必须短而个体化；真人优先过滤假人感、平滑感、CGI、滤镜脸、塑胶感、二次元比例、裁脚、面板错误。
 - 合规边界：描述安全、可播出、温和；禁止血腥、断肢、内脏、严重伤痕、肉体变异、强不适污物、涉暴/涉黄/猎奇词。战损只写轻微擦痕、衣服破损、灰头土脸、疲惫神态等非图形化状态。
 

@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-06-19 24:30:00 +08:00
+# Prompt Updated At: 2026-06-20 12:00:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -9,7 +9,7 @@
 ## 规则强约束
 - **上游接口（Stage 1）**：Stage 1 仅以自然语言具名称呼人物、物件、空间；**禁止**出现 `ENV/PROP/CHAR` 分类标签及 `ENV:`/`PROP:`/`CHAR:` 前缀。本阶段为**资产分类唯一入口**：首次将上游可见主体归类为 `character`/`prop`/`environment` 并输出 `Subject Index`。命名须与 Stage 1 自然语言原名**逐字一致**；`ENV/PROP` 归属须综合 Stage 1 的【Scene实体覆盖】、动作链及**可拍交互证据**（拿起、递交、移出、破坏、跨 Beat 状态承接、固定陈设描述等）裁定，不得凭 Stage 1 未写证据臆造归属。
 - 遵循物理常识与影视工业分类，不超出原文创造资产（原文明示除外）。
-- 实体命名优先逐字匹配原剧：禁止同义替换、概括、缩写、无依据修饰。
+- 实体命名：基础版须与 Stage 1 自然语言原名**逐字一致**；衍生版按「衍生实体命名规范」命名，并与 `base_entity` 建立可追溯关联。禁止同义替换、概括、缩写、无依据修饰。
 - **ENV/PROP 互斥为根本冲突原则（强制）**：同一物理物件在单次提取中只能有一种归属——要么写入 `ENV` 的 `fixed_furniture_and_set_dressing` / `fixed_architecture_and_finish` 等空镜字段，要么独立建 `PROP` 行；**禁止**同名同物、同义同物、可识别同一物件在 `ENV` 与 `PROP` 中重复出现或交叉描述。已写入环境描述的物件**不得**再提取为道具；已独立提取为道具的物件**不得**再写入环境固定陈设。每次遇疑必须郑重按下列顺序评估归属，不得凭直觉双写或漏判：
   1. **硬证据优先**：明确“拿起、带走、移出、递交、使用、破坏、独立展示、行动目标、跨 Beat/Scene 承接状态”或可持续关键状态变化 → 必须 `PROP`，不得并入 `ENV`。
   2. **固定空镜优先**：固定建筑/装修、固定大件家具/基础陈设，且不会被拿起/移出/递交/破坏/独立展示 → 必须留在 `ENV`，不得单列 `PROP`。
@@ -22,7 +22,7 @@
 - 主环境与 Scene 边界完全继承 Stage 1；不得重切。
 - 若上游遗漏但文本已触发衍生环境（非0度、OTS/正反、多角度、门窗内外、屏幕内、镜中、遮挡后、画外声源空间、切至/返回等），必须补最小 `environment` 行，并在主环境写 `auto_completed_derived_env:Stage 2-1依据触发证据补齐`。
 - 仅当缺主环境、缺可命名方向、缺空镜边界证据导致无法建依赖时，写 `upstream_missing_derived_env:需要回流 Stage 1/2 补衍生环境`。
-- Stage 1 已声明的衍生环境中文名必须逐字符透传；命名为“主环境名 + 空格 + 衍生类型/观察区域/可见方向”时也必须原样透传。
+- Stage 1 已声明的衍生环境中文名须按本文件「衍生实体命名规范」归一；若 Stage 1 旧式命名为“主环境名 + 空格 + 衍生类型”，落表时**必须改写**为 `{角度}度{主环境名}`（同角度多视角冲突时可追加 `_{衍生类型/观察区域/可见方向}`），并在 `base_entity` 标注主环境名。
 - 衍生环境为必备资产：除非 Stage 1 明确给出“无：否决证据”，且满足“<5秒极简、对白极少或无、同一可拍轴线、无切换需求”，否则不得省略。
 
 ## 标准流程
@@ -54,7 +54,7 @@
 - 时序断点（闪回/多年后/重生/转世/复活/身份重置等）必须重判 `CHAR`，并同步触发 `ENV` 时序重识别。
 - 重生/转世默认新角色；仅在文本明确“外观与身份体系无实质变化且可直接继承”时可不新建。多人时必须逐个判定，不得群体合并跳过。
 - 长时间间隔导致身份/外观体系稳定变化时必须建新衍生；若同时导致空间时代/用途/陈设/破损翻新/社会功能稳定变化，继续按 ENV 时序规则建衍生环境。
-- 因时序新建的角色，`dependency_reference` 必须指向同一人物上一稳定版本英文名，形成单向可追溯链。
+- 因时序新建的角色，`dependency_reference` 必须指向同一人物上一稳定版本英文名，`base_entity` 填上一稳定版本 `subject_name_zh`，形成单向可追溯链；衍生命名遵循「衍生实体命名规范」：`{基准角色名}_{衍生标识}`。
 - 表情态（皱眉、微笑、短暂眼神变化等）不得实体化。
 - 证据不足默认不新增；衍生数量最小化。
 - 群体词有明确个体互动时必须拆个体；无推动作用路人仅留 Beat。
@@ -69,7 +69,7 @@
 - 关键状态变化（点燃、碎裂、激活、损毁）若可持续或可继承，即使低频也可保留为 `PROP`；纯瞬时不升格。
 - 每个 `PROP` 需一句可解释理由（四维中至少两项，或状态变化/硬证据兜底）；未达门槛且非硬证据时**不得**输出为 `PROP`，**默认**并入 `ENV` 或留 Beat。
 - 无明确角色意识但有显著运动与视觉存在的活物归 `PROP`。
-- 明显正反面/设备态差异（如手机背面与屏幕）应拆关联道具；直播手机场景默认补“支架/持有物”支撑。
+- 明显正反面/设备态差异（如手机背面与屏幕）应拆关联道具，命名 `{基准道具名}_{状态/面/形态}`；直播手机场景默认补“支架/持有物”支撑。
 - 涉及可见文字时，`entity_attributes` 必须含：`visible_text`/`form_field_text`、`text_carrier`、`typography_requirement`、`marked_text_requirement`、`readability_requirement`。
 - 原文明示文字必须逐字、逐标点、逐空格透传，禁止摘要、改写、翻译、繁简转换、大小写修正。
 - 若文字字段由动作/功能隐含（签字、盖章、填写、勾选、二维码、编号等），必须反推字段并入库；原文未给精确字样时写：`visible_text:原文未明示具体字样；根据动作语义必须存在[字段名]文字/栏位`。
@@ -78,14 +78,28 @@
 ### 四、环境组（ENV）与空镜
 - 主环境与 Scene 边界完全继承 Stage 1；Stage 1 已声明主/衍生环境必须逐条提取并保留依赖。
 - 触发线索存在且可判空镜差异（`empty_view_delta`）时，必须补最小衍生环境，禁止并入主环境。
-- 自动补齐衍生环境最小字段：`subject_name_zh(角度+度+主环境名+衍生类型/观察区域/可见方向)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
+- 自动补齐衍生环境最小字段：`subject_name_zh({角度}度{主环境名}[_{衍生类型/观察区域/可见方向}])`、`base_entity(主环境名)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
-- Stage 1 已声明衍生环境 `subject_name_zh` 必须逐字符透传，禁止改写编号/缩写。
+- Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
 - 每个 Scene 主环境与衍生环境必须各自独立成行；OTS/正反/多角度不得并行压缩。
 - `environment` 仅写空间容器与空镜信息：边界、固定结构、固定大件/基础陈设、光声、出入口、遮挡层、FG/MG/BG、`empty_view_delta`；禁止写角色、临场道具、临场动作交互。**禁止**在环境字段中重复描述已独立提取的 `PROP` 同名同物；环境内已写入的固定物件此后不得再单列 `PROP`。
 - 非角色/非道具锚点写 `main_anchor/anchor_description`；若锚点是已提取实体，写 `main_anchor_reference`。
 - 固定环境标识文字（店名/门牌/标语/路牌/牌匾/广告匾）写入 ENV；原文明示逐字透传，未明示则按上条「标识载体剧情补字」补写；可移动载体文字转 `PROP` 并同样执行补字规则。
 - 未达独立衍生门槛的局部空间（门口/窗边/墙面/灯光/声场等）并入当前环境属性，不单建 ENV。
+
+### 五、衍生实体命名规范（强制）
+- **统一原则**：所有衍生实体的 `subject_name_zh` / `subject_name_en` 必须与基准实体（`base_entity` 所指）建立可追溯的命名关联；`base_entity` 填基准实体的 `subject_name_zh`（逐字一致），基准版填 `None`；`dependency_reference` 同步指向基准实体 `subject_name_en`。
+- **环境（ENV）**：
+  - **主环境（0 度基准）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`。
+  - **衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`；同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`，如 `180度办公室会客区_桌后反打`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
+  - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀。
+- **角色（CHAR）**：
+  - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
+  - **衍生版**：`subject_name_zh` = `{基准角色名}_{衍生标识}`，衍生标识写可持续变化类型，如 `战损版`、`正装版`、`老年版`、`特效形态`；`subject_name_en` = `{Base Character English Name} {Variant Descriptor}`，如 `Lin Yue Formal`。
+- **道具（PROP）**：
+  - **基础版**：`subject_name_zh` = Stage 1 原名；`base_entity` = `None`。
+  - **衍生版**：`subject_name_zh` = `{基准道具名}_{状态/面/形态}`，如 `手机_屏幕面`、`银打火机_点燃态`、`合同_已签署`；`subject_name_en` = `{Base Prop English Name} {State/Face/Form}`，如 `Silver Lighter Lit`。
+- **封面海报（cover_poster）**：`base_entity` 填所依赖的核心实体中文名（多依赖时填主视觉锚点）；`dependency_reference` 填对应英文名。
 
 ---
 
@@ -94,14 +108,15 @@
 - 输出 `### Subject Index` 前，必须先单独输出且仅输出一行：
   `----------------*****--------------`
 - 表头固定为：
-  `| subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |`
+  `| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
 - 第二行固定为：
-  `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
-- 数据行要求：每行必须以 `|` 开头并以 `|` 结尾；7 列齐全；禁止拆行、空行、孤立 `|`。
+  `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
+- 数据行要求：每行必须以 `|` 开头并以 `|` 结尾；8 列齐全；禁止拆行、空行、孤立 `|`。
+- `base_entity`（基准实体）：基准版填 `None`；衍生版填所依赖基准实体的 `subject_name_zh`（逐字一致），用于标注该衍生行继承的基础实体名字。
 - `subject_type` 仅允许：`character`、`prop`、`environment`、`cover_poster`。
 - `cover_poster` 规则：必须且仅能 1 行，且必须置于整表最后一行；任一缺失/重复/未置尾/拼写错误均判失败。
-- `cover_poster` 不得省列；`subject_name_zh`、`subject_name_en`、`dependency_reference`、`entity_attributes`、`script_entity_coverage` 必须有效填写，不得用 `None` 回避关键内容。
-- `environment` 行必须遵守空镜边界；主/衍生分行；衍生行 `dependency_reference` 指向主环境英文名；Stage 1 名称逐字透传；自动补齐命名用“角度+度+主环境名+衍生类型/观察区域/可见方向”。
+- `cover_poster` 不得省列；`subject_name_zh`、`subject_name_en`、`base_entity`、`dependency_reference`、`entity_attributes`、`script_entity_coverage` 必须有效填写；基准版 `base_entity` 为 `None`，衍生版不得用 `None` 回避。
+- `environment` 行必须遵守空镜边界；主/衍生分行；衍生行 `base_entity` 与 `dependency_reference` 均指向主环境；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
 - 衍生环境至少包含：`env_role:衍生环境`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
 - 时序衍生环境补充：`time_break_type`、`stable_space_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`、`light_sound_continuity_or_change`、`inheritance_reason`。
 - 任一实体涉可见文字或隐含字段时，`entity_attributes` 必须完整写入文字内容、承载位置、排版要求、标记状态、可读性；`script_entity_coverage` 必须覆盖对应原文关键词。原文明示文字必须与剧本完全一致（字词、数字、大小写、标点、空格）。
@@ -113,10 +128,12 @@
 
 ### Subject Index
 
-| subject_no | subject_type | subject_name_zh | subject_name_en | dependency_reference | entity_attributes | script_entity_coverage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
-| S002 | character | 角色中文名_时序衍生版 | Character English Name Time Variant | Character English Name | 仅填写剧本明示且可持续的身份/外观差异；若剧本未明确服饰，不写服饰描述。 | 原名 |
-| S003 | environment | 主环境名 衍生类型 | Base Environment English Derived Type | Base Environment English | env_role:衍生环境；empty_shot_only:Yes；no_character_or_prop_presence:Yes；derivative_base_zh:主环境名；derivative_base_en:Base Environment English；derivative_naming:主环境名 空格 衍生类型/观察区域/可见方向；in_out:内/外；time_of_day:日/夜；space_boundary:继承主环境边界；main_anchor:继承主环境空间锚点；entrance_exit:xx；fixed_architecture_and_finish:固定建筑/装修结构+空镜差异（empty_view_delta）；fixed_furniture_and_set_dressing:桌椅床凳柜架等固定大件/基础陈设+空镜差异（empty_view_delta）；light_source:继承光源+方向差异；sound_field:空镜声场；barriers:建筑阻隔层；FG/MG/BG:仅空间层次；empty_view_delta:xx；spatial_axis:xx；trigger_from_main/switch_to/visible_content/return_or_continue:仅填写空镜空间信息。严禁包含角色、临场道具与剧情临时动作。 | 主环境名、衍生环境名称、空间锚点、固定大件家具/基础陈设、空镜差异（empty_view_delta）等 |
-| S004 | prop | 关键道具名 | Prop English Name | None或依赖原名 | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
-| S005 | cover_poster | 影视级宣发海报 | Project Cover Poster | [依赖的核心CHAR/PROP英语名] | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
+| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| S001 | character | 角色中文名 | Character English Name | None | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 仅填写剧本明示且可持续的身份/外观差异；若剧本未明确服饰，不写服饰描述。 | 原名 |
+| S003 | environment | 办公室会客区 | Office Reception Area | None | None | env_role:主环境；in_out:内/外；time_of_day:日/夜；space_boundary:xx；main_anchor:xx；entrance_exit:xx；fixed_architecture_and_finish:xx；fixed_furniture_and_set_dressing:xx；light_source:xx；sound_field:xx；barriers:xx；FG/MG/BG:仅空间层次。严禁包含角色、临场道具与剧情临时动作。 | 主环境名、空间锚点、固定大件家具/基础陈设等 |
+| S004 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | env_role:衍生环境；empty_shot_only:Yes；no_character_or_prop_presence:Yes；derivative_base_zh:办公室会客区；derivative_base_en:Office Reception Area；derivative_naming:180度办公室会客区_桌后反打；view_angle_from_main:180；in_out:内/外；time_of_day:日/夜；space_boundary:继承主环境边界；main_anchor:继承主环境空间锚点；entrance_exit:xx；fixed_architecture_and_finish:固定建筑/装修结构+空镜差异（empty_view_delta）；fixed_furniture_and_set_dressing:桌椅床凳柜架等固定大件/基础陈设+空镜差异（empty_view_delta）；light_source:继承光源+方向差异；sound_field:空镜声场；barriers:建筑阻隔层；FG/MG/BG:仅空间层次；empty_view_delta:xx；spatial_axis:xx；trigger_from_main/switch_to/visible_content/return_or_continue:仅填写空镜空间信息。严禁包含角色、临场道具与剧情临时动作。 | 主环境名、衍生环境名称、空间锚点、固定大件家具/基础陈设、空镜差异（empty_view_delta）等 |
+| S005 | prop | 银打火机 | Silver Lighter | None | None | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 银打火机 |
+| S006 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | 可持续点燃状态；火焰形态与识别锚点。 | 银打火机、点燃 |
+| S007 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |

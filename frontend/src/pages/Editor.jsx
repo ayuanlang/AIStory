@@ -229,6 +229,7 @@ const Editor = ({
     const [episodes, setEpisodes] = useState([]);
     const [isEpisodesLoading, setIsEpisodesLoading] = useState(false);
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
+    const pendingInitialEpisodeIdRef = useRef(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState(
         (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab) 
@@ -272,6 +273,9 @@ const Editor = ({
     // Global Logging Context
     const { addLog } = useLog();
     const episodesLoadPromiseRef = useRef(null);
+    const episodesRef = useRef([]);
+    const activeEpisodeIdRef = useRef(initialEpisodeId);
+    const previousProjectIdRef = useRef(null);
 
     const persistProjectReturnSnapshot = useCallback(() => {
         try {
@@ -319,12 +323,15 @@ const Editor = ({
 
     const resolveEpisodeOrderNumber = useCallback((episode) => {
         const info = episode?.episode_info && typeof episode.episode_info === 'object' ? episode.episode_info : {};
+        const nestedGlobalInfo = info?.e_global_info && typeof info.e_global_info === 'object' ? info.e_global_info : {};
         const candidates = [
             episode?.episode_number,
+            info?.episode_number,
             info?.episode_script_episode_number,
             info?.story_dna_episode_number,
-            info?.e_global_info?.episode_script_episode_number,
-            info?.e_global_info?.story_dna_episode_number,
+            info?.index,
+            nestedGlobalInfo?.episode_script_episode_number,
+            nestedGlobalInfo?.story_dna_episode_number,
             parseEpisodeNumberFromText(episode?.title),
             episode?.id,
         ];
@@ -335,6 +342,29 @@ const Editor = ({
         }
         return 0;
     }, []);
+
+    const pickMaxEpisodeId = useCallback((eps) => {
+        const list = Array.isArray(eps) ? eps : [];
+        if (!list.length) return null;
+
+        let best = list[0];
+        let bestOrder = resolveEpisodeOrderNumber(best);
+        for (let i = 1; i < list.length; i += 1) {
+            const candidate = list[i];
+            const candidateOrder = resolveEpisodeOrderNumber(candidate);
+            if (candidateOrder > bestOrder) {
+                best = candidate;
+                bestOrder = candidateOrder;
+                continue;
+            }
+            if (candidateOrder === bestOrder) {
+                const bestId = Number(best?.id || 0);
+                const candidateId = Number(candidate?.id || 0);
+                if (candidateId > bestId) best = candidate;
+            }
+        }
+        return best?.id ?? null;
+    }, [resolveEpisodeOrderNumber]);
 
     const sortEpisodesForEditor = useCallback((eps) => {
         return (Array.isArray(eps) ? [...eps] : []).sort((a, b) => {
@@ -385,21 +415,29 @@ const Editor = ({
     }, []);
 
     const hydrateEpisodesState = useCallback((eps) => {
-        let normalized = [];
-        setEpisodes((prev) => {
-            normalized = mergeEpisodeListWithCachedFields(eps, prev);
-            return normalized;
-        });
+        const normalized = mergeEpisodeListWithCachedFields(eps, episodesRef.current);
+        episodesRef.current = normalized;
+        setEpisodes(normalized);
+
         if (normalized.length > 0) {
-            setActiveEpisodeId((prev) => {
-                const hasActiveEpisode = !!prev && normalized.some((ep) => String(ep.id) === String(prev));
-                return hasActiveEpisode ? prev : normalized[0].id;
-            });
+            const pendingRestoreId = pendingInitialEpisodeIdRef.current;
+            const currentActiveId = activeEpisodeIdRef.current;
+            let nextActiveId = null;
+            if (pendingRestoreId != null && normalized.some((ep) => String(ep.id) === String(pendingRestoreId))) {
+                nextActiveId = pendingRestoreId;
+            } else if (currentActiveId != null && normalized.some((ep) => String(ep.id) === String(currentActiveId))) {
+                nextActiveId = currentActiveId;
+            } else {
+                nextActiveId = pickMaxEpisodeId(normalized);
+            }
+            pendingInitialEpisodeIdRef.current = null;
+            setActiveEpisodeId(nextActiveId);
         } else {
+            pendingInitialEpisodeIdRef.current = null;
             setActiveEpisodeId(null);
         }
         return normalized;
-    }, [mergeEpisodeListWithCachedFields]);
+    }, [mergeEpisodeListWithCachedFields, pickMaxEpisodeId]);
 
     const refreshEpisodesForEditor = useCallback(async () => {
         if (!id) return [];
@@ -432,6 +470,28 @@ const Editor = ({
             setIsEpisodesLoading(false);
         }
     }, [hydrateEpisodesState, id]);
+
+    useEffect(() => {
+        episodesRef.current = episodes;
+    }, [episodes]);
+
+    useEffect(() => {
+        activeEpisodeIdRef.current = activeEpisodeId;
+    }, [activeEpisodeId]);
+
+    useEffect(() => {
+        pendingInitialEpisodeIdRef.current = initialEpisodeId;
+
+        const previousProjectId = previousProjectIdRef.current;
+        const hasProjectChanged = previousProjectId != null && String(previousProjectId) !== String(id);
+        previousProjectIdRef.current = id;
+
+        if (!hasProjectChanged) return;
+
+        episodesRef.current = [];
+        setEpisodes([]);
+        setActiveEpisodeId(initialEpisodeId ?? null);
+    }, [id, initialEpisodeId]);
 
     useEffect(() => {
         const handler = () => refreshProjectBillingStats();
@@ -575,11 +635,15 @@ const Editor = ({
                 if (isStale) return;
                 setActiveTab(startTab);
 
-                if (EPISODE_REQUIRED_TABS.has(startTab)) {
-                    await loadEpisodesForEditor(p);
-                    if (isStale) return;
-                } else {
-                    void loadEpisodesForEditor(p);
+                const loadedEpisodes = await loadEpisodesForEditor(p);
+                if (isStale) return;
+                if (loadedEpisodes.length > 0) {
+                    setActiveEpisodeId((prev) => {
+                        if (prev != null && loadedEpisodes.some((ep) => String(ep.id) === String(prev))) {
+                            return prev;
+                        }
+                        return pickMaxEpisodeId(loadedEpisodes);
+                    });
                 }
 
             } catch (err) {
@@ -597,7 +661,7 @@ const Editor = ({
             isStale = true;
             window.removeEventListener('aistory:workflow_stage_check', handleStageRefresh);
         };
-    }, [cachedInitialProject, id, initialActiveTab, loadEpisodesForEditor]);
+    }, [cachedInitialProject, id, initialActiveTab, loadEpisodesForEditor, pickMaxEpisodeId]);
 
     useEffect(() => {
         if (!EPISODE_REQUIRED_TABS.has(activeTab)) return;
@@ -670,9 +734,10 @@ const Editor = ({
          try {
             await deleteEpisode(epId);
             const remaining = sortEpisodesForEditor(episodes.filter(ep => ep.id !== epId));
+            episodesRef.current = remaining;
             setEpisodes(remaining);
             if (activeEpisodeId === epId) {
-                setActiveEpisodeId(remaining.length > 0 ? remaining[0].id : null);
+                setActiveEpisodeId(remaining.length > 0 ? pickMaxEpisodeId(remaining) : null);
             }
         } catch (err) {
             console.error(err);
@@ -3347,19 +3412,19 @@ const Editor = ({
     // Lazy load full episode data if missing
     useEffect(() => {
         if (!activeEpisodeId) return;
-        const ep = episodes.find(e => e.id === activeEpisodeId);
+        const ep = episodes.find(e => String(e.id) === String(activeEpisodeId));
         if (!ep) return;
         if (!ep._fullLoaded) {
             fetchEpisode(activeEpisodeId).then(fullEp => {
-                setEpisodes(prev => sortEpisodesForEditor(prev.map(e => e.id === activeEpisodeId ? { ...fullEp, _fullLoaded: true } : e)));
+                setEpisodes(prev => sortEpisodesForEditor(prev.map(e => String(e.id) === String(activeEpisodeId) ? { ...fullEp, _fullLoaded: true } : e)));
             }).catch(err => {
                 console.error("Failed to fetch full episode", err);
             });
         }
     }, [activeEpisodeId, episodes, sortEpisodesForEditor]);
 
-    const activeEpisode = episodes.find(e => e.id === activeEpisodeId) || null;
-    const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => episode.id === activeEpisode.id) : -1;
+    const activeEpisode = episodes.find(e => String(e.id) === String(activeEpisodeId)) || null;
+    const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => String(episode.id) === String(activeEpisode.id)) : -1;
     const getEpisodeDisplayFallbackNumber = useCallback((index) => {
         return index >= 0 ? episodes.length - index : null;
     }, [episodes.length]);
@@ -3484,7 +3549,7 @@ const Editor = ({
                                     {episodes.map((ep, index) => (
                                         <div 
                                             key={ep.id}
-                                            className={`px-3 py-2 text-xs flex justify-between items-center group cursor-pointer ${activeEpisodeId === ep.id ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-white'}`}
+                                            className={`px-3 py-2 text-xs flex justify-between items-center group cursor-pointer ${String(activeEpisodeId) === String(ep.id) ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-white/5 hover:text-white'}`}
                                             onClick={() => {
                                                 trackMenuAction('editor.episode.select', getEpisodeDropdownLabel(ep, index), () => {
                                                     setActiveEpisodeId(ep.id);
