@@ -3800,7 +3800,7 @@ const Editor = ({
                                     }}
                                 />
                             )}
-                            {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} uiLang={uiLang} />}
+                            {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />}
                             {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
                             {activeTab === 'scenes' && <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                                 if (sceneId) {

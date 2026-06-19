@@ -623,7 +623,7 @@ const createSkippedSubjectConsistencyReport = () => ({
     skipped: true,
 });
 
-export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, assetRerunRequest = null, uiLang = 'zh' }) => {
+export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh' }) => {
     const functionApiConfigs = useFunctionApis('script_analysis');
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
@@ -5368,6 +5368,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const llmRawAutoSaveArmedRef = useRef(false);
     const analysisResumeInFlightRef = useRef(false);
     const phase2ResolverRef = useRef(null);
+    const assetRerunHandledNonceRef = useRef(null);
     const superuserModalMutexRef = useRef(Promise.resolve());
     const phase2GenerationInFlightRef = useRef(false);
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
@@ -11902,6 +11903,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }));
     }, [phase2RerunDisplayEntries, phase2RerunModal.category]);
 
+    const closePhase2RerunModal = useCallback(() => {
+        setPhase2RerunModal((prev) => ({ ...prev, open: false }));
+    }, []);
+
     const resolveAssetRerunPatchFromSceneRequest = useCallback((request) => {
         const missingSubjects = Array.isArray(request?.missingSubjects) ? request.missingSubjects : [];
         if (missingSubjects.length <= 0) {
@@ -11927,9 +11932,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [mapSubjectIndexTypeToRerunTarget, phase2RerunSubjectEntries]);
 
     useEffect(() => {
-        if (!assetRerunRequest?.nonce) return;
+        assetRerunHandledNonceRef.current = null;
+    }, [activeEpisode?.id]);
+
+    useEffect(() => {
+        const nonce = assetRerunRequest?.nonce;
+        if (!nonce || assetRerunHandledNonceRef.current === nonce) return;
+
+        assetRerunHandledNonceRef.current = nonce;
         const patch = resolveAssetRerunPatchFromSceneRequest(assetRerunRequest);
         openPhase2RerunModal(patch);
+        if (typeof onAssetRerunRequestConsumed === 'function') {
+            onAssetRerunRequestConsumed();
+        }
         const sceneLabel = String(assetRerunRequest.sceneLabel || '').trim();
         const missingCount = Array.isArray(assetRerunRequest.missingSubjects) ? assetRerunRequest.missingSubjects.length : 0;
         if (missingCount > 0) {
@@ -11941,9 +11956,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
         }
     }, [
-        assetRerunRequest?.nonce,
-        assetRerunRequest?.sceneLabel,
-        assetRerunRequest?.missingSubjects,
+        assetRerunRequest,
+        onAssetRerunRequestConsumed,
         onLog,
         openPhase2RerunModal,
         resolveAssetRerunPatchFromSceneRequest,
@@ -13375,7 +13389,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {phase2RerunModal.open && (
                 <div
                     className="fixed inset-0 z-[59] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                    onClick={closePhase2RerunModal}
                 >
                     <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-3xl max-h-[84vh] shadow-2xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
@@ -13384,7 +13398,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {t('资产生成重跑选择', 'Asset Generation Rerun')}
                             </h3>
                             <button
-                                onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                                onClick={closePhase2RerunModal}
                                 className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white"
                             >
                                 {t('退出', 'Exit')}
@@ -13608,7 +13622,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="flex items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => setPhase2RerunModal((prev) => ({ ...prev, open: false }))}
+                                    onClick={closePhase2RerunModal}
                                     className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white border border-white/10"
                                 >
                                     {t('取消', 'Cancel')}
