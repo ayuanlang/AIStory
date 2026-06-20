@@ -21,7 +21,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
 } from '../editorHelpers';
 
 import { 
@@ -6025,77 +6025,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const getSuggestedRefImages = useCallback((shot, sourceText = null, strictMode = false, entitySource = null) => {
         if (!shot) return [];
         const entList = Array.isArray(entitySource) ? entitySource : entities;
-        
-        if (!entList.length) {
-            return [];
+        if (!entList.length) return [];
+
+        let tech = {};
+        try {
+            tech = JSON.parse(shot?.technical_notes || '{}');
+        } catch (e) {
+            tech = {};
         }
 
+        const promptText = String(
+            sourceText
+            || buildShotVideoRefPromptText(shot, tech)
+            || ''
+        ).trim();
 
-        // Updated Logic: Matches both [Name] and {Name}, allowing specific text source
-        // Now synchronized with ReferenceManager logic for consistent robust matching
-        const normalizeName = (s) => normalizeEntityToken(s);
-        
-        // Associated Entities (Included unless strictMode is true)
-        const rawNames1 = strictMode ? [] : (shot.associated_entities || '').split(/[,，]/);
-        
-        // Prompt Search logic - Unified Regexes from ReferenceManager
-        const regexes = [
-            /\[([\s\S]+?)\]/g,    // [...]
-            /\{([\s\S]+?)\}/g,    // {...}
-            /【([\s\S]+?)】/g,     // 【...】
-            /｛([\s\S]+?)｝/g,      // ｛...｝
-            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g, // standalone @Name
-            // Also keep legacy simple regex for cases without full brackets if needed? 
-            // The legacy regex was: /[\[【\{]([^\]】\}\(]+)[\]】\}\(]/g; which was too restrictive.
-        ];
-        
-        // If sourceText is provided, use it. Otherwise use shot fields EXCLUDING description (as per user request)
-        let textToScan = sourceText;
-        if (!textToScan) {
-            const parts = [];
-            if (shot.start_frame) parts.push(shot.start_frame);
-            if (shot.end_frame) parts.push(shot.end_frame);
-            if (shot.video_content) parts.push(shot.video_content);
-            if (shot.prompt) parts.push(shot.prompt);
-            textToScan = parts.join(' ');
-        }
-
-        const rawNames2 = [];
-        if (textToScan) {
-            regexes.forEach(regex => {
-                let match;
-                regex.lastIndex = 0;
-                while ((match = regex.exec(textToScan)) !== null) {
-                    if (match[1] && match[1].trim()) rawNames2.push(match[1]);
-                }
-            });
-            // Legacy Fallback for simple "CharacterName" without brackets? No, usually enforced by [] 
-        }
-        
-        // 3. Match Logic
-        const candidates = [...rawNames1, ...rawNames2];
-        const normalizedCandidates = candidates.map(normalizeName).filter(Boolean);
-
-        let refs = entList.filter(e => {
-            const cn = normalizeName(e.name || '');
-            const en = normalizeName(e.name_en || '');
-            
-            // 3b. English Name extraction from Description (Legacy)
-             if (!en && e.description) {
-                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                if (enMatch && enMatch[1]) {
-                    const complexEn = enMatch[1];
-                    const rawEn = complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]; 
-                    // We don't redefine 'en' here as it's const, use local var if needed or just skip
-                }
-            }
-
-            // Strict full-name exact check only
-            const isMatch = normalizedCandidates.some(n => n === cn || (en && n === en));
-            return isMatch;
-        }).map(e => e.image_url).filter(Boolean);
-        
-        return [...new Set(refs)];
+        return collectMatchedEntityImageUrlsFromPrompt({
+            promptText,
+            associatedEntities: strictMode ? '' : (shot?.associated_entities || ''),
+            entityPool: entList,
+            includeAssociatedEntities: !strictMode,
+        });
     }, [entities]);
 
     const getPromptMatchedEntities = useCallback((shot, sourceText = '', entitySource = null) => {
@@ -7660,7 +7610,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             const effectiveVideoMode = resolveUnifiedVideoMode(tech);
             const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-                promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
+                promptText: buildShotVideoRefPromptText(shotSnapshot, tech),
+                associatedEntities: shotSnapshot?.associated_entities || '',
                 entityPool: resolvedEntities,
             });
             const uniqueRefs = Array.isArray(tech.video_ref_image_urls)

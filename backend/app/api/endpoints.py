@@ -130,6 +130,7 @@ from app.core.config import settings
 from app.core.homepage_referral import parse_homepage_referral_token
 from app.core.entity_token import (
     entity_subject_keys_match,
+    extract_entity_raw_names_from_prompt,
     normalize_entity_token,
     subject_compare_key,
     subject_compare_key_variants,
@@ -34675,6 +34676,8 @@ async def _run_generate_video(
                 shot_for_ref = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
             if shot_for_ref:
                 prompt_candidates.extend([
+                    str(shot_for_ref.video_content or "").strip(),
+                    str(shot_for_ref.prompt or "").strip(),
                     str(shot_for_ref.start_frame or "").strip(),
                     str(shot_for_ref.end_frame or "").strip(),
                 ])
@@ -37516,10 +37519,12 @@ def _inject_shot_prompt_anchors(
 def _collect_associated_entities_refs(associated_entities_str: Optional[str], entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
     if not isinstance(associated_entities_str, str) or not associated_entities_str.strip():
         return []
-        
+
     refs: List[str] = []
-    names = [x.strip() for x in re.split(r'[,，]', associated_entities_str) if x.strip()]
-    
+    names = extract_entity_raw_names_from_prompt(associated_entities_str)
+    if not names:
+        names = [x.strip() for x in re.split(r"[,，]", associated_entities_str) if x.strip()]
+
     for name in names:
         norm_name = _normalize_entity_anchor_token(name)
         if not norm_name:
@@ -37529,18 +37534,12 @@ def _collect_associated_entities_refs(associated_entities_str: Optional[str], en
             image_url = str((row or {}).get("image_url") or "").strip()
             if image_url:
                 refs.append(image_url)
-                
+
     return [x for x in dict.fromkeys(refs) if x]
 
 
 def _extract_frontend_aligned_entity_raw_names(text: str) -> list[str]:
-    raw_names = []
-    for p in [r"\[([\s\S]+?)\]", r"\{([\s\S]+?)\}", r"【([\s\S]+?)】", r"｛([\s\S]+?)｝"]:
-        for m in re.finditer(p, text):
-            raw_names.append(m.group(1))
-    for m in re.finditer(r"(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)", text):
-        raw_names.append(m.group(1))
-    return raw_names
+    return extract_entity_raw_names_from_prompt(text)
 
 def _collect_prompt_entity_ref_images(prompt: str, entity_lookup: Dict[str, Dict[str, Any]]) -> List[str]:
     text = str(prompt or "")
@@ -37839,7 +37838,15 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
             continue
 
         entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
-        if entity_type not in {"subject", "character", "char"}:
+        if entity_type and entity_type not in {
+            "subject",
+            "character",
+            "char",
+            "environment",
+            "env",
+            "prop",
+            "props",
+        }:
             continue
 
         image_url = str(row.get("image_url") or "").strip()

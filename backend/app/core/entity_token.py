@@ -1,5 +1,10 @@
 import re
-from typing import Any
+from typing import Any, List
+
+_TYPED_ENTITY_REF_RE = re.compile(
+    r"CHAR\s*:\s*\[@([^\]]+)\]|ENV\s*:\s*\[([^\]]+)\]|PROP\s*:\s*\[([^\]]+)\]",
+    flags=re.IGNORECASE,
+)
 
 
 def _normalize_ascii_word_separators(value: str) -> str:
@@ -79,6 +84,69 @@ def subject_compare_key_variants(value: Any) -> set:
     if base_key:
         variants.add(base_key)
     return variants
+
+
+def extract_typed_entity_raw_names(text: Any) -> List[str]:
+    """Extract entity names from typed CHAR/ENV/PROP references in prompt text."""
+    source = str(text or "")
+    if not source:
+        return []
+
+    names: List[str] = []
+    for match in _TYPED_ENTITY_REF_RE.finditer(source):
+        name = (match.group(1) or match.group(2) or match.group(3) or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _is_polluted_entity_capture(name: str) -> bool:
+    """Skip brace captures that include typed tags plus action prose."""
+    text = str(name or "").strip()
+    if not text:
+        return True
+    if re.search(r"^(CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]\s+\S", text, flags=re.IGNORECASE):
+        return True
+    if len(text) > 80:
+        return True
+    return False
+
+
+def extract_entity_raw_names_from_prompt(text: Any) -> List[str]:
+    """Extract entity name candidates from typed refs plus bracket/@ tokens."""
+    source = str(text or "")
+    if not source:
+        return []
+
+    raw_names: List[str] = []
+    raw_names.extend(extract_typed_entity_raw_names(source))
+
+    for pattern in (
+        r"\[([\s\S]+?)\]",
+        r"\{([\s\S]+?)\}",
+        r"【([\s\S]+?)】",
+        r"｛([\s\S]+?)｝",
+    ):
+        for match in re.finditer(pattern, source):
+            captured = str(match.group(1) or "").strip()
+            if captured and not _is_polluted_entity_capture(captured):
+                raw_names.append(captured)
+
+    for match in re.finditer(
+        r"(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)",
+        source,
+    ):
+        raw_names.append(str(match.group(1) or "").strip())
+
+    seen: set[str] = set()
+    unique: List[str] = []
+    for name in raw_names:
+        key = normalize_entity_token(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return unique
 
 
 def entity_subject_keys_match(entity_keys: set, candidate_keys: set) -> bool:

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Video } from 'lucide-react';
 import { BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
-import { normalizeEntityToken, entityTokenMatchesName } from '../../lib/entityToken';
+import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
 
 const normalizeExternalMediaUrl = (rawUrl) => {
     const stable = String(rawUrl || '').trim();
@@ -545,46 +545,34 @@ export const collectMatchedEntitiesFromPrompt = ({
 
     const rawMatches = [];
     if (includeAssociatedEntities && associatedEntities) {
-        rawMatches.push(...String(associatedEntities).split(/[,，]/));
+        rawMatches.push(...extractEntityRawNamesFromPrompt(associatedEntities));
     }
 
-    const sourceText = String(promptText || '');
-    const regexes = [
-        /\[([\s\S]+?)\]/g,
-        /\{([\s\S]+?)\}/g,
-        /【([\s\S]+?)】/g,
-        /｛([\s\S]+?)｝/g,
-        /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
-    ];
-
-    regexes.forEach((regex) => {
-        regex.lastIndex = 0;
-        let match;
-        while ((match = regex.exec(sourceText)) !== null) {
-            if (match[1]) rawMatches.push(match[1]);
-        }
-    });
-
-    const typedRefRegex = /(CHAR\s*:\s*\[@([^\]]+)\])|(ENV\s*:\s*\[([^\]]+)\])|(PROP\s*:\s*\[([^\]]+)\])/gi;
-    let typedMatch;
-    typedRefRegex.lastIndex = 0;
-    while ((typedMatch = typedRefRegex.exec(sourceText)) !== null) {
-        rawMatches.push(typedMatch[2] || typedMatch[4] || typedMatch[6] || '');
-    }
+    rawMatches.push(...extractEntityRawNamesFromPrompt(promptText));
 
     const candidates = new Set();
     rawMatches
         .map((value) => String(value || '').trim())
         .filter(Boolean)
         .forEach((raw) => {
-            const content = raw.replace(/[\[\]\{\}【】｛｝]/g, '');
-            const normalized = normalizeEntityToken(content);
+            const normalized = normalizeEntityToken(raw);
             if (normalized) candidates.add(normalized);
         });
 
     return entities.filter((entity) => {
         return Array.from(candidates).some((candidate) => entityTokenMatchesName(entity, candidate));
     });
+};
+
+export const buildShotVideoRefPromptText = (shot = {}, techObj = {}) => {
+    const tech = techObj && typeof techObj === 'object' ? techObj : {};
+    const parts = [
+        String(shot?.video_content || shot?.prompt || '').trim(),
+        String(tech?.video_prompt_cn || '').trim(),
+        String(shot?.start_frame || '').trim(),
+        String(shot?.end_frame || '').trim(),
+    ];
+    return parts.filter(Boolean).join('\n');
 };
 
 export const collectMatchedEntityImageUrlsFromPrompt = ({

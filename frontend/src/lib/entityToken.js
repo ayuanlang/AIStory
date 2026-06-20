@@ -40,6 +40,64 @@ export const normalizeEntityComparableToken = (value) => {
         .trim();
 };
 
+const TYPED_ENTITY_REF_REGEX = /CHAR\s*:\s*\[@([^\]]+)\]|ENV\s*:\s*\[([^\]]+)\]|PROP\s*:\s*\[([^\]]+)\]/gi;
+
+export const extractTypedEntityRawNames = (text) => {
+    const source = String(text || '');
+    if (!source) return [];
+
+    const names = [];
+    let match;
+    TYPED_ENTITY_REF_REGEX.lastIndex = 0;
+    while ((match = TYPED_ENTITY_REF_REGEX.exec(source)) !== null) {
+        const name = String(match[1] || match[2] || match[3] || '').trim();
+        if (name) names.push(name);
+    }
+    return names;
+};
+
+const isPollutedEntityCapture = (name) => {
+    const text = String(name || '').trim();
+    if (!text) return true;
+    if (/^(CHAR|ENV|PROP)\s*:\s*\[[^\]]+\]\s+\S/i.test(text)) return true;
+    if (text.length > 80) return true;
+    return false;
+};
+
+export const extractEntityRawNamesFromPrompt = (text) => {
+    const source = String(text || '');
+    if (!source) return [];
+
+    const rawNames = [...extractTypedEntityRawNames(source)];
+    const regexes = [
+        /\[([\s\S]+?)\]/g,
+        /\{([\s\S]+?)\}/g,
+        /【([\s\S]+?)】/g,
+        /｛([\s\S]+?)｝/g,
+        /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
+    ];
+
+    regexes.forEach((regex) => {
+        regex.lastIndex = 0;
+        let match;
+        while ((match = regex.exec(source)) !== null) {
+            const captured = String(match[1] || '').trim();
+            if (!captured || isPollutedEntityCapture(captured)) continue;
+            rawNames.push(captured);
+        }
+    });
+
+    const seen = new Set();
+    const unique = [];
+    rawNames.forEach((name) => {
+        const key = normalizeEntityToken(name);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        unique.push(String(name || '').trim());
+    });
+    return unique.filter(Boolean);
+};
+
 export const getEntityFallbackEnglishName = (entityOrDescription) => {
     const description = typeof entityOrDescription === 'string'
         ? entityOrDescription
