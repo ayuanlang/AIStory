@@ -882,7 +882,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || /^:?-{2,}:?$/.test(firstCell)
                 || /^:?-{2,}:?$/.test(secondCell);
             if (isHeaderOrSeparator) return { isSubjectRow: false, type: '' };
-            if (/^S\d+\b/i.test(firstCell) && secondCell) {
+            if (/^S?\d+\b/i.test(firstCell) && secondCell) {
                 return {
                     isSubjectRow: true,
                     type: normalizeSubjectIndexTypeForAssetTask(secondCell),
@@ -11601,13 +11601,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]), []);
 
     const resolveSubjectIndexTextForAssetRerun = useCallback(() => {
-        const direct = extractPureSubjectIndexText(String(
-            subjectIndexText
-            || activeEpisode?.ai_scene_analysis_subject_index
-            || getStageOutputContent('stage2', 'subject_index')
-            || ''
-        ).trim());
-        if (direct) return direct;
+        const candidateSources = [
+            activeEpisode?.ai_scene_analysis_subject_index,
+            getStageOutputContent('stage2', 'subject_index'),
+            subjectIndexText,
+        ];
+        for (const raw of candidateSources) {
+            const direct = extractPureSubjectIndexText(String(raw || '').trim());
+            if (direct) return direct;
+        }
 
         const fallbackSections = extractAnalysisSections(String(llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || ''));
         return extractPureSubjectIndexText(String(fallbackSections?.subjectIndexText || '').trim());
@@ -11705,7 +11707,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const headers = parsed.headers;
             const typeIdx = pickHeaderIndex(headers, [/subject_?type/, /^type$/, /类型/, /类别/]);
             const noIdx = pickHeaderIndex(headers, [/subject_?no/, /^id$/, /编号/]);
-            const nameIdx = pickHeaderIndex(headers, [/subject_?name_?exact/, /subject_?name_?zh/, /subject_?name/, /^name$/, /名称/, /名字/]);
+            const nameIdx = pickHeaderIndex(headers, [/subject_?name_?exact/, /subject_?name_?zh/, /subject_?name_?en/, /subject_?name/, /^name$/, /名称/, /名字/]);
             if (typeIdx >= 0) {
                 parsed.rows.forEach((row, idx) => {
                     const rawType = cleanCell(row[typeIdx]);
@@ -11800,13 +11802,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const subjectType = String(entry?.type || normalizedFields.subject_type || '').trim();
         const subjectName = String(
             normalizedFields.subject_name_zh
+            || normalizedFields.subject_name_en
             || entry?.name
             || ''
         ).trim();
         if (!subjectType || !subjectName) return '';
 
         normalizedFields.subject_type = subjectType;
-        normalizedFields.subject_name_zh = subjectName;
+        if (!normalizedFields.subject_name_zh) {
+            normalizedFields.subject_name_zh = subjectName;
+        }
         if (!normalizedFields.subject_no && entry?.subjectNo) normalizedFields.subject_no = String(entry.subjectNo).trim();
 
         const extraHeaders = Object.keys(normalizedFields).filter((key) => !SUBJECT_INDEX_STANDARD_HEADERS.includes(key));
@@ -11857,12 +11862,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
             };
             if (!merged.name) return acc;
-            const sourceText = buildSingleSubjectIndexTextForRerun(merged);
+            const sourceText = buildSingleSubjectIndexTextForRerun(merged)
+                || String(originalEntry?.sourceBlock || originalEntry?.sourceLine || '').trim();
             if (!sourceText) return acc;
             acc.push({
                 ...merged,
                 sourceText,
-                sourceLine: `subject_no=${merged.subjectNo || '-'} | subject_type=${merged.type} | subject_name_exact=${merged.name}`,
+                sourceLine: String(originalEntry?.sourceLine || '').trim()
+                    || `subject_no=${merged.subjectNo || '-'} | subject_type=${merged.type} | subject_name_exact=${merged.name}`,
             });
             return acc;
         }, []);
@@ -11895,8 +11902,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             open: true,
             mode: patch.mode || prev.mode || 'all',
             category: nextCategory,
-            subjectKey: patch.subjectKey || prev.subjectKey || firstSubject?.key || '',
-            query: patch.query ?? prev.query ?? '',
+            subjectKey: patch.subjectKey || firstSubject?.key || '',
+            query: patch.query !== undefined ? String(patch.query || '') : '',
             deletedSubjectKeys: {},
             subjectEdits: {},
             editingSubjectKey: '',
@@ -11915,18 +11922,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const firstMissing = missingSubjects[0] || {};
         const mapped = mapSubjectIndexTypeToRerunTarget(firstMissing.type);
         const category = mapped.category || 'characters';
-        const query = String(firstMissing.name || '').trim();
-        const normalizedQuery = normalizeSubjectKey(query);
+        const missingName = String(firstMissing.name || '').trim();
+        const normalizedMissingName = normalizeSubjectKey(missingName);
         const matched = (phase2RerunSubjectEntries || []).find((entry) => {
             if (category && entry.category !== category) return false;
             const entryKey = normalizeSubjectKey(entry.name);
-            if (normalizedQuery && entryKey === normalizedQuery) return true;
-            return query && String(entry.name || '').toLowerCase().includes(query.toLowerCase());
+            if (normalizedMissingName && entryKey === normalizedMissingName) return true;
+            return missingName && String(entry.name || '').toLowerCase().includes(missingName.toLowerCase());
         });
         return {
             mode: missingSubjects.length === 1 ? 'single' : 'category',
             category,
-            query,
             subjectKey: matched?.key || '',
         };
     }, [mapSubjectIndexTypeToRerunTarget, phase2RerunSubjectEntries]);
@@ -12081,9 +12087,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let retryOptions = {};
         if (mode === 'category') {
             const option = assetRerunCategoryOptions.find((item) => item.key === phase2RerunModal.category) || assetRerunCategoryOptions[0];
+            const category = String(phase2RerunModal.category || option.key || '').trim();
+            const categoryEntries = (phase2RerunDisplayEntries || []).filter((item) => item.category === category);
+            const categorySubjectIndexText = buildFullSubjectIndexTextFromEntries(categoryEntries);
             retryOptions = {
                 targetEntityTypes: option.targetEntityTypes,
-                explicitSubjectIndexText: resolvedEditedText,
+                explicitSubjectIndexText: categorySubjectIndexText || resolvedEditedText,
             };
         } else if (mode === 'single') {
             const selected = filteredPhase2RerunSubjectEntries.find((item) => item.key === phase2RerunModal.subjectKey)
@@ -13423,6 +13432,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 setPhase2RerunModal((prev) => ({
                                                     ...prev,
                                                     mode: mode.key,
+                                                    query: '',
                                                     subjectKey: prev.subjectKey || firstSubject?.key || '',
                                                 }));
                                             }}
@@ -13458,6 +13468,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                         setPhase2RerunModal((prev) => ({
                                                             ...prev,
                                                             category: option.key,
+                                                            query: '',
                                                             subjectKey: firstSubject?.key || '',
                                                         }));
                                                     }}
@@ -13617,7 +13628,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
                             <div className="text-xs text-white/45">
-                                {t(`可选实体：${phase2RerunDisplayEntries.length} 个`, `${phase2RerunDisplayEntries.length} selectable entities`)}
+                                {(() => {
+                                    const total = phase2RerunDisplayEntries.length;
+                                    const mode = String(phase2RerunModal.mode || 'all');
+                                    if (mode === 'all') {
+                                        return t(`可选实体：${total} 个`, `${total} selectable entities`);
+                                    }
+                                    const category = String(phase2RerunModal.category || '').trim();
+                                    const categoryTotal = category
+                                        ? phase2RerunDisplayEntries.filter((item) => item.category === category).length
+                                        : total;
+                                    const visible = filteredPhase2RerunSubjectEntries.length;
+                                    if (visible === categoryTotal) {
+                                        return t(`当前分类：${visible} 个`, `${visible} entities in category`);
+                                    }
+                                    return t(`当前分类：${visible}/${categoryTotal} 个（已筛选）`, `${visible}/${categoryTotal} entities in category (filtered)`);
+                                })()}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
