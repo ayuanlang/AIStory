@@ -276,21 +276,76 @@ const isAssetCategorySatisfiedBySubtaskReports = (subtaskReports, categoryKey) =
     });
 };
 
+const resolveSubtaskImportHandledCount = (scenePostReport, categoryKey = '') => {
+    const subtaskReports = Array.isArray(scenePostReport?.subtaskReports) ? scenePostReport.subtaskReports : [];
+    const aliases = ASSET_CATEGORY_SUBTASK_KEYS[String(categoryKey || '').trim()] || [String(categoryKey || '').trim().toLowerCase()];
+    return subtaskReports.reduce((sum, report) => {
+        const reportKey = String(report?.key || '').trim().toLowerCase();
+        if (!aliases.includes(reportKey)) return sum;
+        return sum + toPositiveCount(report?.created) + toPositiveCount(report?.skipped);
+    }, 0);
+};
+
 const resolveImportReportAssetHandledCount = (importReport, type, categoryKey = '') => {
     const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
+    const supplementReport = scenePostReport?.supplementReport || {};
     const inserted = resolveImportReportAssetInsertedCount(importReport, type);
     const skipped = resolveImportReportAssetSkippedCount(importReport, type);
-    const subtaskReports = Array.isArray(scenePostReport?.subtaskReports) ? scenePostReport.subtaskReports : [];
-    const subtaskSatisfied = categoryKey
-        ? isAssetCategorySatisfiedBySubtaskReports(subtaskReports, categoryKey)
-        : false;
+    const subtaskHandled = categoryKey ? resolveSubtaskImportHandledCount(scenePostReport, categoryKey) : 0;
+    const supplementHandled = countAssetItemsByType(supplementReport?.createdItems, type)
+        + countAssetItemsByType(supplementReport?.skippedItems, type);
     return Math.max(
         inserted,
         skipped,
         inserted + skipped,
+        subtaskHandled,
+        supplementHandled,
         toPositiveCount(importReport?.dbPersistedCounts?.entities?.[type]),
-        subtaskSatisfied ? 1 : 0,
+        toPositiveCount(scenePostReport?.importedSubjectCounts?.[type]),
     );
+};
+
+const resolveWorkflowImportReport = (analysisUiReport, episodeId) => {
+    if (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object') {
+        return analysisUiReport.importReport;
+    }
+    const snapshot = loadAnalysisSessionSnapshot(episodeId);
+    const persistedReport = snapshot?.progressUi?.uiReport?.importReport;
+    if (persistedReport && typeof persistedReport === 'object') {
+        return persistedReport;
+    }
+    return {};
+};
+
+const collectEntityPayloadNameCandidates = (item = {}) => {
+    const names = [
+        item?.subject_name_exact,
+        item?.subject_name_zh,
+        item?.subject_name,
+        item?.name,
+        item?.name_zh,
+        item?.name_en,
+    ]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+    return Array.from(new Set(names));
+};
+
+const countEntityPayloadItemsCoveredInDb = (items, entityType, dbEntities) => {
+    if (!Array.isArray(items) || items.length === 0) return 0;
+    const normalizedType = normalizeAssetReportType(entityType);
+    const entities = (Array.isArray(dbEntities) ? dbEntities : []).filter(
+        (entity) => normalizeAssetReportType(entity?.type) === normalizedType
+    );
+    if (entities.length === 0) return 0;
+    return items.reduce((count, item) => {
+        const names = collectEntityPayloadNameCandidates(item);
+        if (!names.length) return count;
+        const matched = entities.some((entity) => (
+            names.some((name) => entityTokenMatchesName(entity, name))
+        ));
+        return count + (matched ? 1 : 0);
+    }, 0);
 };
 
 const countSubjectIndexEntriesCoveredInDb = (entries, entityType, dbEntities) => {
@@ -670,6 +725,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [analysisAttentionNotes, setAnalysisAttentionNotes] = useState('');
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
     const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
+    const [diagnosticsEpisodeSceneCount, setDiagnosticsEpisodeSceneCount] = useState(0);
     const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
     const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('all');
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
@@ -5021,9 +5077,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         loadAssets();
         return () => { mounted = false; };
-    }, [isEpisodeOnePage, projectId]);
+    }, [isEpisodeOnePage, projectId, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
 
-    
+    useEffect(() => {
+        let mounted = true;
+        const loadEpisodeSceneCount = async () => {
+            if (!activeEpisode?.id) {
+                if (mounted) setDiagnosticsEpisodeSceneCount(0);
+                return;
+            }
+            try {
+                const scenes = await fetchScenes(activeEpisode.id);
+                if (!mounted) return;
+                setDiagnosticsEpisodeSceneCount(Array.isArray(scenes) ? scenes.length : 0);
+            } catch (_) {
+                if (mounted) setDiagnosticsEpisodeSceneCount(0);
+            }
+        };
+        loadEpisodeSceneCount();
+        return () => { mounted = false; };
+    }, [
+        activeEpisode?.id,
+        analysisUiReport?.importReport,
+        analysisUiReport?.resolvedSceneImportCount,
+        isAnalyzing,
+        isRetryingPhase2,
+    ]);
 
     const reuseSubjectTypeOptions = useMemo(() => {
         const types = new Set();
@@ -12484,10 +12563,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const workflowCompletenessStats = useMemo(() => {
-        const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
-            ? analysisUiReport.importReport
-            : {};
+        const importReport = resolveWorkflowImportReport(analysisUiReport, activeEpisode?.id);
         const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
+        const dbEntities = Array.isArray(availableSubjectAssets) ? availableSubjectAssets : [];
 
         const sceneMarkdownMerged = String(
             getStageOutputContent('stage2', 'scene_markdown')
@@ -12500,7 +12578,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const text = String(entry?.markdown || entry || '').trim();
             return Boolean(text);
         });
-        let analysisSceneCount = bySceneIds.length;
+        const splitSceneMap = sceneMarkdownMerged ? splitSceneMarkdownTableBySceneId(sceneMarkdownMerged) : {};
+        const splitSceneIds = Object.keys(splitSceneMap || {}).filter((sceneId) => {
+            const text = String(splitSceneMap[sceneId] || '').trim();
+            return Boolean(text);
+        });
+        let analysisSceneCount = Math.max(bySceneIds.length, splitSceneIds.length);
         if (!analysisSceneCount && sceneMarkdownMerged) {
             const parsed = parseMarkdownTable(normalizeLlmMarkdownTable(sceneMarkdownMerged));
             analysisSceneCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
@@ -12509,16 +12592,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const importedSceneCount = firstPositiveFiniteNumber(
             analysisUiReport?.resolvedSceneImportCount,
             importReport?.dbPersistedCounts?.scenes?.currentEpisode,
-            resolveImportReportSceneCount(importReport, scenePostReport, null),
+            resolveImportReportSceneCount(importReport, scenePostReport, diagnosticsEpisodeSceneCount),
+            diagnosticsEpisodeSceneCount,
         );
 
         const subjectIndexText = String(resolveSubjectIndexTextForAssetRerun() || '').trim();
         const subjectEntries = parseSubjectIndexEntriesForAssetRerun(subjectIndexText);
+        const subjectEntriesByCategory = {
+            characters: subjectEntries.filter((entry) => entry?.category === 'characters'),
+            props: subjectEntries.filter((entry) => entry?.category === 'props'),
+            environments: subjectEntries.filter((entry) => entry?.category === 'environments'),
+            posters: subjectEntries.filter((entry) => entry?.category === 'posters'),
+        };
         const subjectIndexCounts = {
-            character: subjectEntries.filter((entry) => entry?.category === 'characters').length,
-            prop: subjectEntries.filter((entry) => entry?.category === 'props').length,
-            environment: subjectEntries.filter((entry) => entry?.category === 'environments').length,
-            poster: subjectEntries.filter((entry) => entry?.category === 'posters').length,
+            character: subjectEntriesByCategory.characters.length,
+            prop: subjectEntriesByCategory.props.length,
+            environment: subjectEntriesByCategory.environments.length,
+            poster: subjectEntriesByCategory.posters.length,
         };
 
         const assetDesignRaw = String(
@@ -12527,37 +12617,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || llmAssetRawResultContent
             || ''
         ).trim();
-        const assetPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignRaw);
+        const assetPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignRaw) || {};
+        const assetDesignItems = {
+            character: Array.isArray(assetPayload?.characters) ? assetPayload.characters : [],
+            prop: Array.isArray(assetPayload?.props) ? assetPayload.props : [],
+            environment: Array.isArray(assetPayload?.environments) ? assetPayload.environments : [],
+            poster: [
+                ...(Array.isArray(assetPayload?.posters) ? assetPayload.posters : []),
+                ...(Array.isArray(assetPayload?.covers) ? assetPayload.covers : []),
+            ],
+        };
         const assetDesignCounts = {
-            character: Array.isArray(assetPayload?.characters) ? assetPayload.characters.length : 0,
-            prop: Array.isArray(assetPayload?.props) ? assetPayload.props.length : 0,
-            environment: Array.isArray(assetPayload?.environments) ? assetPayload.environments.length : 0,
-            poster: (Array.isArray(assetPayload?.posters) ? assetPayload.posters.length : 0)
-                + (Array.isArray(assetPayload?.covers) ? assetPayload.covers.length : 0),
+            character: assetDesignItems.character.length,
+            prop: assetDesignItems.prop.length,
+            environment: assetDesignItems.environment.length,
+            poster: assetDesignItems.poster.length,
         };
         const hasAssetDesignPayload = Object.values(assetDesignCounts).some((count) => count > 0);
 
-        const importedAssetCounts = {
-            character: resolveImportReportAssetHandledCount(importReport, 'character', 'characters'),
-            prop: resolveImportReportAssetHandledCount(importReport, 'prop', 'props'),
-            environment: resolveImportReportAssetHandledCount(importReport, 'environment', 'environments'),
-            poster: resolveImportReportAssetHandledCount(importReport, 'poster', 'posters'),
+        const resolveImportedAssetCount = (type, categoryKey, categoryEntries, designItems) => {
+            const fromReport = resolveImportReportAssetHandledCount(importReport, type, categoryKey);
+            const fromDbMatch = hasAssetDesignPayload
+                ? countEntityPayloadItemsCoveredInDb(designItems, type, dbEntities)
+                : countSubjectIndexEntriesCoveredInDb(categoryEntries, type, dbEntities);
+            return Math.max(fromReport, fromDbMatch);
         };
 
-        const buildAssetRow = (key, labelZh, labelEn) => {
+        const buildAssetRow = (key, labelZh, labelEn, categoryKey) => {
             const subjectIndexCount = subjectIndexCounts[key] || 0;
             const designCount = assetDesignCounts[key] || 0;
-            const analysisCount = hasAssetDesignPayload ? designCount : subjectIndexCount;
-            const analysisSource = hasAssetDesignPayload ? 'design' : 'subject_index';
-            const importedCount = importedAssetCounts[key] || 0;
+            const analysisCount = hasAssetDesignPayload
+                ? Math.max(designCount, key === 'poster' ? subjectIndexCount : designCount)
+                : subjectIndexCount;
+            const importedCount = resolveImportedAssetCount(
+                key,
+                categoryKey,
+                subjectEntriesByCategory[categoryKey] || [],
+                assetDesignItems[key] || [],
+            );
             return {
                 key,
                 labelZh,
                 labelEn,
-                subjectIndexCount,
-                designCount,
                 analysisCount,
-                analysisSource,
                 importedCount,
                 status: resolveCompletenessStatus(analysisCount, importedCount),
             };
@@ -12568,38 +12670,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 key: 'scenes',
                 labelZh: '场景',
                 labelEn: 'Scenes',
-                subjectIndexCount: null,
-                designCount: null,
                 analysisCount: analysisSceneCount,
-                analysisSource: 'scene_markdown',
                 importedCount: importedSceneCount,
                 status: resolveCompletenessStatus(analysisSceneCount, importedSceneCount),
             },
-            buildAssetRow('character', '角色', 'Characters'),
-            buildAssetRow('prop', '道具', 'Props'),
-            buildAssetRow('environment', '环境', 'Environments'),
-            buildAssetRow('poster', '封面/海报', 'Posters'),
+            buildAssetRow('character', '角色', 'Characters', 'characters'),
+            buildAssetRow('prop', '道具', 'Props', 'props'),
+            buildAssetRow('environment', '环境', 'Environments', 'environments'),
+            buildAssetRow('poster', '封面', 'Poster', 'posters'),
         ];
 
+        const visibleRows = rows.filter((row) => row.analysisCount > 0 || row.importedCount > 0);
+        const summaryItems = (visibleRows.length > 0 ? visibleRows : rows).map((row) => {
+            const statusMeta = {
+                ok: { mark: '✓', className: 'text-emerald-300' },
+                partial: { mark: '⚠', className: 'text-amber-300' },
+                missing: { mark: '⚠', className: 'text-red-300' },
+                extra: { mark: '+', className: 'text-sky-300' },
+                none: { mark: '—', className: 'text-white/35' },
+            }[row.status] || { mark: '—', className: 'text-white/35' };
+            return { ...row, mark: statusMeta.mark, className: statusMeta.className };
+        });
         const hasAnyData = rows.some((row) => row.analysisCount > 0 || row.importedCount > 0);
         const hasIncomplete = rows.some((row) => ['partial', 'missing'].includes(row.status));
 
         return {
-            rows,
+            summaryItems,
             hasAnyData,
             hasIncomplete,
-            hasAssetDesignPayload,
         };
     }, [
         activeEpisode?.ai_entity_design_result,
         activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.id,
         analysisUiReport,
+        availableSubjectAssets,
+        diagnosticsEpisodeSceneCount,
         getAnalysisEntitiesPayloadFromJsonText,
         getStageOutputContent,
         llmAssetRawResultContent,
         normalizeLlmMarkdownTable,
         parseSubjectIndexEntriesForAssetRerun,
         resolveSubjectIndexTextForAssetRerun,
+        splitSceneMarkdownTableBySceneId,
         stage2SceneMarkdownByScene,
     ]);
 
@@ -13065,104 +13178,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 </div>
 
                 {workflowCompletenessStats.hasAnyData && (
-                    <div className="mt-4 pt-4 border-t border-white/10">
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                            <div className="text-xs font-semibold text-white/75">
-                                {t('完整性对照（分析返回 vs 已入库）', 'Completeness (Analysis Output vs Imported)')}
-                            </div>
-                            {workflowCompletenessStats.hasIncomplete && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-400/35 bg-amber-500/15 text-amber-100">
-                                    {t('存在未完全入库项', 'Some items not fully imported')}
-                                </span>
-                            )}
-                        </div>
-                        <div className="overflow-x-auto rounded-lg border border-white/10 bg-black/25">
-                            <table className="w-full min-w-[520px] text-[11px]">
-                                <thead>
-                                    <tr className="border-b border-white/10 text-white/55">
-                                        <th className="px-3 py-2 text-left font-semibold">{t('类别', 'Category')}</th>
-                                        <th className="px-3 py-2 text-right font-semibold">{t('分析返回', 'Analysis Output')}</th>
-                                        <th className="px-3 py-2 text-right font-semibold">{t('已入库', 'Imported')}</th>
-                                        <th className="px-3 py-2 text-center font-semibold">{t('完整性', 'Status')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {workflowCompletenessStats.rows.map((row) => {
-                                        const completenessStatusMeta = {
-                                            ok: {
-                                                labelZh: '完整',
-                                                labelEn: 'Complete',
-                                                className: 'text-emerald-300 bg-emerald-500/15 border-emerald-400/30',
-                                            },
-                                            partial: {
-                                                labelZh: '部分',
-                                                labelEn: 'Partial',
-                                                className: 'text-amber-200 bg-amber-500/15 border-amber-400/30',
-                                            },
-                                            missing: {
-                                                labelZh: '缺失',
-                                                labelEn: 'Missing',
-                                                className: 'text-red-200 bg-red-500/15 border-red-400/30',
-                                            },
-                                            extra: {
-                                                labelZh: '超出',
-                                                labelEn: 'Extra',
-                                                className: 'text-sky-200 bg-sky-500/15 border-sky-400/30',
-                                            },
-                                            none: {
-                                                labelZh: '—',
-                                                labelEn: '—',
-                                                className: 'text-white/35 bg-white/5 border-white/10',
-                                            },
-                                        };
-                                        const statusMeta = completenessStatusMeta[row.status] || completenessStatusMeta.none;
-                                        const analysisHint = row.key === 'scenes'
-                                            ? t('场景表', 'Scene table')
-                                            : (row.analysisSource === 'design'
-                                                ? t('资产设计 JSON', 'Asset design JSON')
-                                                : t('资产清单', 'Subject Index'));
-                                        const showSubjectIndexHint = row.key !== 'scenes'
-                                            && workflowCompletenessStats.hasAssetDesignPayload
-                                            && Number(row.subjectIndexCount || 0) > 0
-                                            && Number(row.subjectIndexCount) !== Number(row.analysisCount);
-                                        return (
-                                            <tr key={row.key} className="border-b border-white/5 last:border-b-0">
-                                                <td className="px-3 py-2 text-white/85 font-medium">
-                                                    {t(row.labelZh, row.labelEn)}
-                                                </td>
-                                                <td className="px-3 py-2 text-right text-white/90">
-                                                    <span className="font-semibold tabular-nums">{row.analysisCount}</span>
-                                                    <div className="text-[10px] text-white/45 mt-0.5">
-                                                        {analysisHint}
-                                                        {showSubjectIndexHint && (
-                                                            <span className="ml-1">
-                                                                ({t('清单', 'Index')} {row.subjectIndexCount})
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-2 text-right">
-                                                    <span className="font-semibold tabular-nums text-white/90">{row.importedCount}</span>
-                                                    <div className="text-[10px] text-white/45 mt-0.5">{t('数据表', 'DB records')}</div>
-                                                </td>
-                                                <td className="px-3 py-2 text-center">
-                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-semibold ${statusMeta.className}`}>
-                                                        {t(statusMeta.labelZh, statusMeta.labelEn)}
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                        <div className="mt-2 text-[10px] text-white/45 leading-relaxed">
-                            {workflowCompletenessStats.hasAssetDesignPayload
-                                ? t('资产“分析返回”取自第四阶段 entity design JSON；“已入库”统计新建、跳过复用与持久化记录的最大值。', 'Asset analysis counts come from Stage 4 entity design JSON. Imported counts use the max of created, skipped/reused, and persisted records.')
-                                : t('资产设计尚未完成时，“分析返回”暂以第二阶段资产清单为准。', 'Before asset design completes, asset analysis counts fall back to the Stage 2 Subject Index.')}
-                            {' '}
-                            {t('场景“分析返回”取自场景 Markdown 表行数。', 'Scene analysis counts use scene markdown table rows.')}
-                        </div>
+                    <div className="mt-3 pt-3 border-t border-white/10 text-[11px] text-white/70 leading-relaxed">
+                        <span className="text-white/55 font-semibold mr-2">
+                            {t('完整性', 'Completeness')}:
+                        </span>
+                        {workflowCompletenessStats.summaryItems.map((item, index) => (
+                            <span key={item.key} className={`${item.className}${index > 0 ? ' ml-3' : ''}`}>
+                                {t(item.labelZh, item.labelEn)} {item.analysisCount}→{item.importedCount}{item.mark}
+                            </span>
+                        ))}
                     </div>
                 )}
             </div>
