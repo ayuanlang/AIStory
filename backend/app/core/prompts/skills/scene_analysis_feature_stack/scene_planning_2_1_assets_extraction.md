@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-06-20 18:00:00 +08:00
+# Prompt Updated At: 2026-06-20 23:15:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -45,7 +45,7 @@
   - **正反例**：❌ 快速闪回出现「幼年林医生」「父亲」「旧客厅」仅写当下「林医生」「银打火机」。✅ 同上切片须提取/衍生「林医生_幼年版」「父亲」「旧客厅」或对应时序环境，并与当下资产建立可追溯链。
 - 安全红线：禁血腥、断肢、肉体变异等词；战损用意象化表达。
 - 新增实体必须可持续、可复现、可继承；瞬时变化不建新实体。
-- 特效不得独立成实体，必须挂宿主并作为宿主衍生变体。
+- 特效不得独立成实体，必须挂宿主并作为宿主衍生变体。改变大范围天象/结界/固定空间结构的**跨 Beat 可持续**域场，归为**主环境的 ENV 状态衍生**（见「衍生实体命名规范」），不得仅留 Beat 而不落 Index。
 - 临时光效/粒子/拖尾仅留 Beat；可持续复现且可命名的施法形态必须建衍生变体并写明触发源、持续形态、识别锚点。
 - 环境仅写空镜信息：空间边界、固定建筑/装修、固定大件家具/基础陈设、锚点、衍生依赖、切换触发；禁止泛化为“室内环境”等。
 - **ENV/PROP 归属底线（与根本冲突原则一致）**：固定且不会被拿起/移出/递交/破坏/独立展示的家具陈设必须留在 `ENV`；已被 `PROP` 独立提取的物件禁止再写入 `ENV` 固定陈设。会被拿起、带走、移出、递交、破坏、独立展示或作为行动目标的物件不得并入 `ENV`，按 `PROP` 提取或留 Beat 证据；**已在 `ENV` 中描述的同一物件禁止再建 `PROP`**。两者均可时默认归 `ENV`。
@@ -85,6 +85,7 @@
 ### 四、环境组（ENV）与空镜
 - 主环境与 Scene 边界完全继承 Stage 1；Stage 1 已声明主/衍生环境必须逐条提取并保留依赖。
 - 触发线索存在且可判空镜差异（`empty_view_delta`）时，必须补最小衍生环境，禁止并入主环境。
+- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/光源/边界 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`，`base_entity` 指向主环境；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对主环境的固定结构/光源/边界差异；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
 - 自动补齐衍生环境最小字段：`subject_name_zh({角度}度{主环境名}[_{衍生类型/观察区域/可见方向}])`、`base_entity(主环境名)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
@@ -98,7 +99,8 @@
 - **统一原则**：所有衍生实体的 `subject_name_zh` / `subject_name_en` 必须与基准实体（`base_entity` 所指）建立可追溯的命名关联；`base_entity` 填基准实体的 `subject_name_zh`（逐字一致），基准版填 `None`；`dependency_reference` 同步指向基准实体 `subject_name_en`。
 - **环境（ENV）**：
   - **主环境（0 度基准）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`。
-  - **衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`；同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`，如 `180度办公室会客区_桌后反打`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
+  - **视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`；同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`，如 `180度办公室会客区_桌后反打`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
+  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`，如 `办公室会客区_符阵覆盖态`、`侯府正厅_墙体崩塌态`；`subject_name_en` = `{Base Environment English Name} {State/Domain Descriptor}`，如 `Office Reception Area Sigil Covered`。须同时满足 Stage 1 跨 Beat 可持续空镜变化证据；与视角衍生可同时存在。
   - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀。
 - **角色（CHAR）**：
   - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
