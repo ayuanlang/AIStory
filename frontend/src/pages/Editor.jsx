@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
 import ProjectStatusBar from '../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -114,6 +114,7 @@ import {
 } from '../services/api';
 
 import RefineControl from '../components/RefineControl.jsx';
+import { DeletionTrashModal } from '../components/DeletionTrashModal';
 
 import {
     PROVIDER_LABELS,
@@ -238,6 +239,7 @@ const Editor = ({
     );
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
+    const [trashModalOpen, setTrashModalOpen] = useState(false);
     const [isProjectBackupExporting, setIsProjectBackupExporting] = useState(false);
     const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
     const [jobPoolLoading, setJobPoolLoading] = useState(false);
@@ -3763,6 +3765,15 @@ const Editor = ({
                         <Layers className="w-4 h-4" />
                         <span className="text-xs font-medium hidden sm:block">{t('任务池', 'Job Pool')}</span>
                     </button>
+
+                    <button
+                        onClick={() => setTrashModalOpen(true)}
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center justify-center"
+                        title={t('回收站', 'Recycle Bin')}
+                        aria-label={t('回收站', 'Recycle Bin')}
+                    >
+                        <RotateCcw className="w-4 h-4" />
+                    </button>
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
@@ -4095,6 +4106,14 @@ const Editor = ({
 
             {/* Log Panel */}
             <LogPanel />
+
+            <DeletionTrashModal
+                open={trashModalOpen}
+                onClose={() => setTrashModalOpen(false)}
+                projectId={id}
+                uiLang={uiLang}
+                onRestored={() => setRefreshKey((k) => k + 1)}
+            />
 
         </div>
     );

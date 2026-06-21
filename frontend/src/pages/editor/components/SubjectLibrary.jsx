@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History } from 'lucide-react';
+import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -108,6 +108,7 @@ import {
     markReviewThreadRead,
     recordSystemLogAction,
     rebindShotMediaAssets,
+    backfillEpisodeMediaFromLibrary,
     getCachedUserPreferences,
 } from '../../../services/api';
 
@@ -156,6 +157,7 @@ import { processPrompt } from '../../../lib/promptUtils';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../../../lib/entityToken';
 import SettingsPage from '../../Settings';
 import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
+import { DeletionTrashModal } from '../../../components/DeletionTrashModal';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -344,6 +346,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [subTab, setSubTab] = useState('character');
     const [createMode, setCreateMode] = useState('manual');
     const [entityListLoading, setEntityListLoading] = useState(false);
+    const [isBackfillingEpisodeMedia, setIsBackfillingEpisodeMedia] = useState(false);
+    const [trashModalOpen, setTrashModalOpen] = useState(false);
     const [entities, setEntities] = useState([]);
     const [allEntities, setAllEntities] = useState([]); // Store ALL entities for cross-reference
     const [entityEpisodeScope, setEntityEpisodeScope] = useState(() => (currentEpisode?.id ? 'current' : 'all'));
@@ -3680,10 +3684,69 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     };
 
-    const handleDeleteAllEntities = async () => {
-        if (!await confirmUiMessage("WARNING: This will delete ALL subjects/entities in this library. This action cannot be undone. Are you sure?")) return;
+    const handleBackfillEpisodeMediaFromLibrary = async () => {
+        if (!projectId || !currentEpisode?.id) {
+            alert(t('请先选择分集。', 'Select an episode first.'));
+            return;
+        }
+        if (!await confirmUiMessage(t(
+            '将从素材库为当前分集中缺失图片/视频/音频链接的主体与分镜，关联生成时间最近的素材。已有链接不会被覆盖。确定继续？',
+            'This will link the most recently generated library assets to subjects and shots in the current episode that are missing image/video/audio URLs. Existing links will not be overwritten. Continue?'
+        ))) return;
+
+        setIsBackfillingEpisodeMedia(true);
         try {
-            await deleteAllEntities(projectId);
+            const res = await backfillEpisodeMediaFromLibrary(projectId, currentEpisode.id, {
+                include_shots: true,
+                include_entities: true,
+                limit: 10000,
+                overwrite_existing: true,
+            });
+            const updatedEntities = Number(res?.updated_entities || 0);
+            const updatedShots = Number(res?.updated_shots || 0);
+            const boundEntities = Number(res?.bound_entities || 0);
+            const boundShots = Number(res?.bound_shots || 0);
+            if (updatedEntities > 0) {
+                await loadEntities();
+            }
+            onLog?.(
+                t(
+                    `素材库回填完成：更新主体 ${updatedEntities} 个、分镜 ${updatedShots} 个（匹配 ${boundEntities + boundShots} 处空链接）。`,
+                    `Library backfill done: updated ${updatedEntities} subjects, ${updatedShots} shots (${boundEntities + boundShots} empty slots matched).`
+                ),
+                updatedEntities > 0 || updatedShots > 0 ? 'success' : 'info',
+            );
+            if (updatedEntities === 0 && updatedShots === 0) {
+                showSubjectNotification(
+                    t('未找到可回填的素材链接。请确认当前分集与素材库分集一致，并重载后端后再试。', 'No library assets found to backfill missing links. Confirm the current episode matches the assets library episode, then reload the backend and retry.'),
+                    'warning',
+                );
+            }
+        } catch (e) {
+            console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            const status = e?.response?.status;
+            if (status === 405) {
+                onLog?.(t('素材库回填接口未加载，请重启后端服务后再试。', 'Library backfill API is not loaded. Please restart the backend and retry.'), 'error');
+            } else {
+                onLog?.(t(`素材库回填失败：${detail}`, `Library backfill failed: ${detail}`), 'error');
+            }
+        } finally {
+            setIsBackfillingEpisodeMedia(false);
+        }
+    };
+
+    const handleDeleteAllEntities = async () => {
+        if (!currentEpisode?.id) {
+            alert(t('请先选择分集后再清空该分集的主体库。', 'Select an episode before clearing its subject library.'));
+            return;
+        }
+        if (!await confirmUiMessage(t(
+            '警告：将删除当前分集下的全部主体/实体（软删除，可从数据库恢复）。确定继续？',
+            'WARNING: This will delete ALL subjects/entities in the current episode (soft delete). Continue?'
+        ))) return;
+        try {
+            await deleteAllEntities(projectId, currentEpisode.id);
             loadEntities();
             setViewingEntity(null);
             setRefImage(null);
@@ -5569,6 +5632,29 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                 ) : (
                                     <span className="whitespace-nowrap">{t('停止', 'Stop')}</span>
                                 )}
+                            </button>
+                             <button
+                                type="button"
+                                onClick={handleBackfillEpisodeMediaFromLibrary}
+                                disabled={isBackfillingEpisodeMedia || !currentEpisode?.id}
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors flex items-center justify-center"
+                                title={t('素材库回填：关联当前分集最新生成的素材', 'Library backfill: link latest generated assets for the current episode')}
+                                aria-label={t('素材库回填', 'Library Backfill')}
+                            >
+                                {isBackfillingEpisodeMedia ? (
+                                    <Loader2 size={16} className="animate-spin" />
+                                ) : (
+                                    <LinkIcon size={16} />
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setTrashModalOpen(true)}
+                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 transition-colors flex items-center justify-center"
+                                title={t('回收站', 'Recycle Bin')}
+                                aria-label={t('回收站', 'Recycle Bin')}
+                            >
+                                <RotateCcw size={16} />
                             </button>
                              <button 
                                 onClick={handleDeleteAllEntities}
@@ -7940,6 +8026,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     </div>
                 </div>
             )}
+            <DeletionTrashModal
+                open={trashModalOpen}
+                onClose={() => setTrashModalOpen(false)}
+                projectId={projectId}
+                uiLang={uiLang}
+                onRestored={() => loadEntities()}
+            />
         </div>
     );
 };

@@ -765,6 +765,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     rawContentRef.current = rawContent;
     const SUBJECT_INDEX_PARSE_ERROR = '第二阶段返回未完成或被截断，未解析到完整的资产清单区块；当前结果不能继续作为完整分析使用。请重新执行，或切换模型后重试。';
 
+    const hasSubjectIndexStructure = useCallback((candidateText) => {
+        const candidate = String(candidateText || '').trim();
+        if (!candidate) return false;
+        if (/(?:^|\n)\s*(?:#{0,6}\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script|\[SCENES_BLOCK_START\])/im.test(candidate)) {
+            return false;
+        }
+        return (
+            /(?:^|\n)\s*subject_no\s*=\s*S?\d+/i.test(candidate)
+            || /(?:^|\n)\s*subject_type\s*=\s*(?:character|prop|environment|cover_poster)/i.test(candidate)
+            || /(?:^|\n)\s*\|[^\n]*subject_no[^\n]*subject_type[^\n]*\|/i.test(candidate)
+            || /(?:^|\n)\s*\|?\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)/i.test(candidate)
+            || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|资产清单|实体清单|设计资产索引)\s*(?:\*\*)?\s*(?:\n|$)/i.test(candidate)
+        );
+    }, []);
+
         const extractAnalysisSections = useCallback((rawText) => {
         let authoritativeSubjectText = String(rawText || '');
         // Erase any <think> blocks before doing regex to prevent huge text matching failures
@@ -776,9 +791,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const looksLikeSubjectIndex = (candidateText) => {
             const candidate = String(candidateText || '');
-            return /subject_no\s*=|subject_type\s*=|subject_name_(?:zh|en|exact)\s*=|subject_type\s*\|/i.test(candidate)
-            || /(?:^|\n)\s*\|?\s*[A-Za-z]?\d{1,}\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|场景|服装|特效)\b/i.test(candidate)
-            || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体)/i.test(candidate);
+            return hasSubjectIndexStructure(candidate);
         };
 
         const trimSubjectIndexSection = (candidateText) => {
@@ -881,13 +894,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             extractedText = extractedText.replace(trailingConsistencyReport[0], '').trim();
         }
 
+        const validatedSubjectIndex = hasStructuredSubjectIndex && hasSubjectIndexStructure(extractedText)
+            ? extractedText
+            : '';
+
         return {
             authoritativeSubjectText,
-            subjectIndexText: hasStructuredSubjectIndex ? extractedText : '',
+            subjectIndexText: validatedSubjectIndex,
             adaptationText: extractedAdaptationText,
-            hasStructuredSubjectIndex,
+            hasStructuredSubjectIndex: !!validatedSubjectIndex,
         };
-    }, []);
+    }, [hasSubjectIndexStructure]);
 
     const extractPureSubjectIndexText = useCallback((rawText) => {
         const source = String(rawText || '').trim();
@@ -895,16 +912,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const sections = extractAnalysisSections(source);
         if (sections?.hasStructuredSubjectIndex && String(sections.subjectIndexText || '').trim()) {
-            return String(sections.subjectIndexText || '').trim();
+            const extracted = String(sections.subjectIndexText || '').trim();
+            return hasSubjectIndexStructure(extracted) ? extracted : '';
         }
 
         const fallbackSceneStart = source.search(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|Scene\s*Arrangement|场景分析结果|场景表|场景列表|###?\s*-1\)\s*类型研判)\b/i);
         if (fallbackSceneStart > 0) {
-            return source.slice(0, fallbackSceneStart).trim();
+            const sliced = source.slice(0, fallbackSceneStart).trim();
+            return hasSubjectIndexStructure(sliced) ? sliced : '';
         }
 
-        return '';
-    }, [extractAnalysisSections]);
+        return hasSubjectIndexStructure(source) ? source : '';
+    }, [extractAnalysisSections, hasSubjectIndexStructure]);
 
     const normalizeSubjectIndexTypeForAssetTask = useCallback((rawType) => {
         const type = String(rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
@@ -1326,22 +1345,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     useEffect(() => {
         if (!activeEpisode) return;
-        const authoritativeSubjectText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
-        if (!authoritativeSubjectText) return;
 
-        const extractedSections = extractAnalysisSections(authoritativeSubjectText);
         const persistedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         const persistedAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
-        const extractedText = extractPureSubjectIndexText(
-            persistedSubjectIndexText || (extractedSections.hasStructuredSubjectIndex ? String(extractedSections.subjectIndexText || '').trim() : '')
-        );
+        const extractedSubjectIndex = extractPureSubjectIndexText(persistedSubjectIndexText);
+        const authoritativeAdaptationText = llmRawResultContent || llmResultContent || activeEpisode.ai_scene_analysis_result || '';
         const extractedAdaptationText = persistedAdaptationText || (
-            /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeSubjectText)
-                ? String(extractStage1AdaptedScriptBody(authoritativeSubjectText) || '').trim()
+            /(?:###?\s*第二部分[:：]?\s*修改后的剧本|###?\s*Second\s*Part[:：]?\s*Adapted\s*Script|【场景\s*|Scene\s*\d+)/i.test(authoritativeAdaptationText)
+                ? String(extractStage1AdaptedScriptBody(authoritativeAdaptationText) || '').trim()
                 : ''
         );
 
-        setSubjectIndexText((prev) => (extractedText !== prev ? extractedText : prev));
+        setSubjectIndexText((prev) => (extractedSubjectIndex !== prev ? extractedSubjectIndex : prev));
         setAdaptationText((prev) => (extractedAdaptationText !== prev ? extractedAdaptationText : prev));
     }, [
         llmRawResultContent,
@@ -1350,7 +1365,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.ai_scene_analysis_adaptation,
         activeEpisode?.id,
-        extractAnalysisSections,
         extractPureSubjectIndexText,
         extractStage1AdaptedScriptBody,
     ]);
@@ -3334,12 +3348,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 reason: t('未检测到可导入的 Scenes Markdown 表格。', 'No importable Scenes markdown table detected.'),
             };
         }
-        const splitCells = (line) => {
-            const cells = String(line || '').split('|').map(c => c.trim());
-            if (cells[0] === '') cells.shift();
-            if (cells[cells.length - 1] === '') cells.pop();
-            return cells;
-        };
+        const splitCells = (line, headerRow) => reconcileSceneTableRowCells(
+            cleanMarkdownTableCells(line),
+            Array.isArray(headerRow) && headerRow.length > 0 ? headerRow : cleanMarkdownTableCells(line)
+        );
         const normalize = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
         const isSeparatorLine = (line) => /\|\s*:?-{3,}:?/.test(line) || /^[\s\|:\-]*$/.test(line);
         const findColIdx = (normalizedHeaders, patterns) => normalizedHeaders.findIndex((h) => patterns.some(p => h.includes(p)));
@@ -3359,7 +3371,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 continue;
             }
 
-            const headers = splitCells(lines[0]);
+            const headers = cleanMarkdownTableCells(lines[0]);
             const normalizedHeaders = headers.map(normalize);
             const sceneIdIdx = findColIdx(normalizedHeaders, ['sceneid', '场景id']);
             const sceneNoIdx = findColIdx(normalizedHeaders, ['sceneno', '场次序号', '场次']);
@@ -3383,9 +3395,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const line = lines[i];
                 if (isSeparatorLine(line)) continue;
 
-                const cells = splitCells(line);
-                while (cells.length < headers.length) cells.push('');
-
+                const cells = splitCells(line, headers);
                 const sceneId = String(cells[sceneIdIdx] || '').trim();
                 const sceneNo = String(sceneNoIdx >= 0 ? (cells[sceneNoIdx] || '') : '').trim();
                 const sceneName = String(sceneNameIdx >= 0 ? (cells[sceneNameIdx] || '') : '').trim();
@@ -3868,6 +3878,81 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     
 
+    function splitMarkdownTableRow(line) {
+        let s = String(line || '').trim();
+        if (!s) return [];
+        if (s.startsWith('|')) s = s.slice(1);
+        if (s.endsWith('|')) s = s.slice(0, -1);
+
+        const cells = [];
+        let buf = [];
+        let escaped = false;
+        for (const ch of s) {
+            if (escaped) {
+                buf.push(ch);
+                escaped = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch === '|') {
+                cells.push(buf.join('').trim());
+                buf = [];
+                continue;
+            }
+            buf.push(ch);
+        }
+        if (escaped) buf.push('\\');
+        cells.push(buf.join('').trim());
+        return cells;
+    }
+
+    function normalizeSceneTableHeaderKey(header) {
+        return String(header || '').toLowerCase().replace(/[\s_.\-]/g, '');
+    }
+
+    function cleanMarkdownTableCells(line) {
+        return splitMarkdownTableRow(line).map((cell) => String(cell || '')
+            .replace(/\\\|/g, '|')
+            .replace(/<br\s*\/?>/gi, '\n'));
+    }
+
+    function reconcileSceneTableRowCells(cells, headers) {
+        const headerCount = Array.isArray(headers) ? headers.length : 0;
+        if (!headerCount) return Array.isArray(cells) ? [...cells] : [];
+
+        let row = Array.isArray(cells) ? [...cells] : [];
+        while (row.length < headerCount) row.push('');
+        if (row.length === headerCount) {
+            return row.slice(0, headerCount);
+        }
+
+        const coreInfoIdx = headers.findIndex((header) => {
+            const normalized = normalizeSceneTableHeaderKey(header);
+            return normalized.includes('coresceneinfo') || normalized.includes('核心场景信息');
+        });
+        const mergeStartIdx = coreInfoIdx >= 0 ? coreInfoIdx : Math.min(5, headerCount - 1);
+        const overflow = row.length - headerCount;
+        const mergeEndIdx = mergeStartIdx + overflow + 1;
+        const merged = [
+            ...row.slice(0, mergeStartIdx),
+            row.slice(mergeStartIdx, mergeEndIdx).join('|'),
+            ...row.slice(mergeEndIdx),
+        ];
+        while (merged.length < headerCount) merged.push('');
+        if (merged.length > headerCount) {
+            const tailCount = headerCount - mergeStartIdx - 1;
+            return [
+                ...merged.slice(0, mergeStartIdx),
+                merged.slice(mergeStartIdx, merged.length - tailCount).join('|'),
+                ...merged.slice(merged.length - tailCount),
+            ].slice(0, headerCount);
+        }
+        return merged.slice(0, headerCount);
+    }
+
     function parseMarkdownTable(text) {
         if (!text || typeof text !== 'string') return null;
         const lines = text
@@ -3877,34 +3962,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (lines.length < 2) return null;
 
-        const cleanCells = (line) => {
-            let cols = line.split('|').map(c => c.trim());
-            if (cols.length > 0 && cols[0] === "") cols.shift();
-            if (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
-
-            return cols.map(c => (c || '')
-                .replace(/\\\|/g, '|')
-                .replace(/<br\s*\/?>/gi, '\n')
-            );
-        };
-
         const isSeparatorLine = (line) => /\|\s*:?-{3,}:?/.test(line) || /^[\s\|:\-]*$/.test(line);
 
         const headerLine = lines[0];
         const sepLine = lines[1];
         if (isSeparatorLine(headerLine) || !isSeparatorLine(sepLine)) return null;
 
-        const headers = cleanCells(headerLine);
+        const headers = cleanMarkdownTableCells(headerLine);
         if (headers.length === 0) return null;
 
         const rows = [];
         for (let i = 2; i < lines.length; i++) {
             const line = lines[i];
             if (isSeparatorLine(line)) continue;
-            const cells = cleanCells(line);
+            const cells = reconcileSceneTableRowCells(cleanMarkdownTableCells(line), headers);
             if (cells.length === 0) continue;
-            while (cells.length < headers.length) cells.push('');
-            rows.push(cells.slice(0, headers.length));
+            rows.push(cells);
         }
 
         return { headers, rows };
@@ -4486,9 +4559,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const stage2SubjectIndexText = extractPureSubjectIndexText(String(parsedSubjectIndexText || '').trim());
 
-        const stage2SceneMarkdownFromStage2 = isSceneMarkdownTableText(resolvedStage2RawText)
-            ? String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim()
-            : '';
+        const stage2SceneMarkdownFromStage2 = (() => {
+            if (!isSceneMarkdownTableText(resolvedStage2RawText)) return '';
+            const normalized = String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim();
+            if (normalized) return normalized;
+            return String(resolvedStage2RawText || '').trim();
+        })();
         let stage2SceneMarkdown = String(stage2SceneMarkdownFromStage2 || '').trim();
         if (parsedSceneArrangementText) {
             if (stage2SceneMarkdown) {
@@ -4687,6 +4763,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
         if (persisted && persisted?.stages?.stage2?.outputs?.subject_index) {
              let subjOutput = persisted.stages.stage2.outputs.subject_index.content || '';
+             if (!hasSubjectIndexStructure(subjOutput)) {
+                 persisted.stages.stage2.outputs.subject_index.content = '';
+             } else {
              let sceneOutput = persisted.stages.stage2.outputs.scene_markdown.content || '';
              
              const match = subjOutput.match(/(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|角色索引|道具索引|场景索引|实体索引|设计资产索引|Entities Index|资产清单|实体清单|设计清单|Subject Extract|剧本实体分析|主要提取实体|实体|Entities|Subjects|Assets|资产|人物列表|提取实体|\[Reusable Subject Assets)/i);
@@ -4700,14 +4779,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                      persisted.stages.stage2.outputs.scene_markdown.content = arrangement;
                  }
              }
+             }
         }
         if (persisted) return persisted;
         return buildStageOutputsObject({
-            analysisRawText: llmRawResultContent || activeEpisode?.ai_scene_analysis_result || '',
+            analysisRawText: '',
             assetRawText: llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '',
+            stage1RawText: activeEpisode?.ai_scene_analysis_adaptation || '',
             stage2RawText: activeEpisode?.ai_scene_analysis_scene_markdown || '',
+            stage2_1Text: activeEpisode?.ai_scene_analysis_subject_index || '',
         });
-    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, llmAssetRawResultContent, llmRawResultContent, llmResultContent, normalizeLlmMarkdownTable, parseStageOutputsObject]);
+    }, [activeEpisode?.ai_entity_design_result, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_scene_analysis_result, activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.ai_stage_outputs, buildStageOutputsObject, extractStage1AdaptedScriptBody, hasSubjectIndexStructure, llmAssetRawResultContent, parseStageOutputsObject]);
 
     const formatArtifactContent = useCallback((content, kind = 'markdown') => {
         const text = String(content || '').trim();
@@ -5046,7 +5128,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || isRetryingPhase2
         );
         if (!skipAiArtifactSync) {
-            const nextSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '');
+            const nextSubjectIndexText = extractPureSubjectIndexText(String(activeEpisode?.ai_scene_analysis_subject_index || ''));
             const nextAdaptationText = String(activeEpisode?.ai_scene_analysis_adaptation || '');
             const nextAssetRaw = String(activeEpisode?.ai_entity_design_result || '');
             const stored = activeEpisode?.ai_scene_analysis_scene_markdown || activeEpisode?.ai_scene_analysis_result;
@@ -5095,6 +5177,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : `${activeEpisode?.id || 0}:`,
         isAnalyzing,
         isRetryingPhase2,
+        extractPureSubjectIndexText,
         normalizeLlmMarkdownTable,
     ]);
 
@@ -11860,17 +11943,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const direct = extractPureSubjectIndexText(String(raw || '').trim());
             if (direct) return direct;
         }
-
-        const fallbackSections = extractAnalysisSections(String(llmRawResultContent || llmResultContent || activeEpisode?.ai_scene_analysis_result || ''));
-        return extractPureSubjectIndexText(String(fallbackSections?.subjectIndexText || '').trim());
+        return '';
     }, [
-        activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.ai_scene_analysis_subject_index,
-        extractAnalysisSections,
         extractPureSubjectIndexText,
         getStageOutputContent,
-        llmRawResultContent,
-        llmResultContent,
         subjectIndexText,
     ]);
 
@@ -12878,8 +12955,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const stage2StageCards = useMemo(() => {
-        const sceneMarkdownMerged = getStageOutputContent('stage2', 'scene_markdown')
-            || String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+        const sceneMarkdownMerged = String(
+            getStageOutputContent('stage2', 'scene_markdown')
+            || activeEpisode?.ai_scene_analysis_scene_markdown
+            || ''
+        ).trim();
         const byScene = stage2SceneMarkdownByScene || {};
         const sceneIds = Object.keys(byScene).sort((leftId, rightId) => {
             const leftOrder = Number(byScene[leftId]?.scene_order) || 0;
@@ -12963,7 +13043,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         });
 
-        const subjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || subjectIndexText || getStageOutputContent('stage2', 'subject_index') || '').trim();
+        const subjectIndex = extractPureSubjectIndexText(
+            String(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index') || subjectIndexText || '').trim()
+        );
 
         cards.push({
                 key: 'stage2-subject-index',
@@ -13011,7 +13093,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
         return cards;
-    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, stage2SceneMarkdownByScene, subjectIndexText, t]);
+    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, stage2SceneMarkdownByScene, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
         const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');

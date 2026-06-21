@@ -3035,9 +3035,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     };
 
     const handleDeleteAllEntities = async () => {
-        if (!await confirmUiMessage("WARNING: This will delete ALL subjects/entities in this library. This action cannot be undone. Are you sure?")) return;
+        if (!currentEpisode?.id) {
+            alert('Select an episode before clearing its subject library.');
+            return;
+        }
+        if (!await confirmUiMessage("WARNING: This will delete ALL subjects/entities in the current episode (soft delete). Continue?")) return;
         try {
-            await deleteAllEntities(projectId);
+            await deleteAllEntities(projectId, currentEpisode.id);
             loadEntities();
             setViewingEntity(null);
             setRefImage(null);

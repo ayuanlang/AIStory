@@ -16,6 +16,7 @@
 
 - **[Node 1] World Bible**
   - **项目强一致性**：读取 `Project Context.Type / Genre / Base Positioning / Global_Style`、情绪/受众定位、时代地域；统一环境/海报视觉体系，禁止反向题材化。
+  - **检索参考（强制前置）**：在 Node 3 动笔前，须按项目类型、题材、时代地域与场域用途，主动检索并对标 **2-4 部** 同气质/同时代/同类型的影视、动画、游戏或美术作品（含实景空间、概念美术、场景布光、海报 key art、环境设定集等）；逐条提取可复用的具体视觉细节——空间尺度、材质、光照、色谱、构图、氛围、装饰层级、镜头气质、景深组织等——形成本批环境/海报的参考清单。检索结果须写入各实体 `description_cn` 的「美学参考：」段落；须转译为项目专属视觉语义后再写入 `generation_prompt_cn`，禁止空泛对标或直接搬运作品名入生图提示词。无法外部检索时，须基于可信行业常识给出具体作品名与细节对照，禁止只写“电影感/高级/大气”。
   - **礼法与文化纵深**：有年代、地域、国家、族群、阶层、政体、宗教、门第时，空间/海报必须响应建筑传统、礼法秩序、身份规范、空间禁忌；高礼制场域突出轴线、等级、仪轨。
   - **光学优先**：先定亮度、可见度、主辅光、色温、空气感，再写陈设/氛围；默认明亮通透，低照度需题材或剧情明确支持。
   - **题材映射**：喜剧/轻松向明快友好；情感/治愈温润自然；仙侠/东方幻想可奇观、超现实尺度、灵性色光但主体可读；写实/纪实服从真实空间与动机光；恐怖/惊悚才可低照度高反差且信息可读。
@@ -51,10 +52,11 @@
 - **Clean Plate**：环境只写空间、材质、灯光、空气感与匿名非情节群演；已进入 Subject Index 的角色不得进入 `environments`。海报可按依赖整合角色/道具/环境。
 - **字段回写**：`generation_prompt_cn` 必须吸收场所属性、级别、方向、早晚、依赖、功能、动作通道、版式要求等结构字段；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段，名称含可见物理信息时只吸收可见语义。
 - **项目风格种子回写（强制）**：`description_cn` 与 `generation_prompt_cn` 必须显式吸收 `entity_attributes.project_base_positioning` 与 `entity_attributes.project_global_style`，写成可执行视觉语义（如材质、光照、色谱、镜头气质、空间秩序）；禁止仅写抽象口号。若上游缺失任一字段，必须在 `dependency_strategy.logic` 标注 `上游待补（回流 Stage 2）：缺少 project_base_positioning/project_global_style`。
+- **美学参考溯源（description_cn 强制）**：每个环境/海报实体的 `description_cn` 末尾须以「美学参考：」段落明确列出参考过的 2-4 部影视、动画、游戏或美术作品（写清作品名），并逐条说明借用了哪些具体视觉细节——如空间尺度、材质、光照、色谱、构图、氛围、装饰层级、镜头气质、景深组织等；禁止只写“电影感”“大片感”“高级”等空泛对标。参考仅用于设计文档与审美溯源，不得原样写入 `generation_prompt_cn`/`generation_prompt_en`/`negative_prompt_en`，须在本阶段转译为项目专属的可执行视觉描述后再写入生图提示词。
 - **光学顺序**：主光来源/方向/照亮面 -> 补光/反光/环境光 -> 轮廓或背景分离 -> 材质与色彩响应。禁止泛写“电影感光影”。
 - **三点布光**：明确 Key Light、Fill Light、Backlight；亮度/反差服从 `Genre` 与 `Base Positioning`。
 - **色彩层次**：主色、辅色、点缀色、过渡色绑定材质、光源、距离层；说明曝光、白平衡、反差、风格化影调，禁单色平铺。
-- **中文 prompt**：`generation_prompt_cn` 使用连贯自然中文短段；最低覆盖机位落点、观察朝向、主舞台分层（MG/BG 必写，FG 按镜头需要可选）、主次主体、光照层次、材质/空间结构、可达性、去人物化。不得为满足模板强行添加不合理前景遮挡。
+- **中文 prompt**：`generation_prompt_cn` 使用连贯自然中文短段；最低覆盖机位落点、观察朝向、主舞台分层（MG/BG 必写，FG 按镜头需要可选）、主次主体、光照层次、材质/空间结构、可达性、去人物化；主舞台与动线保持净空的同时，BG/边缘/窗外等非动线区须补足装饰、植被、天象、雾气等氛围细节以强化美感与层次。不得为满足模板强行添加不合理前景遮挡。
 - 必含 `{Viewpoint Anchor}` 与 `{Viewing Direction}` 语义；机位/镜头感需给焦距或等效基线。
 - 透视：补机位高度、地平线、俯仰；建筑/门窗/柱列等避免 keystone 变形、地平线倾斜、空间线歪斜。
 - 清晰度：说明焦平面与景深；主舞台、主要道具、标题区、关键主体保持锐度，可用 `deep focus` / `moderate depth of field` / `background slightly softened`。
@@ -81,8 +83,9 @@
 - **Stage 中心**：`generation_prompt_cn` 围绕上游 `{Stage}` 组织；核心舞台清晰可见，优先放 MG 承载表演。先写固定实体与空间边界，再写 FG/MG/BG、光照、材质、Delta。
 - **Stage 实体回写**：把舞台边界、关键界面、固定物、通行路径转成可见结构，如门框、窗沿、桌边通道、柜台内外分界、台阶起点、栏杆转角；不重新发明边界。
 - **动作支持**：若 Beat 要求穿门、绕桌、切换内外、跨阈值，必须保留通行净空、界面两侧结构、视线通廊。
+- **活动空间与氛围细节平衡**：主舞台、角色站位区、通行净空与主要动线须保持空旷清晰，不得被杂物阻塞。在此范围之外，须写入适量可见细节以强化画面美感与景深层次——如墙面/梁架装饰、陈设点缀、花草植被、星辰天象、雾气烟尘、粒子光效、悬挂物、远景点缀等；细节优先落于 BG 远层、画面边缘、顶部/底部非动线区或窗外远景，须写清景别、尺度与受光/分布逻辑，陪衬主构图、不抢主舞台。
 - **构图简洁有序**：明确主导构图策略，如三分法、对称、前景框景 + 中景主舞台 + 背景收束。主舞台、次级主体、引导线、留白区、通行动线服从同一秩序。
-- **控杂**：只保留服务主构图、主舞台、题材气质的关键物件；前景框景/柱列/屏风/灯具/树枝等不得平均抢戏。写明主体位置、陪衬、留白或框景如何压向主舞台。
+- **控杂**：只保留服务主构图、主舞台、题材气质的关键物件；前景框景/柱列/屏风/灯具/树枝等不得平均抢戏。写明主体位置、陪衬、留白或框景如何压向主舞台；控杂不等于剥离氛围细节，非动线区的装饰与空气感细节仍须按上条补足。
 
 #### 3.1.3 光学语境与美学强化
 - **环境光学总领**：先定亮度基线、可见度层级、主光/辅光/轮廓光、色温、空气透视，再写陈设风格。氛围与可读/可拍/可演冲突时，优先后者。
@@ -165,7 +168,7 @@
 - 字段按类型分离；`environments[]` 与 `posters[]` 使用 `atmosphere`、`visual_params` 等环境/海报字段，禁止角色字段借壳。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
 - 衍生环境若按“主环境名 + 空格 + 衍生类型/观察区域/可见方向”命名，输出 `name` 必须逐字符保留，`visual_dependencies` 必须回挂 `ENV:[主环境名]`，`dependency_strategy.type` 使用 `Type A/Type B`，`generation_prompt_cn` 必须写继承锚点与 Delta 差异。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`description_cn` 末尾须含「美学参考：」段落，逐条写明参考作品名与借用的具体视觉细节；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -179,7 +182,7 @@
       "base_name_en": "Harbor Office",
       "atmosphere": "Rainy tense night with restrained noir contrast and structured staging",
       "visual_params": "Mid/Interior/Night",
-      "description_cn": "港口办公区夜景。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。基准空间四面拓扑：0度正面为有雨痕斑驳的百叶窗与玻璃；90度右侧为一排铁皮文件柜；180度反面为半开实木门及外侧幽灰通道；270度左侧为挂满线索照片的白板；老旧实木桌位于中央。当前视角由门外（180度）向内（0度）看，老旧木桌与百叶窗拉出纵深。Key Light 来自桌面黄铜台灯，照亮核心舞台；Fill Light 来自窗外冷蓝雨夜反射，保留暗部细节。后景可有少量匿名深夜办公群演，只作远景氛围。",
+      "description_cn": "港口办公区夜景。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。基准空间四面拓扑：0度正面为有雨痕斑驳的百叶窗与玻璃；90度右侧为一排铁皮文件柜；180度反面为半开实木门及外侧幽灰通道；270度左侧为挂满线索照片的白板；老旧实木桌位于中央。当前视角由门外（180度）向内（0度）看，老旧木桌与百叶窗拉出纵深。Key Light 来自桌面黄铜台灯，照亮核心舞台；Fill Light 来自窗外冷蓝雨夜反射，保留暗部细节。后景可有少量匿名深夜办公群演，只作远景氛围。美学参考：《银翼杀手2049》— 雨夜窗面冷蓝反射与半遮光百叶窗的 noir 压抑层次；《社交网络》— 低调办公台灯与旧木桌的冷暖对冲布局；《真探》S1 — 九十年代夜班办公的磨损木作与文件柜秩序感。",
       "generation_prompt_cn": "电影级写实环境，项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实物理材质。35mm 广角，胸口高度略低于视线，镜头水平，三分法结合前景门框框景。从半开实木门框内侧作为 Viewpoint Anchor 正向看入办公室深处（沿180度向0度方向看）。FG 左侧门框木纹；MG 老旧实木办公桌和两把空转椅为 Primary Subject；BG 金属百叶窗与雨痕玻璃为 Secondary Subject，辅以局部模糊的铁皮文件柜与白板边缘。黄铜台灯作暖色主光，窗外冷蓝街灯作补光与背景分离，桌面、文件、椅背、地面形成受光面、半影和投影。中等景深，主舞台锐利，远景略软。色彩以旧木褐和煤灰蓝为主辅，琥珀暖光、橄榄灰过渡、冷白雨痕反射作层次。通道清楚，空间厚重、克制、可读。远景可保留 2-3 个大幅虚化匿名办公群演，面部不可识别、服饰低信息、不得像任何角色。",
       "generation_prompt_en": "",
       "negative_prompt_en": "specific characters, clear faces, hero extras, foreground humans, messy blocked paths, flat lighting, plastic set, miniature look",
@@ -197,7 +200,7 @@
       "base_name_en": "Harbor Office",
       "atmosphere": "Rainy tense night with the same noir anchor seen from the opposite half of the room",
       "visual_params": "Mid/Interior/Night/Reverse",
-      "description_cn": "港口办公区反向夜景。继承基准环境的四面拓扑结构（0度百叶窗、90度铁皮柜、180度实木门、270度白板），以办公桌中线和半开门框作共同锚点；机位从办公桌内侧（靠近0度百叶窗侧）反向看向门外走廊（180度方向），补足正向环境不可见的入口半空间，此刻左侧可见铁皮文件柜，右侧可见白板。Key Light 仍来自桌面黄铜台灯，照亮桌沿和椅背背面；Fill Light 来自走廊冷蓝雨夜反射，保留门外通道细节。",
+      "description_cn": "港口办公区反向夜景。继承基准环境的四面拓扑结构（0度百叶窗、90度铁皮柜、180度实木门、270度白板），以办公桌中线和半开门框作共同锚点；机位从办公桌内侧（靠近0度百叶窗侧）反向看向门外走廊（180度方向），补足正向环境不可见的入口半空间，此刻左侧可见铁皮文件柜，右侧可见白板。Key Light 仍来自桌面黄铜台灯，照亮桌沿和椅背背面；Fill Light 来自走廊冷蓝雨夜反射，保留门外通道细节。美学参考：《社交网络》— 反向机位下桌沿与椅背背面的低调轮廓光；《银翼杀手2049》— 半开门框作前景框景、门外走廊冷蓝纵深；《真探》S1 — 办公室内侧文件柜与白板的实用主义陈设秩序。",
       "generation_prompt_cn": "电影级写实衍生环境，50mm 自然焦距，胸口高度，镜头水平。从办公桌内侧靠窗一侧作为 Viewpoint Anchor，沿办公桌中线反向看向半开实木门框和门外走廊，Viewing Direction 与基准正向环境约 180 度相反（即从0度方向看180度）。继承基准环境共同锚点：旧木地板为深褐色磨损纹理，实木办公桌位于 MG 中央，左侧可见铁皮柜（原90度方向），右侧可见白板（原270度方向），黄铜台灯在桌面左后角，金属百叶窗仍在机位后方不可作当前背景，半开实木门框保持同一木纹、尺度和暖光边缘。FG 为桌面文件边缘和台灯暖光反射；MG 为办公桌内侧与两把空转椅的椅背背面，椅背朝向门外、椅面朝向机位，桌前/桌后关系按反向机位重新判定；BG 为半开门扇与门外冷蓝走廊，门扇向办公室内侧开启并停在画面右侧。黄铜台灯作暖色 Key Light，从画面左中部照亮桌沿、椅背背面和门框内缘；走廊冷蓝雨夜反射作 Fill Light，分离门外深处与室内暗部；门框边缘形成柔弱 Backlight。中等景深，办公桌与门框锐利，走廊远端略软。色彩继承旧木褐、煤灰蓝、琥珀暖光与冷白雨痕反射，当前 Delta 只强化入口半空间、椅背背面、向内开启门扇和走廊来向。Clean Plate，无人物、无肩膀、无可识别人脸。",
       "generation_prompt_en": "",
       "negative_prompt_en": "specific characters, clear faces, foreground shoulders, duplicated front-view background, wrong chair direction, wrong door swing, blocked doorway",
@@ -219,7 +222,7 @@
       "base_name_en": "Project Cover Poster",
       "atmosphere": "Premium theatrical tension with layered poster depth",
       "visual_params": "Poster/Cover/4:3",
-      "description_cn": "4:3 横版封面海报。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。主要角色与关键道具整合为单张主视觉。Key Light 服务人物轮廓与标题留白；Fill Light 由背景冷色反射分离层次。标题置于顶部安全区 y=30%-35%，保留右侧和底部 UI 净空。",
+      "description_cn": "4:3 横版封面海报。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫感。主要角色与关键道具整合为单张主视觉。Key Light 服务人物轮廓与标题留白；Fill Light 由背景冷色反射分离层次。标题置于顶部安全区 y=30%-35%，保留右侧和底部 UI 净空。美学参考：《银翼杀手2049》— 冷暖对冲的一-sheet 海报色谱与雨夜背景分离；《社交网络》— 角色群像与办公环境的块面分区构图；《碟中谍：幽灵协议》— 前景道具引导线与人物轮廓的强识别度排版。",
       "generation_prompt_cn": "电影级写实封面海报，固定 4:3 poster canvas。项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实材质与可读叙事层次。以 premium theatrical one-sheet 构图整合角色、道具与环境依赖，前景道具作引导线，中景角色群像承载冲突，背景环境形成纵深。主光清楚塑形面部与身体轮廓，冷色补光分离背景层次。上方三分之一保留标题安全区，标题背后低噪声、低信息密度，并有足够明度/色相对比；人物高光、武器/法器、烟雾、雨丝、火花不得压住标题主阅读区。右侧与底部保留移动端 UI 净空。",
       "generation_prompt_en": "",
       "negative_prompt_en": "comic grid, tiled collage, split-screen montage, unreadable title, wrong canvas ratio, blurry faces",

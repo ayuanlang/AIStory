@@ -19,7 +19,8 @@ ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
 SystemAPISetting = models.SystemAPISetting
 ProviderKeyPool = models.ProviderKeyPool
 OSSProviderPool = getattr(models, "OSSProviderPool", None)
-DeletedMedia = getattr(models, "DeletedMedia", None)
+DeletionBatch = getattr(models, "DeletionBatch", None)
+DeletionBatchItem = getattr(models, "DeletionBatchItem", None)
 SystemAPIBillingRule = models.SystemAPIBillingRule
 TransactionAction = models.TransactionAction
 SMTPSystemConfig = models.SMTPSystemConfig
@@ -404,16 +405,26 @@ def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None
         (
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_entities_proj_ep_type_name_norm "
             "ON entities (project_id, COALESCE(episode_id, -1), lower(trim(type)), lower(trim(name))) "
-            "WHERE name IS NOT NULL AND trim(name) <> ''"
+            "WHERE name IS NOT NULL AND trim(name) <> '' "
+            "AND coalesce(is_deleted, false) = false"
         ),
         (
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_entities_proj_ep_type_name_en_norm "
             "ON entities (project_id, COALESCE(episode_id, -1), lower(trim(type)), lower(trim(name_en))) "
-            "WHERE name_en IS NOT NULL AND trim(name_en) <> ''"
+            "WHERE name_en IS NOT NULL AND trim(name_en) <> '' "
+            "AND coalesce(is_deleted, false) = false"
         ),
     ]
 
     with engine.begin() as conn:
+        for index_name in (
+            "uq_entities_proj_ep_type_name_norm",
+            "uq_entities_proj_ep_type_name_en_norm",
+        ):
+            try:
+                conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+            except Exception as exc:
+                logger.warning("Entity unique index drop failed (non-fatal): %s | err=%s", index_name, exc)
         for ddl in ddl_statements:
             try:
                 conn.execute(text(ddl))
@@ -886,6 +897,8 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("shots", models.Shot),
             ("script_segments", models.ScriptSegment),
             ("project_shares", models.ProjectShare),
+            ("deletion_batches", DeletionBatch),
+            ("deletion_batch_items", DeletionBatchItem),
             ("llm_call_logs", models.LLMCallLog),
             ("script_progress_scene_units", getattr(models, "ScriptProgressSceneUnit", None)),
             ("script_progress_pipeline_nodes", getattr(models, "ScriptProgressPipelineNode", None)),

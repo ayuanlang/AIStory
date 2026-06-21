@@ -118,7 +118,7 @@ from app.services.video_service import create_montage
 from app.services.project_cost_service import compute_project_cost_estimation
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
-from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set
+from typing import List, Optional, Dict, Any, Union, Tuple, TYPE_CHECKING, Set, Iterable
 from pydantic import BaseModel
 import bcrypt
 import re
@@ -193,6 +193,8 @@ ProviderKeyPool = models.ProviderKeyPool
 ScriptProgressSceneUnit = getattr(models, "ScriptProgressSceneUnit", None)
 ScriptProgressPipelineNode = getattr(models, "ScriptProgressPipelineNode", None)
 ScriptProgressIssue = getattr(models, "ScriptProgressIssue", None)
+DeletionBatch = getattr(models, "DeletionBatch", None)
+DeletionBatchItem = getattr(models, "DeletionBatchItem", None)
 
 _REVIEW_MODELS_AVAILABLE = all(
     model is not None
@@ -12919,11 +12921,229 @@ def _active_asset_clause():
     return or_(Asset.is_deleted.is_(False), Asset.is_deleted.is_(None))
 
 
+def _active_entity_clause():
+    return or_(Entity.is_deleted.is_(False), Entity.is_deleted.is_(None))
+
+
+def _resolve_record_episode_id(record) -> Optional[int]:
+    episode_id = getattr(record, "episode_id", None)
+    if episode_id is not None:
+        try:
+            parsed = int(episode_id)
+            if parsed > 0:
+                return parsed
+        except Exception:
+            pass
+    meta = getattr(record, "meta_info", None)
+    if isinstance(meta, dict):
+        try:
+            meta_episode_id = meta.get("episode_id")
+            if meta_episode_id is not None:
+                parsed = int(meta_episode_id)
+                if parsed > 0:
+                    return parsed
+        except Exception:
+            pass
+    return None
+
+
+def _assert_episode_scoped_delete(record, *, label: str = "Record") -> int:
+    episode_id = _resolve_record_episode_id(record)
+    if episode_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{label} is project-scoped and can only be removed when deleting the entire project",
+        )
+    return episode_id
+
+
 def _is_soft_deleted(record) -> bool:
     return bool(getattr(record, "is_deleted", False))
 
 
-def _soft_delete_shots(db: Session, *, scene_id: Optional[int] = None, scene_ids: Optional[List[int]] = None, shot_id: Optional[int] = None, now: Optional[str] = None) -> int:
+_DELETION_RESOURCE_MODELS: Dict[str, Any] = {
+    "project": Project,
+    "episode": Episode,
+    "scene": Scene,
+    "shot": Shot,
+    "entity": Entity,
+    "asset": Asset,
+}
+
+_DELETION_RESTORE_ORDER = ("project", "episode", "scene", "shot", "entity", "asset")
+
+
+def _start_deletion_batch(
+    db: Session,
+    *,
+    user_id: int,
+    project_id: int,
+    action_type: str,
+    episode_id: Optional[int] = None,
+    label: Optional[str] = None,
+) -> str:
+    if DeletionBatch is None or DeletionBatchItem is None:
+        return ""
+    batch_id = str(uuid.uuid4())
+    db.add(
+        DeletionBatch(
+            id=batch_id,
+            user_id=int(user_id),
+            project_id=int(project_id),
+            episode_id=int(episode_id) if episode_id is not None else None,
+            action_type=str(action_type or "delete").strip() or "delete",
+            label=str(label or "").strip() or None,
+            item_count=0,
+        )
+    )
+    db.flush()
+    return batch_id
+
+
+def _track_deletion_batch_items(
+    db: Session,
+    batch_id: Optional[str],
+    resource_type: str,
+    resource_ids: Iterable[Any],
+) -> int:
+    if not batch_id or DeletionBatchItem is None:
+        return 0
+    tracked = 0
+    seen: Set[int] = set()
+    for raw_id in resource_ids:
+        try:
+            resource_id = int(raw_id)
+        except Exception:
+            continue
+        if resource_id <= 0 or resource_id in seen:
+            continue
+        seen.add(resource_id)
+        db.add(
+            DeletionBatchItem(
+                batch_id=batch_id,
+                resource_type=str(resource_type),
+                resource_id=resource_id,
+            )
+        )
+        tracked += 1
+    return tracked
+
+
+def _finalize_deletion_batch(db: Session, batch_id: Optional[str]) -> int:
+    if not batch_id or DeletionBatch is None or DeletionBatchItem is None:
+        return 0
+    count = int(
+        db.query(DeletionBatchItem)
+        .filter(DeletionBatchItem.batch_id == batch_id)
+        .count()
+    )
+    batch = db.query(DeletionBatch).filter(DeletionBatch.id == batch_id).first()
+    if batch is not None:
+        batch.item_count = count
+    return count
+
+
+def _require_project_owner_any_state(
+    db: Session,
+    project_id: int,
+    current_user: User,
+) -> Project:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.owner_id != current_user.id:
+        is_root_super_system_user = (
+            bool(getattr(current_user, "is_superuser", False))
+            and str(getattr(current_user, "username", "")).strip().lower() == "ylsystem"
+        )
+        if not is_root_super_system_user:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    return project
+
+
+def _serialize_deletion_batch(batch: DeletionBatch, db: Session) -> Dict[str, Any]:
+    counts_by_type: Dict[str, int] = {}
+    if DeletionBatchItem is not None:
+        rows = (
+            db.query(DeletionBatchItem.resource_type, func.count(DeletionBatchItem.id))
+            .filter(DeletionBatchItem.batch_id == batch.id)
+            .group_by(DeletionBatchItem.resource_type)
+            .all()
+        )
+        counts_by_type = {str(rtype or "unknown"): int(count or 0) for rtype, count in rows}
+    project_title = ""
+    project_row = db.query(Project.id, Project.title).filter(Project.id == batch.project_id).first()
+    if project_row:
+        project_title = str(project_row[1] or "")
+    episode_title = ""
+    if batch.episode_id is not None:
+        episode_row = db.query(Episode.id, Episode.title).filter(Episode.id == batch.episode_id).first()
+        if episode_row:
+            episode_title = str(episode_row[1] or "")
+    return {
+        "id": batch.id,
+        "project_id": int(batch.project_id),
+        "project_title": project_title,
+        "episode_id": int(batch.episode_id) if batch.episode_id is not None else None,
+        "episode_title": episode_title or None,
+        "action_type": batch.action_type,
+        "label": batch.label,
+        "item_count": int(batch.item_count or 0),
+        "created_at": batch.created_at,
+        "restored_at": batch.restored_at,
+        "counts_by_type": counts_by_type,
+        "is_restored": bool(batch.restored_at),
+    }
+
+
+def _restore_deletion_batch(db: Session, batch_id: str, current_user: User) -> Dict[str, Any]:
+    if DeletionBatch is None or DeletionBatchItem is None:
+        raise HTTPException(status_code=503, detail="Deletion batch restore is unavailable")
+    batch = db.query(DeletionBatch).filter(DeletionBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Deletion batch not found")
+    if batch.restored_at:
+        raise HTTPException(status_code=409, detail="Deletion batch already restored")
+    _require_project_owner_any_state(db, int(batch.project_id), current_user)
+
+    items = db.query(DeletionBatchItem).filter(DeletionBatchItem.batch_id == batch_id).all()
+    ids_by_type: Dict[str, List[int]] = {}
+    for item in items:
+        ids_by_type.setdefault(str(item.resource_type), []).append(int(item.resource_id))
+
+    restored_counts: Dict[str, int] = {}
+    for resource_type in _DELETION_RESTORE_ORDER:
+        model = _DELETION_RESOURCE_MODELS.get(resource_type)
+        resource_ids = ids_by_type.get(resource_type) or []
+        if not model or not resource_ids:
+            continue
+        updated = int(
+            db.query(model)
+            .filter(model.id.in_(resource_ids), model.is_deleted.is_(True))
+            .update({model.is_deleted: False, model.deleted_at: None}, synchronize_session=False)
+            or 0
+        )
+        if updated:
+            restored_counts[resource_type] = updated
+
+    batch.restored_at = now_bj_iso()
+    return {
+        "status": "restored",
+        "batch_id": batch_id,
+        "restored_counts": restored_counts,
+        "restored_at": batch.restored_at,
+    }
+
+
+def _soft_delete_shots(
+    db: Session,
+    *,
+    scene_id: Optional[int] = None,
+    scene_ids: Optional[List[int]] = None,
+    shot_id: Optional[int] = None,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> int:
     now = now or now_bj_iso()
     filters = [_active_shot_clause()]
     if scene_id is not None:
@@ -12932,16 +13152,25 @@ def _soft_delete_shots(db: Session, *, scene_id: Optional[int] = None, scene_ids
         filters.append(Shot.scene_id.in_(scene_ids))
     if shot_id is not None:
         filters.append(Shot.id == shot_id)
-    return int(
-        db.query(Shot).filter(*filters).update(
-            {Shot.is_deleted: True, Shot.deleted_at: now},
-            synchronize_session=False,
-        )
-        or 0
+    shot_ids = [row[0] for row in db.query(Shot.id).filter(*filters).all()]
+    if not shot_ids:
+        return 0
+    db.query(Shot).filter(Shot.id.in_(shot_ids)).update(
+        {Shot.is_deleted: True, Shot.deleted_at: now},
+        synchronize_session=False,
     )
+    _track_deletion_batch_items(db, batch_id, "shot", shot_ids)
+    return len(shot_ids)
 
 
-def _soft_delete_scenes(db: Session, *, episode_id: Optional[int] = None, scene_id: Optional[int] = None, now: Optional[str] = None) -> int:
+def _soft_delete_scenes(
+    db: Session,
+    *,
+    episode_id: Optional[int] = None,
+    scene_id: Optional[int] = None,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> int:
     now = now or now_bj_iso()
     scene_filters = [_active_scene_clause()]
     if episode_id is not None:
@@ -12951,18 +13180,29 @@ def _soft_delete_scenes(db: Session, *, episode_id: Optional[int] = None, scene_
 
     scene_ids = [row[0] for row in db.query(Scene.id).filter(*scene_filters).all()]
     if scene_ids:
-        _soft_delete_shots(db, scene_ids=scene_ids, now=now)
+        _soft_delete_shots(db, scene_ids=scene_ids, now=now, batch_id=batch_id)
 
-    return int(
-        db.query(Scene).filter(*scene_filters).update(
-            {Scene.is_deleted: True, Scene.deleted_at: now},
-            synchronize_session=False,
-        )
-        or 0
+    if not scene_ids:
+        return 0
+    db.query(Scene).filter(Scene.id.in_(scene_ids)).update(
+        {Scene.is_deleted: True, Scene.deleted_at: now},
+        synchronize_session=False,
     )
+    _track_deletion_batch_items(db, batch_id, "scene", scene_ids)
+    return len(scene_ids)
 
 
-def _soft_delete_assets(db: Session, *, asset_id: Optional[int] = None, asset_ids: Optional[List[int]] = None, project_id: Optional[int] = None, user_id: Optional[int] = None, now: Optional[str] = None) -> int:
+def _soft_delete_assets(
+    db: Session,
+    *,
+    asset_id: Optional[int] = None,
+    asset_ids: Optional[List[int]] = None,
+    project_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> int:
     now = now or now_bj_iso()
     filters = [_active_asset_clause()]
     if asset_id is not None:
@@ -12971,22 +13211,70 @@ def _soft_delete_assets(db: Session, *, asset_id: Optional[int] = None, asset_id
         filters.append(Asset.id.in_(asset_ids))
     if project_id is not None:
         filters.append(Asset.project_id == project_id)
+    if episode_id is not None:
+        filters.append(Asset.episode_id == episode_id)
     if user_id is not None:
         filters.append(Asset.user_id == user_id)
-    return int(
-        db.query(Asset).filter(*filters).update(
-            {Asset.is_deleted: True, Asset.deleted_at: now},
-            synchronize_session=False,
-        )
-        or 0
+    matched_ids = [row[0] for row in db.query(Asset.id).filter(*filters).all()]
+    if not matched_ids:
+        return 0
+    db.query(Asset).filter(Asset.id.in_(matched_ids)).update(
+        {Asset.is_deleted: True, Asset.deleted_at: now},
+        synchronize_session=False,
     )
+    _track_deletion_batch_items(db, batch_id, "asset", matched_ids)
+    return len(matched_ids)
 
 
-def _soft_delete_episode_children(db: Session, episode_id: int, now: Optional[str] = None) -> None:
-    _soft_delete_scenes(db, episode_id=episode_id, now=now)
+def _soft_delete_entities(
+    db: Session,
+    *,
+    entity_id: Optional[int] = None,
+    entity_ids: Optional[List[int]] = None,
+    project_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> int:
+    now = now or now_bj_iso()
+    filters = [_active_entity_clause()]
+    if entity_id is not None:
+        filters.append(Entity.id == entity_id)
+    if entity_ids:
+        filters.append(Entity.id.in_(entity_ids))
+    if project_id is not None:
+        filters.append(Entity.project_id == project_id)
+    if episode_id is not None:
+        filters.append(Entity.episode_id == episode_id)
+    matched_ids = [row[0] for row in db.query(Entity.id).filter(*filters).all()]
+    if not matched_ids:
+        return 0
+    db.query(Entity).filter(Entity.id.in_(matched_ids)).update(
+        {Entity.is_deleted: True, Entity.deleted_at: now},
+        synchronize_session=False,
+    )
+    _track_deletion_batch_items(db, batch_id, "entity", matched_ids)
+    return len(matched_ids)
 
 
-def _soft_delete_project_children(db: Session, project_id: int, now: Optional[str] = None) -> None:
+def _soft_delete_episode_children(
+    db: Session,
+    episode_id: int,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> None:
+    now = now or now_bj_iso()
+    _soft_delete_scenes(db, episode_id=episode_id, now=now, batch_id=batch_id)
+    _soft_delete_assets(db, episode_id=episode_id, now=now, batch_id=batch_id)
+    _soft_delete_entities(db, episode_id=episode_id, now=now, batch_id=batch_id)
+
+
+def _soft_delete_project_children(
+    db: Session,
+    project_id: int,
+    now: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> None:
     now = now or now_bj_iso()
     episode_ids = [
         row[0]
@@ -12995,9 +13283,10 @@ def _soft_delete_project_children(db: Session, project_id: int, now: Optional[st
             _active_episode_clause(),
         ).all()
     ]
-    for episode_id in episode_ids:
-        _soft_delete_scenes(db, episode_id=episode_id, now=now)
-    _soft_delete_assets(db, project_id=project_id, now=now)
+    for ep_id in episode_ids:
+        _soft_delete_scenes(db, episode_id=ep_id, now=now, batch_id=batch_id)
+    _soft_delete_assets(db, project_id=project_id, now=now, batch_id=batch_id)
+    _soft_delete_entities(db, project_id=project_id, now=now, batch_id=batch_id)
 
 
 def _require_project_access(
@@ -13038,6 +13327,7 @@ def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
     # 0. 优先使用 named cover 或 type cover 相关的
     poster_entities = db.query(Entity).filter(
         Entity.project_id == project_id,
+        _active_entity_clause(),
         or_(
             Entity.name.in_(["封面海报", "海报", "封面", "cover", "poster"]),
             Entity.name.ilike("%海报%"),
@@ -15752,7 +16042,63 @@ def recompute_scene_cost_estimation(
     }
 
 
-@router.delete("/projects/{project_id}", status_code=204)
+@router.get("/deletion-batches")
+def list_deletion_batches(
+    project_id: Optional[int] = None,
+    include_restored: bool = False,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if DeletionBatch is None:
+        return []
+    if project_id is not None:
+        _require_project_owner_any_state(db, int(project_id), current_user)
+    query = db.query(DeletionBatch).filter(DeletionBatch.user_id == current_user.id)
+    if project_id is not None:
+        query = query.filter(DeletionBatch.project_id == int(project_id))
+    if not include_restored:
+        query = query.filter(DeletionBatch.restored_at.is_(None))
+    safe_skip = max(int(skip or 0), 0)
+    safe_limit = max(1, min(int(limit or 50), 200))
+    batches = (
+        query.order_by(DeletionBatch.created_at.desc(), DeletionBatch.id.desc())
+        .offset(safe_skip)
+        .limit(safe_limit)
+        .all()
+    )
+    return [_serialize_deletion_batch(batch, db) for batch in batches]
+
+
+@router.get("/deletion-batches/{batch_id}")
+def get_deletion_batch(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if DeletionBatch is None:
+        raise HTTPException(status_code=503, detail="Deletion batch is unavailable")
+    batch = db.query(DeletionBatch).filter(DeletionBatch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Deletion batch not found")
+    if int(batch.user_id) != int(current_user.id):
+        _require_project_owner_any_state(db, int(batch.project_id), current_user)
+    return _serialize_deletion_batch(batch, db)
+
+
+@router.post("/deletion-batches/{batch_id}/restore")
+def restore_deletion_batch(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = _restore_deletion_batch(db, batch_id, current_user)
+    db.commit()
+    return result
+
+
+@router.delete("/projects/{project_id}", status_code=200)
 def delete_project(
     project_id: int, 
     db: Session = Depends(get_db),
@@ -15760,23 +16106,39 @@ def delete_project(
 ):
     project = _require_project_access(db, project_id, current_user, owner_only=True)
     if _is_soft_deleted(project):
-        return None
+        return {"status": "deleted", "batch_id": None}
 
     now = now_bj_iso()
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=project_id,
+        action_type="project",
+        label=str(project.title or f"Project {project_id}"),
+    )
+    episode_ids = [
+        row[0]
+        for row in db.query(Episode.id).filter(
+            Episode.project_id == project_id,
+            _active_episode_clause(),
+        ).all()
+    ]
+    _track_deletion_batch_items(db, batch_id, "project", [project_id])
+    _track_deletion_batch_items(db, batch_id, "episode", episode_ids)
+
     project.is_deleted = True
     project.deleted_at = now
     project.updated_at = now
-    db.query(Episode).filter(
-        Episode.project_id == project_id,
-        _active_episode_clause(),
-    ).update(
-        {Episode.is_deleted: True, Episode.deleted_at: now},
-        synchronize_session=False,
-    )
-    _soft_delete_project_children(db, project_id, now=now)
+    if episode_ids:
+        db.query(Episode).filter(Episode.id.in_(episode_ids)).update(
+            {Episode.is_deleted: True, Episode.deleted_at: now},
+            synchronize_session=False,
+        )
+    _soft_delete_project_children(db, project_id, now=now, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     db.add(project)
     db.commit()
-    return None
+    return {"status": "deleted", "batch_id": batch_id}
 
 # --- Episodes (Script) ---
 
@@ -18686,7 +19048,7 @@ def stop_project_episode_scripts_generation(
         "message": "Force removed",
     }
 
-@router.delete("/episodes/{episode_id}", status_code=204)
+@router.delete("/episodes/{episode_id}", status_code=200)
 def delete_episode(
     episode_id: int,
     db: Session = Depends(get_db),
@@ -18702,14 +19064,25 @@ def delete_episode(
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
     if _is_soft_deleted(episode):
-        return None
+        return {"status": "deleted", "batch_id": None}
 
+    now = now_bj_iso()
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=int(episode.project_id),
+        episode_id=int(episode.id),
+        action_type="episode",
+        label=str(episode.title or f"Episode {episode_id}"),
+    )
+    _track_deletion_batch_items(db, batch_id, "episode", [episode.id])
     episode.is_deleted = True
-    episode.deleted_at = now_bj_iso()
-    _soft_delete_episode_children(db, int(episode.id), now=episode.deleted_at)
+    episode.deleted_at = now
+    _soft_delete_episode_children(db, int(episode.id), now=now, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     db.add(episode)
     db.commit()
-    return None
+    return {"status": "deleted", "batch_id": batch_id}
 
 # --- Scenes ---
 
@@ -19703,7 +20076,7 @@ def update_scene(
     return db_scene
 
 
-@router.delete("/scenes/{scene_id}", status_code=204)
+@router.delete("/scenes/{scene_id}", status_code=200)
 def delete_scene(
     scene_id: int,
     db: Session = Depends(get_db),
@@ -19720,16 +20093,26 @@ def delete_scene(
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
     if _is_soft_deleted(db_scene):
-        return None
+        return {"status": "deleted", "batch_id": None}
 
     now = now_bj_iso()
-    _soft_delete_scenes(db, scene_id=scene_id, now=now)
+    scene_label = str(db_scene.scene_name or db_scene.scene_no or f"Scene {scene_id}")
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=int(episode.project_id),
+        episode_id=int(episode.id),
+        action_type="scene",
+        label=scene_label,
+    )
+    _soft_delete_scenes(db, scene_id=scene_id, now=now, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     try:
         _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
     except Exception as cost_exc:
         logger.warning("delete_scene cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
     db.commit()
-    return None
+    return {"status": "deleted", "batch_id": batch_id}
 
 
 @router.post("/scenes/{scene_id}/regenerate", response_model=Dict[str, Any])
@@ -23298,15 +23681,25 @@ def delete_shot(
     project = _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
     if _is_soft_deleted(db_shot):
-        return {"ok": True}
+        return {"ok": True, "batch_id": None}
 
-    _soft_delete_shots(db, shot_id=shot_id)
+    shot_label = str(db_shot.shot_name or db_shot.shot_id or f"Shot {shot_id}")
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=int(project.id),
+        episode_id=int(episode.id),
+        action_type="shot",
+        label=shot_label,
+    )
+    _soft_delete_shots(db, shot_id=shot_id, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     try:
         _recompute_and_persist_project_cost_estimation(db, int(project.id))
     except Exception as cost_exc:
         logger.warning("delete_shot cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "batch_id": batch_id}
 
 # --- Entities ---
 
@@ -23441,7 +23834,7 @@ def read_entities(
 ):
     project = _require_project_access(db, project_id, current_user)
 
-    query = db.query(Entity).filter(Entity.project_id == project_id)
+    query = db.query(Entity).filter(Entity.project_id == project_id, _active_entity_clause())
     if type:
         query = query.filter(Entity.type == type)
     if episode_id is not None:
@@ -24311,15 +24704,69 @@ def delete_entity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
-        
+
     _require_project_access(db, entity.project_id, current_user, owner_only=True)
-        
-    db.delete(entity)
+    _assert_episode_scoped_delete(entity, label="Entity")
+
+    if _is_soft_deleted(entity):
+        return {"status": "success", "batch_id": None}
+
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=int(entity.project_id),
+        episode_id=int(entity.episode_id),
+        action_type="entity",
+        label=str(entity.name or f"Entity {entity_id}"),
+    )
+    _soft_delete_entities(db, entity_id=entity_id, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     db.commit()
-    return {"status": "success"}
+    return {"status": "success", "batch_id": batch_id}
+
+
+@router.delete("/projects/{project_id}/episodes/{episode_id}/entities")
+def delete_episode_entities(
+    project_id: int,
+    episode_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user, owner_only=True)
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=int(project_id),
+        episode_id=int(episode_id),
+        action_type="episode_entities",
+        label=f"{episode.title or f'Episode {episode_id}'} entities",
+    )
+    deleted_count = _soft_delete_entities(
+        db,
+        project_id=project_id,
+        episode_id=episode_id,
+        batch_id=batch_id,
+    )
+    _finalize_deletion_batch(db, batch_id)
+    db.commit()
+    return {
+        "status": "success",
+        "message": "Episode entities deleted",
+        "deleted_count": deleted_count,
+        "batch_id": batch_id,
+    }
+
 
 @router.delete("/projects/{project_id}/entities")
 def delete_project_entities(
@@ -24328,10 +24775,10 @@ def delete_project_entities(
     current_user: User = Depends(get_current_user)
 ):
     _require_project_access(db, project_id, current_user, owner_only=True)
-        
-    db.query(Entity).filter(Entity.project_id == project_id).delete()
-    db.commit()
-    return {"status": "success", "message": "All entities deleted"}
+    raise HTTPException(
+        status_code=403,
+        detail="Deleting all project entities is not allowed. Delete entities per episode instead.",
+    )
 
 # --- Users ---
 
@@ -25794,6 +26241,19 @@ class AssetRebindShotMediaRequest(BaseModel):
     shot_id: Optional[int] = None
     limit: int = 2000
     dry_run: bool = False
+    include_entities: bool = True
+    include_shots: bool = True
+    overwrite_existing: bool = True
+
+
+class AssetBackfillEpisodeMediaRequest(BaseModel):
+    project_id: int
+    episode_id: int
+    dry_run: bool = False
+    include_shots: bool = True
+    include_entities: bool = True
+    limit: int = 10000
+    overwrite_existing: bool = True
 
 
 def _asset_meta_dict(raw_meta: Any) -> Dict[str, Any]:
@@ -27122,11 +27582,32 @@ def delete_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     if _is_soft_deleted(asset):
-        return {"status": "success"}
+        return {"status": "success", "batch_id": None}
 
-    _soft_delete_assets(db, asset_id=asset_id, user_id=current_user.id)
+    episode_id = _assert_episode_scoped_delete(asset, label="Asset")
+    project_id = int(asset.project_id or 0)
+    if project_id <= 0:
+        meta = asset.meta_info if isinstance(asset.meta_info, dict) else {}
+        try:
+            project_id = int(meta.get("project_id") or 0)
+        except Exception:
+            project_id = 0
+    if project_id <= 0:
+        raise HTTPException(status_code=400, detail="Asset is missing project scope")
+    _require_project_access(db, project_id, current_user, owner_only=True)
+
+    batch_id = _start_deletion_batch(
+        db,
+        user_id=current_user.id,
+        project_id=project_id if project_id > 0 else 0,
+        episode_id=episode_id,
+        action_type="asset",
+        label=str(asset.filename or asset.url or f"Asset {asset_id}"),
+    )
+    _soft_delete_assets(db, asset_id=asset_id, user_id=current_user.id, batch_id=batch_id)
+    _finalize_deletion_batch(db, batch_id)
     db.commit()
-    return {"status": "success"}
+    return {"status": "success", "batch_id": batch_id}
 
 @router.post("/assets/batch-delete")
 def batch_delete_assets(
@@ -27139,15 +27620,61 @@ def batch_delete_assets(
         Asset.user_id == current_user.id,
         _active_asset_clause(),
     ).all()
-    
-    deleted_count = _soft_delete_assets(
-        db,
-        asset_ids=[int(asset.id) for asset in assets],
-        user_id=current_user.id,
-    )
+
+    episode_scoped_assets: List[Asset] = []
+    skipped_project_scoped = 0
+    for asset in assets:
+        if _resolve_record_episode_id(asset) is None:
+            skipped_project_scoped += 1
+            continue
+        episode_scoped_assets.append(asset)
+
+    from collections import defaultdict
+
+    grouped: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+    for asset in episode_scoped_assets:
+        episode_id = int(_resolve_record_episode_id(asset) or 0)
+        project_id = int(asset.project_id or 0)
+        if project_id <= 0:
+            meta = asset.meta_info if isinstance(asset.meta_info, dict) else {}
+            try:
+                project_id = int(meta.get("project_id") or 0)
+            except Exception:
+                project_id = 0
+        if project_id <= 0 or episode_id <= 0:
+            skipped_project_scoped += 1
+            continue
+        grouped[(project_id, episode_id)].append(int(asset.id))
+
+    batch_ids: List[str] = []
+    deleted_count = 0
+    for (project_id, episode_id), scoped_ids in grouped.items():
+        _require_project_access(db, project_id, current_user, owner_only=True)
+        batch_id = _start_deletion_batch(
+            db,
+            user_id=current_user.id,
+            project_id=project_id,
+            episode_id=episode_id,
+            action_type="assets_batch",
+            label=f"Batch delete {len(scoped_ids)} assets",
+        )
+        deleted_count += _soft_delete_assets(
+            db,
+            asset_ids=scoped_ids,
+            user_id=current_user.id,
+            batch_id=batch_id,
+        )
+        _finalize_deletion_batch(db, batch_id)
+        batch_ids.append(batch_id)
         
     db.commit()
-    return {"status": "success", "deleted_count": deleted_count}
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "skipped_project_scoped": skipped_project_scoped,
+        "batch_id": batch_ids[0] if len(batch_ids) == 1 else None,
+        "batch_ids": batch_ids,
+    }
 
 @router.put("/assets/{asset_id}", response_model=dict)
 def update_asset(
@@ -27203,18 +27730,342 @@ def mark_asset_current_project_asset(
     db.refresh(asset)
     return _serialize_asset_row(asset, db)
 
+
+def _resolve_asset_shot_media_slot(asset: Asset, meta: Dict[str, Any]) -> Optional[str]:
+    asset_type = str(meta.get("asset_type") or meta.get("frame_type") or "").strip().lower()
+    if asset_type in {"start_frame", "start"}:
+        return "start"
+    if asset_type in {"end_frame", "end"}:
+        return "end"
+    if asset_type == "video" or str(getattr(asset, "type", "") or "").strip().lower() == "video":
+        return "video"
+    if str(getattr(asset, "type", "") or "").strip().lower() == "image":
+        return "start"
+    return None
+
+
+def _resolve_asset_entity_media_slot(asset: Asset, meta: Dict[str, Any]) -> Optional[str]:
+    asset_type = str(meta.get("asset_type") or meta.get("frame_type") or "").strip().lower()
+    media_type = str(getattr(asset, "type", "") or meta.get("type") or "").strip().lower()
+    if media_type == "video" or asset_type == "video":
+        return "video"
+    if media_type == "audio" or asset_type in {"audio", "voice", "tts"}:
+        return "audio"
+    if media_type == "image" or asset_type in {
+        "subject",
+        "character",
+        "char",
+        "environment",
+        "prop",
+        "poster",
+    }:
+        return "image"
+    return None
+
+
+def _backfill_episode_media_from_library(
+    db: Session,
+    current_user: User,
+    project_id: int,
+    episode_id: int,
+    *,
+    dry_run: bool = False,
+    include_shots: bool = True,
+    include_entities: bool = True,
+    limit: int = 10000,
+    overwrite_existing: bool = True,
+) -> Dict[str, Any]:
+    project = _require_project_access(db, project_id, current_user)
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    safe_limit = max(1, min(int(limit or 10000), 10000))
+    owner_ids = _visible_asset_owner_ids_for_project(project, current_user)
+
+    scene_rows = db.query(Scene.id).filter(
+        Scene.episode_id == episode_id,
+        _active_scene_clause(),
+    ).all()
+    scene_ids = [int(row[0]) for row in scene_rows if row and row[0] is not None]
+    episode_shot_ids = set()
+    if scene_ids:
+        shot_rows = db.query(Shot.id).filter(
+            Shot.scene_id.in_(scene_ids),
+            _active_shot_clause(),
+        ).all()
+        episode_shot_ids = {int(row[0]) for row in shot_rows if row and row[0] is not None}
+
+    entity_cache: Dict[int, Entity] = {}
+    entity_name_index: Dict[str, Entity] = {}
+    if include_entities:
+        episode_entities = db.query(Entity).filter(
+            Entity.project_id == project_id,
+            Entity.episode_id == episode_id,
+            _active_entity_clause(),
+        ).all()
+        for entity in episode_entities:
+            entity_cache[int(entity.id)] = entity
+            for label in (getattr(entity, "name", None), getattr(entity, "name_en", None)):
+                normalized = str(label or "").strip().lower()
+                if normalized and normalized not in entity_name_index:
+                    entity_name_index[normalized] = entity
+
+    assets = (
+        db.query(Asset)
+        .filter(
+            Asset.user_id.in_(owner_ids),
+            _active_asset_clause(),
+            Asset.url.isnot(None),
+            Asset.url != "",
+            Asset.project_id == project_id,
+            or_(Asset.episode_id == episode_id, Asset.episode_id.is_(None)),
+        )
+        .order_by(Asset.created_at.desc(), Asset.id.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    shot_cache: Dict[int, Optional[Shot]] = {}
+    scene_cache: Dict[int, Optional[Scene]] = {}
+    touched_shots: Dict[int, Shot] = {}
+    touched_entities: Dict[int, Entity] = {}
+    stats = {
+        "scanned": 0,
+        "eligible": 0,
+        "bound_shots": 0,
+        "bound_entities": 0,
+        "skipped_existing": 0,
+        "skipped_no_target": 0,
+        "skipped_filter": 0,
+        "skipped_unknown_type": 0,
+    }
+
+    def _meta_dict(raw_meta: Any) -> Dict[str, Any]:
+        return _asset_meta_dict(raw_meta)
+
+    def _to_int(value: Any) -> Optional[int]:
+        return _asset_optional_int(value)
+
+    def _shot_belongs_to_episode(shot: Shot) -> bool:
+        scene_id_int = _to_int(getattr(shot, "scene_id", None))
+        if not scene_id_int:
+            return False
+        if scene_id_int in scene_ids:
+            return True
+        if scene_id_int not in scene_cache:
+            scene_cache[scene_id_int] = db.query(Scene).filter(Scene.id == scene_id_int).first()
+        scene = scene_cache.get(scene_id_int)
+        return bool(scene and _to_int(getattr(scene, "episode_id", None)) == episode_id)
+
+    def _entity_in_episode_scope(entity: Entity) -> bool:
+        return _to_int(getattr(entity, "episode_id", None)) == episode_id
+
+    def _asset_episode_id(asset: Asset, meta: Dict[str, Any]) -> Optional[int]:
+        return _to_int(getattr(asset, "episode_id", None) or meta.get("episode_id"))
+
+    def _asset_in_project_scope(asset: Asset, meta: Dict[str, Any]) -> bool:
+        asset_project_id = _to_int(getattr(asset, "project_id", None) or meta.get("project_id"))
+        return asset_project_id == project_id
+
+    def _asset_in_episode_scope(asset: Asset, meta: Dict[str, Any], shot: Optional[Shot]) -> bool:
+        asset_episode_id = _asset_episode_id(asset, meta)
+        if asset_episode_id is not None:
+            return asset_episode_id == episode_id
+        if shot and _shot_belongs_to_episode(shot):
+            return True
+        return False
+
+    best_shot_bindings: Dict[Tuple[int, str], Tuple[Shot, str]] = {}
+    best_entity_bindings: Dict[Tuple[int, str], Tuple[Entity, str]] = {}
+
+    for asset in assets:
+        stats["scanned"] += 1
+        meta = _meta_dict(asset.meta_info)
+        if not _asset_in_project_scope(asset, meta):
+            stats["skipped_filter"] += 1
+            continue
+
+        media_url = str(asset.url or "").strip()
+        if not media_url or _is_ephemeral_provider_media_url(media_url):
+            stats["skipped_filter"] += 1
+            continue
+
+        stable_url = _refresh_managed_media_url(media_url, db)
+
+        shot: Optional[Shot] = None
+        shot_id = _to_int(meta.get("shot_id"))
+        if shot_id:
+            if shot_id not in shot_cache:
+                shot_cache[shot_id] = db.query(Shot).filter(
+                    Shot.id == shot_id,
+                    _active_shot_clause(),
+                ).first()
+            shot = shot_cache.get(shot_id)
+
+        if include_shots and shot and _asset_in_episode_scope(asset, meta, shot):
+            slot = _resolve_asset_shot_media_slot(asset, meta)
+            if not slot:
+                stats["skipped_unknown_type"] += 1
+            else:
+                shot_key = (int(shot.id), slot)
+                if shot_key not in best_shot_bindings:
+                    stats["eligible"] += 1
+                    best_shot_bindings[shot_key] = (shot, stable_url)
+
+        if not include_entities:
+            continue
+
+        entity: Optional[Entity] = None
+        entity_id = _to_int(meta.get("entity_id"))
+        if entity_id:
+            entity = entity_cache.get(entity_id)
+        if not entity and _asset_episode_id(asset, meta) == episode_id:
+            subject_name = str(meta.get("subject_name") or meta.get("entity_name") or "").strip().lower()
+            if subject_name:
+                entity = entity_name_index.get(subject_name)
+
+        if not entity or not _entity_in_episode_scope(entity):
+            if shot:
+                continue
+            stats["skipped_no_target"] += 1
+            continue
+
+        if not _asset_in_episode_scope(asset, meta, shot):
+            stats["skipped_filter"] += 1
+            continue
+
+        slot = _resolve_asset_entity_media_slot(asset, meta)
+        if not slot:
+            stats["skipped_unknown_type"] += 1
+            continue
+
+        entity_key = (int(entity.id), slot)
+        if entity_key not in best_entity_bindings:
+            stats["eligible"] += 1
+            best_entity_bindings[entity_key] = (entity, stable_url)
+
+    for (_shot_id, slot), (shot, stable_url) in best_shot_bindings.items():
+        changed = False
+        if slot == "start":
+            current = str(getattr(shot, "image_url", "") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_shots"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                shot.image_url = stable_url
+                changed = True
+        elif slot == "video":
+            current = str(getattr(shot, "video_url", "") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_shots"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                shot.video_url = stable_url
+                changed = True
+        elif slot == "end":
+            tech = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
+            current = str(tech.get("end_frame_url") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_shots"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                tech["end_frame_url"] = stable_url
+                shot.technical_notes = json.dumps(tech, ensure_ascii=False)
+                changed = True
+        if changed:
+            db.add(shot)
+            touched_shots[int(shot.id)] = shot
+
+    for (_entity_id, slot), (entity, stable_url) in best_entity_bindings.items():
+        changed = False
+        if slot == "image":
+            current = str(getattr(entity, "image_url", "") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_entities"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                entity.image_url = stable_url
+                changed = True
+        elif slot == "video":
+            current = str(getattr(entity, "video_url", "") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_entities"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                entity.video_url = stable_url
+                changed = True
+        elif slot == "audio":
+            current = str(getattr(entity, "audio_url", "") or "").strip()
+            if current and not overwrite_existing:
+                stats["skipped_existing"] += 1
+                continue
+            stats["bound_entities"] += 1
+            if not dry_run and (overwrite_existing or not current):
+                entity.audio_url = stable_url
+                changed = True
+
+        if changed:
+            db.add(entity)
+            touched_entities[int(entity.id)] = entity
+
+    return {
+        **stats,
+        "dry_run": bool(dry_run),
+        "project_id": project_id,
+        "episode_id": episode_id,
+        "updated_shots": len(touched_shots),
+        "updated_entities": len(touched_entities),
+        "limit": safe_limit,
+    }
+
+
 @router.post("/assets/rebind-shot-media", response_model=dict)
 def rebind_shot_media_from_assets(
     payload: AssetRebindShotMediaRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if payload.project_id and payload.episode_id:
+        _require_project_access(db, int(payload.project_id), current_user)
+        safe_limit = max(1, min(int(payload.limit or 10000), 10000))
+        result = _backfill_episode_media_from_library(
+            db,
+            current_user,
+            int(payload.project_id),
+            int(payload.episode_id),
+            dry_run=bool(payload.dry_run),
+            include_shots=bool(payload.include_shots),
+            include_entities=bool(payload.include_entities),
+            limit=safe_limit,
+            overwrite_existing=bool(payload.overwrite_existing),
+        )
+        if not payload.dry_run and (
+            int(result.get("updated_shots") or 0) > 0
+            or int(result.get("updated_entities") or 0) > 0
+        ):
+            db.commit()
+        result["bound"] = int(result.get("bound_shots") or 0) + int(result.get("bound_entities") or 0)
+        return result
+
     if payload.project_id:
         _require_project_access(db, int(payload.project_id), current_user)
 
     safe_limit = max(1, min(int(payload.limit or 2000), 10000))
 
-    query = db.query(Asset).filter(Asset.user_id == current_user.id, _active_asset_clause()).order_by(Asset.id.asc())
+    query = db.query(Asset).filter(Asset.user_id == current_user.id, _active_asset_clause()).order_by(
+        Asset.created_at.desc(),
+        Asset.id.desc(),
+    )
     assets = query.limit(safe_limit).all()
 
     shot_cache: Dict[int, Optional[Shot]] = {}
@@ -27384,6 +28235,33 @@ def rebind_shot_media_from_assets(
         "updated_shots": len(touched_shots),
         "limit": safe_limit,
     }
+
+
+@router.post("/assets/backfill-episode-media", response_model=dict)
+def backfill_episode_media_from_assets(
+    payload: AssetBackfillEpisodeMediaRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_project_access(db, int(payload.project_id), current_user)
+    result = _backfill_episode_media_from_library(
+        db,
+        current_user,
+        int(payload.project_id),
+        int(payload.episode_id),
+        dry_run=bool(payload.dry_run),
+        include_shots=bool(payload.include_shots),
+        include_entities=bool(payload.include_entities),
+        limit=int(payload.limit or 10000),
+        overwrite_existing=bool(payload.overwrite_existing),
+    )
+    if not payload.dry_run and (
+        int(result.get("updated_shots") or 0) > 0
+        or int(result.get("updated_entities") or 0) > 0
+    ):
+        db.commit()
+    result["bound"] = int(result.get("bound_shots") or 0) + int(result.get("bound_entities") or 0)
+    return result
 
 
 

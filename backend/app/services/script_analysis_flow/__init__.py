@@ -253,12 +253,71 @@ def _normalize_scene_table_header(value: Any) -> str:
 
 
 def _split_scene_table_cells(line: str) -> List[str]:
-    cells = [str(cell or "").strip() for cell in str(line or "").split("|")]
-    if cells and cells[0] == "":
-        cells.pop(0)
-    if cells and cells[-1] == "":
-        cells.pop()
+    s = str(line or "").strip()
+    if not s:
+        return []
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+
+    cells: List[str] = []
+    buf: List[str] = []
+    escaped = False
+    for ch in s:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    cells.append("".join(buf).strip())
     return cells
+
+
+def _reconcile_scene_table_row_cells(cells: List[str], headers: List[str]) -> List[str]:
+    header_count = len(headers or [])
+    if header_count <= 0:
+        return list(cells or [])
+
+    row = list(cells or [])
+    while len(row) < header_count:
+        row.append("")
+    if len(row) == header_count:
+        return row[:header_count]
+
+    core_info_idx = -1
+    for idx, header in enumerate(headers):
+        normalized = _normalize_scene_table_header(header)
+        if "coresceneinfo" in normalized or "核心场景信息" in normalized:
+            core_info_idx = idx
+            break
+    merge_start_idx = core_info_idx if core_info_idx >= 0 else min(5, header_count - 1)
+    overflow = len(row) - header_count
+    merge_end_idx = merge_start_idx + overflow + 1
+    merged = (
+        row[:merge_start_idx]
+        + ["|".join(row[merge_start_idx:merge_end_idx])]
+        + row[merge_end_idx:]
+    )
+    while len(merged) < header_count:
+        merged.append("")
+    if len(merged) > header_count:
+        tail_count = header_count - merge_start_idx - 1
+        merged = (
+            merged[:merge_start_idx]
+            + ["|".join(merged[merge_start_idx : len(merged) - tail_count])]
+            + merged[len(merged) - tail_count :]
+        )
+    return merged[:header_count]
 
 
 def _is_scene_table_separator_line(line: str) -> bool:
@@ -374,11 +433,9 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
             if _is_scene_table_separator_line(line):
                 continue
 
-            cells = _split_scene_table_cells(line)
+            cells = _reconcile_scene_table_row_cells(_split_scene_table_cells(line), headers)
             if not cells:
                 continue
-            while len(cells) < len(headers):
-                cells.append("")
 
             if _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx):
                 scene_id = _scene_table_cell_value(cells, scene_id_idx)

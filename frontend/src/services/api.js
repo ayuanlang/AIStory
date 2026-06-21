@@ -1559,8 +1559,8 @@ export const deleteEntity = async (entityId) => {
     return response.data;
 }
 
-export const deleteAllEntities = async (projectId) => {
-    const response = await api.delete(`/projects/${projectId}/entities`);
+export const deleteAllEntities = async (projectId, episodeId) => {
+    const response = await api.delete(`/projects/${projectId}/episodes/${episodeId}/entities`);
     return response.data;
 }
 
@@ -2491,6 +2491,32 @@ export const deleteProject = async (projectId) => {
     const response = await api.delete(`/projects/${projectId}`);
     return response.data;
 }
+
+export const fetchDeletionBatches = async ({ projectId, includeRestored = false, skip = 0, limit = 50 } = {}) => {
+    const params = { skip, limit };
+    if (projectId != null) params.project_id = projectId;
+    if (includeRestored) params.include_restored = true;
+    const response = await api.get('/deletion-batches', { params });
+    return response.data;
+};
+
+export const restoreDeletionBatch = async (batchId) => {
+    const response = await api.post(`/deletion-batches/${batchId}/restore`);
+    return response.data;
+};
+
+export const backfillEpisodeMediaFromLibrary = async (projectId, episodeId, payload = {}) => {
+    const response = await api.post('/assets/rebind-shot-media', {
+        project_id: Number(projectId),
+        episode_id: Number(episodeId),
+        include_entities: payload.include_entities !== false,
+        include_shots: payload.include_shots !== false,
+        limit: payload.limit ?? 10000,
+        dry_run: payload.dry_run ?? false,
+        overwrite_existing: payload.overwrite_existing !== false,
+    });
+    return response.data;
+};
 
 export const registerUser = async (data) => {
     // data: { username, email, password, full_name, homepage_referral_token? }

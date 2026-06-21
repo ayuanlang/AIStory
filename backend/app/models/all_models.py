@@ -182,6 +182,29 @@ class ProjectShare(Base):
     user = relationship("User", back_populates="shared_projects")
 
 
+class DeletionBatch(Base):
+    __tablename__ = "deletion_batches"
+
+    id = Column(String, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    episode_id = Column(Integer, ForeignKey("episodes.id"), index=True, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    action_type = Column(String, nullable=False, index=True)
+    label = Column(String, nullable=True)
+    item_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(String, default=now_bj_iso)
+    restored_at = Column(String, nullable=True)
+
+
+class DeletionBatchItem(Base):
+    __tablename__ = "deletion_batch_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(String, ForeignKey("deletion_batches.id"), index=True, nullable=False)
+    resource_type = Column(String, index=True, nullable=False)
+    resource_id = Column(Integer, index=True, nullable=False)
+
+
 class ProjectAssetReviewThread(Base):
     __tablename__ = "project_asset_review_threads"
 
@@ -475,6 +498,8 @@ class Entity(Base):
     
     # Store arbitrary user-defined attributes
     custom_attributes = Column(JSON, default={})
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
     
     project = relationship("Project", back_populates="entities")
     episode = relationship("Episode", foreign_keys=[episode_id])

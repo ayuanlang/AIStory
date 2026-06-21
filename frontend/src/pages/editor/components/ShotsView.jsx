@@ -111,6 +111,7 @@ import {
     markReviewThreadRead,
     recordSystemLogAction,
     rebindShotMediaAssets,
+    backfillEpisodeMediaFromLibrary,
     getCachedUserPreferences,
     markAssetAsCurrentProjectAsset,
 } from '../../../services/api';
@@ -5362,13 +5363,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         let cancelled = false;
         (async () => {
             try {
-                const res = await rebindShotMediaAssets({
-                    project_id: Number(projectId),
-                    episode_id: Number(activeEpisode.id),
-                    limit: 10000,
-                });
+                const res = await backfillEpisodeMediaFromLibrary(
+                    Number(projectId),
+                    Number(activeEpisode.id),
+                    { include_shots: true, include_entities: false, limit: 10000, overwrite_existing: false },
+                );
 
-                const rebound = Number(res?.bound || 0);
+                const rebound = Number(res?.bound_shots || 0);
 
                 const updatedShots = Number(res?.updated_shots || 0);
                 if (!cancelled && (rebound > 0 || updatedShots > 0)) {
@@ -10475,7 +10476,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                         return (
                                             <>
-                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                <div className="space-y-3">
                                                     <div>
                                                         <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
                                                             {t('关键帧（时间线）', 'Keyframes (Timeline)')}
@@ -10485,115 +10486,109 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         </div>
                                                         <div className="text-xs text-muted-foreground mt-1">{t('多画格图会自动拆分并直接回填到关键帧。', 'Multi-panel images are automatically split and filled back into keyframes.')}</div>
                                                     </div>
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-2 py-1.5">
-                                                            <span className="text-[11px] text-white/80">{t('截取帧数', 'Frame Count')}</span>
-                                                            <input
-                                                                type="number"
-                                                                min={2}
-                                                                step={1}
-                                                                value={videoKeyframeExtractCount}
-                                                                onChange={(e) => setVideoKeyframeExtractCount(e.target.value)}
-                                                                className="w-16 h-7 rounded border border-white/10 bg-black/40 px-2 text-xs text-white outline-none focus:border-sky-400/60"
-                                                                title={t('按输入帧数均匀截取视频关键帧（至少 2）', 'Extract evenly spaced keyframes by frame count (minimum 2)')}
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                onClick={handleExtractKeyframesFromVideo}
-                                                                disabled={isExtractingVideoKeyframes}
-                                                                title={t('按视频时长均匀截取关键帧，包含首尾帧', 'Extract evenly spaced keyframes across duration, including first and last frames')}
-                                                                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isExtractingVideoKeyframes ? 'bg-sky-500/10 text-sky-200/50 cursor-wait' : 'bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'}`}
-                                                            >
-                                                                {isExtractingVideoKeyframes ? t('截取中...', 'Extracting...') : t('视频截取关键帧', 'Extract Keyframes')}
-                                                            </button>
-                                                        </div>
-                                                        <select
-                                                            value={multiPanelPresetKey}
-                                                            onChange={async (e) => {
-                                                                const nextPresetKey = normalizeMultiPanelPresetKey(e.target.value);
-                                                                setMultiPanelPresetKey(nextPresetKey);
-                                                                const nextTech = { ...tech, multi_panel_image_preset: nextPresetKey };
-                                                                const nextTechNotes = JSON.stringify(nextTech);
-                                                                setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
-                                                                try {
-                                                                    await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
-                                                                } catch (error) {
-                                                                    onLog?.(`${t('保存多画格预设失败', 'Failed to save multi-panel preset')}: ${error?.message || 'unknown error'}`, 'error');
-                                                                }
-                                                            }}
-                                                            className="h-9 rounded border border-white/10 bg-black/30 px-3 text-sm text-white"
-                                                            title={t('选择多画格预设', 'Choose multi-panel preset')}
-                                                        >
-                                                            {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
-                                                                <option key={option.key} value={option.key}>
-                                                                    {t(option.labelZh, option.labelEn)}
-                                                                </option>
-                                                            ))}
-                                                        </select>
-                                                        <label
-                                                            className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 cursor-pointer hover:bg-white/5"
-                                                            title={t('选中后自动取上一镜结束帧作为首参考图，并直接读取上一镜结束帧提示词注入多画格提示词，要求第一格从该参考图开始。', 'Use the previous shot end frame as the first ref, read the previous end-frame prompt directly, inject it into the multi-panel prompt, and force panel 1 to start from that image.')}
-                                                        >
-                                                            <input
-                                                                type="checkbox"
-                                                                className="hidden"
-                                                                checked={usePrevEndFrameAsMultiPanelStart}
-                                                                onChange={async (e) => {
-                                                                    const checked = e.target.checked;
-                                                                    setUsePrevEndFrameAsMultiPanelStart(checked);
-                                                                    try {
-                                                                        const nextTech = { ...tech, multi_panel_start_from_prev_end: checked };
-                                                                        if (!checked) {
-                                                                            delete nextTech.multi_panel_prev_end_ref_url;
-                                                                            delete nextTech.multi_panel_prev_end_ref_summary;
-                                                                        }
+                                                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                                        <div className="rounded-lg border border-white/10 bg-black/15 p-3 space-y-2">
+                                                            <div className="text-[10px] uppercase font-bold text-muted-foreground">{t('分镜预览', 'Storyboard Preview')}</div>
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <select
+                                                                    value={multiPanelPresetKey}
+                                                                    onChange={async (e) => {
+                                                                        const nextPresetKey = normalizeMultiPanelPresetKey(e.target.value);
+                                                                        setMultiPanelPresetKey(nextPresetKey);
+                                                                        const nextTech = { ...tech, multi_panel_image_preset: nextPresetKey };
                                                                         const nextTechNotes = JSON.stringify(nextTech);
                                                                         setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
-                                                                        await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
-                                                                    } catch (error) {
-                                                                        onLog?.(`${t('保存多画格起始参考设置失败', 'Failed to save multi-panel opening ref setting')}: ${error?.message || 'unknown error'}`, 'error');
-                                                                    }
-                                                                }}
-                                                            />
-                                                            <div className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border ${usePrevEndFrameAsMultiPanelStart ? 'border-primary bg-primary text-black' : 'border-white/30 bg-black/20 text-transparent'}`}>
-                                                                <Check className="h-3 w-3" />
+                                                                        try {
+                                                                            await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
+                                                                        } catch (error) {
+                                                                            onLog?.(`${t('保存多画格预设失败', 'Failed to save multi-panel preset')}: ${error?.message || 'unknown error'}`, 'error');
+                                                                        }
+                                                                    }}
+                                                                    className="h-9 rounded border border-white/10 bg-black/30 px-3 text-sm text-white"
+                                                                    title={t('选择多画格预设', 'Choose multi-panel preset')}
+                                                                >
+                                                                    {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
+                                                                        <option key={option.key} value={option.key}>
+                                                                            {t(option.labelZh, option.labelEn)}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                                <label
+                                                                    className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 cursor-pointer hover:bg-white/5"
+                                                                    title={t('选中后自动取上一镜结束帧作为首参考图，并直接读取上一镜结束帧提示词注入多画格提示词，要求第一格从该参考图开始。', 'Use the previous shot end frame as the first ref, read the previous end-frame prompt directly, inject it into the multi-panel prompt, and force panel 1 to start from that image.')}
+                                                                >
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="hidden"
+                                                                        checked={usePrevEndFrameAsMultiPanelStart}
+                                                                        onChange={async (e) => {
+                                                                            const checked = e.target.checked;
+                                                                            setUsePrevEndFrameAsMultiPanelStart(checked);
+                                                                            try {
+                                                                                const nextTech = { ...tech, multi_panel_start_from_prev_end: checked };
+                                                                                if (!checked) {
+                                                                                    delete nextTech.multi_panel_prev_end_ref_url;
+                                                                                    delete nextTech.multi_panel_prev_end_ref_summary;
+                                                                                }
+                                                                                const nextTechNotes = JSON.stringify(nextTech);
+                                                                                setEditingShot((prev) => ({ ...(prev || {}), technical_notes: nextTechNotes }));
+                                                                                await onUpdateShot(editingShot.id, { technical_notes: nextTechNotes });
+                                                                            } catch (error) {
+                                                                                onLog?.(`${t('保存多画格起始参考设置失败', 'Failed to save multi-panel opening ref setting')}: ${error?.message || 'unknown error'}`, 'error');
+                                                                            }
+                                                                        }}
+                                                                    />
+                                                                    <div className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border ${usePrevEndFrameAsMultiPanelStart ? 'border-primary bg-primary text-black' : 'border-white/30 bg-black/20 text-transparent'}`}>
+                                                                        <Check className="h-3 w-3" />
+                                                                    </div>
+                                                                    <span>{t('以上镜结束帧开始', 'Start From Prev End Frame')}</span>
+                                                                </label>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleGenerateMultiPanelImage()}
+                                                                    disabled={isGeneratingMultiPanelImage}
+                                                                    title={t('按当前视频提示词生成并自动拆分到关键帧', 'Generate from the current video prompt and auto-split into keyframes')}
+                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isGeneratingMultiPanelImage ? 'bg-white/10 text-white/40 cursor-wait' : 'bg-white/10 text-white/80 hover:bg-white/20'}`}
+                                                                >
+                                                                    {isGeneratingMultiPanelImage ? t('生成中...', 'Generating...') : t('生成并拆分', 'Generate + Split')}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleResplitMultiPanelImage()}
+                                                                    disabled={!multiPanelUrl || isResplittingMultiPanelImage}
+                                                                    title={t('基于当前多画格图重新切分并重建关键帧', 'Re-split the current multi-panel image and rebuild keyframes')}
+                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${(!multiPanelUrl || isResplittingMultiPanelImage) ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                                >
+                                                                    {isResplittingMultiPanelImage ? t('重新拆分中...', 'Re-splitting...') : t('重新拆分', 'Re-split')}
+                                                                </button>
                                                             </div>
-                                                            <span>{t('以上镜结束帧开始', 'Start From Prev End Frame')}</span>
-                                                        </label>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleGenerateMultiPanelImage()}
-                                                            disabled={isGeneratingMultiPanelImage}
-                                                            title={t('按当前视频提示词生成并自动拆分到关键帧', 'Generate from the current video prompt and auto-split into keyframes')}
-                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isGeneratingMultiPanelImage ? 'bg-white/10 text-white/40 cursor-wait' : 'bg-white/10 text-white/80 hover:bg-white/20'}`}
-                                                        >
-                                                            {isGeneratingMultiPanelImage ? t('生成中...', 'Generating...') : t('生成并拆分', 'Generate + Split')}
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleResplitMultiPanelImage()}
-                                                            disabled={!multiPanelUrl || isResplittingMultiPanelImage}
-                                                            title={t('基于当前多画格图重新切分并重建关键帧', 'Re-split the current multi-panel image and rebuild keyframes')}
-                                                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${(!multiPanelUrl || isResplittingMultiPanelImage) ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
-                                                        >
-                                                            {isResplittingMultiPanelImage ? t('重新拆分中...', 'Re-splitting...') : t('重新拆分', 'Re-split')}
-                                                        </button>
-                                                        <button 
-                                                            onClick={() => {
-                                                                const newTime = `${(localKeyframes.length + 1) * 1.0}s`;
-                                                                const newKf = { 
-                                                                    id: Date.now(), 
-                                                                    time: newTime, 
-                                                                    prompt: "[Global Style] ...", 
-                                                                    url: "" 
-                                                                };
-                                                                const newList = [...localKeyframes, newKf];
-                                                                setLocalKeyframes(newList);
-                                                            }}
-                                                            className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded flex items-center gap-1"
-                                                        >
-                                                            <Plus className="w-3 h-3"/> {t('新增关键帧', 'Add Keyframe')}
-                                                        </button>
+                                                        </div>
+                                                        <div className="rounded-lg border border-white/10 bg-black/15 p-3 space-y-2">
+                                                            <div className="text-[10px] uppercase font-bold text-muted-foreground">{t('分镜截取（用于下镜参考）', 'Storyboard Extract (Next-Shot Ref)')}</div>
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-2 py-1.5">
+                                                                    <span className="text-[11px] text-white/80">{t('截取帧数', 'Frame Count')}</span>
+                                                                    <input
+                                                                        type="number"
+                                                                        min={2}
+                                                                        step={1}
+                                                                        value={videoKeyframeExtractCount}
+                                                                        onChange={(e) => setVideoKeyframeExtractCount(e.target.value)}
+                                                                        className="w-16 h-7 rounded border border-white/10 bg-black/40 px-2 text-xs text-white outline-none focus:border-sky-400/60"
+                                                                        title={t('按输入帧数均匀截取视频关键帧（至少 2）', 'Extract evenly spaced keyframes by frame count (minimum 2)')}
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={handleExtractKeyframesFromVideo}
+                                                                        disabled={isExtractingVideoKeyframes}
+                                                                        title={t('按视频时长均匀截取关键帧，包含首尾帧', 'Extract evenly spaced keyframes across duration, including first and last frames')}
+                                                                        className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isExtractingVideoKeyframes ? 'bg-sky-500/10 text-sky-200/50 cursor-wait' : 'bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'}`}
+                                                                    >
+                                                                        {isExtractingVideoKeyframes ? t('截取中...', 'Extracting...') : t('视频截取关键帧', 'Extract Keyframes')}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     </div>
                                                 </div>
                                                 {multiPanelStartsFromPrevEnd ? (
