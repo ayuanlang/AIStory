@@ -1569,6 +1569,25 @@ const Editor = ({
         const importedSubjectCounts = { character: 0, prop: 0, environment: 0, poster: 0 };
         const createdSubjectItems = [];
         const skippedSubjectItems = [];
+        const normalizeImportTargetType = (value) => {
+            const key = String(value || '').trim().toLowerCase();
+            if (!key) return '';
+            if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) return 'characters';
+            if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) return 'props';
+            if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(key)) return 'environments';
+            if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) return key === 'covers' ? 'covers' : 'posters';
+            return key;
+        };
+        const targetTypeFilters = Array.isArray(importOptions?.targetEntityTypes)
+            ? Array.from(new Set(importOptions.targetEntityTypes.map(normalizeImportTargetType).filter(Boolean)))
+            : null;
+        const shouldOverwriteExistingSubjects = Boolean(importOptions?.overwriteExistingSubjects);
+        const isPosterOnlyImport = Boolean(
+            targetTypeFilters
+            && targetTypeFilters.length > 0
+            && targetTypeFilters.every((item) => item === 'posters' || item === 'covers')
+        );
+        const shouldOverwritePoster = shouldOverwriteExistingSubjects || isPosterOnlyImport;
         const importStats = {
             scriptLines: 0,
             scenesCreated: 0,
@@ -1606,18 +1625,6 @@ const Editor = ({
         if (effectiveImportType === 'auto' || effectiveImportType === 'json') {
             importDiagnostics.subjectIndexTableRows = getSubjectIndexTableRowCount(text);
 
-            const normalizeImportTargetType = (value) => {
-                const key = String(value || '').trim().toLowerCase();
-                if (!key) return '';
-                if (['character', 'characters', 'role', 'roles', '人物', '角色'].includes(key)) return 'characters';
-                if (['prop', 'props', 'item', 'items', '道具', '物件'].includes(key)) return 'props';
-                if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(key)) return 'environments';
-                if (['poster', 'posters', 'cover', 'covers', 'cover_poster', '海报', '封面'].includes(key)) return key === 'covers' ? 'covers' : 'posters';
-                return key;
-            };
-            const targetTypeFilters = Array.isArray(importOptions?.targetEntityTypes)
-                ? Array.from(new Set(importOptions.targetEntityTypes.map(normalizeImportTargetType).filter(Boolean)))
-                : null;
             const filterSubjectsByTargetTypes = (payload) => {
                 if (!payload || typeof payload !== 'object' || !targetTypeFilters || targetTypeFilters.length === 0) {
                     return payload;
@@ -2117,7 +2124,70 @@ const Editor = ({
                                           addLog('Skipped poster entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             if (existingEntityMap.has(normalizeEntityKey('poster', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('poster', entityNameEn)))) {
+                             const existingPoster = existingEntityMap.get(normalizeEntityKey('poster', entityName))
+                                || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('poster', entityNameEn)) : null)
+                                || (shouldOverwritePoster
+                                    ? (knownEntities.find((item) => {
+                                        if (canonicalSubjectType(item?.type) !== 'poster') return false;
+                                        if (activeEpisode?.id && String(item?.episode_id || '') !== String(activeEpisode.id)) return false;
+                                        return true;
+                                    }) || null)
+                                    : null);
+                             if (existingPoster && shouldOverwritePoster) {
+                                const desc = [
+                                          `Name (EN): ${entityNameEn || poster.name_en || ''}`,
+                                `Atmosphere: ${poster.atmosphere}`,
+                                `Visual Params: ${poster.visual_params}`,
+                                          `Description: ${poster.description_cn || poster.description || poster.narrative_description || ''}`,
+                                poster.generation_prompt_cn ? `Prompt (CN): ${poster.generation_prompt_cn}` : '',
+                                `Prompt: ${poster.generation_prompt_en}`,
+                                poster.negative_prompt_en ? `Negative Prompt: ${poster.negative_prompt_en}` : ''
+                            ].filter(Boolean).join('\n\n');
+                                try {
+                                    const payload = {
+                                        name: entityName,
+                                        type: 'poster',
+                                        episode_id: activeEpisode?.id || existingPoster.episode_id || undefined,
+                                        description: desc,
+                                        generation_prompt_cn: poster.generation_prompt_cn || '',
+                                        generation_prompt_en: poster.generation_prompt_en || '',
+                                        anchor_description: poster.anchor_description || '',
+                                        name_en: entityNameEn,
+                                        base_name_en: poster.base_name_en || '',
+                                        atmosphere: poster.atmosphere,
+                                        visual_params: poster.visual_params,
+                                        narrative_description: poster.description_cn,
+                                        visual_dependencies: parseVisualDependencies(poster.visual_dependencies),
+                                        dependency_strategy: poster.dependency_strategy || {},
+                                        custom_attributes: {
+                                            ...(existingPoster.custom_attributes || {}),
+                                            ...(poster.custom_attributes || {}),
+                                            ...(poster.subject_no ? { subject_no: poster.subject_no } : {}),
+                                            ...(poster.negative_prompt_en ? { negative_prompt_en: poster.negative_prompt_en } : {}),
+                                        },
+                                    };
+                                    const updated = await updateEntity(existingPoster.id, payload);
+                                    if (updated?.id) {
+                                        knownEntities = knownEntities.map((item) => (item.id === updated.id ? updated : item));
+                                        existingEntityMap.set(normalizeEntityKey('poster', entityName), updated);
+                                        if (entityNameEn) existingEntityMap.set(normalizeEntityKey('poster', entityNameEn), updated);
+                                        count++;
+                                        importedSubjectCounts.poster += 1;
+                                        createdSubjectItems.push({
+                                            type: 'poster',
+                                            name: entityName,
+                                            name_en: entityNameEn || '',
+                                            id: updated.id,
+                                            updated: true,
+                                        });
+                                        addLog(`Updated existing poster subject during import: ${entityName}${entityNameEn ? ` / ${entityNameEn}` : ''}`, 'success');
+                                    }
+                                } catch (err) {
+                                    addLog(`Poster update failed (${entityName}): ${err?.message || err}`, 'warning');
+                                }
+                                continue;
+                             }
+                             if (existingPoster) {
                                 logSkippedExistingSubject('poster', entityName, entityNameEn);
                                 continue;
                              }

@@ -591,6 +591,90 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
     );
 };
 
+export const buildShotVideoEntityRefSlots = ({
+    promptText = '',
+    associatedEntities = '',
+    entityPool = [],
+    includeAssociatedEntities = true,
+} = {}) => {
+    return collectMatchedEntitiesFromPrompt({
+        promptText,
+        associatedEntities,
+        entityPool,
+        includeAssociatedEntities,
+    }).map((entity) => {
+        const imageUrl = String(entity?.image_url || '').trim();
+        return {
+            entityId: entity?.id,
+            name: String(entity?.name || entity?.name_en || '').trim(),
+            nameEn: String(entity?.name_en || '').trim(),
+            type: String(entity?.type || entity?.entity_type || '').trim(),
+            imageUrl: imageUrl || null,
+            missing: !imageUrl,
+            entity,
+        };
+    });
+};
+
+export const getMissingShotVideoEntityRefSlots = (slots = []) => (
+    Array.isArray(slots) ? slots.filter((slot) => slot?.missing) : []
+);
+
+export const buildShotVideoRefDisplayItems = ({
+    activeRefs = [],
+    promptText = '',
+    associatedEntities = '',
+    entityPool = [],
+    includeAssociatedEntities = true,
+    includeEntityPlaceholders = true,
+} = {}) => {
+    const refs = normalizeMediaRefList(activeRefs);
+    const matchedEntities = collectMatchedEntitiesFromPrompt({
+        promptText,
+        associatedEntities,
+        entityPool,
+        includeAssociatedEntities,
+    });
+    const items = [];
+    const usedUrls = new Set();
+
+    matchedEntities.forEach((entity) => {
+        const imageUrl = String(entity?.image_url || '').trim();
+        if (imageUrl) {
+            usedUrls.add(imageUrl);
+            items.push({
+                key: `entity-${entity?.id || entity?.name || imageUrl}`,
+                kind: 'image',
+                entity,
+                url: imageUrl,
+                label: String(entity?.name || entity?.name_en || '').trim(),
+            });
+            return;
+        }
+        if (!includeEntityPlaceholders) return;
+        items.push({
+            key: `entity-missing-${entity?.id || entity?.name || items.length}`,
+            kind: 'placeholder',
+            entity,
+            url: null,
+            label: String(entity?.name || entity?.name_en || '').trim(),
+        });
+    });
+
+    refs.forEach((url, idx) => {
+        if (usedUrls.has(url)) return;
+        items.push({
+            key: `ref-${url}-${idx}`,
+            kind: 'image',
+            entity: null,
+            url,
+            label: '',
+        });
+    });
+
+    return items;
+};
+
 export const SCENE_SUBJECT_TYPE_LABELS = {
     character: 'Character',
     prop: 'Prop',

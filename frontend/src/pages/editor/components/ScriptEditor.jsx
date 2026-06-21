@@ -2114,6 +2114,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return null;
     };
 
+    const countSubjectsPayloadItems = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return 0;
+        return ['characters', 'props', 'environments', 'posters', 'covers'].reduce((sum, key) => (
+            sum + (Array.isArray(payload[key]) ? payload[key].length : 0)
+        ), 0);
+    }, []);
+
+    const normalizePosterBucketsInSubjectsPayload = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return payload;
+        const posters = Array.isArray(payload.posters) ? payload.posters : [];
+        const covers = Array.isArray(payload.covers) ? payload.covers : [];
+        if (!posters.length && !covers.length) return payload;
+
+        const seen = new Set();
+        const merged = [];
+        for (const item of [...posters, ...covers]) {
+            if (!item || typeof item !== 'object') continue;
+            const dedupeKey = [
+                String(item.subject_no || '').trim().toLowerCase(),
+                String(item.name || item.subject_name_exact || '').trim().toLowerCase(),
+                String(item.name_en || '').trim().toLowerCase(),
+            ].join('|');
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            merged.push(item);
+        }
+        if (!merged.length) return payload;
+        return {
+            ...payload,
+            posters: merged,
+            covers: merged,
+        };
+    }, []);
+
+    const resolveSubjectsJsonFromAnalyzeResult = useCallback((result, analysisText) => {
+        const backendJson = (result?.subjects_json && typeof result.subjects_json === 'object')
+            ? result.subjects_json
+            : null;
+        const textJson = String(analysisText || '').trim()
+            ? (getAnalysisEntitiesPayloadFromJsonText(analysisText) || null)
+            : null;
+
+        const normalizedBackend = normalizePosterBucketsInSubjectsPayload(backendJson);
+        const normalizedText = normalizePosterBucketsInSubjectsPayload(textJson);
+        const backendCount = countSubjectsPayloadItems(normalizedBackend);
+        const textCount = countSubjectsPayloadItems(normalizedText);
+
+        if (backendCount > 0) return normalizedBackend;
+        if (textCount > 0) return normalizedText;
+        return normalizedBackend || normalizedText || {};
+    }, [countSubjectsPayloadItems, getAnalysisEntitiesPayloadFromJsonText, normalizePosterBucketsInSubjectsPayload]);
+
     const repairJSON = (jsonStr) => {
         try {
             return JSON.parse(jsonStr);
@@ -3436,8 +3488,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const importSubjectsJsonWithDedupe = useCallback(async (text, options = {}) => {
         const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
         const subjectsJson = (options?.subjectsJson && typeof options.subjectsJson === 'object')
-            ? options.subjectsJson
-            : getAnalysisEntitiesPayloadFromJsonText(text);
+            ? normalizePosterBucketsInSubjectsPayload(options.subjectsJson)
+            : normalizePosterBucketsInSubjectsPayload(getAnalysisEntitiesPayloadFromJsonText(text));
         const importReason = String(options?.reason || 'auto-subjects-import').trim() || 'auto-subjects-import';
         const signature = buildSubjectsImportSignature(subjectsJson);
 
@@ -3463,7 +3515,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         return importResult;
-    }, [buildSubjectsImportSignature, doImportText, getAnalysisEntitiesPayloadFromJsonText, onLog]);
+    }, [buildSubjectsImportSignature, doImportText, getAnalysisEntitiesPayloadFromJsonText, normalizePosterBucketsInSubjectsPayload, onLog]);
 
     const ensureSubjectsImportedBeforePostChecks = useCallback(async (analysisResult, importReport = null) => {
         const subjectsJson = (analysisResult?.subjects_json && typeof analysisResult.subjects_json === 'object')
@@ -3516,6 +3568,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             character: (Number(importedCounts.character || 0) + Number(subjectsImportReport?.importedSubjectCounts?.character || 0)),
             prop: (Number(importedCounts.prop || 0) + Number(subjectsImportReport?.importedSubjectCounts?.prop || 0)),
             environment: (Number(importedCounts.environment || 0) + Number(subjectsImportReport?.importedSubjectCounts?.environment || 0)),
+            poster: (Number(importedCounts.poster || 0) + Number(subjectsImportReport?.importedSubjectCounts?.poster || 0)),
         };
 
         return {
@@ -6778,7 +6831,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
 
             const buildSubtaskSubjectsPayload = (key, sourcePayload) => {
-                const input = (sourcePayload && typeof sourcePayload === 'object') ? sourcePayload : {};
+                const input = normalizePosterBucketsInSubjectsPayload(
+                    (sourcePayload && typeof sourcePayload === 'object') ? sourcePayload : {}
+                );
                 const payload = { characters: [], environments: [], props: [], posters: [], covers: [] };
                 if (key === 'characters') {
                     payload.characters = Array.isArray(input.characters) ? input.characters : [];
@@ -6883,9 +6938,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const responseTraceId = String(res?.meta?.analysis_trace_id || res?.analysis_trace_id || '').trim();
                         throwIfAnalysisStopped();
                         const aText = extractAnalysisTextFromResult(res);
-                        const bJson = (res?.subjects_json && typeof res.subjects_json === 'object')
-                            ? res.subjects_json
-                            : (aText ? (getAnalysisEntitiesPayloadFromJsonText(aText) || {}) : {});
+                        const bJson = resolveSubjectsJsonFromAnalyzeResult(res, aText);
 
                         assetsGenCompletedCount += 1;
                         if (pData.key && !assetsGenCompletedKeys.includes(pData.key)) {
@@ -6922,6 +6975,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             episodeId: activeEpisode?.id,
                                             importSessionId: subtaskImportSessionId,
                                             targetEntityTypes: subtaskTargetTypes,
+                                            overwriteExistingSubjects: Boolean(options?.isRetryPhase2),
                                             suppressAlerts: true,
                                         },
                                     }
@@ -12964,7 +13018,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         key: `restart-stage3-${cat.key}`,
                         label: t(cat.btnZh, cat.btnEn),
                         icon: 'repeat',
-                        onClick: () => handleRetryPhase2({ targetEntityTypes: [cat.key] }),
+                        onClick: () => handleRetryPhase2({ targetEntityTypes: cat.key === 'posters' ? ['posters', 'covers'] : [cat.key] }),
                         disabled: isAnalyzing || isRetryingPhase2 || !hasAssetGenerationPrerequisite,
                         loading: isRetryingPhase2 && phase2RetryOptionsRef.current?.targetEntityTypes?.includes(cat.key),
                     }

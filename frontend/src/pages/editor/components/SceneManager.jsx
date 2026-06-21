@@ -14,7 +14,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
 } from '../editorHelpers';
 
 import { 
@@ -434,6 +434,26 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         return entities.find(e => e.image_url === url);
     };
 
+    const shouldShowEntityRefPlaceholders = isVideoRefManager && resolvedVideoMode.includes('entity_refs');
+    const refDisplayItems = shouldShowEntityRefPlaceholders
+        ? buildShotVideoRefDisplayItems({
+            activeRefs,
+            promptText,
+            associatedEntities: shot?.associated_entities || '',
+            entityPool: entities,
+            includeAssociatedEntities: !strictPromptOnly,
+            includeEntityPlaceholders: true,
+        })
+        : activeRefs.map((url, idx) => ({
+            key: `ref-${url}-${idx}`,
+            kind: 'image',
+            entity: getEntityInfo(url),
+            url,
+            label: String(getEntityInfo(url)?.name || getEntityInfo(url)?.name_en || '').trim(),
+        }));
+    const missingRefSlotCount = shouldShowEntityRefPlaceholders
+        ? refDisplayItems.filter((item) => item.kind === 'placeholder').length
+        : 0;
     const currentSubmitRefCount = activeRefs.length;
 
     // Modal Content
@@ -560,15 +580,37 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                             </button>
                         )}
                     </h4>
-                    <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/50">Used by AI: {activeRefs.length}</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/50">
+                            {t('实际提交', 'Submit')}: {currentSubmitRefCount}
+                        </span>
+                        {missingRefSlotCount > 0 && (
+                            <span className="text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded text-amber-200 border border-amber-400/20">
+                                {t(`缺失 ${missingRefSlotCount}`, `Missing ${missingRefSlotCount}`)}
+                            </span>
+                        )}
                     </div>
                 </div>
                 
                 <div className={`flex gap-2 pb-2 custom-scrollbar ${isPortrait ? 'flex-col overflow-y-auto max-h-[420px] 2xl:max-h-[480px] h-full' : 'overflow-x-auto min-h-[90px]'}`}>
-                    {/* 1. Active Refs (Selected) */}
-                    {activeRefs.map((url, idx) => (
-                        <div key={url + idx} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
+                    {refDisplayItems.map((item) => {
+                        if (item.kind === 'placeholder') {
+                            return (
+                                <div
+                                    key={item.key}
+                                    className={`relative shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-amber-500/5 rounded border border-dashed border-amber-400/40 overflow-hidden flex flex-col items-center justify-center gap-2 px-2 text-center`}
+                                    title={t('该实体参考图尚未生成', 'Reference image for this entity has not been generated yet')}
+                                >
+                                    <AlertTriangle className="w-5 h-5 text-amber-300/80" />
+                                    <div className="text-[11px] font-medium text-amber-100 line-clamp-2">{item.label || t('未命名实体', 'Unnamed Entity')}</div>
+                                    <div className="text-[10px] text-amber-200/70">{t('参考图缺失', 'Missing Ref')}</div>
+                                </div>
+                            );
+                        }
+
+                        const url = item.url;
+                        return (
+                        <div key={item.key} className={`relative group shrink-0 ${isPortrait ? 'w-full aspect-[4/3]' : 'w-[140px] aspect-video'} bg-black/40 rounded border border-primary/50 overflow-hidden shadow-[0_0_10px_rgba(0,0,0,0.5)] cursor-zoom-in`} onClick={() => setSelectedImage(url)}>
                             {isVideoRefUrl(url) ? (
                                 <LazyHoverVideo
                                     src={url}
@@ -582,6 +624,11 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 />
                             ) : (
                                 <SafeImage src={url} className="w-full h-full object-contain object-center" alt="ref" />
+                            )}
+                            {item.label && (
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-1.5 py-1 text-[10px] text-white/80 truncate">
+                                    {item.label}
+                                </div>
                             )}
                             {!useSequenceLogic && (
                                 <>
@@ -607,7 +654,8 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 </>
                             )}
                         </div>
-                    ))}
+                        );
+                    })}
                     
                     {/* Add Button */}
                     {!useSequenceLogic && onPickMedia && (

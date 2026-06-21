@@ -1782,6 +1782,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 generator_kind: generatorKind,
                 episodes_count: n,
                 script_mode: globalStoryInput.script_mode,
+                target_audience: globalStoryInput.target_audience,
                 script_title: String(info?.script_title || project?.title || '').trim(),
                 overwrite_existing: overwriteExisting,
                 retry_failed_only: retryFailedOnly,

@@ -3533,6 +3533,132 @@ def _normalize_generator_kind(value: Any) -> Optional[str]:
     return None
 
 
+def _pick_first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_script_mode_key(script_mode: Any) -> str:
+    raw = str(script_mode or "").strip().lower()
+    if "short drama" in raw or "短剧" in raw:
+        return "short_drama"
+    if "feature film" in raw or "电影" in raw:
+        return "feature_film"
+    if "action feature" in raw or "动作片" in raw:
+        return "action_feature"
+    if "romance" in raw or "emotional" in raw or "爱情情感" in raw:
+        return "romance_emotional"
+    if "mystery" in raw or "thriller" in raw or "悬疑惊悚" in raw:
+        return "mystery_thriller"
+    if "comedy" in raw or "light" in raw or "喜剧轻快" in raw:
+        return "comedy_light"
+    if "xianxia" in raw or "fantasy" in raw or "仙侠奇幻" in raw:
+        return "xianxia_fantasy"
+    if "sci-fi" in raw or "sci fi" in raw or "科幻冒险" in raw:
+        return "sci_fi_adventure"
+    if "period" in raw or "wuxia" in raw or "古装武侠" in raw:
+        return "period_wuxia"
+    if "workplace" in raw or "现代职场" in raw:
+        return "modern_workplace"
+    if "horror" in raw or "恐怖" in raw:
+        return "horror"
+    if "cyberpunk" in raw or "赛博朋克" in raw:
+        return "cyberpunk"
+    if "realism" in raw or "现实主义" in raw:
+        return "realism"
+    if "youth" in raw or "coming-of-age" in raw or "青春成长" in raw:
+        return "youth_coming_of_age"
+    if "general series" in raw or "通用连续剧" in raw:
+        return "general_series"
+    return "general_series"
+
+
+_MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE: Dict[str, str] = {
+    "short_drama": (
+        "- 首分钟强钩子；压缩说明；快反转；集末强悬念；短句对白。\n"
+        "- 表演主轴=对白+微表情+微动作（每句台词配说话人/听者微表演，禁对白裸奔）。\n"
+        "- 减环境与动作变化：1-2 场、同轴近景、少换锚点/少走位/少道具大交互/少环境奇观；反转靠台词与表情落点而非场面调度。\n"
+        "- 优先用有趣、机锋、刻薄、挑衅等有记忆点的短句对白推进关键信息，避免大段旁白式说明。"
+    ),
+    "feature_film": (
+        "- 按电影单集/单部节奏组织起承转合；允许更完整的空间建置与动作链，但仍须服务核心冲突。"
+    ),
+    "action_feature": (
+        "- 目标驱动情节；地理清晰；战术逐步升级；动作后果可见。"
+    ),
+    "romance_emotional": (
+        "- 关系张力优先；多利用停顿/潜台词/身体距离；对白承担关系升降与人物塑形。"
+    ),
+    "mystery_thriller": (
+        "- 精确控制线索；转移怀疑对象；压力逐步升级；结局设揭秘或陷阱。"
+    ),
+    "comedy_light": (
+        "- 节奏性反转；误会成组；喜剧因果清晰。"
+    ),
+    "xianxia_fantasy": (
+        "- 命运秩序与阶层奇观；术法/武戏须写可读动作链与特效层级，禁止只写“打起来”。"
+    ),
+    "sci_fi_adventure": (
+        "- 未知探索；科技具象；逻辑破解；设定自洽。"
+    ),
+    "period_wuxia": (
+        "- 江湖规矩；身法兵器；环境破坏；近身/兵器对抗按起势/换招/受力反馈/结果落位拆写。"
+    ),
+    "modern_workplace": (
+        "- 职级权力；信息差；资源争夺；受限公共空间视线拉扯。"
+    ),
+    "horror": (
+        "- 视觉盲区；生理恐惧；铺垫后惊吓释放。"
+    ),
+    "cyberpunk": (
+        "- 阶级反差；技术异化；入侵/追击时写技术后果可视化与实体动作反馈。"
+    ),
+    "realism": (
+        "- 克制；生活细节；困境与解法扎根现实。"
+    ),
+    "youth_coming_of_age": (
+        "- 自我认同；同辈后果；本集一步成长。"
+    ),
+    "general_series": (
+        "- 铺垫、升级、反转、情感释放、后续价值之间保持平衡。"
+    ),
+}
+
+
+def _build_mandatory_writing_logic(script_mode: Any) -> str:
+    key = _normalize_script_mode_key(script_mode)
+    return _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE.get(key) or _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE["general_series"]
+
+
+def _build_episode_script_product_specs_block(
+    *,
+    episodes_count: Any,
+    script_mode: str,
+    target_audience: str,
+) -> str:
+    mode_label = script_mode or "（缺失：按项目全局框架与题材常识保守处理）"
+    audience_label = target_audience or "（缺失：按项目全局框架与题材常识保守处理）"
+    mandatory_logic = _build_mandatory_writing_logic(script_mode)
+    return (
+        "Project Product Specs (Hard Constraint):\n"
+        f"- 载体规格 / Episodes Count: {episodes_count}\n"
+        f"- 产品规格与节奏 / Script Mode (Product Format): {mode_label}\n"
+        f"- 受众定位 / Target Audience: {audience_label}\n"
+        "\n"
+        "Script Mode (Hard Constraint):\n"
+        f"- {mode_label}\n"
+        "\n"
+        "Mandatory Writing Logic (强制写作逻辑, Hard Constraint):\n"
+        f"{mandatory_logic}\n"
+        "- Script Mode 与 Mandatory Writing Logic 为硬性写作逻辑；与通用默认冲突时，以本节为准。\n"
+        "- 受众定位须极化核心看点与关系/情绪张力（男频/女频/全受众差异须体现在冲突选择与表达方式上）。\n"
+        "\n"
+    )
+
+
 def _log_shot_submit_debug(kind: str, req: Any, refs: Any = None, extra: Optional[Dict[str, Any]] = None) -> None:
     if not _is_shot_submit_debug_enabled():
         return
@@ -8962,6 +9088,9 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
             records = _extract_subject_index_records(source_text)
             if not records:
+                merged_covers = normalized.get("covers") or []
+                if merged_covers:
+                    normalized["posters"] = list(merged_covers)
                 return {
                     "subjects_json": normalized,
                     "meta": {
@@ -9150,6 +9279,24 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     "Subject Index base-version warning: some derived entities reference a base name that does not exist in Subject Index. "
                     + f"Examples: {', '.join(missing_base_references[:8])}"
                 )
+
+            cover_poster_items: List[Dict[str, Any]] = []
+            cover_poster_seen: set = set()
+            for item in (reconciled.get("covers") or []) + (reconciled.get("posters") or []):
+                if not isinstance(item, dict):
+                    continue
+                item_key = "|".join([
+                    str(item.get("subject_no") or "").strip().lower(),
+                    str(item.get("name") or "").strip().lower(),
+                    str(item.get("name_en") or "").strip().lower(),
+                ])
+                if item_key in cover_poster_seen:
+                    continue
+                cover_poster_seen.add(item_key)
+                cover_poster_items.append(item)
+            if cover_poster_items:
+                reconciled["covers"] = cover_poster_items
+                reconciled["posters"] = cover_poster_items
 
             return {
                 "subjects_json": reconciled,
@@ -15729,6 +15876,8 @@ class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     episodes_count: Optional[int] = None
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
+    script_mode: Optional[str] = None
+    target_audience: Optional[str] = None
     script_title: Optional[str] = None
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
@@ -16260,6 +16409,8 @@ class StoryGeneratorRequest(BaseModel):
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
     episode_number: Optional[int] = None
+    script_mode: Optional[str] = None
+    target_audience: Optional[str] = None
     # Project Overview / Basic Information (optional but should be forwarded to LLM when provided)
     script_title: Optional[str] = None
     type: Optional[str] = None
@@ -17471,6 +17622,24 @@ async def generate_project_episode_scripts_from_global_framework(
         )
         raise HTTPException(status_code=400, detail=f"Generated Global Framework ({global_md_key}) is empty")
 
+    story_input_key = "promo_generator_input" if generator_kind == "promo" else "story_generator_global_input"
+    saved_story_input = gi.get(story_input_key) if isinstance(gi.get(story_input_key), dict) else {}
+    episode_script_mode = _pick_first_text(
+        req.script_mode,
+        saved_story_input.get("script_mode"),
+        gi_story_input.get("script_mode"),
+    )
+    episode_target_audience = _pick_first_text(
+        req.target_audience,
+        saved_story_input.get("target_audience"),
+        gi_story_input.get("target_audience"),
+    )
+    episode_product_specs_block = _build_episode_script_product_specs_block(
+        episodes_count=target_n,
+        script_mode=episode_script_mode,
+        target_audience=episode_target_audience,
+    )
+
     character_canon_md = str(gi.get("character_canon_md") or "").strip()
     if not character_canon_md:
         # Best-effort build from profiles
@@ -17506,7 +17675,8 @@ async def generate_project_episode_scripts_from_global_framework(
         "[generate_episode_scripts] INPUT_CONTEXT "
         f"project_id={project_id} user_id={current_user.id} "
         f"has_relationships={has_relationships} global_md_len={len(global_md)} "
-        f"character_canon_len={len(character_canon_md)} character_source={character_canon_source}"
+        f"character_canon_len={len(character_canon_md)} character_source={character_canon_source} "
+        f"script_mode={episode_script_mode!r} target_audience={episode_target_audience!r} episodes_count={target_n}"
     )
 
     # Single stable prompt entry for episode script generation.
@@ -18100,6 +18270,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"Episode Number: {idx}\n"
             f"Episode Title (current DB value): {ep_title}\n"
             f"Extra Notes: {req.extra_notes or ''}\n\n"
+            f"{episode_product_specs_block}"
             f"{script_title_policy_block}"
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
@@ -18428,6 +18599,9 @@ async def generate_project_episode_scripts_from_global_framework(
             "global_story_dna_length": len(global_md),
             "character_canon_length": len(character_canon_md),
             "constraints_keys": list(constraints_obj.keys()) if isinstance(constraints_obj, dict) else [],
+            "script_mode": episode_script_mode,
+            "target_audience": episode_target_audience,
+            "episodes_count": target_n,
         },
     }
 
@@ -19312,6 +19486,24 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
             seen_item_keys.add(item_key)
             deduped_items.append(item)
         payload[section] = deduped_items
+
+    cover_poster_items: List[Dict[str, Any]] = []
+    cover_poster_seen: set = set()
+    for item in (payload.get("covers") or []) + (payload.get("posters") or []):
+        if not isinstance(item, dict):
+            continue
+        item_key = "|".join([
+            str(item.get("subject_no") or "").strip().lower(),
+            str(item.get("name") or "").strip().lower(),
+            str(item.get("name_en") or "").strip().lower(),
+        ])
+        if item_key in cover_poster_seen:
+            continue
+        cover_poster_seen.add(item_key)
+        cover_poster_items.append(item)
+    if cover_poster_items:
+        payload["covers"] = cover_poster_items
+        payload["posters"] = cover_poster_items
 
     return payload
 
