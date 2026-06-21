@@ -223,6 +223,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         promo_dna_global_md: "",
         story_generator_global_input: {
             episodes_count: 30,
+            episode_duration_minutes: 1,
             background: "",
             setup: "",
             development: "",
@@ -250,6 +251,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     const [globalStoryInput, setGlobalStoryInput] = useState({
         episodes_count: 30,
+        episode_duration_minutes: 1,
         script_mode: "短剧快节奏 / Short Drama",
         target_audience: "男频路线 / Male-Oriented",
         background: "",
@@ -989,6 +991,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                          setGlobalStoryInput(prev => ({
                              ...prev,
                              ...merged.story_generator_global_input,
+                             episode_duration_minutes: Number(merged.story_generator_global_input.episode_duration_minutes) > 0
+                                 ? Number(merged.story_generator_global_input.episode_duration_minutes)
+                                 : 1,
                          }));
                      }
 
@@ -1248,6 +1253,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     mode: 'global',
                     generator_kind: 'story',
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
+                    episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
+                        ? Number(globalStoryInput.episode_duration_minutes)
+                        : 1,
                     script_mode: globalStoryInput.script_mode,
                     target_audience: globalStoryInput.target_audience,
                     background: globalStoryInput.background,
@@ -1402,6 +1410,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 story_generator_global_input: {
                     ...globalStoryInput,
                     episodes_count: Number(globalStoryInput.episodes_count || 0) || 0,
+                    episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
+                        ? Number(globalStoryInput.episode_duration_minutes)
+                        : 1,
                 },
                 promo_generator_input: {
                     ...promoInput,
@@ -1557,6 +1568,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 mode: 'global',
                 generator_kind: 'story',
                 episodes_count: Number(globalStoryInput.episodes_count || 0),
+                episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
+                    ? Number(globalStoryInput.episode_duration_minutes)
+                    : 1,
                 script_mode: globalStoryInput.script_mode,
                 target_audience: globalStoryInput.target_audience,
                 // Project Overview / Basic Information (forward to LLM)
@@ -1685,6 +1699,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     setGlobalStoryInput(prev => ({
                         ...prev,
                         ...updated.global_info.story_generator_global_input,
+                        episode_duration_minutes: Number(updated.global_info.story_generator_global_input.episode_duration_minutes) > 0
+                            ? Number(updated.global_info.story_generator_global_input.episode_duration_minutes)
+                            : 1,
                     }));
                 }
 
@@ -1777,12 +1794,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             addLog?.(`Generating episode scripts (${modeLabel}, target 1..${n})... (This may take several minutes)`, 'process');
             addLog?.(
-                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, script_mode: globalStoryInput.script_mode, script_title: info?.script_title || project?.title || '', overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
+                `[DEBUG][Before API] Generate Episode Scripts payload: ${JSON.stringify({ generator_kind: generatorKind, episodes_count: n, episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0 ? Number(globalStoryInput.episode_duration_minutes) : 1, script_mode: globalStoryInput.script_mode, script_title: info?.script_title || project?.title || '', overwrite_existing: overwriteExisting, retry_failed_only: retryFailedOnly, episode_number: specificEpisode })}`,
                 'info'
             );
             const reqPayload = {
                 generator_kind: generatorKind,
                 episodes_count: n,
+                episode_duration_minutes: Number(globalStoryInput.episode_duration_minutes) > 0
+                    ? Number(globalStoryInput.episode_duration_minutes)
+                    : 1,
                 script_mode: globalStoryInput.script_mode,
                 target_audience: globalStoryInput.target_audience,
                 script_title: String(info?.script_title || project?.title || '').trim(),
@@ -3162,6 +3182,17 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 value={globalStoryInput.episodes_count}
                                 onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episodes_count: e.target.value }))}
                                 placeholder={t('例如：20', 'e.g. 20')}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('每集时长（分钟）', 'Episode Duration (min)')}</label>
+                            <input
+                                type="number"
+                                min="1"
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full"
+                                value={globalStoryInput.episode_duration_minutes}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, episode_duration_minutes: e.target.value }))}
+                                placeholder={t('例如：1', 'e.g. 1')}
                             />
                         </div>
                         <InputGroup

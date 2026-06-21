@@ -3637,18 +3637,29 @@ def _build_mandatory_writing_logic(script_mode: Any) -> str:
     return _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE.get(key) or _MANDATORY_WRITING_LOGIC_BY_SCRIPT_MODE["general_series"]
 
 
+def _resolve_episode_duration_minutes(value: Any, *, default: int = 1) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
 def _build_episode_script_product_specs_block(
     *,
     episodes_count: Any,
+    episode_duration_minutes: Any = 1,
     script_mode: str,
     target_audience: str,
 ) -> str:
     mode_label = script_mode or "（缺失：按项目全局框架与题材常识保守处理）"
     audience_label = target_audience or "（缺失：按项目全局框架与题材常识保守处理）"
+    duration_minutes = _resolve_episode_duration_minutes(episode_duration_minutes)
     mandatory_logic = _build_mandatory_writing_logic(script_mode)
     return (
         "Project Product Specs (Hard Constraint):\n"
         f"- 载体规格 / Episodes Count: {episodes_count}\n"
+        f"- 每集时长 / Episode Duration: {duration_minutes} minute(s)\n"
         f"- 产品规格与节奏 / Script Mode (Product Format): {mode_label}\n"
         f"- 受众定位 / Target Audience: {audience_label}\n"
         "\n"
@@ -15008,6 +15019,7 @@ async def generate_project_story_dna_global(
         f"Global Style: {global_style}\n"
         f"\n"
         f"Episodes Count: {int(episodes_count)}\n"
+        f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
         f"Foreshadowing: {req.foreshadowing or ''}\n"
         f"Background: {req.background or ''}\n"
         f"Setup: {req.setup or ''}\n"
@@ -15461,6 +15473,10 @@ def import_project_story_generator_global_package(
                 normalized_input["episodes_count"] = int(normalized_input.get("episodes_count") or 0)
             except Exception:
                 normalized_input["episodes_count"] = 0
+        if "episode_duration_minutes" in normalized_input:
+            normalized_input["episode_duration_minutes"] = _resolve_episode_duration_minutes(
+                normalized_input.get("episode_duration_minutes")
+            )
 
         structured_input = req.story_generator_global_structured or {}
         if isinstance(structured_input, dict):
@@ -16217,6 +16233,7 @@ class EpisodeOut(BaseModel):
 class ProjectEpisodeScriptsGenerateRequest(BaseModel):
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
+    episode_duration_minutes: Optional[int] = None
     episode_id: Optional[int] = None  # Optional. Generate a specific episode only
     episode_number: Optional[int] = None  # Optional alias for single-episode generation
     script_mode: Optional[str] = None
@@ -16760,6 +16777,7 @@ class StoryGeneratorRequest(BaseModel):
     mode: str  # 'global' | 'episode'
     generator_kind: Optional[str] = None  # promo | story
     episodes_count: Optional[int] = None
+    episode_duration_minutes: Optional[int] = 1
     episode_number: Optional[int] = None
     script_mode: Optional[str] = None
     target_audience: Optional[str] = None
@@ -17213,6 +17231,7 @@ async def generate_episode_story_dna(
     user_prompt = (
         f"Mode: {mode}\n"
         f"Episodes Count: {req.episodes_count or ''}\n"
+        f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
         f"Episode Number: {req.episode_number or ''}\n"
         f"Foreshadowing: {req.foreshadowing or ''}\n"
         f"Background: {req.background or ''}\n"
@@ -17986,8 +18005,16 @@ async def generate_project_episode_scripts_from_global_framework(
         saved_story_input.get("target_audience"),
         gi_story_input.get("target_audience"),
     )
+    episode_duration_minutes = _resolve_episode_duration_minutes(
+        req.episode_duration_minutes
+        if req.episode_duration_minutes is not None
+        else saved_story_input.get("episode_duration_minutes")
+        if saved_story_input.get("episode_duration_minutes") is not None
+        else gi_story_input.get("episode_duration_minutes")
+    )
     episode_product_specs_block = _build_episode_script_product_specs_block(
         episodes_count=target_n,
+        episode_duration_minutes=episode_duration_minutes,
         script_mode=episode_script_mode,
         target_audience=episode_target_audience,
     )
@@ -18028,7 +18055,8 @@ async def generate_project_episode_scripts_from_global_framework(
         f"project_id={project_id} user_id={current_user.id} "
         f"has_relationships={has_relationships} global_md_len={len(global_md)} "
         f"character_canon_len={len(character_canon_md)} character_source={character_canon_source} "
-        f"script_mode={episode_script_mode!r} target_audience={episode_target_audience!r} episodes_count={target_n}"
+        f"script_mode={episode_script_mode!r} target_audience={episode_target_audience!r} "
+        f"episodes_count={target_n} episode_duration_minutes={episode_duration_minutes}"
     )
 
     # Single stable prompt entry for episode script generation.
@@ -18957,6 +18985,7 @@ async def generate_project_episode_scripts_from_global_framework(
             "script_mode": episode_script_mode,
             "target_audience": episode_target_audience,
             "episodes_count": target_n,
+            "episode_duration_minutes": episode_duration_minutes,
         },
     }
 
