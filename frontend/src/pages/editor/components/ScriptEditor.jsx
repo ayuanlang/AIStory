@@ -6852,8 +6852,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             selectedReuseSubjectAssets, 
                             {
                                 onTaskCreated: (taskId) => {
-                                    onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${taskId}`, 'info');
-                                    registerActiveAnalysisTask(taskId);
+                                    const stableTaskId = String(taskId || '').trim();
+                                    onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${stableTaskId}`, 'info');
+                                    registerActiveAnalysisTask(stableTaskId);
+                                    if (activeEpisode?.id && stableTaskId) {
+                                        saveAnalysisTaskMarker(activeEpisode.id, {
+                                            taskId: stableTaskId,
+                                            startedAt: phase2StartedAt,
+                                            phase: 2,
+                                        });
+                                        updateEpisodeAnalysisRun(activeEpisode.id, {
+                                            taskId: stableTaskId,
+                                            phase: 2,
+                                        });
+                                    }
                                 },
                                 analysisTraceId: subtaskTraceId,
                                 analysisFeatures: {
@@ -7165,7 +7177,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
-        buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase
+        buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
+        saveAnalysisTaskMarker, updateEpisodeAnalysisRun
     ]);
 
     
