@@ -11,7 +11,7 @@ import ProjectStatusBar from '../../../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
-import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
+import { parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -2226,103 +2226,9 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         });
     }, []);
 
-    const parseScenesFromText = useCallback((text) => {
-        if (!text) return [];
-        const lines = text.split('\n').filter(l => l.trim().includes('|'));
-        const headerIdx = lines.findIndex(l =>
-            (l.includes("Scene No") || l.includes("场次序号") || l.includes("Scene ID") || l.includes("场次") || l.includes("Title"))
-        );
-
-        if (headerIdx === -1) return [];
-
-        const headerLine = lines[headerIdx];
-        let headers = headerLine.split('|').map(c => c.trim());
-        if (headers.length > 0 && headers[0] === "") headers.shift();
-        if (headers.length > 0 && headers[headers.length - 1] === "") headers.pop();
-
-        const normalizeHeader = (h) => h.toLowerCase().replace(/[\.\s]/g, '');
-        const headerMap = {};
-        headers.forEach((h, idx) => {
-            const n = normalizeHeader(h);
-            if (n.includes("episodeid") || n.includes("集id")) headerMap['episode_id'] = idx;
-            else if ((n.includes("sceneid") && !n.includes("sceneno")) || n.includes("场景id")) headerMap['scene_id'] = idx;
-            if (n.includes("sceneno") || n.includes("场次")) headerMap['scene_no'] = idx;
-            else if (n.includes("scenename") || n.includes("title")) headerMap['scene_name'] = idx;
-            else if (n.includes("equivalentduration")) headerMap['equivalent_duration'] = idx;
-            else if (n.includes("coresceneinfo") || n.includes("coregoal")) headerMap['core_scene_info'] = idx;
-            else if (n.includes("originalscripttext") || n.includes("description") || n.includes("adaptedscripttext") || n.includes("改编剧本")) headerMap['original_script_text'] = idx;
-            else if (n.includes("environmentname") || n.includes("environment")) headerMap['environment_name'] = idx;
-            else if (n.includes("environmentrelation")) headerMap['environment_relation'] = idx;
-            else if (n.includes("entrystate")) headerMap['entry_state'] = idx;
-            else if (n.includes("exitstate")) headerMap['exit_state'] = idx;
-            else if (n.includes("linkedcharacters")) headerMap['linked_characters'] = idx;
-            else if (n.includes("keyprops")) headerMap['key_props'] = idx;
-        });
-
-        const rows = [];
-        let inShotTable = false;
-
-        for (let i = headerIdx + 1; i < lines.length; i++) {
-            const line = lines[i];
-            if (line.includes("Shot ID") || line.includes("镜头ID")) {
-                inShotTable = true;
-                continue;
-            }
-            if (line.includes("Scene No") || line.includes("场次序号")) {
-                inShotTable = false;
-                continue;
-            }
-            if (inShotTable) continue;
-            if (line.includes('---')) continue;
-
-            let cols = line.split('|').map(c => c.trim());
-            if (cols.length > 0 && cols[0] === "") cols.shift();
-            if (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
-
-            if (cols.length >= 2) {
-                const cleanCol = (txt) => txt ? txt.replace(/<br\s*\/?>/gi, '\n').replace(/\\\|/g, '|') : '';
-                const getVal = (key, fallbackIdx) => {
-                    const idx = headerMap[key] !== undefined ? headerMap[key] : fallbackIdx;
-                    return cols[idx] ? cleanCol(cols[idx]) : '';
-                };
-
-                const isNewFormat = cols.length >= 13 || headerMap['episode_id'] !== undefined || headerMap['scene_id'] !== undefined;
-                const fallback = isNewFormat
-                    ? {
-                        scene_no: 2,
-                        scene_name: 3,
-                        equivalent_duration: 4,
-                        core_scene_info: 5,
-                        original_script_text: 6,
-                        environment_name: 7,
-                        linked_characters: 11,
-                        key_props: 12,
-                    }
-                    : {
-                        scene_no: 0,
-                        scene_name: 1,
-                        equivalent_duration: 2,
-                        core_scene_info: 3,
-                        original_script_text: 4,
-                        environment_name: 5,
-                        linked_characters: 6,
-                        key_props: 7,
-                    };
-
-                rows.push({
-                    scene_no: getVal('scene_no', fallback.scene_no),
-                    scene_name: getVal('scene_name', fallback.scene_name),
-                    equivalent_duration: getVal('equivalent_duration', fallback.equivalent_duration),
-                    core_scene_info: getVal('core_scene_info', fallback.core_scene_info),
-                    original_script_text: normalizeOriginalScriptText(getVal('original_script_text', fallback.original_script_text)),
-                    environment_name: getVal('environment_name', fallback.environment_name),
-                    linked_characters: getVal('linked_characters', fallback.linked_characters),
-                    key_props: getVal('key_props', fallback.key_props)
-                });
-            }
-        }
-        return rows;
-    }, []);
+    const parseScenesFromText = useCallback((text) => parseScenesFromMarkdownTable(text, {
+        normalizeOriginalScriptText,
+    }), [normalizeOriginalScriptText]);
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {

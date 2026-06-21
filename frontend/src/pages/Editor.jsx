@@ -12,6 +12,13 @@ import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Set
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
+import {
+    cleanMarkdownTableCells,
+    reconcileSceneTableRowCells,
+    buildSceneTableHeaderMap,
+    getSceneTableFallbackIndices,
+    normalizeSceneTableHeaderKey,
+} from '../lib/sceneTableParser';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
@@ -2481,6 +2488,8 @@ const Editor = ({
                 let inSceneTable = false;
                 let shotHeaderMap = {};
                 let sceneHeaderMap = {};
+                let sceneTableHeaders = [];
+                let sceneTableHeaderMap = {};
 
                 for (let line of lines) {
                     const trimmed = line.trim();
@@ -2530,9 +2539,11 @@ const Editor = ({
                         if (curCols.length > 0 && curCols[0] === "") curCols.shift();
                         if (curCols.length > 0 && curCols[curCols.length-1] === "") curCols.pop();
 
+                        sceneTableHeaders = cleanMarkdownTableCells(line);
+                        sceneTableHeaderMap = buildSceneTableHeaderMap(sceneTableHeaders);
                         sceneHeaderMap = {};
-                        curCols.forEach((col, idx) => {
-                            const key = col.toLowerCase().replace(/[\(\)（）\s\.]/g, '');
+                        sceneTableHeaders.forEach((col, idx) => {
+                            const key = normalizeSceneTableHeaderKey(col);
                             sceneHeaderMap[key] = idx;
                         });
                         continue;
@@ -2556,39 +2567,41 @@ const Editor = ({
 
                          // A. Handle Scene Row
                          if (inSceneTable) {
+                             if (sceneTableHeaders.length > 0) {
+                                 cols = reconcileSceneTableRowCells(cleanMarkdownTableCells(line), sceneTableHeaders);
+                             }
                              sceneLines.push(line);
                              
                              try {
-                                const getSceneVal = (keys, fallbackIdx) => {
-                                    for (const k of keys) {
+                                const fallback = getSceneTableFallbackIndices(cols.length, sceneTableHeaderMap);
+                                const getSceneVal = (headerKey, legacyKeys, fallbackIdx) => {
+                                    if (sceneTableHeaderMap[headerKey] !== undefined && sceneTableHeaderMap[headerKey] < cols.length) {
+                                        return clean(cols[sceneTableHeaderMap[headerKey]]);
+                                    }
+                                    for (const k of legacyKeys) {
                                         if (sceneHeaderMap[k] !== undefined && sceneHeaderMap[k] < cols.length) {
                                             return clean(cols[sceneHeaderMap[k]]);
                                         }
                                     }
-                                    return fallbackIdx < cols.length ? clean(cols[fallbackIdx]) : '';
+                                    const resolvedFallback = fallbackIdx !== undefined ? fallbackIdx : fallback[headerKey];
+                                    return resolvedFallback !== undefined && resolvedFallback < cols.length
+                                        ? clean(cols[resolvedFallback])
+                                        : '';
                                 };
-
-                                const isNewSceneFormat = cols.length >= 13 || sceneHeaderMap['episodeid'] !== undefined || sceneHeaderMap['sceneid'] !== undefined;
 
                                 const scData = {
-                                    scene_no: getSceneVal(['sceneno', 'scene_no', '场次序号', '场次'], isNewSceneFormat ? 2 : 0),
-                                    scene_name: getSceneVal(['scenename', 'title', 'scene_name', '场景名称'], isNewSceneFormat ? 3 : 1),
-                                    equivalent_duration: getSceneVal(['equivalentduration', 'duration', 'equivalent_duration'], isNewSceneFormat ? 4 : 2),
-                                    core_scene_info: getSceneVal(['coresceneinfo', 'coregoal', 'core_scene_info'], isNewSceneFormat ? 5 : 3),
-                                    original_script_text: getSceneVal(['originalscripttext', 'description', 'original_script_text', 'adaptedscripttext', '改编剧本', '改编剧本文本'], isNewSceneFormat ? 6 : 4),
-                                    environment_name: getSceneVal(['environmentname', 'environment', 'environment_name', '环境名称', '环境', '环境锚点'], isNewSceneFormat ? 7 : 5),
-                                    linked_characters: getSceneVal(['linkedcharacters', 'linked_characters', '关联角色', '角色', 'characters'], isNewSceneFormat ? 11 : 6),
-                                    key_props: getSceneVal(['keyprops', 'key_props', '关键道具', '道具', 'props'], isNewSceneFormat ? 12 : 7)
+                                    scene_no: getSceneVal('scene_no', ['sceneno', 'scene_no', '场次序号', '场次']),
+                                    scene_name: getSceneVal('scene_name', ['scenename', 'title', 'scene_name', '场景名称']),
+                                    equivalent_duration: getSceneVal('equivalent_duration', ['equivalentduration', 'duration', 'equivalent_duration']),
+                                    core_scene_info: getSceneVal('core_scene_info', ['coresceneinfo', 'coregoal', 'core_scene_info']),
+                                    original_script_text: getSceneVal('original_script_text', ['originalscripttext', 'description', 'original_script_text', 'adaptedscripttext', '改编剧本', '改编剧本文本']),
+                                    environment_name: getSceneVal('environment_name', ['environmentname', 'environment_name', '环境名称', '环境', '环境锚点']),
+                                    linked_characters: getSceneVal('linked_characters', ['linkedcharacters', 'linked_characters', '关联角色', '角色', 'characters']),
+                                    key_props: getSceneVal('key_props', ['keyprops', 'key_props', '关键道具', '道具', 'props']),
                                 };
 
-                                const linkedByHeader = sceneHeaderMap['linkedcharacters'] !== undefined
-                                    || sceneHeaderMap['关联角色'] !== undefined
-                                    || sceneHeaderMap['角色'] !== undefined
-                                    || sceneHeaderMap['characters'] !== undefined;
-                                const propsByHeader = sceneHeaderMap['keyprops'] !== undefined
-                                    || sceneHeaderMap['关键道具'] !== undefined
-                                    || sceneHeaderMap['道具'] !== undefined
-                                    || sceneHeaderMap['props'] !== undefined;
+                                const linkedByHeader = sceneTableHeaderMap.linked_characters !== undefined;
+                                const propsByHeader = sceneTableHeaderMap.key_props !== undefined;
                                 if (!linkedByHeader || !propsByHeader) {
                                     addLog(
                                         `Scene row import used fallback columns for subject fields (linked_by_header=${linkedByHeader}, props_by_header=${propsByHeader}) scene_no=${scData.scene_no || '(empty)'}.`,

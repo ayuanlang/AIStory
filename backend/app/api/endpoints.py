@@ -93,6 +93,8 @@ from app.services.script_analysis_flow import (
     persist_analyze_scene_stage_result,
     resolve_scene_units_for_markdown_orchestration,
     resolve_analyze_scene_stage,
+    _reconcile_scene_table_row_cells,
+    _split_scene_table_cells,
     SCENES_BLOCK_END_TOKEN,
     STAGE_SCENE_MARKDOWN,
     get_script_analysis_flow_registry,
@@ -19269,12 +19271,10 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         return []
 
     def _split_row(line: str) -> List[str]:
-        cols = [col.strip() for col in line.strip().split("|")]
-        if cols and cols[0] == "":
-            cols = cols[1:]
-        if cols and cols[-1] == "":
-            cols = cols[:-1]
-        return cols
+        return _split_scene_table_cells(line)
+
+    def _reconcile_row(cols: List[str], headers: List[str]) -> List[str]:
+        return _reconcile_scene_table_row_cells(cols, headers)
 
     def _find_idx(headers: List[str], aliases: List[str]) -> int:
         normalized_headers = [_normalize_scene_header(h) for h in headers]
@@ -19294,6 +19294,11 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
         "Core Scene Info",
         "Original Script Text",
         "Environment Name",
+        "Environment Relation",
+        "Base Environment Reference",
+        "Environment Delta",
+        "Entry State",
+        "Exit State",
         "Linked Characters",
         "Key Props",
     ]
@@ -19350,7 +19355,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
 
         scene_name_idx = _find_idx(headers, ["Scene Name", "场景名称", "场景名", "Title"])
         duration_idx = _find_idx(headers, ["Equivalent Duration", "Duration", "时长"])
-        env_name_idx = _find_idx(headers, ["Environment Name", "环境名称", "环境锚点", "Environment"])
+        env_name_idx = _find_idx(headers, ["Environment Name", "环境名称", "环境锚点"])
         linked_chars_idx = _find_idx(headers, ["Linked Characters", "关联角色", "角色"])
         key_props_idx = _find_idx(headers, ["Key Props", "关键道具", "道具"])
 
@@ -19362,7 +19367,7 @@ def _parse_scene_rows_from_markdown(markdown_text: str) -> List[Dict[str, str]]:
                 j += 1
                 continue
 
-            cols = _split_row(row_line)
+            cols = _reconcile_row(_split_row(row_line), headers)
             if not cols:
                 j += 1
                 continue
