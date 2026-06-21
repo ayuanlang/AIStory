@@ -58,7 +58,7 @@
 - 清晰度：说明焦平面与景深；主舞台、主要道具、标题区、关键主体保持锐度，可用 `deep focus` / `moderate depth of field` / `background slightly softened`。
 - 排除引擎参数与控制符：`--ar`, `--v`, `--stylize`, `::`, `<lora:...>` 等。
 - **单状态只读**：同一 Subject 只呈现一个物理状态；需多状态但上游仅一条时回流 Stage 2。
-- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向上一阶段。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `ENV:[...]`、`CHAR:[@...]`、`PROP:[...]`）。
+- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向**剧情时序上紧邻的上一完整形象**（读取上游 `dependency_reference` / `base_entity`）。**视角衍生**回挂主环境；**状态/破坏链**回挂紧邻上一完整状态，禁止跳链直挂远端基础版。被依赖基准为破坏/损毁态时，须在 `generation_prompt_cn` 逐项回补并强调被破坏部分细节；修复/再生态须写明恢复重建细节。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `ENV:[...]`、`CHAR:[@...]`、`PROP:[...]`）。
 - `negative_prompt_en` 必须短而个体化；环境优先过滤角色残影、可识别人脸、杂乱阻塞、塑料/微缩感、时代错置；海报过滤错画幅、标题不可读、拼贴感。
 - 合规边界：描述安全、可播出、温和；禁止血腥、断肢、内脏、严重伤痕、肉体变异、强不适污物、涉暴/涉黄/猎奇词。战损只写非图形化状态，如磨损、灰尘、破损衣物、疲惫氛围。
 

@@ -103,7 +103,7 @@
 - 确保同条 prompt 内描述协调统一；确保排除引擎参数与控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>`）；确保方位描述精准清晰。
 - 默认器材说明：仅当剧情明确要求时，才将 `camera/lens/operator` 写成画面实体。
 - **单状态只读**：同一 Subject 只呈现一个物理状态，并以 Subject Index 状态为准；需多状态但上游仅一条时，按 Node 4 “上游清单只读与缺口回流”处理。
-- **全局变体与继承链 (Global Dependency Strategy)**：派生变体（换装/老龄/破损/正反打等）中，基准实体：`dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体：`type=Type A/Type B` 并指向上一阶段。提示词必须写清继承的不变锚点与当前变化。`visual_dependencies` 禁填 `S001`、`E001` 等 `subject_no`；实体名引用必须逐字符一致（如 `CHAR:[@...]` 或 `PROP:[...]`）。
+- **全局变体与继承链 (Global Dependency Strategy)**：派生变体（换装/老龄/破损/正反打等）中，基准实体：`dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体：`type=Type A/Type B` 并指向**剧情时序上紧邻的上一完整形象**（`dependency_reference` / `base_entity` 所指）。**同 Scene 视角衍生**以原始主环境/基础版为基准；**状态/破坏链**以前一完整状态为基准，禁止跳链直挂远端基础版。若被依赖基准为**破坏/损毁态**，新衍生须在提示词中**逐项回补并强调**被破坏部分的可见细节；修复/再生态须写明恢复重建细节，禁止跳跃式抹除破坏痕迹。提示词必须写清继承的不变锚点与当前变化。`visual_dependencies` 禁填 `S001`、`E001` 等 `subject_no`；实体名引用必须逐字符一致（如 `CHAR:[@...]` 或 `PROP:[...]`）。
 - 每个实体必须具备专属的 `negative_prompt_en`，实现个体化过滤。
 - **负面提示精简 (Negative Prompt Compactness)**：`negative_prompt_en` 短而自适应，优先过滤破坏当前风格/身份一致性的核心项。真人：假人感/平滑感/CGI；道具环境：塑料感/微缩感；其他：时代错置/多余肢体等。
 - **分屏词适用范围**：四视图资产页的提示词可使用分屏相关词组。

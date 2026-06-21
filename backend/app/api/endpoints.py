@@ -12961,6 +12961,14 @@ def _is_soft_deleted(record) -> bool:
     return bool(getattr(record, "is_deleted", False))
 
 
+def _restore_soft_deleted_record(record) -> bool:
+    if record is None or not _is_soft_deleted(record):
+        return False
+    record.is_deleted = False
+    record.deleted_at = None
+    return True
+
+
 _DELETION_RESOURCE_MODELS: Dict[str, Any] = {
     "project": Project,
     "episode": Episode,
@@ -23939,6 +23947,7 @@ def create_entity(
     
 
     if existing_entity:
+        _restore_soft_deleted_record(existing_entity)
         existing_entity.description = entity.description or existing_entity.description
         existing_entity.image_url = entity.image_url or existing_entity.image_url
         existing_entity.video_url = entity.video_url or existing_entity.video_url
@@ -24393,6 +24402,7 @@ def update_entity(
     project = _require_project_access(db, entity.project_id, current_user)
 
     _repair_entity_image_url_from_assets(db, current_user, project, entity)
+    _restore_soft_deleted_record(entity)
 
     update_data = entity_in.dict(exclude_unset=True)
     if "visual_dependencies" in update_data:

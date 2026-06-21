@@ -258,6 +258,7 @@ const Editor = ({
     const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [projectBillingStats, setProjectBillingStats] = useState({ user_cost: 0, total_cost: 0 });
     const [refreshKey, setRefreshKey] = useState(0);
+    const [entitiesRefreshKey, setEntitiesRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
     const [assetRerunRequest, setAssetRerunRequest] = useState(null);
@@ -387,7 +388,11 @@ const Editor = ({
         'character_profiles',
     ]), []);
 
-    const mergeEpisodeListWithCachedFields = useCallback((incomingEps, previousEps) => {
+    const mergeEpisodeListWithCachedFields = useCallback((incomingEps, previousEps, options = {}) => {
+        const invalidateSet = new Set(
+            (Array.isArray(options.invalidateEpisodeIds) ? options.invalidateEpisodeIds : [])
+                .map((episodeId) => String(episodeId))
+        );
         const prevById = new Map(
             (Array.isArray(previousEps) ? previousEps : []).map((ep) => [String(ep.id), ep])
         );
@@ -396,6 +401,10 @@ const Editor = ({
             if (!previous) return ep;
 
             const merged = { ...previous, ...ep };
+            if (invalidateSet.has(String(ep.id))) {
+                delete merged._fullLoaded;
+                return merged;
+            }
             for (const field of DEFERRED_EPISODE_FIELDS) {
                 const incomingValue = ep[field];
                 const cachedValue = previous[field];
@@ -416,8 +425,8 @@ const Editor = ({
         return parseEpisodeNumberFromText(episode?.title);
     }, []);
 
-    const hydrateEpisodesState = useCallback((eps) => {
-        const normalized = mergeEpisodeListWithCachedFields(eps, episodesRef.current);
+    const hydrateEpisodesState = useCallback((eps, options = {}) => {
+        const normalized = mergeEpisodeListWithCachedFields(eps, episodesRef.current, options);
         episodesRef.current = normalized;
         setEpisodes(normalized);
 
@@ -441,11 +450,23 @@ const Editor = ({
         return normalized;
     }, [mergeEpisodeListWithCachedFields, pickMaxEpisodeId]);
 
-    const refreshEpisodesForEditor = useCallback(async () => {
+    const refreshEpisodesForEditor = useCallback(async (options = {}) => {
         if (!id) return [];
         const fresh = await fetchEpisodes(id).catch(() => []);
-        return hydrateEpisodesState(fresh);
+        return hydrateEpisodesState(fresh, options);
     }, [id, hydrateEpisodesState]);
+
+    const reloadEpisodeIntoState = useCallback(async (episodeId) => {
+        const fullEp = await fetchEpisode(episodeId);
+        setEpisodes((prev) => sortEpisodesForEditor(
+            prev.map((episode) => (
+                String(episode.id) === String(episodeId)
+                    ? { ...fullEp, _fullLoaded: true }
+                    : episode
+            ))
+        ));
+        return fullEp;
+    }, [sortEpisodesForEditor]);
 
     const loadEpisodesForEditor = useCallback(async (projectSnapshot = null) => {
         if (!id) return [];
@@ -2900,6 +2921,7 @@ const Editor = ({
 
             const importedTotal = importedSubjectCounts.character + importedSubjectCounts.prop + importedSubjectCounts.environment + importedSubjectCounts.poster;
             if (importedTotal > 0) {
+                setEntitiesRefreshKey((prev) => prev + 1);
                 addLog(
                     `Imported subjects summary: character=${importedSubjectCounts.character}, prop=${importedSubjectCounts.prop}, environment=${importedSubjectCounts.environment}, poster=${importedSubjectCounts.poster}.`,
                     'info'
@@ -3849,9 +3871,21 @@ const Editor = ({
                                         onProjectUpdate={loadProjectData}
                                         onRefreshEpisodes={refreshEpisodesForEditor}
                                         onTabChange={setActiveTab}
-                                        onJumpToEpisode={(episodeId) => {
-                                            setActiveEpisodeId(episodeId);
-                                            setActiveTab('script');
+                                        onJumpToEpisode={(episodeId, options = {}) => {
+                                            const jump = () => {
+                                                setActiveEpisodeId(episodeId);
+                                                setActiveTab('script');
+                                            };
+                                            if (options?.forceReload) {
+                                                void reloadEpisodeIntoState(episodeId)
+                                                    .then(jump)
+                                                    .catch((err) => {
+                                                        console.error('Failed to reload episode after jump', err);
+                                                        jump();
+                                                    });
+                                                return;
+                                            }
+                                            jump();
                                         }}
                                     />
                                     <EpisodeInfo
@@ -3875,14 +3909,26 @@ const Editor = ({
                                     onProjectUpdate={loadProjectData}
                                     onRefreshEpisodes={refreshEpisodesForEditor}
                                     onTabChange={setActiveTab}
-                                    onJumpToEpisode={(episodeId) => {
-                                        setActiveEpisodeId(episodeId);
-                                        setActiveTab('script');
+                                    onJumpToEpisode={(episodeId, options = {}) => {
+                                        const jump = () => {
+                                            setActiveEpisodeId(episodeId);
+                                            setActiveTab('script');
+                                        };
+                                        if (options?.forceReload) {
+                                            void reloadEpisodeIntoState(episodeId)
+                                                .then(jump)
+                                                .catch((err) => {
+                                                    console.error('Failed to reload episode after jump', err);
+                                                    jump();
+                                                });
+                                            return;
+                                        }
+                                        jump();
                                     }}
                                 />
                             )}
                             {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />}
-                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
+                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
                             {activeTab === 'scenes' && <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                                 if (sceneId) {
                                     setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });

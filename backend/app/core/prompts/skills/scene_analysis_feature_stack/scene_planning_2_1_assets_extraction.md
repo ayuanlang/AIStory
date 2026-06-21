@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-06-21 16:30:00 +08:00
+# Prompt Updated At: 2026-06-21 18:00:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -103,7 +103,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 ### 四、环境组（ENV）与空镜
 - 主环境与 Scene 边界完全继承 Stage 1；Stage 1 已声明主/衍生环境必须逐条提取并保留依赖。
 - 触发线索存在且可判空镜差异（`empty_view_delta`）时，必须补最小衍生环境，禁止并入主环境。
-- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/光源/边界 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`，`base_entity` 指向主环境；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对主环境的固定结构/光源/边界差异；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
+- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/光源/边界 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对**直接依赖基准**的固定结构/光源/边界差异（首个状态衍生相对主环境，后续相对上一完整状态）；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
 - 自动补齐衍生环境最小字段：`subject_name_zh({角度}度{主环境名}[_{衍生类型/观察区域/可见方向}])`、`base_entity(主环境名)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
@@ -115,10 +115,15 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 ### 五、衍生实体命名规范（强制）
 - **统一原则**：所有衍生实体的 `subject_name_zh` / `subject_name_en` 必须与基准实体（`base_entity` 所指）建立可追溯的命名关联；`base_entity` 填基准实体的 `subject_name_zh`（逐字一致），基准版填 `None`；`dependency_reference` 同步指向基准实体 `subject_name_en`。
+- **依赖链时序优先原则（强制）**：实体依赖选择必须优先以**更早出现的形象/状态**为基准，形成单向时序链；禁止跳链回挂远端基础版（除非当前即为该族系的首个衍生）。
+  - **同 Scene 视角衍生**：`base_entity` / `dependency_reference` 均指向该 Scene 的**主环境（0 度原始完整场景）**；各角度/反打/OTS 等视角差异只写 Delta，不以其他衍生视角互为基准。
+  - **状态/破坏/特效衍生链**：每个状态衍生须指向剧情时序上**紧邻的上一完整状态**——首个状态衍生指向主环境；后续破坏、崩塌、余波、再生等状态须指向前一完整状态实体，**禁止**跳过中间态直挂主环境。例：主环境「办公室会客区」→「办公室会客区_符阵覆盖态」→「办公室会客区_墙体崩塌态」：后者 `base_entity` / `dependency_reference` 指「办公室会客区_符阵覆盖态」，不得直挂「办公室会客区」。
+  - **破坏态被依赖时的细节回补（强制）**：若确认以**破坏/损毁/崩塌类**状态实体作为 `base_entity`（被依赖基准），新衍生行必须在 `entity_attributes`（尤其 `empty_view_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`）中**逐项回补并强调**依赖基准里已被破坏部分的可见细节——如崩裂位置与范围、倾覆/断裂构件、残留碎屑与尘雾、破损边界、受扰光源等；禁止仅写「更破败/延续破坏」等抽象概括而丢失具体物项与损伤形态。若剧情为**修复/再生/恢复基准态**，还须写明相对破坏态**恢复重建**的构件、材质与完整细节，不得跳跃式回到无破坏痕迹的主环境描述。
+  - **角色/道具连续状态链**：换装、点燃、损毁、签署等连续状态变化时，`base_entity` / `dependency_reference` 指向同一实体族系内剧情时序上**上一稳定版本**（与角色时序规则一致）；仅当当前为族系首个衍生时，才指向基础版。若被依赖基准为**损毁/战损/破碎态**，新衍生须在 `entity_attributes` 中逐项回补并强调破损部位的可见细节；修复/复原态须写明恢复重建细节，禁止跳跃式抹除损伤痕迹。
 - **环境（ENV）**：
   - **主环境（0 度基准）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`。
   - **视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`；同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`，如 `180度办公室会客区_桌后反打`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
-  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`，如 `办公室会客区_符阵覆盖态`、`侯府正厅_墙体崩塌态`；`subject_name_en` = `{Base Environment English Name} {State/Domain Descriptor}`，如 `Office Reception Area Sigil Covered`。须同时满足 Stage 1 跨 Beat 可持续空镜变化证据；与视角衍生可同时存在。
+  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`，如 `办公室会客区_符阵覆盖态`、`侯府正厅_墙体崩塌态`；`subject_name_en` = `{Base Environment English Name} {State/Domain Descriptor}`，如 `Office Reception Area Sigil Covered`。须同时满足 Stage 1 跨 Beat 可持续空镜变化证据；与视角衍生可同时存在。`base_entity` / `dependency_reference` 按「依赖链时序优先原则」：首个状态衍生指向主环境；后续状态衍生指向**紧邻上一完整状态**（被破坏场景依赖破坏前的完整场景，不得跳链直挂主环境）。
   - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀。
 - **角色（CHAR）**：
   - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
@@ -143,7 +148,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - `subject_type` 仅允许：`character`、`prop`、`environment`、`cover_poster`。
 - `cover_poster` 规则：必须且仅能 1 行，且必须置于整表最后一行；任一缺失/重复/未置尾/拼写错误均判失败。
 - `cover_poster` 不得省列；`subject_name_zh`、`subject_name_en`、`base_entity`、`dependency_reference`、`entity_attributes`、`script_entity_coverage` 必须有效填写；基准版 `base_entity` 为 `None`，衍生版不得用 `None` 回避。
-- `environment` 行必须遵守空镜边界；主/衍生分行；衍生行 `base_entity` 与 `dependency_reference` 均指向主环境；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
+- `environment` 行必须遵守空镜边界；主/衍生分行；**视角衍生**行 `base_entity` 与 `dependency_reference` 均指向主环境；**状态/特效衍生**行按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
 - 衍生环境至少包含：`env_role:衍生环境`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
 - 时序衍生环境补充：`time_break_type`、`stable_space_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`、`light_sound_continuity_or_change`、`inheritance_reason`。
 - 任一实体涉可见文字或隐含字段时，`entity_attributes` 必须完整写入文字内容、承载位置、排版要求、标记状态、可读性；`script_entity_coverage` 必须覆盖对应原文关键词。原文明示文字必须与剧本完全一致（字词、数字、大小写、标点、空格）。

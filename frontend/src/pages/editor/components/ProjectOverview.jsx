@@ -1818,6 +1818,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             const generatedCount = Number(res?.episodes_generated ?? results.filter(r => r?.generated === true).length);
             const generated = Number.isFinite(generatedCount) ? generatedCount : results.filter(r => r?.generated === true).length;
             const skipped = results.filter(r => r?.skipped === true).length;
+            const generatedEpisodeIds = results
+                .filter((item) => item?.generated && Number(item?.episode_id || 0) > 0)
+                .map((item) => Number(item.episode_id));
             const summary = `Generated: ${generated}, Skipped: ${skipped}, Created Episodes: ${created}, Errors: ${errors.length}`;
             if (errors.length > 0) {
                 addLog?.(`Episode script generation finished. ${summary}`, 'warning');
@@ -1830,7 +1833,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 await onProjectUpdate();
             }
             if (onRefreshEpisodes) {
-                await onRefreshEpisodes();
+                await onRefreshEpisodes({ invalidateEpisodeIds: generatedEpisodeIds });
             }
 
             // In single-episode mode, jump directly to the resolved episode_id returned by backend.
@@ -1854,7 +1857,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         `[Single Episode] Jumping to generated episode_id=${resolvedEpisodeId}${resolvedTitle ? ` title=${resolvedTitle}` : ''}`,
                         'info'
                     );
-                    onJumpToEpisode(resolvedEpisodeId);
+                    onJumpToEpisode(resolvedEpisodeId, { forceReload: true });
                 }
             }
         } catch (e) {
