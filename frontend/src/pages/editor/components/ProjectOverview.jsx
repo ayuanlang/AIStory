@@ -212,6 +212,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         season_occurrence: "",
         video_sound: true,
         borrowed_films: [],
+        plot_summary: "",
+        music_recommendation: "",
         generation_seed: "",
         project_share_users: [],
         project_reviewer_users: [],
@@ -2723,6 +2725,22 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             list={PROJECT_EP_LIGHTING_OPTIONS} 
                         />
                     </div>
+
+                    <InputGroup idPrefix={prefix}
+                        label={t('百字剧情总结', 'Plot Summary (100 chars)')}
+                        value={info.plot_summary}
+                        onChange={v => updateField('plot_summary', v)}
+                        multi={true}
+                        placeholder={t('80-120字概括核心剧情、人物关系与情感走向', '80-120 chars summarizing plot, relationships, and emotional arc')}
+                    />
+
+                    <InputGroup idPrefix={prefix}
+                        label={t('配乐推荐', 'Music Recommendation')}
+                        value={info.music_recommendation}
+                        onChange={v => updateField('music_recommendation', v)}
+                        multi={true}
+                        placeholder={t('配乐风格、情绪基调、参考曲目/作曲家及主要使用场景', 'Score style, mood, reference tracks/composers, and key usage scenes')}
+                    />
                                 </div>
                             </motion.div>
                         )}

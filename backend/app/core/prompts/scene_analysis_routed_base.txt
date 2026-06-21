@@ -731,6 +731,8 @@
   - `borrowed_films_note`（字符串）
   - `tone`（字符串）
   - `lighting`（字符串）
+  - `plot_summary`（字符串，80–120 字中文百字剧情总结）
+  - `music_recommendation`（字符串，配乐风格/情绪/参考曲目或作曲家/主要使用场景）
 - 若剧本无法可靠推断某字段，仍需保留键并给空值（空字符串或空数组），禁止省略键。
 - 该对象值必须与本次分析语义一致，不得与 Part 1/Part 2 互相冲突。
 - `Global_Style` 强制回写 `Project Context.Type + Base Positioning`（Mandatory）：若输入项目信息中存在 `Type` 与/或 `Base Positioning`，`Global_Style` 必须显式吸收它们，不能只给抽象氛围词。必须写清项目属于何种视觉体系，并结合 `Base Positioning` 给出整体风格基线；若项目未明确具体分支，就保持风格统一且中性，不得自行偷跑预设分支。
@@ -745,7 +747,9 @@
     "borrowed_films": ["Little Forest", "Our Little Sister"],
     "borrowed_films_note": "Borrow the natural daylight softness, lived-in spatial breathing room, and restrained emotional observation.",
     "tone": "gentle, intimate, restrained",
-    "lighting": "soft motivated daylight with warm practical fill"
+    "lighting": "soft motivated daylight with warm practical fill",
+    "plot_summary": "都市青年林月在雨夜办公室追查旧案，与搭档在信任与猜忌间反复拉扯；她在父亲遗物的触发下直面童年创伤，最终在冷光走廊里做出不再逃避的选择，情感由压抑转向克制释怀。",
+    "music_recommendation": "克制钢琴+弦乐铺底，情绪偏内敛疗愈；参考《小森林》《海街日记》式日常配乐与久石让慢板旋律。开场用稀疏钢琴，对峙段加入低弦铺陈，情感释放时弦乐渐强但不煽情，结尾回归单钢琴余韵。"
   }
 }
 ```

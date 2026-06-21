@@ -74,7 +74,9 @@
       "borrowed_films": ["电影名A", "电影名B"],
       "borrowed_films_note": "对标的核心要素...",
       "tone": "形容词...",
-      "lighting": "光影结构描述..."
+      "lighting": "光影结构描述...",
+      "plot_summary": "百字剧情总结：80-120字中文...",
+      "music_recommendation": "配乐推荐：风格+情绪基调+参考曲目/作曲家+主要使用场景..."
    }
 }
 ```

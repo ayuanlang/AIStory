@@ -1126,7 +1126,9 @@ const Editor = ({
                 borrowed_films: toStringArray(pickValue(base, ['borrowed_films', 'reference_films', '参考影片'])),
                 borrowed_films_note: toText(pickValue(base, ['borrowed_films_note', 'reference_films_note', '参考影片备注'])),
                 tone: toneRaw ? toText(toneRaw) : '',
-                lighting: lightingRaw ? toText(lightingRaw) : '',        
+                lighting: lightingRaw ? toText(lightingRaw) : '',
+                plot_summary: toText(pickValue(base, ['plot_summary', 'story_summary', '剧情总结'])),
+                music_recommendation: toText(pickValue(base, ['music_recommendation', 'score_recommendation', '配乐推荐'])),
             };
 
             const payload = {};
@@ -1191,6 +1193,8 @@ const Editor = ({
             const borrowedFilmsNoteRaw = findValueByAliases(obj, ['borrowed_films_note', 'borrowedFilmsNote', 'reference_films_note', 'referenceFilmsNote']);
             const toneRaw = findValueByAliases(obj, ['tone', 'mood']);
             const lightingRaw = findValueByAliases(obj, ['lighting', 'light']);
+            const plotSummaryRaw = findValueByAliases(obj, ['plot_summary', 'plotSummary', 'story_summary', 'storySummary', '剧情总结']);
+            const musicRecommendationRaw = findValueByAliases(obj, ['music_recommendation', 'musicRecommendation', 'score_recommendation', 'scoreRecommendation', '配乐推荐']);
 
             const payload = {
                 Global_Style: toNonEmptyString(globalStyleRaw),
@@ -1198,9 +1202,11 @@ const Editor = ({
                 borrowed_films_note: toNonEmptyString(borrowedFilmsNoteRaw),
                 tone: toNonEmptyString(toneRaw),
                 lighting: toNonEmptyString(lightingRaw),
+                plot_summary: toNonEmptyString(plotSummaryRaw),
+                music_recommendation: toNonEmptyString(musicRecommendationRaw),
             };
 
-            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.borrowed_films_note || payload.tone || payload.lighting) {
+            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.borrowed_films_note || payload.tone || payload.lighting || payload.plot_summary || payload.music_recommendation) {
                 return payload;
             }
         }
@@ -1823,6 +1829,12 @@ const Editor = ({
             }
             if (isBlank(originalGlobalInfo.borrowed_films_note) && projectVisualBackfill.borrowed_films_note) {
                 backfillPatch.borrowed_films_note = projectVisualBackfill.borrowed_films_note;
+            }
+            if (isBlank(originalGlobalInfo.plot_summary) && projectVisualBackfill.plot_summary) {
+                backfillPatch.plot_summary = projectVisualBackfill.plot_summary;
+            }
+            if (isBlank(originalGlobalInfo.music_recommendation) && projectVisualBackfill.music_recommendation) {
+                backfillPatch.music_recommendation = projectVisualBackfill.music_recommendation;
             }
 
             if (Object.keys(backfillPatch).length > 0) {

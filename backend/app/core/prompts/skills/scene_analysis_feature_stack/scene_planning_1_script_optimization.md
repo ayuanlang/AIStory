@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md
-# Prompt Updated At: 2026-06-21 15:00:00 +08:00
+# Prompt Updated At: 2026-06-22 10:00:00 +08:00
 
 # Skill 1-1: 剧本改编与整体规划 [SCRIPT_OPT]
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -107,7 +107,7 @@
 19. **AI特效强化（强制）**：凡原文明示/强暗示、题材需要或情绪/信息可视化可受益处，须主动规划可拍特效。单段须覆盖**六相链**（触发源→显形起势→扩散传播→命中作用→维持碰撞→余波残留）及受影响人物/物件/空间结构在 FG/MG/BG 的落点。分配方式见§三-B。  
 20. **资产分类禁令（强制）**：全文禁止 `ENV/PROP/CHAR` 分类术语、`ENV:`/`PROP:`/`CHAR:` 前缀及资产表式枚举；仅以自然语言具名书写，并为 Stage 2-1 保留归类证据（固定陈设 vs 可移动交互、跨 Beat 状态变化、拿起/递交/破坏等）。  
 21. **输出边界**：不得输出 `Scenes Table` 或 `Shot List`；“首镜/补镜头”仅指视觉节拍。  
-22. **Backfill强制校验**：第三部分只能有一个 JSON 代码块，顶层 `project_visual_backfill`；`Global_Style`、`borrowed_films`、`borrowed_films_note`、`tone`、`lighting` 必填非空，`borrowed_films>=1`；禁止 `null`/空串/`[]`/`{}`/`TBD`/`N/A`/`待补`。  
+22. **Backfill强制校验**：第三部分只能有一个 JSON 代码块，顶层 `project_visual_backfill`；`Global_Style`、`borrowed_films`、`borrowed_films_note`、`tone`、`lighting`、`plot_summary`、`music_recommendation` 必填非空，`borrowed_films>=1`；`plot_summary` 须为 **80–120 字中文**百字剧情总结（概括核心剧情、人物关系与情感走向，禁止剧透终局细节）；`music_recommendation` 须写明配乐风格、情绪基调、参考曲目/作曲家/影视配乐及主要使用场景（开场/高潮/情感转折等）；禁止 `null`/空串/`[]`/`{}`/`TBD`/`N/A`/`待补`。  
 23. **每场对白拆句判定（强制）**：每个 Scene **必须**单独输出【对白拆句判定】，明确本场是否进行了拆句处理；禁止省略、默认不写或仅在 Part 1 汇总而不逐场声明。  
   - **判定值**：`已拆句` | `未拆句` | `无对白`（三选一，不得留空）。  
   - **已拆句**：逐条列出被拆原句/原段（说话人+原文或核销源对应句）→ 拆句后各子句（含情绪标点）→ 落点 Beat → 配套说话动作切口或听者微反应。>20 字单句或同一角色连续说话 >20 字**必须**拆句并标 `已拆句`。  
@@ -351,7 +351,9 @@
 ---------
 
 ### 第三部分：Project Visual Backfill
-放在最终输出末尾；仅输出一个独立 JSON 代码块；不得附加解释文本：
+放在最终输出末尾；仅输出一个独立 JSON 代码块；不得附加解释文本。除既有视觉字段外，须额外输出：
+- `plot_summary`：80–120 字中文百字剧情总结，概括核心剧情、人物关系与情感走向；禁止剧透终局细节。
+- `music_recommendation`：配乐推荐，写明风格、情绪基调、参考曲目/作曲家/影视配乐，以及开场/高潮/情感转折等主要使用场景。
 ```json
 {
   "project_visual_backfill": {
@@ -359,7 +361,9 @@
     "borrowed_films": ["电影名A", "电影名B"],
     "borrowed_films_note": "对标核心要素...",
     "tone": "风格形容词或基调短语...",
-    "lighting": "光影结构描述..."
+    "lighting": "光影结构描述...",
+    "plot_summary": "百字剧情总结：80-120字中文，概括核心剧情、人物关系与情感走向...",
+    "music_recommendation": "配乐推荐：风格+情绪基调+参考曲目/作曲家+主要使用场景..."
   }
 }
 ```
