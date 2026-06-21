@@ -6980,6 +6980,7 @@ def _resolve_scene_id_to_db_scene(
         .filter(
             Scene.episode_id == int(episode_id),
             or_(Scene.scene_no == marker, Scene.scene_no == fallback_no),
+            _active_scene_clause(),
         )
         .first()
     )
@@ -6992,7 +6993,11 @@ def _resolve_scene_id_to_db_scene(
     if maybe_num is not None:
         return (
             db.query(Scene)
-            .filter(Scene.episode_id == int(episode_id), cast(Scene.scene_no, String) == str(maybe_num))
+            .filter(
+                Scene.episode_id == int(episode_id),
+                cast(Scene.scene_no, String) == str(maybe_num),
+                _active_scene_clause(),
+            )
             .first()
         )
     return None
@@ -7239,7 +7244,10 @@ async def get_project_progress_overview(
     current_user: User = Depends(get_current_user),
 ):
     _require_project_access(db, project_id, current_user)
-    episode_ids = [int(e.id) for e in db.query(Episode).filter(Episode.project_id == int(project_id)).all()]
+    episode_ids = [int(e.id) for e in db.query(Episode).filter(
+        Episode.project_id == int(project_id),
+        _active_episode_clause(),
+    ).all()]
 
     nodes = []
     if ScriptProgressPipelineNode is not None:
@@ -7744,7 +7752,10 @@ async def reconcile_progress_status(
 
         # best-effort mark scene import success for scenes with finished storyboard
         if ScriptProgressSceneUnit is not None and total > 0 and completed > 0:
-            db_scenes = db.query(Scene).filter(Scene.episode_id == int(request.episode_id)).all()
+            db_scenes = db.query(Scene).filter(
+                Scene.episode_id == int(request.episode_id),
+                _active_scene_clause(),
+            ).all()
             scene_ids_done = set()
             if next_storyboard_status == "success":
                 scene_ids_done = {_normalize_scene_marker_id_from_scene(s, int(request.episode_id)) for s in db_scenes}
@@ -9816,10 +9827,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     persisted_subject_index_for_prompt = sanitize_subject_index_text(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_subject_index", None)
                     )
-                    if not persisted_subject_index_for_prompt:
-                        persisted_subject_index_for_prompt = sanitize_subject_index_text(
-                            getattr(_ep_for_subject_index, "ai_scene_analysis_result", None)
-                        )
                     if persisted_subject_index_for_prompt and subject_index_allowed_types_for_request:
                         persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
                             persisted_subject_index_for_prompt,
@@ -11960,11 +11967,14 @@ def _compute_project_cost_estimation_snapshot(db: Session, project_id: int) -> D
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    episodes = db.query(Episode).filter(
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).all()
     episode_ids = [int(getattr(ep, "id", 0) or 0) for ep in episodes if getattr(ep, "id", None) is not None]
-    scenes = db.query(Scene).filter(Scene.episode_id.in_(episode_ids)).all() if episode_ids else []
+    scenes = db.query(Scene).filter(Scene.episode_id.in_(episode_ids), _active_scene_clause()).all() if episode_ids else []
     scene_ids = [int(getattr(sc, "id", 0) or 0) for sc in scenes if getattr(sc, "id", None) is not None]
-    shots = db.query(Shot).filter(Shot.scene_id.in_(scene_ids)).all() if scene_ids else []
+    shots = db.query(Shot).filter(Shot.scene_id.in_(scene_ids), _active_shot_clause()).all() if scene_ids else []
 
     cfg = get_project_cost_estimation_config(db)
     snapshot = compute_project_cost_estimation(
@@ -12889,13 +12899,114 @@ def _require_review_round_access(db: Session, round_id: int, current_user: User)
     return round_row, thread, project
 
 
+def _active_project_clause():
+    return or_(Project.is_deleted.is_(False), Project.is_deleted.is_(None))
+
+
+def _active_episode_clause():
+    return or_(Episode.is_deleted.is_(False), Episode.is_deleted.is_(None))
+
+
+def _active_scene_clause():
+    return or_(Scene.is_deleted.is_(False), Scene.is_deleted.is_(None))
+
+
+def _active_shot_clause():
+    return or_(Shot.is_deleted.is_(False), Shot.is_deleted.is_(None))
+
+
+def _active_asset_clause():
+    return or_(Asset.is_deleted.is_(False), Asset.is_deleted.is_(None))
+
+
+def _is_soft_deleted(record) -> bool:
+    return bool(getattr(record, "is_deleted", False))
+
+
+def _soft_delete_shots(db: Session, *, scene_id: Optional[int] = None, scene_ids: Optional[List[int]] = None, shot_id: Optional[int] = None, now: Optional[str] = None) -> int:
+    now = now or now_bj_iso()
+    filters = [_active_shot_clause()]
+    if scene_id is not None:
+        filters.append(Shot.scene_id == scene_id)
+    if scene_ids:
+        filters.append(Shot.scene_id.in_(scene_ids))
+    if shot_id is not None:
+        filters.append(Shot.id == shot_id)
+    return int(
+        db.query(Shot).filter(*filters).update(
+            {Shot.is_deleted: True, Shot.deleted_at: now},
+            synchronize_session=False,
+        )
+        or 0
+    )
+
+
+def _soft_delete_scenes(db: Session, *, episode_id: Optional[int] = None, scene_id: Optional[int] = None, now: Optional[str] = None) -> int:
+    now = now or now_bj_iso()
+    scene_filters = [_active_scene_clause()]
+    if episode_id is not None:
+        scene_filters.append(Scene.episode_id == episode_id)
+    if scene_id is not None:
+        scene_filters.append(Scene.id == scene_id)
+
+    scene_ids = [row[0] for row in db.query(Scene.id).filter(*scene_filters).all()]
+    if scene_ids:
+        _soft_delete_shots(db, scene_ids=scene_ids, now=now)
+
+    return int(
+        db.query(Scene).filter(*scene_filters).update(
+            {Scene.is_deleted: True, Scene.deleted_at: now},
+            synchronize_session=False,
+        )
+        or 0
+    )
+
+
+def _soft_delete_assets(db: Session, *, asset_id: Optional[int] = None, asset_ids: Optional[List[int]] = None, project_id: Optional[int] = None, user_id: Optional[int] = None, now: Optional[str] = None) -> int:
+    now = now or now_bj_iso()
+    filters = [_active_asset_clause()]
+    if asset_id is not None:
+        filters.append(Asset.id == asset_id)
+    if asset_ids:
+        filters.append(Asset.id.in_(asset_ids))
+    if project_id is not None:
+        filters.append(Asset.project_id == project_id)
+    if user_id is not None:
+        filters.append(Asset.user_id == user_id)
+    return int(
+        db.query(Asset).filter(*filters).update(
+            {Asset.is_deleted: True, Asset.deleted_at: now},
+            synchronize_session=False,
+        )
+        or 0
+    )
+
+
+def _soft_delete_episode_children(db: Session, episode_id: int, now: Optional[str] = None) -> None:
+    _soft_delete_scenes(db, episode_id=episode_id, now=now)
+
+
+def _soft_delete_project_children(db: Session, project_id: int, now: Optional[str] = None) -> None:
+    now = now or now_bj_iso()
+    episode_ids = [
+        row[0]
+        for row in db.query(Episode.id).filter(
+            Episode.project_id == project_id,
+            _active_episode_clause(),
+        ).all()
+    ]
+    for episode_id in episode_ids:
+        _soft_delete_scenes(db, episode_id=episode_id, now=now)
+    _soft_delete_assets(db, project_id=project_id, now=now)
+
+
 def _require_project_access(
     db: Session,
     project_id: int,
     current_user: User,
     owner_only: bool = False,
 ) -> Project:
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = db.query(Project).filter(Project.id == project_id, _active_project_clause()).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -13092,7 +13203,7 @@ def sanitize_subject_index_text(text: Any) -> str:
                 break
 
     if start_idx < 0:
-        return cleaned
+        return ""
 
     end_idx = len(lines)
     for idx in range(start_idx + 1, len(lines)):
@@ -13131,7 +13242,7 @@ def sanitize_subject_index_text(text: Any) -> str:
         # Normalize glued rows like: ...S001...S002... into one row per line.
         result = re.sub(r"(?<!^)\s*(?=S\d{3,})", "\n", result)
         result = re.sub(r"\n{3,}", "\n\n", result).strip()
-    return result or cleaned
+    return result or ""
 
 
 def _is_provider_moderation_block_response(raw_text: Any, cleaned_text: Optional[str] = None) -> bool:
@@ -15273,6 +15384,7 @@ def read_projects(
             session.query(Project.id, Project, func.count(ProjectShare.id).label("share_count"))
             .outerjoin(ProjectShare, Project.id == ProjectShare.project_id)
             .filter(
+                _active_project_clause(),
                 or_(
                     Project.owner_id == current_user.id,
                     Project.id.in_(shared_project_ids),
@@ -15584,7 +15696,11 @@ def recompute_episode_cost_estimation(
 ):
     """Recompute cost estimation scoped to a single episode, then persist full project snapshot."""
     _require_project_access(db, project_id, current_user)
-    episode = db.query(Episode).filter(Episode.id == episode_id, Episode.project_id == project_id).first()
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
@@ -15615,7 +15731,11 @@ def recompute_scene_cost_estimation(
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
     # Verify scene belongs to this project via episode
-    episode = db.query(Episode).filter(Episode.id == scene.episode_id, Episode.project_id == project_id).first()
+    episode = db.query(Episode).filter(
+        Episode.id == scene.episode_id,
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=403, detail="Scene does not belong to this project")
     snapshot = _recompute_and_persist_project_cost_estimation(db, project_id)
@@ -15639,172 +15759,23 @@ def delete_project(
     current_user: User = Depends(get_current_user)
 ):
     project = _require_project_access(db, project_id, current_user, owner_only=True)
+    if _is_soft_deleted(project):
+        return None
 
-    # Cascade delete related data (scenes, shots, subjects/entities, etc.)
-    # Audit logs are intentionally retained (transaction_history / transaction_action / system_logs).
-    try:
-        # Collect related IDs
-        episode_ids = [row[0] for row in db.query(Episode.id).filter(Episode.project_id == project_id).all()]
-        scene_ids: List[int] = []
-        project_scoped_shot_ids: List[int] = []
-        asset_ids_to_delete: List[int] = []
-        if episode_ids:
-            scene_ids = [row[0] for row in db.query(Scene.id).filter(Scene.episode_id.in_(episode_ids)).all()]
-
-        # Defensive cleanup: some historical shots may be project-scoped but no longer reachable via scene linkage.
-        project_scoped_shot_ids = [
-            row[0]
-            for row in db.query(Shot.id).filter(Shot.project_id == project_id).all()
-        ]
-
-        # Collect referenced upload URLs/paths before deleting rows
-        candidate_urls: List[str] = []
-        if scene_ids or project_scoped_shot_ids:
-            shot_filter = []
-            if scene_ids:
-                shot_filter.append(Shot.scene_id.in_(scene_ids))
-            if project_scoped_shot_ids:
-                shot_filter.append(Shot.id.in_(project_scoped_shot_ids))
-
-            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(or_(*shot_filter)).all():
-                if img_url:
-                    candidate_urls.append(img_url)
-                if vid_url:
-                    candidate_urls.append(vid_url)
-        for (img_url,) in db.query(Entity.image_url).filter(Entity.project_id == project_id).all():
-            if img_url:
-                candidate_urls.append(img_url)
-
-        # Collect project-related asset rows (for DB row cleanup + physical file cleanup).
-        # Rule:
-        # 1) Explicitly tagged to this project in meta_info.project_id
-        # 2) URL matches media already referenced by this project (shots/entities)
-        normalized_candidate_urls = {str(u).strip() for u in candidate_urls if str(u or "").strip()}
-        user_assets = db.query(Asset.id, Asset.url, Asset.meta_info).filter(
-            Asset.user_id == current_user.id,
-        ).all()
-        for aid, aurl, ameta in user_assets:
-            meta = ameta if isinstance(ameta, dict) else {}
-            meta_project_id = meta.get("project_id")
-            url_txt = str(aurl or "").strip()
-            should_delete = False
-
-            try:
-                if meta_project_id is not None and int(meta_project_id) == int(project_id):
-                    should_delete = True
-            except Exception:
-                pass
-
-            if not should_delete and url_txt and url_txt in normalized_candidate_urls:
-                should_delete = True
-
-            if should_delete:
-                asset_ids_to_delete.append(int(aid))
-                if url_txt:
-                    candidate_urls.append(url_txt)
-
-        # Delete DB rows bottom-up to avoid FK constraints
-        if episode_ids:
-            db.query(TransactionAction).filter(TransactionAction.episode_id.in_(episode_ids)).update({TransactionAction.episode_id: None}, synchronize_session=False)
-            db.query(TransactionHistory).filter(TransactionHistory.episode_id.in_(episode_ids)).update({TransactionHistory.episode_id: None}, synchronize_session=False)
-
-        db.query(TransactionAction).filter(TransactionAction.project_id == project_id).update({TransactionAction.project_id: None}, synchronize_session=False)
-        db.query(TransactionHistory).filter(TransactionHistory.project_id == project_id).update({TransactionHistory.project_id: None}, synchronize_session=False)
-
-        # Pre-clear references in remaining assets and credit allocations
-        db.query(Asset).filter(Asset.project_id == project_id).update({
-            Asset.project_id: None,
-            Asset.episode_id: None,
-            Asset.is_current_project_asset: False
-        }, synchronize_session=False)
-
-        if hasattr(models, "ProjectGroupCreditAllocation"):
-            db.query(models.ProjectGroupCreditAllocation).filter(
-                models.ProjectGroupCreditAllocation.project_id == project_id
-            ).delete(synchronize_session=False)
-
-        if scene_ids or project_scoped_shot_ids:
-            shot_delete_filter = []
-            if scene_ids:
-                shot_delete_filter.append(Shot.scene_id.in_(scene_ids))
-            if project_scoped_shot_ids:
-                shot_delete_filter.append(Shot.id.in_(project_scoped_shot_ids))
-
-            db.query(Shot).filter(or_(*shot_delete_filter)).delete(synchronize_session=False)
-
-        if scene_ids:
-            db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
-
-        db.query(Entity).filter(Entity.project_id == project_id).delete(synchronize_session=False)
-
-        if episode_ids:
-            db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(episode_ids)).delete(synchronize_session=False)
-            db.query(Episode).filter(Episode.id.in_(episode_ids)).delete(synchronize_session=False)
-
-        if asset_ids_to_delete:
-            db.query(Asset).filter(
-                Asset.user_id == current_user.id,
-                Asset.id.in_(asset_ids_to_delete),
-            ).delete(synchronize_session=False)
-
-        db.delete(project)
-        db.commit()
-
-    except Exception as e:
-        db.rollback()
-        logger.error(f"[delete_project] Cascade delete failed project_id={project_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    # Best-effort file cleanup after DB commit
-    try:
-        upload_root = settings.UPLOAD_DIR
-        if not os.path.isabs(upload_root):
-            upload_root = os.path.abspath(upload_root)
-
-        def _to_upload_path(url_or_path: str) -> Optional[str]:
-            if not url_or_path:
-                return None
-            raw = str(url_or_path).strip()
-            if not raw:
-                return None
-
-            # If it's a URL, strip scheme/host
-            try:
-                parsed = urllib.parse.urlparse(raw)
-                path_part = parsed.path if parsed.scheme else raw
-            except Exception:
-                path_part = raw
-
-            path_part = urllib.parse.unquote(path_part)
-            path_part = path_part.lstrip("/")
-
-            # Normalize common forms:
-            # - uploads/<user>/<file>
-            # - /uploads/<user>/<file>
-            # - <user>/<file> (relative already)
-            if path_part.startswith("uploads/"):
-                rel = path_part.replace("uploads/", "", 1)
-            elif "/uploads/" in path_part:
-                rel = path_part.split("/uploads/", 1)[1]
-            else:
-                rel = path_part
-
-            abs_path = os.path.abspath(os.path.join(upload_root, rel))
-            # Safety: only delete within upload_root
-            if not abs_path.startswith(upload_root):
-                return None
-            return abs_path
-
-        for u in set(candidate_urls):
-            p = _to_upload_path(u)
-            if p and os.path.exists(p) and os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except Exception as fe:
-                    logger.warning(f"[delete_project] Failed to delete file {p}: {fe}")
-    except Exception as e:
-        logger.warning(f"[delete_project] File cleanup skipped/failed project_id={project_id}: {e}")
-
+    now = now_bj_iso()
+    project.is_deleted = True
+    project.deleted_at = now
+    project.updated_at = now
+    db.query(Episode).filter(
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).update(
+        {Episode.is_deleted: True, Episode.deleted_at: now},
+        synchronize_session=False,
+    )
+    _soft_delete_project_children(db, project_id, now=now)
+    db.add(project)
+    db.commit()
     return None
 
 # --- Episodes (Script) ---
@@ -15909,7 +15880,10 @@ def read_episodes(
             defer(Episode.character_profiles),
             noload(Episode.script_segments)
         )
-        .filter(Episode.project_id == project_id)
+        .filter(
+            Episode.project_id == project_id,
+            _active_episode_clause(),
+        )
         .all()
     )
     return _sort_project_episodes(episodes)
@@ -15921,7 +15895,10 @@ def read_episode(
     current_user: User = Depends(get_current_user)
 ):
     from sqlalchemy.orm import noload
-    episode = db.query(Episode).options(noload(Episode.script_segments)).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).options(noload(Episode.script_segments)).filter(
+        Episode.id == episode_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     _require_project_access(db, episode.project_id, current_user)
@@ -15934,7 +15911,10 @@ def update_episode_segments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
@@ -15971,7 +15951,10 @@ def create_episode(
 ):
     _require_project_access(db, project_id, current_user)
 
-    existing_episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    existing_episodes = db.query(Episode).filter(
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).all()
     existing_numbers = {
         int(num)
         for num in (_resolve_episode_sort_number(item) for item in existing_episodes)
@@ -16012,7 +15995,10 @@ def update_episode(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
@@ -16024,15 +16010,9 @@ def update_episode(
     if episode_in.script_content is not None:
         episode.script_content = episode_in.script_content
     # episode_info is deprecated and intentionally ignored.
-    explicit_subject_index_update = bool(
-        hasattr(episode_in, 'ai_scene_analysis_subject_index')
-        and episode_in.ai_scene_analysis_subject_index is not None
-    )
 
     if episode_in.ai_scene_analysis_result is not None:
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
-        if not explicit_subject_index_update:
-            episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_result)
     if hasattr(episode_in, 'ai_scene_analysis_scene_markdown') and episode_in.ai_scene_analysis_scene_markdown is not None:
         episode.ai_scene_analysis_scene_markdown = episode_in.ai_scene_analysis_scene_markdown
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
@@ -17205,7 +17185,7 @@ async def generate_episode_scenes_from_story(
         raise HTTPException(status_code=500, detail="LLM JSON did not include a non-empty 'scenes' list")
 
     if req.replace_existing_scenes:
-        db.query(Scene).filter(Scene.episode_id == episode_id).delete()
+        _soft_delete_scenes(db, episode_id=episode_id)
 
     created = []
     for i, s in enumerate(scenes, start=1):
@@ -17694,7 +17674,10 @@ async def generate_project_episode_scripts_from_global_framework(
     # Priority: explicit episode_info number -> parse from title -> create missing.
     existing_eps = (
         db.query(Episode)
-        .filter(Episode.project_id == project_id)
+        .filter(
+            Episode.project_id == project_id,
+            _active_episode_clause(),
+        )
         .order_by(Episode.id.asc())
         .all()
     )
@@ -18709,97 +18692,23 @@ def delete_episode(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).filter(
+        Episode.id == episode_id,
+        _active_episode_clause(),
+    ).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
-    try:
-        scene_ids = [row[0] for row in db.query(Scene.id).filter(Scene.episode_id == episode_id).all()]
+    if _is_soft_deleted(episode):
+        return None
 
-        # Defensive cleanup: some historical shots may only carry episode_id but not valid scene linkage.
-        episode_scoped_shot_ids = [
-            row[0]
-            for row in db.query(Shot.id).filter(Shot.episode_id == episode_id).all()
-        ]
-
-        candidate_urls: List[str] = []
-        if scene_ids or episode_scoped_shot_ids:
-            shot_filters = []
-            if scene_ids:
-                shot_filters.append(Shot.scene_id.in_(scene_ids))
-            if episode_scoped_shot_ids:
-                shot_filters.append(Shot.id.in_(episode_scoped_shot_ids))
-
-            for (img_url, vid_url) in db.query(Shot.image_url, Shot.video_url).filter(or_(*shot_filters)).all():
-                if img_url:
-                    candidate_urls.append(img_url)
-                if vid_url:
-                    candidate_urls.append(vid_url)
-
-        for (img_url,) in db.query(Entity.image_url).filter(Entity.episode_id == episode_id).all():
-            if img_url:
-                candidate_urls.append(img_url)
-
-        normalized_candidate_urls = {str(u).strip() for u in candidate_urls if str(u or "").strip()}
-        asset_ids_to_delete = {
-            int(row[0])
-            for row in db.query(Asset.id).filter(Asset.episode_id == episode_id).all()
-        }
-
-        # Fallback: also delete project assets whose URL/meta explicitly maps to this episode.
-        project_assets = db.query(Asset.id, Asset.url, Asset.meta_info).filter(
-            Asset.project_id == episode.project_id
-        ).all()
-        for aid, aurl, ameta in project_assets:
-            meta = ameta if isinstance(ameta, dict) else {}
-            url_txt = str(aurl or "").strip()
-            should_delete = bool(url_txt and url_txt in normalized_candidate_urls)
-            if not should_delete:
-                meta_episode_id = meta.get("episode_id")
-                try:
-                    if meta_episode_id is not None and int(meta_episode_id) == int(episode_id):
-                        should_delete = True
-                except Exception:
-                    pass
-            if should_delete:
-                asset_ids_to_delete.add(int(aid))
-
-        # Pre-clear accounting references to avoid FK constraints.
-        db.query(TransactionAction).filter(TransactionAction.episode_id == episode_id).update(
-            {TransactionAction.episode_id: None},
-            synchronize_session=False,
-        )
-        db.query(TransactionHistory).filter(TransactionHistory.episode_id == episode_id).update(
-            {TransactionHistory.episode_id: None},
-            synchronize_session=False,
-        )
-
-        if scene_ids or episode_scoped_shot_ids:
-            shot_delete_filters = []
-            if scene_ids:
-                shot_delete_filters.append(Shot.scene_id.in_(scene_ids))
-            if episode_scoped_shot_ids:
-                shot_delete_filters.append(Shot.id.in_(episode_scoped_shot_ids))
-            db.query(Shot).filter(or_(*shot_delete_filters)).delete(synchronize_session=False)
-
-        if scene_ids:
-            db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
-
-        db.query(Entity).filter(Entity.episode_id == episode_id).delete(synchronize_session=False)
-        db.query(ScriptSegment).filter(ScriptSegment.episode_id == episode_id).delete(synchronize_session=False)
-
-        if asset_ids_to_delete:
-            db.query(Asset).filter(Asset.id.in_(list(asset_ids_to_delete))).delete(synchronize_session=False)
-
-        db.delete(episode)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"[delete_episode] Cascade delete failed episode_id={episode_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+    episode.is_deleted = True
+    episode.deleted_at = now_bj_iso()
+    _soft_delete_episode_children(db, int(episode.id), now=episode.deleted_at)
+    db.add(episode)
+    db.commit()
     return None
 
 # --- Scenes ---
@@ -19519,13 +19428,13 @@ def read_scenes(
     current_user: User = Depends(get_current_user)
 ):
     # Ownership check
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).filter(Episode.id == episode_id, _active_episode_clause()).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
     _require_project_access(db, episode.project_id, current_user)
         
-    query = db.query(Scene).filter(Scene.episode_id == episode_id)
+    query = db.query(Scene).filter(Scene.episode_id == episode_id, _active_scene_clause())
     if scene_code:
         token = f"%{scene_code.strip()}%"
         query = query.filter(Scene.scene_no.ilike(token))
@@ -19551,13 +19460,17 @@ def create_scene(
     current_user: User = Depends(get_current_user)
 ):
     scene_api_started_perf = time.perf_counter()
-    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    episode = db.query(Episode).filter(Episode.id == episode_id, _active_episode_clause()).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
         
     _require_project_access(db, episode.project_id, current_user)
 
-    existing_scene = db.query(Scene).filter(Scene.episode_id == episode_id, Scene.scene_no == scene.scene_no).first()
+    existing_scene = db.query(Scene).filter(
+        Scene.episode_id == episode_id,
+        Scene.scene_no == scene.scene_no,
+        _active_scene_clause(),
+    ).first()
     if existing_scene:
         logger.info(
             "[SceneImportAPI] upsert-existing start | episode_id=%s | project_id=%s | scene_no=%s | scene_name=%s",
@@ -19663,6 +19576,7 @@ def batch_upsert_scenes(
         .filter(
             Scene.episode_id == int(episode_id),
             Scene.scene_no.in_(normalized_scene_nos),
+            _active_scene_clause(),
         )
         .all()
     ) if normalized_scene_nos else []
@@ -19719,7 +19633,11 @@ def batch_upsert_scenes(
     if unique_touched:
         refreshed = (
             db.query(Scene)
-            .filter(Scene.episode_id == int(episode_id), Scene.scene_no.in_(unique_touched))
+            .filter(
+                Scene.episode_id == int(episode_id),
+                Scene.scene_no.in_(unique_touched),
+                _active_scene_clause(),
+            )
             .all()
         )
         refreshed_by_no = {str(row.scene_no or "").strip(): row for row in refreshed}
@@ -19791,17 +19709,21 @@ def delete_scene(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    db_scene = db.query(Scene).filter(Scene.id == scene_id, _active_scene_clause()).first()
     if not db_scene:
         raise HTTPException(status_code=404, detail="Scene not found")
 
-    episode = db.query(Episode).filter(Episode.id == db_scene.episode_id).first()
+    episode = db.query(Episode).filter(Episode.id == db_scene.episode_id, _active_episode_clause()).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
 
     _require_project_access(db, episode.project_id, current_user, owner_only=True)
 
-    db.delete(db_scene)
+    if _is_soft_deleted(db_scene):
+        return None
+
+    now = now_bj_iso()
+    _soft_delete_scenes(db, scene_id=scene_id, now=now)
     try:
         _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
     except Exception as cost_exc:
@@ -20115,11 +20037,7 @@ async def regenerate_scene(
                 db.commit()
                 created_scenes = [db_scene]
         else:
-            db.query(Shot).filter(Shot.scene_id == scene_id).delete(synchronize_session=False)
-            db_scene = db.query(Scene).filter(Scene.id == scene_id).first()
-            if db_scene:
-                db.delete(db_scene)
-                db.flush()
+            _soft_delete_scenes(db, scene_id=scene_id)
 
             total_new = len(parsed_rows)
             for idx, row in enumerate(parsed_rows, start=1):
@@ -20393,7 +20311,8 @@ def read_episode_shots(
 
     query = db.query(Shot).filter(
         Shot.project_id == project.id,
-        Shot.episode_id == episode_id
+        Shot.episode_id == episode_id,
+        _active_shot_clause(),
     )
 
     if scene_code:
@@ -20467,7 +20386,13 @@ def download_episode_shot_videos_zip(
     project = _require_project_access(db, episode.project_id, current_user)
     shots = (
         db.query(Shot)
-        .filter(Shot.project_id == project.id, Shot.episode_id == episode_id, Shot.video_url.isnot(None), Shot.video_url != "")
+        .filter(
+            Shot.project_id == project.id,
+            Shot.episode_id == episode_id,
+            Shot.video_url.isnot(None),
+            Shot.video_url != "",
+            _active_shot_clause(),
+        )
         .order_by(Shot.id)
         .all()
     )
@@ -20550,7 +20475,7 @@ def read_shot_detail(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    shot = db.query(Shot).filter(Shot.id == shot_id).first()
+    shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
     if not shot:
         raise HTTPException(status_code=404, detail="Shot not found")
 
@@ -21170,8 +21095,6 @@ def _build_shot_prompts(
         subject_index_text = sanitize_subject_index_text(
             getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
         )
-        if not subject_index_text and episode:
-            subject_index_text = sanitize_subject_index_text(getattr(episode, "ai_scene_analysis_result", None))
         if not subject_index_text:
             return "", set()
 
@@ -21981,7 +21904,7 @@ def _start_scene_ai_shots_batch_for_episode(
         raise HTTPException(status_code=409, detail="Scene AI shots batch is already running")
 
     requested_scene_ids = [int(x) for x in (scene_ids or []) if x]
-    scenes_query = db.query(Scene).filter(Scene.episode_id == episode_id)
+    scenes_query = db.query(Scene).filter(Scene.episode_id == episode_id, _active_scene_clause())
     if requested_scene_ids:
         scenes_query = scenes_query.filter(Scene.id.in_(requested_scene_ids))
     target_scenes = scenes_query.order_by(Scene.id.asc()).all()
@@ -22840,9 +22763,9 @@ def _import_scene_shot_rows_to_db(
         logger.error(f"[Import] Entity auto-linking failed: {e}")
 
     # 2) Replace scene shots with imported rows.
-    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
     old_shot_map = {(str(s.shot_id or "").strip()): s for s in existing_shots if str(s.shot_id or "").strip()}
-    db.query(Shot).filter(Shot.scene_id == scene_id).delete()
+    _soft_delete_shots(db, scene_id=scene_id)
 
     def _split_combined_cn_prompt(raw_text: str) -> Tuple[str, str, str, str]:
         text = str(raw_text or "").strip()
@@ -23137,12 +23060,12 @@ def read_shots(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    scene = db.query(Scene).filter(Scene.id == scene_id, _active_scene_clause()).first()
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
         
     # Check Project ownership via Episode
-    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
     project = _require_project_access(db, episode.project_id, current_user)
         
     # Optimized: Return shots strictly by Scene ID (Physical Association)
@@ -23150,7 +23073,8 @@ def read_shots(
     shots = db.query(Shot).filter(
         Shot.project_id == project.id,
         Shot.episode_id == episode.id,
-        Shot.scene_id == scene_id
+        Shot.scene_id == scene_id,
+        _active_shot_clause(),
     ).all()
     repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
     return [_refresh_shot_media_urls(shot, db) for shot in repaired]
@@ -23167,13 +23091,13 @@ def create_shot(
     logger.info(f"[create_shot] DB URL: {settings.DATABASE_URL}")
     logger.info(f"[create_shot] Payload: shot_id={shot.shot_id}, logic_cn={'YES' if shot.shot_logic_cn else 'NO'}")
 
-    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    scene = db.query(Scene).filter(Scene.id == scene_id, _active_scene_clause()).first()
     if not scene:
         logger.error(f"[create_shot] Scene {scene_id} not found")
         raise HTTPException(status_code=404, detail="Scene not found")
     
     # Ownership
-    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
     if not episode:
         logger.error(f"[create_shot] Scene {scene_id} refers to non-existent episode {scene.episode_id}")
         raise HTTPException(status_code=404, detail="Parent Episode not found")
@@ -23236,7 +23160,7 @@ def batch_create_shots(
     current_user: User = Depends(get_current_user),
 ):
     started_perf = time.perf_counter()
-    episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+    episode = db.query(Episode).filter(Episode.id == int(episode_id), _active_episode_clause()).first()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     project = _require_project_access(db, episode.project_id, current_user)
@@ -23259,6 +23183,7 @@ def batch_create_shots(
         .filter(
             Scene.id.in_(scene_ids),
             Scene.episode_id == int(episode_id),
+            _active_scene_clause(),
         )
         .all()
     ) if scene_ids else []
@@ -23360,15 +23285,22 @@ def delete_shot(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    db_shot = db.query(Shot).filter(Shot.id == shot_id).first()
+    db_shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
     if not db_shot:
          raise HTTPException(status_code=404, detail="Shot not found")
          
-    scene = db.query(Scene).filter(Scene.id == db_shot.scene_id).first()
-    episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
+    scene = db.query(Scene).filter(Scene.id == db_shot.scene_id, _active_scene_clause()).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
     project = _require_project_access(db, episode.project_id, current_user, owner_only=True)
-        
-    db.delete(db_shot)
+
+    if _is_soft_deleted(db_shot):
+        return {"ok": True}
+
+    _soft_delete_shots(db, shot_id=shot_id)
     try:
         _recompute_and_persist_project_cost_estimation(db, int(project.id))
     except Exception as cost_exc:
@@ -26213,11 +26145,19 @@ def _url_reference_tokens(raw_url: Any) -> set[str]:
 
 def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
     owner_ids = [
-        pid for (pid,) in db.query(Project.id).filter(Project.owner_id == current_user.id).all()
+        pid for (pid,) in db.query(Project.id).filter(
+            Project.owner_id == current_user.id,
+            _active_project_clause(),
+        ).all()
         if pid is not None
     ]
     shared_ids = [
-        pid for (pid,) in db.query(ProjectShare.project_id).filter(ProjectShare.user_id == current_user.id).all()
+        pid for (pid,) in db.query(ProjectShare.project_id).join(
+            Project, Project.id == ProjectShare.project_id
+        ).filter(
+            ProjectShare.user_id == current_user.id,
+            _active_project_clause(),
+        ).all()
         if pid is not None
     ]
     return sorted(set([int(pid) for pid in owner_ids + shared_ids]))
@@ -26230,7 +26170,7 @@ def get_unreferenced_asset_ids(
     db: Session = Depends(get_db),
 ):
     # Base asset query for the user
-    query = db.query(Asset).filter(Asset.user_id == current_user.id)
+    query = db.query(Asset).filter(Asset.user_id == current_user.id, _active_asset_clause())
     
     if project_id is not None:
         _require_project_access(db, project_id, current_user)
@@ -26533,7 +26473,7 @@ def get_assets(
     accessible_project_id_set = set(int(pid) for pid in accessible_project_ids)
     visible_owner_ids = sorted(set([int(current_user.id)] + [int(x) for x in accessible_project_owner_ids]))
 
-    query = db.query(Asset).filter(Asset.user_id.in_(visible_owner_ids))
+    query = db.query(Asset).filter(Asset.user_id.in_(visible_owner_ids), _active_asset_clause())
     if type:
         normalized_type = str(type or "").strip().lower()
         if normalized_type == "video":
@@ -26965,10 +26905,26 @@ def create_asset_url(
     meta = asset_in.meta_info if asset_in.meta_info else {}
     meta['source'] = 'external_url'
 
+    existing_asset = _find_existing_asset_for_registration(
+        db,
+        current_user.id,
+        url=asset_in.url,
+        idempotency_key=meta.get("idempotency_key"),
+        meta_info=meta,
+    )
+    if existing_asset:
+        _sync_asset_denormalized_fields(existing_asset)
+        if existing_asset.project_id:
+            _mark_asset_as_current_project_asset(db, existing_asset)
+        db.commit()
+        db.refresh(existing_asset)
+        return _serialize_asset_row(existing_asset, db)
+
     asset = Asset(
         user_id=current_user.id,
         type=asset_in.type,
         url=asset_in.url,
+        url_normalized=_normalize_asset_url_for_dedup(asset_in.url),
         project_id=_asset_optional_int(meta.get('project_id')),
         episode_id=_asset_optional_int(meta.get('episode_id')),
         meta_info=meta,
@@ -27157,26 +27113,18 @@ def delete_asset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id,
+        Asset.user_id == current_user.id,
+        _active_asset_clause(),
+    ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-        
-    # Delete file if local
-    try:
-        if asset.url and "/uploads/" in asset.url:
-            # parsing logic: /uploads/{user_id}/{filename}
-            parts = asset.url.split("/uploads/")
-            if len(parts) > 1:
-                rel_path = parts[1] # user_id/filename
-                file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        elif asset.url:
-            oss_storage_service.delete_url(asset.url)
-    except Exception as e:
-        print(f"Error deleting file for asset {asset_id}: {e}")
 
-    db.delete(asset)
+    if _is_soft_deleted(asset):
+        return {"status": "success"}
+
+    _soft_delete_assets(db, asset_id=asset_id, user_id=current_user.id)
     db.commit()
     return {"status": "success"}
 
@@ -27188,27 +27136,15 @@ def batch_delete_assets(
 ):
     assets = db.query(Asset).filter(
         Asset.id.in_(asset_ids), 
-        Asset.user_id == current_user.id
+        Asset.user_id == current_user.id,
+        _active_asset_clause(),
     ).all()
     
-    deleted_count = 0
-    for asset in assets:
-        # Delete file if local
-        try:
-            if asset.url and "/uploads/" in asset.url:
-                parts = asset.url.split("/uploads/")
-                if len(parts) > 1:
-                    rel_path = parts[1]
-                    file_path = os.path.join(settings.UPLOAD_DIR, rel_path)
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-            elif asset.url:
-                oss_storage_service.delete_url(asset.url)
-        except Exception as e:
-            print(f"Error deleting file for asset {asset.id}: {e}")
-        
-        db.delete(asset)
-        deleted_count += 1
+    deleted_count = _soft_delete_assets(
+        db,
+        asset_ids=[int(asset.id) for asset in assets],
+        user_id=current_user.id,
+    )
         
     db.commit()
     return {"status": "success", "deleted_count": deleted_count}
@@ -27220,7 +27156,11 @@ def update_asset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id,
+        Asset.user_id == current_user.id,
+        _active_asset_clause(),
+    ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     
@@ -27246,7 +27186,11 @@ def mark_asset_current_project_asset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    asset = db.query(Asset).filter(Asset.id == asset_id, Asset.user_id == current_user.id).first()
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id,
+        Asset.user_id == current_user.id,
+        _active_asset_clause(),
+    ).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
 
@@ -27270,7 +27214,7 @@ def rebind_shot_media_from_assets(
 
     safe_limit = max(1, min(int(payload.limit or 2000), 10000))
 
-    query = db.query(Asset).filter(Asset.user_id == current_user.id).order_by(Asset.id.asc())
+    query = db.query(Asset).filter(Asset.user_id == current_user.id, _active_asset_clause()).order_by(Asset.id.asc())
     assets = query.limit(safe_limit).all()
 
     shot_cache: Dict[int, Optional[Shot]] = {}
@@ -30310,7 +30254,7 @@ def _find_existing_asset_for_registration(
     if normalized_key:
         keyed_candidates = (
             db.query(Asset)
-            .filter(Asset.user_id == user_id)
+            .filter(Asset.user_id == user_id, _active_asset_clause())
             .order_by(Asset.id.desc())
             .limit(500)
             .all()
@@ -30330,7 +30274,11 @@ def _find_existing_asset_for_registration(
         try:
             normalized_candidates = (
                 db.query(Asset)
-                .filter(Asset.user_id == user_id, Asset.url_normalized == normalized_compare_url)
+                .filter(
+                    Asset.user_id == user_id,
+                    Asset.url_normalized == normalized_compare_url,
+                    _active_asset_clause(),
+                )
                 .order_by(Asset.id.desc())
                 .limit(120)
                 .all()
@@ -30344,7 +30292,11 @@ def _find_existing_asset_for_registration(
 
     url_candidates = (
         db.query(Asset)
-        .filter(Asset.user_id == user_id, Asset.url == normalized_url)
+        .filter(
+            Asset.user_id == user_id,
+            Asset.url == normalized_url,
+            _active_asset_clause(),
+        )
         .order_by(Asset.id.desc())
         .limit(50)
         .all()
@@ -30358,7 +30310,7 @@ def _find_existing_asset_for_registration(
     if normalized_compare_url:
         recent_candidates = (
             db.query(Asset)
-            .filter(Asset.user_id == user_id)
+            .filter(Asset.user_id == user_id, _active_asset_clause())
             .order_by(Asset.id.desc())
             .limit(600)
             .all()
@@ -36430,7 +36382,7 @@ def get_generation_job_pool(
         project_rows: List[Tuple[Any, Any, Any]] = []
         t_query_projects_start = time.perf_counter()
         if current_user.is_superuser:
-            project_rows = db.query(Project.id, Project.owner_id, Project.global_info).all()
+            project_rows = db.query(Project.id, Project.owner_id, Project.global_info).filter(_active_project_clause()).all()
         else:
             accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
             if not accessible_project_ids:
@@ -36438,7 +36390,10 @@ def get_generation_job_pool(
             else:
                 project_rows = (
                     db.query(Project.id, Project.owner_id, Project.global_info)
-                    .filter(Project.id.in_(accessible_project_ids))
+                    .filter(
+                        Project.id.in_(accessible_project_ids),
+                        _active_project_clause(),
+                    )
                     .all()
                 )
         t_query_projects_ms = int((time.perf_counter() - t_query_projects_start) * 1000)
@@ -36698,13 +36653,16 @@ def repair_generation_job_history(
     now_iso = now_bj_iso()
 
     if current_user.is_superuser:
-        projects = db.query(Project).all()
+        projects = db.query(Project).filter(_active_project_clause()).all()
     else:
         accessible_project_ids = _resolve_accessible_project_ids_for_user(db, current_user)
         if not accessible_project_ids:
             projects = []
         else:
-            projects = db.query(Project).filter(Project.id.in_(accessible_project_ids)).all()
+            projects = db.query(Project).filter(
+                Project.id.in_(accessible_project_ids),
+                _active_project_clause(),
+            ).all()
 
     project_ids = [int(p.id) for p in projects]
     project_owner_by_id = {int(p.id): int(p.owner_id) for p in projects if p.owner_id is not None}
@@ -36764,7 +36722,10 @@ def repair_generation_job_history(
                 touched_projects.add(int(project.id))
 
     if project_ids and safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
-        episodes = db.query(Episode).filter(Episode.project_id.in_(project_ids)).all()
+        episodes = db.query(Episode).filter(
+            Episode.project_id.in_(project_ids),
+            _active_episode_clause(),
+        ).all()
 
         def _maybe_repair_episode_status(episode: Episode, status_key: str, kind_name: str) -> None:
             nonlocal repaired, scanned
@@ -37260,7 +37221,10 @@ def stop_all_generation_jobs(
             logger.warning("stop-all queue cleanup skipped | kind=%s err=%s", safe_kind, e)
 
     if safe_kind in {"all", "episode-scripts"}:
-        projects = db.query(Project).all() if current_user.is_superuser else db.query(Project).filter(Project.owner_id == current_user.id).all()
+        projects = db.query(Project).filter(_active_project_clause()).all() if current_user.is_superuser else db.query(Project).filter(
+            Project.owner_id == current_user.id,
+            _active_project_clause(),
+        ).all()
         for project in projects:
             if not _can_access_project(int(project.id)):
                 continue
@@ -37277,7 +37241,7 @@ def stop_all_generation_jobs(
             touched.append(f"episode-scripts:{int(project.id)}")
 
     if safe_kind in {"all", "episode-scenes", "scene-ai-shots-batch", "shot-media-batch"}:
-        episodes = db.query(Episode).all()
+        episodes = db.query(Episode).filter(_active_episode_clause()).all()
         for episode in episodes:
             if not episode.project_id:
                 continue
@@ -41425,21 +41389,28 @@ def export_project_backup(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    project = db.query(Project).filter(Project.id == project_id, Project.owner_id == current_user.id).first()
+    project = db.query(Project).filter(
+        Project.id == project_id,
+        Project.owner_id == current_user.id,
+        _active_project_clause(),
+    ).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or access denied")
     
     # Preload required data
-    episodes = db.query(Episode).filter(Episode.project_id == project_id).all()
+    episodes = db.query(Episode).filter(
+        Episode.project_id == project_id,
+        _active_episode_clause(),
+    ).all()
     entities = db.query(Entity).filter(Entity.project_id == project_id).all()
-    assets = db.query(Asset).filter(Asset.project_id == project_id).all()
+    assets = db.query(Asset).filter(Asset.project_id == project_id, _active_asset_clause()).all()
     
     ep_ids = [e.id for e in episodes]
-    scenes = db.query(Scene).filter(Scene.episode_id.in_(ep_ids)).all() if ep_ids else []
+    scenes = db.query(Scene).filter(Scene.episode_id.in_(ep_ids), _active_scene_clause()).all() if ep_ids else []
     script_segments = db.query(ScriptSegment).filter(ScriptSegment.episode_id.in_(ep_ids)).all() if ep_ids else []
     
     sc_ids = [s.id for s in scenes]
-    shots = db.query(Shot).filter(Shot.scene_id.in_(sc_ids)).all() if sc_ids else []
+    shots = db.query(Shot).filter(Shot.scene_id.in_(sc_ids), _active_shot_clause()).all() if sc_ids else []
 
     def to_dict(obj):
         d = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}

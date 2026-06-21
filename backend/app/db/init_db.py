@@ -448,7 +448,8 @@ def _ensure_assets_normalized_url_unique_index(*, is_postgres: bool) -> None:
         create_index_sql = (
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_user_type_scope_url_norm "
             "ON assets (user_id, lower(type), coalesce(project_id, -1), coalesce(episode_id, -1), url_normalized) "
-            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> ''"
+            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> '' "
+            "AND coalesce(is_deleted, false) = false"
         )
     else:
         backfill_sql = (
@@ -472,7 +473,8 @@ def _ensure_assets_normalized_url_unique_index(*, is_postgres: bool) -> None:
         create_index_sql = (
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_assets_user_type_scope_url_norm "
             "ON assets (user_id, lower(type), ifnull(project_id, -1), ifnull(episode_id, -1), url_normalized) "
-            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> ''"
+            "WHERE url_normalized IS NOT NULL AND trim(url_normalized) <> '' "
+            "AND coalesce(is_deleted, 0) = 0"
         )
 
     with engine.begin() as conn:
@@ -485,6 +487,11 @@ def _ensure_assets_normalized_url_unique_index(*, is_postgres: bool) -> None:
             conn.execute(text(dedup_sql))
         except Exception as exc:
             logger.warning("Assets dedup before unique index failed (non-fatal): %s", exc)
+
+        try:
+            conn.execute(text("DROP INDEX IF EXISTS uq_assets_user_type_scope_url_norm"))
+        except Exception as exc:
+            logger.warning("Assets unique index drop failed (non-fatal): %s", exc)
 
         try:
             conn.execute(text(create_index_sql))

@@ -158,6 +158,8 @@ class Project(Base):
     
     created_at = Column(String, default=now_bj_iso)
     updated_at = Column(String, default=now_bj_iso)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
     
     owner = relationship("User", back_populates="projects")
     shares = relationship("ProjectShare", back_populates="project", cascade="all, delete-orphan")
@@ -277,6 +279,8 @@ class Episode(Base):
     ai_scene_analysis_adaptation = Column(Text, nullable=True)
     ai_entity_design_result = Column(Text, nullable=True)
     ai_stage_outputs = Column(Text, nullable=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="episodes")
     scenes = relationship("Scene", back_populates="episode", cascade="all, delete-orphan")
@@ -314,6 +318,8 @@ class Scene(Base):
     key_props = Column(Text, nullable=True)
     # Raw LLM output (Markdown table). Stored as plain text to match import logic.
     ai_shots_result = Column(Text, nullable=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
 
     episode = relationship("Episode", back_populates="scenes")
     shots = relationship("Shot", back_populates="scene", cascade="all, delete-orphan")
@@ -348,6 +354,8 @@ class Shot(Base):
     image_url = Column(String, nullable=True)
     video_url = Column(String, nullable=True)
     prompt = Column(Text, nullable=True) # Internal generation prompt (derived from start/end/video content)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
     
     scene = relationship("Scene", back_populates="shots")
 
@@ -485,6 +493,8 @@ class Asset(Base):
     filename = Column(String, nullable=True)
     meta_info = Column(JSON, default={}) # width, height, size, duration, format
     remark = Column(Text, nullable=True)
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(String, nullable=True)
     
     created_at = Column(String, default=now_bj_iso)
     

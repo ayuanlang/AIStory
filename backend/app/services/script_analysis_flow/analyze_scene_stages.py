@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -110,28 +111,88 @@ def _read_persisted_chars(episode: Episode, field_name: str) -> int:
     return len(str(getattr(episode, field_name, "") or ""))
 
 
+def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
+    candidate = str(candidate_text or "").strip()
+    if not candidate:
+        return ""
+
+    scenes_start = re.search(r"`?\[SCENES_BLOCK_START\]`?", candidate, flags=re.IGNORECASE)
+    if scenes_start:
+        start_idx = scenes_start.start()
+        after_start = candidate[scenes_start.end():]
+        scenes_end = re.search(r"`?\[SCENES_BLOCK_END\]`?", after_start, flags=re.IGNORECASE)
+        if scenes_end:
+            end_idx_abs = scenes_start.end() + scenes_end.end()
+            return candidate[start_idx:end_idx_abs].strip()
+        return candidate[start_idx:].strip()
+
+    scene_heading = re.search(
+        r"(?:^|\n)\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    if scene_heading and scene_heading.start() >= 0:
+        candidate = candidate[scene_heading.start():].strip()
+
+    end_marker = re.search(
+        r"(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    if end_marker and end_marker.start() > 0:
+        candidate = candidate[: end_marker.start()].strip()
+
+    return candidate.strip()
+
+
+def extract_stage1_adapted_script_body(stage1_text: str) -> str:
+    text = str(stage1_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    section_patterns = [
+        r"(?is)^.*?(?:###\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
+        r"(?is)^.*?(?:##\s*第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
+        r"(?is)^.*?(?:第二部分[:：]?\s*修改后的剧本.*?\n)(.*)$",
+        r"(?is)^.*?(?:###\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$",
+        r"(?is)^.*?(?:##\s*Second\s*Part[:：]?\s*Adapted\s*Script.*?\n)(.*)$",
+        r"(?is)^.*?(?:Adapted\s*Script\s*[-(（].*?\n)(.*)$",
+    ]
+    for pattern in section_patterns:
+        match = re.match(pattern, text)
+        if not match:
+            continue
+        extracted = _trim_stage1_adapted_script_body(match.group(1) or "")
+        if extracted:
+            return extracted
+    return ""
+
+
 def persist_script_optimization_stage(
     *,
     db: Session,
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
-    episode.ai_scene_analysis_result = result_content
+    adapted_script = extract_stage1_adapted_script_body(result_content)
+    if adapted_script:
+        episode.ai_scene_analysis_adaptation = adapted_script
     db.commit()
     try:
         db.refresh(episode)
     except Exception:
         pass
     logger.info(
-        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_result chars=%s",
+        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_adaptation chars=%s raw_chars=%s",
         STAGE_SCRIPT_OPTIMIZATION,
         getattr(episode, "id", None),
+        len(adapted_script or ""),
         len(result_content or ""),
     )
     return {
         "stage_key": STAGE_SCRIPT_OPTIMIZATION,
-        "saved_field": "ai_scene_analysis_result",
-        "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_result"),
+        "saved_field": "ai_scene_analysis_adaptation",
+        "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_adaptation"),
     }
 
 
@@ -143,7 +204,6 @@ def persist_assets_extraction_stage(
 ) -> Dict[str, Any]:
     from app.api.endpoints import sanitize_subject_index_text
 
-    episode.ai_scene_analysis_result = result_content
     episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
     db.commit()
     try:
@@ -151,17 +211,17 @@ def persist_assets_extraction_stage(
     except Exception:
         pass
     logger.info(
-        "[analyze_scene.persist] stage=%s episode_id=%s fields=ai_scene_analysis_result,ai_scene_analysis_subject_index chars=%s subject_index_chars=%s",
+        "[analyze_scene.persist] stage=%s episode_id=%s field=ai_scene_analysis_subject_index chars=%s raw_chars=%s",
         STAGE_ASSETS_EXTRACTION,
         getattr(episode, "id", None),
-        len(result_content or ""),
         len(str(getattr(episode, "ai_scene_analysis_subject_index", "") or "")),
+        len(result_content or ""),
     )
     return {
         "stage_key": STAGE_ASSETS_EXTRACTION,
-        "saved_field": "ai_scene_analysis_result",
+        "saved_field": "ai_scene_analysis_subject_index",
         "saved_subject_index_field": "ai_scene_analysis_subject_index",
-        "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_result"),
+        "saved_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_subject_index"),
         "saved_subject_index_chars_readback": _read_persisted_chars(episode, "ai_scene_analysis_subject_index"),
     }
 

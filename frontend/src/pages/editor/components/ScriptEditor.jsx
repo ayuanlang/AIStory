@@ -903,7 +903,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return source.slice(0, fallbackSceneStart).trim();
         }
 
-        return source;
+        return '';
     }, [extractAnalysisSections]);
 
     const normalizeSubjectIndexTypeForAssetTask = useCallback((rawType) => {
@@ -4466,7 +4466,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             extractProjectVisualBackfillJsonText(resolvedStage1RawText || resolvedAnalysisRawText) || ''
         ).trim();
 
-        const analysisSections = extractAnalysisSections(resolvedAnalysisRawText);
         const explicitSubjectIndex = String(stage2_1Text || '').trim();
         const persistedSubjectIndex = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         const rawStage2_1Text = extractPureSubjectIndexText(explicitSubjectIndex || persistedSubjectIndex || '');
@@ -4485,19 +4484,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        const stage2SubjectIndexText = extractPureSubjectIndexText(String(
-            parsedSubjectIndexText
-            || (analysisSections?.hasStructuredSubjectIndex ? analysisSections.subjectIndexText : '')
-            || ''
-        ).trim());
+        const stage2SubjectIndexText = extractPureSubjectIndexText(String(parsedSubjectIndexText || '').trim());
 
         const stage2SceneMarkdownFromStage2 = isSceneMarkdownTableText(resolvedStage2RawText)
             ? String(normalizeLlmMarkdownTable(resolvedStage2RawText || '') || '').trim()
             : '';
-        const stage2SceneMarkdownFromAnalysis = isSceneMarkdownTableText(resolvedAnalysisRawText)
-            ? String(normalizeLlmMarkdownTable(resolvedAnalysisRawText || '') || '').trim()
-            : '';
-        let stage2SceneMarkdown = String(stage2SceneMarkdownFromStage2 || stage2SceneMarkdownFromAnalysis || '').trim();
+        let stage2SceneMarkdown = String(stage2SceneMarkdownFromStage2 || '').trim();
         if (parsedSceneArrangementText) {
             if (stage2SceneMarkdown) {
                 stage2SceneMarkdown = `${parsedSceneArrangementText}\n\n${stage2SceneMarkdown}`;
@@ -4525,10 +4517,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : splitBySceneMap
         );
 
-        const stage2RawTextForSlot = String(
-            resolvedStage2RawText
-            || (stage2SceneMarkdownFromAnalysis || analysisSections?.hasStructuredSubjectIndex ? resolvedAnalysisRawText : '')
-        ).trim();
+        const stage2RawTextForSlot = String(resolvedStage2RawText || '').trim();
         const stage2VisualBackfillJson = String(
             extractProjectVisualBackfillJsonText(resolvedStage2RawText) || stage1VisualBackfillJson || ''
         ).trim();
@@ -5239,14 +5228,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
 
             if (resultField === 'ai_scene_analysis_result') {
+                const isStage1ResultWrite = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
+
+                if (isStage1ResultWrite) {
+                    const effectiveStage1RawText = String(options?.stage1RawText || nextContent || '').trim();
+                    if (effectiveStage1RawText) {
+                        latestStage1RawTextRef.current = effectiveStage1RawText;
+                    }
+                    const hasExplicitAdaptedScriptSection = /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script|Adapted\s*Script\s*[-(（])/i.test(effectiveStage1RawText);
+                    const looksLikeSceneMarkdownTable = /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(effectiveStage1RawText)
+                        || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(effectiveStage1RawText);
+                    const canExtractStage1Adaptation = hasExplicitAdaptedScriptSection || (Boolean(effectiveStage1RawText) && !looksLikeSceneMarkdownTable);
+                    const adaptationValue = canExtractStage1Adaptation
+                        ? String(extractStage1AdaptedScriptBody(effectiveStage1RawText) || '').trim()
+                        : '';
+                    const stageOutputsPayload = {
+                        analysisRawText: '',
+                        assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                        stage1RawText: effectiveStage1RawText,
+                        stage2RawText: persistedStage2RawText || '',
+                        stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
+                        sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                    };
+                    Object.assign(updatePayload, {
+                        ai_scene_analysis_adaptation: adaptationValue,
+                        ai_stage_outputs: JSON.stringify(buildStageOutputsObject(stageOutputsPayload), null, 2),
+                    });
+                    delete updatePayload.ai_scene_analysis_result;
+                    onLog?.(`[Analysis Writeback] field=stage1 source=${logSource} raw_len=${nextContent.length} adaptation_len=${adaptationValue.length}`, 'info');
+                } else {
                 latestAnalysisRawTextRef.current = nextContent;
                 if (options?.stage2_1Text !== undefined) {
                     latestStage2_1TextRef.current = options.stage2_1Text;
                 }
-                const isStage1ResultWrite = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
                 const explicitStage2RawText = String(options?.stage2RawText || '').trim();
-                const effectiveStage2RawText = explicitStage2RawText || (isStage1ResultWrite ? '' : nextContent);
-                const effectiveStage1RawText = String(options?.stage1RawText || (isStage1ResultWrite ? nextContent : '') || '').trim();
+                const effectiveStage2RawText = explicitStage2RawText || nextContent;
+                const effectiveStage1RawText = String(options?.stage1RawText || '').trim();
                 if (effectiveStage1RawText) {
                     latestStage1RawTextRef.current = effectiveStage1RawText;
                 }
@@ -5286,11 +5303,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
+                }
             } else if (resultField === 'ai_scene_analysis_scene_markdown') {
                 latestAnalysisRawTextRef.current = nextContent;
                 updatePayload.ai_scene_analysis_scene_markdown = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
-                    analysisRawText: nextContent,
+                    analysisRawText: '',
                     assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
                     stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
                     stage2RawText: options?.stage2RawText || nextContent,
@@ -5313,7 +5331,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (resultField === 'ai_entity_design_result') {
                 latestAssetRawTextRef.current = nextContent;
                 updatePayload.ai_stage_outputs = JSON.stringify(buildStageOutputsObject({
-                    analysisRawText: persistedStage2RawText || latestAnalysisRawTextRef.current || activeEpisode?.ai_scene_analysis_result || llmRawResultContent || '',
+                    analysisRawText: '',
                     assetRawText: nextContent,
                     stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
                     stage2RawText: options?.stage2RawText || persistedStage2RawText || '',
@@ -9135,13 +9153,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (activeEpisode?.id) {
             const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-            const hasExistingSubjectIndex = !!(subjectIndexText || activeEpisode?.ai_scene_analysis_subject_index);
+            const hasExistingStageOutputs = [
+                activeEpisode?.ai_scene_analysis_result,
+                activeEpisode?.ai_scene_analysis_adaptation,
+                activeEpisode?.ai_scene_analysis_subject_index,
+                activeEpisode?.ai_scene_analysis_scene_markdown,
+                activeEpisode?.ai_entity_design_result,
+                activeEpisode?.ai_stage_outputs,
+                subjectIndexText,
+                adaptationText,
+                llmRawResultContent,
+                llmAssetRawResultContent,
+            ].some((value) => String(value || '').trim());
             const hasExistingScenes = existingScenes && existingScenes.length > 0;
             
-            if (hasExistingScenes || hasExistingSubjectIndex) {
+            if (hasExistingScenes || hasExistingStageOutputs) {
                 const ok = await confirmUiMessage(t(
-                    '检测到已存在场景或资产清单数据。重新分析将覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
-                    'Existing scenes or asset index data detected. Regenerating will overwrite previous analysis results. Do you want to continue? (Choose Cancel to use original results)'
+                    '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
+                    'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
                 ));
                 if (!ok) {
                     return;
@@ -9201,6 +9230,63 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     };
 
+    async function clearPersistedStageAnalysisFields({ deferWorkspaceUiReset = false } = {}) {
+        if (!activeEpisode?.id) return false;
+
+        const stageFieldPayload = {
+            ai_scene_analysis_result: '',
+            ai_scene_analysis_adaptation: '',
+            ai_scene_analysis_subject_index: '',
+            ai_scene_analysis_scene_markdown: '',
+            ai_entity_design_result: '',
+            ai_stage_outputs: '',
+        };
+
+        if (typeof onUpdateEpisodeInfo === 'function') {
+            await onUpdateEpisodeInfo(activeEpisode.id, stageFieldPayload);
+        }
+
+        latestAssetRawTextRef.current = '';
+        latestAnalysisRawTextRef.current = '';
+        latestStage1RawTextRef.current = '';
+        latestStage2_1TextRef.current = '';
+        lastPersistPayloadSignatureRef.current = {};
+
+        if (!deferWorkspaceUiReset) {
+            setLlmRawResultContent('');
+            setLlmResultContent('');
+            setLlmAssetRawResultContent('');
+            setSubjectIndexText('');
+            setAdaptationText('');
+            setAnalysisRuntimeMeta(null);
+            lastLoadedAnalysisRef.current = null;
+        }
+
+        return true;
+    }
+
+    function episodeHasPersistedStageAnalysisFields(episodeRow = activeEpisode) {
+        if (!episodeRow) return false;
+        return [
+            episodeRow.ai_scene_analysis_result,
+            episodeRow.ai_scene_analysis_adaptation,
+            episodeRow.ai_scene_analysis_subject_index,
+            episodeRow.ai_scene_analysis_scene_markdown,
+            episodeRow.ai_entity_design_result,
+            episodeRow.ai_stage_outputs,
+        ].some((value) => String(value || '').trim());
+    }
+
+    function hasInMemoryStageAnalysisArtifacts() {
+        return [
+            llmRawResultContent,
+            llmResultContent,
+            llmAssetRawResultContent,
+            subjectIndexText,
+            adaptationText,
+        ].some((value) => String(value || '').trim());
+    }
+
     async function clearAnalysisOutputsForRestart({ preserveProgressUi = false, deferWorkspaceUiReset = false } = {}) {
         if (!activeEpisode?.id) return;
 
@@ -9220,25 +9306,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (onLog) onLog(`AI Script Analysis restart: deleted ${existingScenes.length} existing scene(s).`, 'info');
             }
 
-            if (typeof onUpdateEpisodeInfo === 'function') {
-                await onUpdateEpisodeInfo(activeEpisode.id, {
-                    ai_scene_analysis_result: '',
-                    ai_scene_analysis_subject_index: '',
-                    ai_scene_analysis_adaptation: '',
-                    ai_entity_design_result: '',
-                    ai_stage_outputs: '',
-                });
-            }
-
-            if (!deferWorkspaceUiReset) {
-                setLlmRawResultContent('');
-                setLlmResultContent('');
-                setLlmAssetRawResultContent('');
-                setSubjectIndexText('');
-                setAdaptationText('');
-                setAnalysisRuntimeMeta(null);
-                lastLoadedAnalysisRef.current = null;
-            }
+            await clearPersistedStageAnalysisFields({ deferWorkspaceUiReset });
 
             if (!preserveProgressUi) {
                 setAnalysisUiReport(null);
@@ -9246,6 +9314,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         } catch (clearErr) {
             if (onLog) onLog(`AI Script Analysis restart clear warning: ${clearErr?.message || clearErr}`, 'warning');
+        }
+    }
+
+    async function ensureStageAnalysisFieldsClearedBeforeRun({ forceRegenerate = false, preserveProgressUi = true, deferWorkspaceUiReset = true } = {}) {
+        if (!activeEpisode?.id) return;
+
+        const hasPersistedFields = episodeHasPersistedStageAnalysisFields(activeEpisode);
+        const hasInMemoryArtifacts = hasInMemoryStageAnalysisArtifacts();
+        if (!hasPersistedFields && !hasInMemoryArtifacts && !forceRegenerate) {
+            return;
+        }
+
+        if (forceRegenerate) {
+            await clearAnalysisOutputsForRestart({ preserveProgressUi, deferWorkspaceUiReset });
+            return;
+        }
+
+        if (hasPersistedFields || hasInMemoryArtifacts) {
+            if (onLog) {
+                onLog('Detected existing stage analysis outputs. Clearing persisted stage fields before starting a new run...', 'process');
+            }
+            await clearPersistedStageAnalysisFields({ deferWorkspaceUiReset: false });
         }
     }
 
@@ -9543,9 +9633,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         if (onLog) onLog("Starting AI Script Analysis...", "start");
 
-        if (forceRegenerate && activeEpisode?.id) {
-            await clearAnalysisOutputsForRestart({ preserveProgressUi: true, deferWorkspaceUiReset: true });
-        }
+        await ensureStageAnalysisFieldsClearedBeforeRun({
+            forceRegenerate,
+            preserveProgressUi: true,
+            deferWorkspaceUiReset: true,
+        });
 
         let llmReturned = false;
         let runtimeMeta = null;
@@ -10084,9 +10176,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
-        if (forceRegenerate && activeEpisode?.id) {
-            await clearAnalysisOutputsForRestart({ preserveProgressUi: true, deferWorkspaceUiReset: true });
-        }
+        await ensureStageAnalysisFieldsClearedBeforeRun({
+            forceRegenerate,
+            preserveProgressUi: true,
+            deferWorkspaceUiReset: true,
+        });
 
         let llmReturned = false;
         let runtimeMeta = null;
