@@ -35,6 +35,7 @@ import {
     createScene,
     updateScene, 
     deleteScene,
+    purgeEpisodeScenes,
     regenerateScene,
     fetchShots,
     fetchEpisodeShots,
@@ -3637,13 +3638,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (replaceExistingScenes && activeEpisode?.id) {
                 try {
-                    const staleScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-                    if (Array.isArray(staleScenes) && staleScenes.length > 0) {
-                        await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
-                        onLog?.(`Cleared ${staleScenes.length} existing scene(s) before auto-import.`, 'info');
-                    }
+                    await purgeEpisodeWorkspaceScenes('auto-import-replace');
                 } catch (clearErr) {
-                    onLog?.(`Pre-import scene clear warning: ${clearErr?.message || clearErr}`, 'warning');
+                    onLog?.(`Pre-import scene purge warning: ${clearErr?.message || clearErr}`, 'warning');
                 }
             }
 
@@ -3867,7 +3864,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const staleScenes = await fetchScenes(stableEpisodeId);
         if (Array.isArray(staleScenes) && staleScenes.length > 0) {
-            await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+            try {
+                const { purgeEpisodeScenes: purgeEpisodeScenesApi } = await import('../../../services/api');
+                await purgeEpisodeScenesApi(stableEpisodeId, { clearProgress: false });
+                if (onLog) onLog(`Scene markdown repair: purged ${staleScenes.length} existing scene(s) before re-import.`, 'info');
+            } catch (purgeErr) {
+                await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+                if (onLog) onLog(`Scene markdown repair purge fallback: soft-deleted ${staleScenes.length} scene(s).`, 'warning');
+            }
         }
 
         const repairImportReport = await doImportText(sceneCheck.tableText, 'scene', {
@@ -4307,13 +4311,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         if (options?.replaceExistingScenes && activeEpisode?.id) {
             try {
-                const staleScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-                if (Array.isArray(staleScenes) && staleScenes.length > 0) {
-                    await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
-                    onLog?.(`Cleared ${staleScenes.length} existing scene(s) before per-scene import.`, 'info');
-                }
+                await purgeEpisodeScenes(activeEpisode.id, { clearProgress: false });
+                onLog?.('Cleared existing episode scenes before per-scene import.', 'info');
             } catch (clearErr) {
-                onLog?.(`Pre-import per-scene clear warning: ${clearErr?.message || clearErr}`, 'warning');
+                onLog?.(`Pre-import per-scene purge warning: ${clearErr?.message || clearErr}`, 'warning');
             }
         }
         let lastReport = null;
@@ -4340,7 +4341,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         return lastReport;
-    }, [activeEpisode?.id, deleteScene, doImportText, fetchScenes, onLog, projectId, syncSceneUnitsProgress]);
+    }, [activeEpisode?.id, doImportText, onLog, projectId, purgeEpisodeScenes, syncSceneUnitsProgress]);
 
     const parseSceneMarkdownBySceneMap = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -5594,6 +5595,54 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         llmAssetRawResultContent,
         onLog,
         onUpdateEpisodeInfo,
+        parseStageOutputsObject,
+    ]);
+
+    const persistSubjectIndexEdit = useCallback(async (newVal) => {
+        const normalizedValue = extractPureSubjectIndexText(String(newVal || '').trim());
+        setSubjectIndexText(normalizedValue);
+        latestStage2_1TextRef.current = normalizedValue;
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+
+        const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
+        const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
+        const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+        const rawJson = String(persistedStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || '').trim();
+        const sceneMarkdownByScene = parseSceneMarkdownBySceneMap(rawJson);
+
+        try {
+            await onUpdateEpisodeInfo(activeEpisode.id, {
+                ai_scene_analysis_subject_index: normalizedValue,
+                ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
+                    analysisRawText: existingSceneMarkdown,
+                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    stage1RawText: latestStage1RawTextRef.current || persistedStage1RawText || '',
+                    stage2RawText: persistedStage2RawText || existingSceneMarkdown,
+                    stage2_1Text: normalizedValue,
+                    sceneMarkdownByScene: sceneMarkdownByScene && Object.keys(sceneMarkdownByScene).length > 0
+                        ? sceneMarkdownByScene
+                        : null,
+                    replaceSceneMarkdownByScene: false,
+                }), null, 2),
+            });
+            onLog?.(`[Stage 2 Asset Index] Saved manual edit (len=${normalizedValue.length})`, 'success');
+        } catch (error) {
+            console.error('Failed to update stage2 subject index', error);
+            onLog?.(`Failed to save asset index edit: ${error?.message || error}`, 'error');
+            throw error;
+        }
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.ai_stage_outputs,
+        activeEpisode?.id,
+        buildStageOutputsObject,
+        extractPureSubjectIndexText,
+        llmAssetRawResultContent,
+        onLog,
+        onUpdateEpisodeInfo,
+        parseSceneMarkdownBySceneMap,
         parseStageOutputsObject,
     ]);
 
@@ -9421,6 +9470,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         ].some((value) => String(value || '').trim());
     }
 
+    async function purgeEpisodeWorkspaceScenes(reason = 'analysis-restart') {
+        if (!activeEpisode?.id) return { deleted_scenes: 0, removed_progress_units: 0 };
+        try {
+            const result = await purgeEpisodeScenes(activeEpisode.id, { clearProgress: true });
+            const deletedScenes = Number(result?.deleted_scenes || 0);
+            const removedProgress = Number(result?.removed_progress_units || 0);
+            if (onLog) {
+                onLog(
+                    `[Scene Purge] source=${reason} deleted_scenes=${deletedScenes} removed_progress_units=${removedProgress}`,
+                    deletedScenes > 0 || removedProgress > 0 ? 'info' : 'process'
+                );
+            }
+            return result || { deleted_scenes: deletedScenes, removed_progress_units: removedProgress };
+        } catch (purgeErr) {
+            if (onLog) onLog(`[Scene Purge] failed source=${reason}: ${purgeErr?.message || purgeErr}`, 'warning');
+            throw purgeErr;
+        }
+    }
+
     async function clearAnalysisOutputsForRestart({ preserveProgressUi = false, deferWorkspaceUiReset = false } = {}) {
         if (!activeEpisode?.id) return;
 
@@ -9449,11 +9517,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-            if (existingScenes && existingScenes.length > 0) {
-                await Promise.all(existingScenes.map((sc) => deleteScene(sc.id)));
-                if (onLog) onLog(`AI Script Analysis restart: deleted ${existingScenes.length} existing scene(s).`, 'info');
-            }
+            await purgeEpisodeWorkspaceScenes('analysis-restart-clear');
 
             await clearPersistedStageAnalysisFields({ deferWorkspaceUiReset });
 
@@ -10614,6 +10678,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             stage2_1Text: globalStage2_1Text,
                             replaceSceneMarkdownByScene: true,
                         });
+                        const mergedParallelMarkdown = mergeStage2_2SceneTableOutputs(
+                            Object.values(sceneMarkdownPatchMap)
+                                .map((entry) => String(entry?.markdown || '').trim())
+                                .filter(Boolean)
+                        );
+                        if (mergedParallelMarkdown) {
+                            finalAnalysisText = mergedParallelMarkdown;
+                            importSourceText = mergedParallelMarkdown;
+                            await persistSceneMarkdownBundle(mergedParallelMarkdown, {
+                                source: 'advanced-analysis-split-per-scene-merged',
+                                stage1RawText: stage1PhaseRawText,
+                                stage2RawText: [String(stage2_1Text || '').trim(), mergedParallelMarkdown].filter(Boolean).join('\n\n'),
+                                stage2_1Text: globalStage2_1Text,
+                                sceneMarkdownByScene: sceneMarkdownPatchMap,
+                                replaceSceneMarkdownByScene: true,
+                                syncSceneUnits: false,
+                            });
+                        }
                         finalRawResultPersistedEarly = true;
                     } catch (persistErr) {
                         if (onLog) onLog(`Immediate per-scene Stage 2.2 save warning: ${persistErr?.message || persistErr}`, 'warning');
@@ -13127,18 +13209,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 badge: subjectIndex ? t('可导入', 'Importable') : t('待输出', 'Pending'),
                 summary: t('单独保存第二阶段的资产清单，可按当前结果重新导入。', 'Stores the Stage 2 asset index separately for re-import.'),
                 content: subjectIndex,
-                onSave: async (newVal) => {
-                    setSubjectIndexText(newVal);
-                    if (activeEpisode?.id) {
-                        try {
-                            await onUpdateEpisode(activeEpisode.id, {
-                                ai_scene_analysis_subject_index: newVal
-                            });
-                        } catch(e) {
-                            console.error('Failed to update stage2 subject index', e);
-                        }
-                    }
-                },
+                onSave: persistSubjectIndexEdit,
                 actions: [
                     {
                         key: 'reimport-stage2-subject-index',
@@ -13165,7 +13236,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
         return cards;
-    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, stage2SceneMarkdownByScene, subjectIndexText, t]);
+    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, persistSubjectIndexEdit, stage2SceneMarkdownByScene, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
         const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');

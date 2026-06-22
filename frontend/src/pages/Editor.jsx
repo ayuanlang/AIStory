@@ -41,6 +41,7 @@ import {
     fetchScenes, 
     createScene,
     batchUpsertScenes,
+    purgeEpisodeScenes,
     updateScene, 
     deleteScene,
     regenerateScene,
@@ -2355,11 +2356,11 @@ const Editor = ({
                 let existingScenes = [];
                 if (replaceExistingScenes) {
                     try {
-                        const staleScenes = await fetchScenes(activeEpisodeId);
-                        if (Array.isArray(staleScenes) && staleScenes.length > 0) {
-                            await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
-                            addLog(`Replaced ${staleScenes.length} existing scene(s) before import.`, 'info');
-                        }
+                        const purgeResult = await purgeEpisodeScenes(activeEpisodeId, { clearProgress: false });
+                        addLog(
+                            `Replaced episode scenes before import: deleted=${Number(purgeResult?.deleted_scenes || 0)}.`,
+                            'info'
+                        );
                     } catch (clearErr) {
                         addLog(`Pre-import scene replace warning: ${clearErr?.message || clearErr}`, 'warning');
                     }

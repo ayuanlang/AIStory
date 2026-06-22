@@ -1196,6 +1196,14 @@ export const batchUpsertScenes = async (episodeId, scenes, options = {}) => {
     return response.data;
 }
 
+export const purgeEpisodeScenes = async (episodeId, options = {}) => {
+    const payload = {
+        clear_progress: options?.clearProgress !== false,
+    };
+    const response = await api.post(`/episodes/${episodeId}/scenes/purge`, payload);
+    return response.data;
+}
+
 export const updateScene = async (sceneId, data) => {
     const response = await api.put(`/scenes/${sceneId}`, data);
     return response.data;

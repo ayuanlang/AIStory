@@ -13184,6 +13184,40 @@ def _soft_delete_shots(
     return len(shot_ids)
 
 
+def _hard_purge_episode_scenes(db: Session, episode_id: int) -> int:
+    scene_ids = [
+        int(row[0])
+        for row in db.query(Scene.id).filter(Scene.episode_id == int(episode_id)).all()
+        if row and row[0] is not None
+    ]
+    if not scene_ids:
+        return 0
+    db.query(Shot).filter(Shot.scene_id.in_(scene_ids)).delete(synchronize_session=False)
+    deleted = db.query(Scene).filter(Scene.id.in_(scene_ids)).delete(synchronize_session=False)
+    return int(deleted or 0)
+
+
+def _purge_episode_scene_progress(db: Session, *, project_id: int, episode_id: int) -> int:
+    removed = 0
+    if ScriptProgressSceneUnit is not None:
+        removed += int(
+            db.query(ScriptProgressSceneUnit)
+            .filter(
+                ScriptProgressSceneUnit.project_id == int(project_id),
+                ScriptProgressSceneUnit.episode_id == int(episode_id),
+            )
+            .delete(synchronize_session=False)
+            or 0
+        )
+    if ScriptProgressPipelineNode is not None:
+        db.query(ScriptProgressPipelineNode).filter(
+            ScriptProgressPipelineNode.project_id == int(project_id),
+            ScriptProgressPipelineNode.episode_id == int(episode_id),
+            ScriptProgressPipelineNode.node_name.in_(["scene_markdown", "scene_planning", "scene_import"]),
+        ).delete(synchronize_session=False)
+    return removed
+
+
 def _soft_delete_scenes(
     db: Session,
     *,
@@ -19139,6 +19173,9 @@ class SceneBatchUpsertRequest(BaseModel):
     scenes: List[SceneCreate]
     recompute_cost: Optional[bool] = False
 
+class ScenePurgeRequest(BaseModel):
+    clear_progress: Optional[bool] = True
+
 class SceneOut(BaseModel):
     id: int
     scene_no: str
@@ -20020,6 +20057,30 @@ def batch_upsert_scenes(
             updated += 1
             continue
 
+        soft_deleted = (
+            db.query(Scene)
+            .filter(
+                Scene.episode_id == int(episode_id),
+                Scene.scene_no == scene_no,
+                Scene.is_deleted.is_(True),
+            )
+            .order_by(Scene.id.desc())
+            .first()
+        )
+        if soft_deleted is not None:
+            soft_deleted.is_deleted = False
+            soft_deleted.deleted_at = None
+            soft_deleted.scene_name = item.scene_name
+            soft_deleted.original_script_text = item.original_script_text
+            soft_deleted.equivalent_duration = item.equivalent_duration
+            soft_deleted.core_scene_info = item.core_scene_info
+            soft_deleted.environment_name = item.environment_name
+            soft_deleted.linked_characters = item.linked_characters
+            soft_deleted.key_props = item.key_props
+            existing_by_no[scene_no] = soft_deleted
+            updated += 1
+            continue
+
         row = Scene(
             episode_id=int(episode_id),
             scene_no=scene_no,
@@ -20116,6 +20177,42 @@ def update_scene(
     db.commit()
     db.refresh(db_scene)
     return db_scene
+
+
+@router.post("/episodes/{episode_id}/scenes/purge", response_model=Dict[str, Any])
+def purge_episode_scenes(
+    episode_id: int,
+    request: ScenePurgeRequest = ScenePurgeRequest(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == int(episode_id), _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user, owner_only=True)
+
+    deleted_scenes = _hard_purge_episode_scenes(db, int(episode_id))
+    removed_progress = 0
+    if bool(getattr(request, "clear_progress", True)):
+        removed_progress = _purge_episode_scene_progress(
+            db,
+            project_id=int(episode.project_id),
+            episode_id=int(episode_id),
+        )
+
+    try:
+        _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
+    except Exception as cost_exc:
+        logger.warning("purge_episode_scenes cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
+
+    db.commit()
+    return {
+        "status": "ok",
+        "episode_id": int(episode_id),
+        "project_id": int(episode.project_id),
+        "deleted_scenes": deleted_scenes,
+        "removed_progress_units": removed_progress,
+    }
 
 
 @router.delete("/scenes/{scene_id}", status_code=200)
