@@ -1573,6 +1573,7 @@ const Editor = ({
         const autoSupplementSceneSubjects = Boolean(importOptions?.autoSupplementSceneSubjects);
         const suppressAlerts = Boolean(importOptions?.suppressAlerts);
         const skipDbVerify = Boolean(importOptions?.skipDbVerify) || suppressAlerts;
+        const replaceExistingScenes = Boolean(importOptions?.replaceExistingScenes);
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -2352,6 +2353,17 @@ const Editor = ({
                 
                 // DB Sync State
                 let existingScenes = [];
+                if (replaceExistingScenes) {
+                    try {
+                        const staleScenes = await fetchScenes(activeEpisodeId);
+                        if (Array.isArray(staleScenes) && staleScenes.length > 0) {
+                            await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+                            addLog(`Replaced ${staleScenes.length} existing scene(s) before import.`, 'info');
+                        }
+                    } catch (clearErr) {
+                        addLog(`Pre-import scene replace warning: ${clearErr?.message || clearErr}`, 'warning');
+                    }
+                }
                 try { existingScenes = await fetchScenes(activeEpisodeId); } catch(e) {}
                 let currentSceneDbId = null;
                 const deferredShots = [];
@@ -2799,7 +2811,13 @@ const Editor = ({
                                 currentSceneDbId = match.id;
                                 const rowRef = importedSceneRows.find((x) => String(x?.scene_no || '').replace(/\s+/g, '') === currentSceneNo);
                                 if (rowRef) rowRef.id = match.id;
-                                addLog(`Skipped updating existing Scene ${scData.scene_no} (duplicate imports not allowed)`, "warning");
+                                try {
+                                    await updateScene(match.id, scData);
+                                    importStats.scenesUpdated += 1;
+                                    addLog(`Updated existing Scene ${scData.scene_no}`, 'success');
+                                } catch (updateErr) {
+                                    addLog(`Failed to update existing Scene ${scData.scene_no}: ${updateErr?.message || updateErr}`, 'error');
+                                }
                             } else {
                                 const newScene = await createScene(activeEpisodeId, scData);
                                 currentSceneDbId = newScene.id;

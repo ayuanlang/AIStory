@@ -3614,6 +3614,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             const switchToScenes = options?.switchToScenes !== false;
             const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
+            const replaceExistingScenes = options?.replaceExistingScenes !== false
+                && importOptions?.replaceExistingScenes !== false;
             if (typeof onImportText !== 'function') {
                 if (onLog) onLog('Import is not available in this context.', 'warning');
                 setAnalysisFlowStatus({
@@ -3633,6 +3635,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (check.ok && check.warning && onLog) onLog(check.warning, 'warning');
             if (!check.ok && onLog) onLog(`Auto scene-table check skipped: ${check.reason}`, 'warning');
 
+            if (replaceExistingScenes && activeEpisode?.id) {
+                try {
+                    const staleScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                    if (Array.isArray(staleScenes) && staleScenes.length > 0) {
+                        await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+                        onLog?.(`Cleared ${staleScenes.length} existing scene(s) before auto-import.`, 'info');
+                    }
+                } catch (clearErr) {
+                    onLog?.(`Pre-import scene clear warning: ${clearErr?.message || clearErr}`, 'warning');
+                }
+            }
+
             // Prefer importing the validated scene table only. This prevents
             // Subject Index text from being misidentified as scene rows.
             setAnalysisFlowStatus({
@@ -3641,8 +3655,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
             const importReport = check.ok
-                ? await onImportText(check.tableText || '', 'scene', { ...importOptions, skipDbVerify: true })
-                : await onImportText(analyzedText || '', 'auto', { ...importOptions, skipDbVerify: true });
+                ? await onImportText(check.tableText || '', 'scene', { ...importOptions, skipDbVerify: true, replaceExistingScenes: false })
+                : await onImportText(analyzedText || '', 'auto', { ...importOptions, skipDbVerify: true, replaceExistingScenes: false });
             if (onLog) onLog('Auto-import finished.', 'success');
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
@@ -4291,6 +4305,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (leftOrder !== rightOrder) return leftOrder - rightOrder;
             return String(left[0]).localeCompare(String(right[0]));
         });
+        if (options?.replaceExistingScenes && activeEpisode?.id) {
+            try {
+                const staleScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                if (Array.isArray(staleScenes) && staleScenes.length > 0) {
+                    await Promise.all(staleScenes.map((scene) => deleteScene(scene.id)));
+                    onLog?.(`Cleared ${staleScenes.length} existing scene(s) before per-scene import.`, 'info');
+                }
+            } catch (clearErr) {
+                onLog?.(`Pre-import per-scene clear warning: ${clearErr?.message || clearErr}`, 'warning');
+            }
+        }
         let lastReport = null;
         for (const [sceneId, entry] of entries) {
             const importText = String(entry?.markdown || '').trim();
@@ -4315,7 +4340,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         return lastReport;
-    }, [activeEpisode?.id, doImportText, onLog, projectId, syncSceneUnitsProgress]);
+    }, [activeEpisode?.id, deleteScene, doImportText, fetchScenes, onLog, projectId, syncSceneUnitsProgress]);
 
     const parseSceneMarkdownBySceneMap = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -4512,7 +4537,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length;
     }, [llmMarkdownTable]);
 
-    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null } = {}) => {
+    const buildStageOutputsObject = useCallback(({ analysisRawText = '', assetRawText = '', stage1RawText = '', stage2RawText = '', stage2_1Text = '', sceneMarkdownByScene = null, replaceSceneMarkdownByScene = false } = {}) => {
         const resolvedAnalysisRawText = String(analysisRawText || '').trim();
         const resolvedAssetRawText = String(assetRawText || '').trim();
         const resolvedStage1RawText = String(stage1RawText || '').trim();
@@ -4595,12 +4620,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         })();
         const persistedBySceneMap = parseSceneMarkdownBySceneMap(persistedBySceneRaw);
         const splitBySceneMap = splitSceneMarkdownTableBySceneId(stage2SceneMarkdown);
-        const resolvedSceneMarkdownByScene = mergeSceneMarkdownBySceneMaps(
-            persistedBySceneMap,
-            sceneMarkdownByScene && typeof sceneMarkdownByScene === 'object'
-                ? sceneMarkdownByScene
-                : splitBySceneMap
-        );
+        const incomingByScene = sceneMarkdownByScene && typeof sceneMarkdownByScene === 'object'
+            ? sceneMarkdownByScene
+            : splitBySceneMap;
+        const resolvedSceneMarkdownByScene = replaceSceneMarkdownByScene
+            ? incomingByScene
+            : mergeSceneMarkdownBySceneMaps(
+                persistedBySceneMap,
+                incomingByScene
+            );
 
         const stage2RawTextForSlot = String(resolvedStage2RawText || '').trim();
         const stage2VisualBackfillJson = String(
@@ -5318,6 +5346,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const persistedStage1RawText = String(persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content || '').trim();
             const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
             const persistedStage2_1Text = String(persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content || '').trim();
+            const replaceSceneMarkdownByScene = options?.replaceSceneMarkdownByScene === true
+                || (
+                    options?.replaceSceneMarkdownByScene !== false
+                    && (
+                        resultField === 'ai_scene_analysis_scene_markdown'
+                        || /stage2_2|scene_beats|scene_markdown|stage1/i.test(logSource)
+                        || Boolean(options?.sceneMarkdownByScene)
+                    )
+                );
 
             if (resultField === 'ai_scene_analysis_result') {
                 const isStage1ResultWrite = /stage1/i.test(logSource) && !/stage2|split-combined/i.test(logSource);
@@ -5341,6 +5378,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         stage2RawText: persistedStage2RawText || '',
                         stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
                         sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                        replaceSceneMarkdownByScene: true,
                     };
                     Object.assign(updatePayload, {
                         ai_scene_analysis_adaptation: adaptationValue,
@@ -5392,6 +5430,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     stage2RawText: effectiveStage2RawText,
                     stage2_1Text: options?.stage2_1Text !== undefined ? extractPureSubjectIndexText(options.stage2_1Text) : extractPureSubjectIndexText(latestStage2_1TextRef.current || normalizedSubjectIndexValue),
                     sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                    replaceSceneMarkdownByScene,
                 }), null, 2);
 
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length} subject_index_len=${normalizedSubjectIndexValue.length} adaptation_len=${adaptationValue.length}`, 'info');
@@ -5406,6 +5445,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     stage2RawText: options?.stage2RawText || nextContent,
                     stage2_1Text: latestStage2_1TextRef.current || persistedStage2_1Text || undefined,
                     sceneMarkdownByScene: options?.sceneMarkdownByScene || null,
+                    replaceSceneMarkdownByScene,
                 }), null, 2);
                 onLog?.(`[Analysis Writeback] field=${resultField} source=${logSource} raw_len=${nextContent.length}`, 'info');
 
@@ -5501,6 +5541,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stage2RawText: options?.stage2RawText || merged,
             stage2_1Text: options?.stage2_1Text,
             sceneMarkdownByScene: patchMap,
+            replaceSceneMarkdownByScene: options?.replaceSceneMarkdownByScene !== false,
             syncSceneUnits: options?.syncSceneUnits,
         });
     }, [persistLlmResultContent, splitSceneMarkdownTableBySceneId]);
@@ -5531,6 +5572,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ? extractPureSubjectIndexText(options.stage2_1Text)
                         : extractPureSubjectIndexText(latestStage2_1TextRef.current || persistedStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || ''),
                     sceneMarkdownByScene: patchMap,
+                    replaceSceneMarkdownByScene: options?.replaceSceneMarkdownByScene === true,
                 }), null, 2),
             };
 
@@ -9387,9 +9429,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             releaseEpisodeAnalysisRun(activeEpisode.id);
             clearAnalysisTaskMarker(activeEpisode.id);
+            resetAnalysisFallbackRetryCounts(activeEpisode.id);
+            lastAutoSubjectsImportRef.current = { signature: '', result: null };
             if (!preserveProgressUi) {
                 clearAnalysisSessionProgressSnapshot(activeEpisode.id);
                 analysisTimerStartedAtRef.current = 0;
+            }
+
+            if (projectId && activeEpisode?.id) {
+                try {
+                    await resetSceneOrchestrationProgress({
+                        project_id: Number(projectId),
+                        episode_id: Number(activeEpisode.id),
+                        scene_ids: [],
+                    });
+                    if (onLog) onLog('AI Script Analysis restart: reset scene orchestration progress.', 'info');
+                } catch (orchErr) {
+                    if (onLog) onLog(`AI Script Analysis restart orchestration reset warning: ${orchErr?.message || orchErr}`, 'warning');
+                }
             }
 
             const existingScenes = await fetchScenes(activeEpisode.id).catch(() => []);
@@ -9409,26 +9466,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }
 
-    async function ensureStageAnalysisFieldsClearedBeforeRun({ forceRegenerate = false, preserveProgressUi = true, deferWorkspaceUiReset = true } = {}) {
-        if (!activeEpisode?.id) return;
+    async function ensureStageAnalysisFieldsClearedBeforeRun({ forceRegenerate = false, preserveProgressUi = true, deferWorkspaceUiReset = false } = {}) {
+        if (!activeEpisode?.id) return false;
 
         const hasPersistedFields = episodeHasPersistedStageAnalysisFields(activeEpisode);
         const hasInMemoryArtifacts = hasInMemoryStageAnalysisArtifacts();
         if (!hasPersistedFields && !hasInMemoryArtifacts && !forceRegenerate) {
-            return;
+            return false;
         }
 
-        if (forceRegenerate) {
-            await clearAnalysisOutputsForRestart({ preserveProgressUi, deferWorkspaceUiReset });
-            return;
+        if (onLog) {
+            onLog('Detected existing stage analysis outputs. Clearing all previous analysis artifacts before starting a new run...', 'process');
         }
-
-        if (hasPersistedFields || hasInMemoryArtifacts) {
-            if (onLog) {
-                onLog('Detected existing stage analysis outputs. Clearing persisted stage fields before starting a new run...', 'process');
-            }
-            await clearPersistedStageAnalysisFields({ deferWorkspaceUiReset: false });
-        }
+        await clearAnalysisOutputsForRestart({ preserveProgressUi, deferWorkspaceUiReset });
+        return true;
     }
 
     const beginAnalysisRestartUi = useCallback((startedAt = Date.now()) => {
@@ -9677,16 +9728,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        const resumeState = await prepareSceneAnalysisResumeState();
-        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
-            return;
-        }
-        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
-
-        let analysisPipelineFinished = false;
-        let analysisError = null;
-        let analysisCanceled = false;
-
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -9697,6 +9738,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 console.warn('Silent failure trying to stop previous task', e);
             }
         }
+
+        const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
+            forceRegenerate,
+            preserveProgressUi: true,
+            deferWorkspaceUiReset: false,
+        });
+
+        const resumeState = await prepareSceneAnalysisResumeState();
+        if (!forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+            return;
+        }
+        const preflightSceneSyncNotice = (forceRegenerate || clearedBeforeRun) ? '' : (resumeState?.preflightSceneSyncNotice || '');
+
+        let analysisPipelineFinished = false;
+        let analysisError = null;
+        let analysisCanceled = false;
 
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
@@ -9724,12 +9781,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             error: '',
         });
         if (onLog) onLog("Starting AI Script Analysis...", "start");
-
-        await ensureStageAnalysisFieldsClearedBeforeRun({
-            forceRegenerate,
-            preserveProgressUi: true,
-            deferWorkspaceUiReset: true,
-        });
 
         let llmReturned = false;
         let runtimeMeta = null;
@@ -9760,7 +9811,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
             
-            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+            const baselineAnalysisText = clearedBeforeRun
+                ? ''
+                : String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
                     'script_optimization',
@@ -10216,16 +10269,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        const resumeState = await prepareSceneAnalysisResumeState();
-        if (!forceRegenerate && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
-            return;
-        }
-        const preflightSceneSyncNotice = forceRegenerate ? '' : (resumeState?.preflightSceneSyncNotice || '');
-
-        let analysisPipelineFinished = false;
-        let analysisError = null;
-        let analysisCanceled = false;
-
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -10236,6 +10279,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 console.warn('Silent failure trying to stop previous task', e);
             }
         }
+
+        const clearedBeforeRun = await ensureStageAnalysisFieldsClearedBeforeRun({
+            forceRegenerate,
+            preserveProgressUi: true,
+            deferWorkspaceUiReset: false,
+        });
+
+        const resumeState = await prepareSceneAnalysisResumeState();
+        if (!forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
+            return;
+        }
+        const preflightSceneSyncNotice = (forceRegenerate || clearedBeforeRun) ? '' : (resumeState?.preflightSceneSyncNotice || '');
+
+        let analysisPipelineFinished = false;
+        let analysisError = null;
+        let analysisCanceled = false;
 
         analysisRunInFlightRef.current = true;
         clearAnalysisTaskMarker(activeEpisode?.id);
@@ -10268,12 +10327,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         if (onLog) onLog("Starting Advanced AI Analysis (Superuser)...", "start");
 
-        await ensureStageAnalysisFieldsClearedBeforeRun({
-            forceRegenerate,
-            preserveProgressUi: true,
-            deferWorkspaceUiReset: true,
-        });
-
         let llmReturned = false;
         let runtimeMeta = null;
         let importReport = null;
@@ -10301,7 +10354,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             phaseMarks.analyzeStartedAt = Date.now();
 
-            const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+            const baselineAnalysisText = clearedBeforeRun
+                ? ''
+                : String(activeEpisode?.ai_scene_analysis_result || '').trim();
             const splitStage1Flow = isSplitStage1Prompt(customSystemPrompt);
             const result = await awaitAnalyzeSceneWithRecovery(
                 () => runScriptAnalysisFlowAnalyzeNode(
@@ -10557,6 +10612,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             source: 'advanced-analysis-split-per-scene-immediate',
                             stage1RawText: stage1PhaseRawText,
                             stage2_1Text: globalStage2_1Text,
+                            replaceSceneMarkdownByScene: true,
                         });
                         finalRawResultPersistedEarly = true;
                     } catch (persistErr) {
@@ -10650,6 +10706,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (parallelSceneMarkdownPatchMap && Object.keys(parallelSceneMarkdownPatchMap).length > 0) {
                     importReport = await importScenesFromPerScenePatchMap(parallelSceneMarkdownPatchMap, {
                         subjectsJson: result?.subjects_json || null,
+                        replaceExistingScenes: true,
                     });
                 } else {
                     importReport = await runAutoImportAndSwitchToScenes(importSourceText || finalAnalysisText || '', {
@@ -11096,6 +11153,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     source: 'restart-stage2-per-scene',
                     stage1RawText: stage1SourceText,
                     stage2_1Text: stage2_1Text || undefined,
+                    replaceSceneMarkdownByScene: true,
                 });
             } else {
                 await persistSceneMarkdownBundle(validatedBeatsText, {
@@ -11113,7 +11171,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             try {
                 if (restartScenePatchMap) {
-                    importReport = await importScenesFromPerScenePatchMap(restartScenePatchMap);
+                    importReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
+                        replaceExistingScenes: true,
+                    });
                 } else {
                     importReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
                         switchToScenes: false,
@@ -11393,6 +11453,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     source: 'restart-scene-beats-only-all',
                     stage1RawText: stage1SourceText,
                     stage2_1Text: stage2_1Text || undefined,
+                    replaceSceneMarkdownByScene: true,
                 });
             } else {
                 setLlmRawResultContent(validatedBeatsText);
@@ -11439,7 +11500,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                 }
             } else if (allScenePatchMap && Object.keys(allScenePatchMap).length > 0) {
-                importReport = await importScenesFromPerScenePatchMap(allScenePatchMap);
+                importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
+                    replaceExistingScenes: rerunMode === 'all',
+                });
             } else if (rerunMode === 'all' && orchestrationSceneCount > 1) {
                 throw new Error(t(
                     '全部场景重排未获得完整的分场景 LLM 结果，已中止导入以避免写入旧数据。',
