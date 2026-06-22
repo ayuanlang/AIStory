@@ -12,7 +12,8 @@ if (!resolvedBaseUrl) {
     if (isSelfHostedIP) {
         resolvedBaseUrl = window.location.origin;
     } else if (isLocalFrontend) {
-        resolvedBaseUrl = LOCAL_BACKEND_FALLBACK;
+        // Route through Vite dev proxy (same-origin) — avoids local CORS/auth quirks.
+        resolvedBaseUrl = '';
     } else {
         resolvedBaseUrl = RENDER_BACKEND_FALLBACK;
     }

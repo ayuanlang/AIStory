@@ -9,31 +9,12 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { getUiLang, tUI, UI_LANG_EVENT, UI_LANG_KEY } from './lib/uiLang';
 import { getMaintenanceStatus } from './services/api';
 
-const lazyWithRetry = (componentImport) =>
-  lazy(async () => {
-    const pageHasAlreadyBeenForceRefreshed = JSON.parse(
-      window.sessionStorage.getItem('page-has-been-force-refreshed') || 'false'
-    );
-
-    try {
-      const component = await componentImport();
-      window.sessionStorage.setItem('page-has-been-force-refreshed', 'false');
-      return component;
-    } catch (error) {
-      if (!pageHasAlreadyBeenForceRefreshed) {
-        window.sessionStorage.setItem('page-has-been-force-refreshed', 'true');
-        return window.location.reload();
-      }
-      throw error;
-    }
-  });
-
-const Home = lazyWithRetry(() => import('./pages/Home'));
-const ProjectList = lazyWithRetry(() => import('./pages/ProjectList'));
-const Editor = lazyWithRetry(() => import('./pages/Editor'));
-const AdvancedAnalysisResult = lazyWithRetry(() => import('./pages/AdvancedAnalysisResult'));
-const Auth = lazyWithRetry(() => import('./pages/Auth'));
-const UserAdmin = lazyWithRetry(() => import('./pages/UserAdmin'));
+const Home = lazy(() => import('./pages/Home'));
+const ProjectList = lazy(() => import('./pages/ProjectList'));
+const Editor = lazy(() => import('./pages/Editor'));
+const AdvancedAnalysisResult = lazy(() => import('./pages/AdvancedAnalysisResult'));
+const Auth = lazy(() => import('./pages/Auth'));
+const UserAdmin = lazy(() => import('./pages/UserAdmin'));
 
 // Helper component to protect routes that require authentication
 const PrivateRoute = ({ children }) => {

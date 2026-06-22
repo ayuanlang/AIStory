@@ -39,10 +39,12 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0', // Bind to all interfaces
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000', // Use IP to avoid localhost DNS issues
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
@@ -50,7 +52,24 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
-      }
-    }
-  }
+      },
+    },
+  },
+  preview: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/uploads': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 })

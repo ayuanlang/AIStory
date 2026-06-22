@@ -84,6 +84,7 @@ const shouldRetryWithFallback = (error) => {
         );
 
     if (code === 'ERR_NETWORK') return true;
+    if (code === 'ERR_INSUFFICIENT_RESOURCES') return false;
     // Only retry on gateway errors (502/504), NOT on 500/503 which are meaningful responses
     if (status === 502 || status === 504) return true;
 
@@ -307,6 +308,7 @@ async function pollTask(taskId, {
                 params: { _ts: Date.now() },
                 // Per-poll timeout: fail fast and retry instead of blocking on the global 10m axios default.
                 timeout: Math.max(15000, Math.min(60000, Number(interval || LLM_POLL_INTERVAL) * 4)),
+                skipAuthRedirect: true,
             };
             const res = await api.get(`/tasks/${taskId}`, reqConfig);
             notFoundSince = 0;
@@ -798,6 +800,8 @@ api.interceptors.request.use(
     }
 );
 
+let authRedirectInFlight = false;
+
 // Add a response interceptor to handle 401 errors
 api.interceptors.response.use(
     (response) => response,
@@ -811,8 +815,24 @@ api.interceptors.response.use(
 
         if (error.response) {
             if (error.response.status === 401) {
-                localStorage.removeItem('token');
-                window.location.href = '/auth';
+                const requestUrl = String(error.config?.url || '');
+                const skipAuthRedirect = Boolean(error.config?.skipAuthRedirect)
+                    || /\/batch\/status$/.test(requestUrl)
+                    || requestUrl.includes('/generate/jobs/pool')
+                    || requestUrl.includes('/cost_estimation')
+                    || requestUrl.includes('/admin/maintenance-status');
+                if (!skipAuthRedirect && localStorage.getItem('token')) {
+                    localStorage.removeItem('token');
+                    window.dispatchEvent(new Event('AUTH_LOGOUT'));
+                    if (
+                        typeof window !== 'undefined'
+                        && !window.location.pathname.startsWith('/auth')
+                        && !authRedirectInFlight
+                    ) {
+                        authRedirectInFlight = true;
+                        window.location.replace('/auth');
+                    }
+                }
             } else if (error.response.status === 402) {
                 // Dispatch event for UI to handle (Show Recharge Modal)
                 window.dispatchEvent(new Event('SHOW_RECHARGE_MODAL'));
@@ -1155,8 +1175,11 @@ export const deleteEpisode = async (episodeId) => {
 
 // Scenes
 export const fetchScenes = async (episodeId, params = {}) => {
-    const response = await api.get(`/episodes/${episodeId}/scenes`, { params });
-    return response.data;
+    const key = buildSingleFlightKey('GET:/episodes/scenes', { episodeId, params });
+    return runSingleFlight(key, async () => {
+        const response = await api.get(`/episodes/${episodeId}/scenes`, { params });
+        return response.data;
+    });
 }
 
 export const createScene = async (episodeId, data) => {
@@ -1475,7 +1498,9 @@ const enrichedPayload = { ...payload };
 }
 
 export const getSceneAiShotsBatchStatus = async (episodeId) => {
-    const response = await api.get(`/episodes/${episodeId}/scenes/ai_shots/batch/status`);
+    const response = await api.get(`/episodes/${episodeId}/scenes/ai_shots/batch/status`, {
+        skipAuthRedirect: true,
+    });
     return response.data;
 }
 
@@ -1530,8 +1555,11 @@ export const fetchEntities = async (projectId, typeOrOptions = null, options = {
         ...extraParams,
         ...(type ? { type } : {}),
     };
-    const response = await api.get(`/projects/${projectId}/entities`, { params });
-    return response.data;
+    const key = buildSingleFlightKey('GET:/projects/entities', { projectId, params });
+    return runSingleFlight(key, async () => {
+        const response = await api.get(`/projects/${projectId}/entities`, { params });
+        return response.data;
+    });
 }
 
 export const batchSupplementMissingEntities = async (projectId, payload) => {
@@ -2150,7 +2178,7 @@ export const getVideoGenerationJobStatus = async (jobId, options = {}) => {
 };
 
 export const getGenerationJobPool = async (params = {}) => {
-    const response = await api.get('/generate/jobs/pool', { params });
+    const response = await api.get('/generate/jobs/pool', { params, skipAuthRedirect: true });
     return response?.data || {};
 };
 
@@ -3111,6 +3139,7 @@ export const getMaintenanceStatus = async () => {
         return _cachedMaintenanceStatus;
     }
     const response = await api.get('/admin/maintenance-status', {
+        skipAuthRedirect: true,
         headers: {
             'Cache-Control': 'no-cache',
             Pragma: 'no-cache',
@@ -3616,6 +3645,7 @@ export const updateProjectCreateOptionsConfigManage = async (payload = {}) => (a
 export const getProjectCostEstimation = async (projectId, options = {}) => {
     const response = await api.get(`/projects/${projectId}/cost_estimation`, {
         params: options?.refresh ? { refresh: true } : {},
+        skipAuthRedirect: true,
     });
     return response.data;
 };

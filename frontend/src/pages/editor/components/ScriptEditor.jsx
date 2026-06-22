@@ -776,6 +776,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || /(?:^|\n)\s*subject_type\s*=\s*(?:character|prop|environment|cover_poster)/i.test(candidate)
             || /(?:^|\n)\s*\|[^\n]*subject_no[^\n]*subject_type[^\n]*\|/i.test(candidate)
             || /(?:^|\n)\s*\|?\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)/i.test(candidate)
+            || /(?:^|\n)\s*\|?\s*[A-Za-z]+\d+\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)/i.test(candidate)
             || /(?:^|\n)\s*(?:#{0,6}\s*)?(?:\*\*)?\s*(?:Subject Index|Subjects? Index|资产清单|实体清单|设计资产索引)\s*(?:\*\*)?\s*(?:\n|$)/i.test(candidate)
         );
     }, []);
@@ -967,7 +968,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || /^:?-{2,}:?$/.test(firstCell)
                 || /^:?-{2,}:?$/.test(secondCell);
             if (isHeaderOrSeparator) return { isSubjectRow: false, type: '' };
-            if (/^S?\d+\b/i.test(firstCell) && secondCell) {
+            if (firstCell && secondCell) {
                 return {
                     isSubjectRow: true,
                     type: normalizeSubjectIndexTypeForAssetTask(secondCell),
@@ -4456,10 +4457,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             const normalizedLine = line.replace(/^\s*>\s*/, '').replace(/^\s*[-*+]\s+/, '').trim();
-            const rowLike = /^\|?\s*S\d+\s*\|/i.test(normalizedLine) || /^\s*S\d+\s*\|/i.test(normalizedLine);
-            if (!rowLike) continue;
+            if (!normalizedLine.includes('|')) continue;
             const parts = normalizedLine.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((x) => String(x || '').trim());
             if (parts.length < 2) continue;
+            const firstCol = String(parts[0] || '').trim().toLowerCase();
+            const secondCol = String(parts[1] || '').trim();
+            if (['subject_no', 'subject_id', 'id', '编号'].includes(firstCol)) continue;
+            if (/^:?-{2,}:?$/.test(firstCol) || /^:?-{2,}:?$/.test(secondCol)) continue;
+            if (!secondCol) continue;
             detectedTypes.add(normalizeType(parts[1]));
         }
 

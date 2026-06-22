@@ -13,6 +13,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
 
+const normalizeOriginalScriptText = (value) => {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    if (/^\{\s*Original\s+Script\s+Text\s+for\s+Scene\s*\d+\s*\}$/i.test(raw)) return '';
+    if (/^Original\s+Script\s+Text\s+for\s+Scene\s*\d+$/i.test(raw)) return '';
+    return raw;
+};
+
+const parseScenesFromEpisodeText = (text) => parseScenesFromMarkdownTable(text, {
+    normalizeOriginalScriptText,
+});
+
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
 } from '../editorHelpers';
@@ -1493,13 +1505,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     useEffect(() => {
         batchAiShotsProgressRef.current = batchAiShotsProgress;
     }, [batchAiShotsProgress]);
-    const normalizeOriginalScriptText = (value) => {
-        const raw = typeof value === 'string' ? value.trim() : '';
-        if (!raw) return '';
-        if (/^\{\s*Original\s+Script\s+Text\s+for\s+Scene\s*\d+\s*\}$/i.test(raw)) return '';
-        if (/^Original\s+Script\s+Text\s+for\s+Scene\s*\d+$/i.test(raw)) return '';
-        return raw;
-    };
     const sceneAutoSaveTimerRef = useRef(null);
     const sceneAutoSaveInFlightRef = useRef(false);
     const sceneAutoSaveQueuedRef = useRef(null);
@@ -2226,18 +2231,23 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         });
     }, []);
 
-    const parseScenesFromText = useCallback((text) => parseScenesFromMarkdownTable(text, {
-        normalizeOriginalScriptText,
-    }), [normalizeOriginalScriptText]);
+    const parseScenesFromText = parseScenesFromEpisodeText;
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {
+        const episodeId = activeEpisode?.id;
+        const sceneContent = activeEpisode?.scene_content;
 
         const loadScenes = async () => {
              if (activeEpisode?.id) {
                  setSceneListLoading(true);
-                 const quickPreview = parseScenesFromText(activeEpisode?.scene_content);
-                 setScenes(quickPreview);
+                 try {
+                     const quickPreview = parseScenesFromText(activeEpisode?.scene_content);
+                     setScenes(quickPreview);
+                 } catch (parseErr) {
+                     console.error('[SceneManager] Failed to parse scene preview', parseErr);
+                     setScenes([]);
+                 }
                  try {
                      const dbScenes = await fetchScenes(activeEpisode.id);
                      if (dbScenes && dbScenes.length > 0) {
@@ -2289,7 +2299,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
         if (projectId) fetchEntities(projectId).then(setEntities).catch(console.error);
         loadScenes();
-    }, [activeEpisode, projectId, parseScenesFromText]);
+    }, [activeEpisode?.id, activeEpisode?.scene_content, projectId]);
 
     // Load cost data from project's cost_estimation snapshot
     useEffect(() => {
@@ -3927,9 +3937,10 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
             }
         };
 
-        hydrate();
+        const deferTimer = window.setTimeout(hydrate, 800);
         return () => {
             cancelled = true;
+            window.clearTimeout(deferTimer);
             if (batchAiShotsStatusTimerRef.current) {
                 clearInterval(batchAiShotsStatusTimerRef.current);
                 batchAiShotsStatusTimerRef.current = null;

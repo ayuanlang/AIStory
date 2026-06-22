@@ -163,6 +163,7 @@ import { processPrompt } from '../lib/promptUtils';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../lib/entityToken';
 import SettingsPage from './Settings';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -170,35 +171,15 @@ import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYS
 
 
 import { ImportModal } from './editor/components/ImportModal';
-
-// Safe lazy loading wrapper that forces a reload if a chunk fails to load
-const lazyWithRetry = (componentImport) =>
-  React.lazy(async () => {
-    const pageHasAlreadyBeenForceRefreshed = JSON.parse(
-      window.sessionStorage.getItem('page-has-been-force-refreshed') || 'false'
-    );
-
-    try {
-      const component = await componentImport();
-      window.sessionStorage.setItem('page-has-been-force-refreshed', 'false');
-      return component;
-    } catch (error) {
-      if (!pageHasAlreadyBeenForceRefreshed) {
-        window.sessionStorage.setItem('page-has-been-force-refreshed', 'true');
-        return window.location.reload();
-      }
-      throw error;
-    }
-  });
+import { SceneManager } from './editor/components/SceneManager';
 
 // Lazy loaded heavy components
-const ProjectOverview = lazyWithRetry(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
-const EpisodeInfo = lazyWithRetry(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
-const ScriptEditor = lazyWithRetry(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
-const SceneManager = lazyWithRetry(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
-const SubjectLibrary = lazyWithRetry(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
-const ShotsView = lazyWithRetry(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
-const VideoStudio = lazyWithRetry(() => import('../components/VideoStudio'));
+const ProjectOverview = React.lazy(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
+const EpisodeInfo = React.lazy(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
+const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
+const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
+const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
+const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
@@ -3954,15 +3935,33 @@ const Editor = ({
                             )}
                             {activeTab === 'script' && <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />}
                             {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
-                            {activeTab === 'scenes' && <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
-                                if (sceneId) {
-                                    setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
-                                }
-                                setActiveTab('shots');
-                            }} onSwitchToScriptAssetRerun={(patch) => {
-                                setAssetRerunRequest({ ...(patch && typeof patch === 'object' ? patch : {}), nonce: Date.now() });
-                                setActiveTab('script');
-                            }} uiLang={uiLang} />}
+                            {activeTab === 'scenes' && (
+                                <ErrorBoundary
+                                    fallbackRender={({ resetErrorBoundary }) => (
+                                        <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
+                                            <AlertTriangle className="h-8 w-8 text-yellow-400" />
+                                            <div className="text-sm text-white/80">{t('场景页加载失败', 'Failed to load Scenes tab')}</div>
+                                            <button
+                                                type="button"
+                                                className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                onClick={resetErrorBoundary}
+                                            >
+                                                {t('重试', 'Retry')}
+                                            </button>
+                                        </div>
+                                    )}
+                                >
+                                    <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                                        if (sceneId) {
+                                            setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
+                                        }
+                                        setActiveTab('shots');
+                                    }} onSwitchToScriptAssetRerun={(patch) => {
+                                        setAssetRerunRequest({ ...(patch && typeof patch === 'object' ? patch : {}), nonce: Date.now() });
+                                        setActiveTab('script');
+                                    }} uiLang={uiLang} />
+                                </ErrorBoundary>
+                            )}
                             {activeTab === 'shots' && <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
                             {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                                 </>

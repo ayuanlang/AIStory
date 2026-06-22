@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:stable": "vite build && vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:preview": "npm run dev:stable",
     "build": "vite build",
     "preview": "vite preview",
     "verify:injection": "node ./scripts/verify-injection.mjs"

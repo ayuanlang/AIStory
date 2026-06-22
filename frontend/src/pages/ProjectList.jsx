@@ -117,38 +117,6 @@ const cinematicImages = [
     "https://images.unsplash.com/photo-1517602302552-471fe67acf66?w=500&q=80", // Vibes
 ];
 
-const projectCardPrefetchPromises = new Map();
-const prefetchEditorTabChunk = (tab) => {
-    switch (String(tab || '').trim()) {
-        case 'script':
-            return import('./editor/components/ScriptEditor').catch(() => null);
-        case 'subjects':
-            return import('./editor/components/SubjectLibrary').catch(() => null);
-        case 'scenes':
-            return import('./editor/components/SceneManager').catch(() => null);
-        case 'shots':
-            return import('./editor/components/ShotsView').catch(() => null);
-        case 'montage':
-            return import('../components/VideoStudio').catch(() => null);
-        case 'generator':
-            return import('./editor/components/ProjectOverview').catch(() => null);
-        default:
-            return Promise.resolve(null);
-    }
-};
-
-const prefetchProjectCardEditor = (stage) => {
-    const stageKey = String(stage || '').trim() || 'default';
-    if (!projectCardPrefetchPromises.has(stageKey)) {
-        projectCardPrefetchPromises.set(stageKey, Promise.all([
-            import('./editor/components/ProjectOverview').catch(() => null),
-            import('./editor/components/EpisodeInfo').catch(() => null),
-            prefetchEditorTabChunk(stage),
-        ]));
-    }
-    return projectCardPrefetchPromises.get(stageKey);
-};
-
 const normalizeExternalMediaUrl = (url) => {
     const stable = String(url || '').trim();
     if (!stable) return '';
@@ -2315,10 +2283,6 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 setRestoredEditorState(null);
                                                 setSelectedProject(p);
                                                 setSelectedProjectId(p.id);
-                                            }} onMouseEnter={() => {
-                                                void prefetchProjectCardEditor(p?.global_info?.workflow_stage);
-                                            }} onPointerDown={() => {
-                                                void prefetchProjectCardEditor(p?.global_info?.workflow_stage);
                                             }} key={p.id} className="cursor-pointer">
                                                 <motion.div 
                                                     whileHover={{ y: -8, scale: 1.02 }}
