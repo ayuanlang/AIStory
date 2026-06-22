@@ -23376,7 +23376,7 @@ def _import_scene_shot_rows_to_db(
 
     db.commit()
 
-    applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+    applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
     if skipped_row_errors:
         try:
             for shot in applied_shots:
@@ -23391,10 +23391,10 @@ def _import_scene_shot_rows_to_db(
                 )
                 shot.technical_notes = json.dumps(notes_obj, ensure_ascii=False)
             db.commit()
-            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
         except Exception:
             db.rollback()
-            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id).all()
+            applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
 
     logger.info(
         "[shot_import.apply] applied scene_id=%s episode_id=%s project_id=%s rows=%s skipped=%s",
@@ -23613,6 +23613,11 @@ def batch_create_shots(
         .all()
     ) if scene_ids else []
     scene_by_id = {int(scene.id): scene for scene in scenes}
+
+    if scene_ids:
+        for scene_id in scene_ids:
+            if scene_id in scene_by_id:
+                _soft_delete_shots(db, scene_id=scene_id)
 
     created = 0
     skipped = 0
@@ -23972,16 +23977,15 @@ def create_entity(
     existing_entity = db.query(Entity).filter(
         Entity.project_id == project_id,
         episode_scope_filter,
+        _active_entity_clause(),
         func.lower(func.trim(func.coalesce(Entity.type, ""))) == normalized_type,
         or_(
             entity_name_expr.in_(normalized_name_candidates),
             entity_name_en_expr.in_(normalized_name_candidates),
         ),
     ).first()
-    
 
     if existing_entity:
-        _restore_soft_deleted_record(existing_entity)
         existing_entity.description = entity.description or existing_entity.description
         existing_entity.image_url = entity.image_url or existing_entity.image_url
         existing_entity.video_url = entity.video_url or existing_entity.video_url
@@ -24112,7 +24116,7 @@ def _build_unique_entity_name(db: Session, project_id: int, base_name: str, *, f
     candidate = stable_base
     idx = 2
     while True:
-        query = db.query(Entity).filter(Entity.project_id == project_id)
+        query = db.query(Entity).filter(Entity.project_id == project_id, _active_entity_clause())
         if field == "name_en":
             existing = query.filter(Entity.name_en == candidate).first()
         else:
@@ -24428,7 +24432,7 @@ def update_entity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    entity = db.query(Entity).filter(Entity.id == entity_id).first()
+    entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     
@@ -24436,7 +24440,6 @@ def update_entity(
     project = _require_project_access(db, entity.project_id, current_user)
 
     _repair_entity_image_url_from_assets(db, current_user, project, entity)
-    _restore_soft_deleted_record(entity)
 
     update_data = entity_in.dict(exclude_unset=True)
     if "visual_dependencies" in update_data:

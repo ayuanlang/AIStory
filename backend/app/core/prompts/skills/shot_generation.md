@@ -8,7 +8,7 @@
 将 Beats generation 产出的场景节拍转化为标准化 AI Shot List。定位：确认分镜后的最终中文动态视频提示词，不改写剧本，不生成静态生图提示词。输出 Markdown 表格结构不变；只填写 `Video Content (CN)`，`Video Content` 英文列与其他兼容提示词列留空。
 启动顺序：**Beat 完整逻辑（前置+六环节）继承核对** → 穿帮对照 → 拆镜 → 写作。
 **最高限制**：
-1. **彻底继承**：强制继承上游输入的所有角色、道具、环境、背景人物及 Beat 信息，**禁止臆造**。
+1. **彻底继承**：强制继承上游Beat/实体/环境，禁臆造。**正式决战(§25)**：`正式决战=是` → ≥10 Beat，逐Beat拆镜禁合并；`正式决战继承:`(Scene/Beat总数/本镜Beat/阶段)。**宏观群体(§26)**：`宏观群体=是` → ≥6 Beat，逐Beat拆镜禁稀疏；`宏观群体继承:`(Scene/Beat总数/本镜Beat/三要素)。
    - **Beat 完整逻辑继承（最高优先级）**：完整继承 Stage 1 **前置 + 六环节**、Stage 2-2 `{Beats}` 工程化字段；拆镜与 `Video Content (CN)` **不得弱化、省略或改写**任一环节；细则见下文专节。
    - **主节拍与环境切换继承**：若上游 Beat 已包含 `[主节拍规划]` 或 `[环境切换声明]`，必须在 `Shot Logic (CN)` 与 `Video Content (CN)` 中显式继承。
    - **Beat 语言逐字继承**：完整写入 `Video Content (CN)`，格式见 §六.1；禁止概括、改写或只写在 `Shot Logic (CN)`。
@@ -141,41 +141,12 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 2. **构图**：三分、黄金螺旋、对称、引导线、前景层次。
 3. **焦段/透视**：广角=空间拉伸/临场；长焦=压缩/分离。
 4. **摄影机运动**：推/拉/摇/跟；每场至少1个高级运镜；OTS 必写 Left-Shoulder 或 Right-Shoulder；不可越轴。
-   - **经典影视运镜参照（强制）**：每场至少 1 镜、每场含打斗/追逐/对峙/仪式/灾难/法术等强调度 Beat 时该 Beat 覆盖镜头**须全部**在 `Shot Logic (CN)` 写明经典参照与选用逻辑；`Video Content (CN)` 只写本镜实际运镜，禁堆砌片名。写法：`运镜经典参照: [片名/名场面简述] — 借鉴手法=[具体运镜/构图/节奏] — 本镜逻辑=[为何服务当前情绪/空间/动作/题材，与 Beat 六环节哪一环咬合]`。参照须**具体可核对**（片名或系列 + 场景类型），禁空泛「电影感」。题材启发（须按剧情筛选，非照搬）：悬疑惊悚→《七宗罪》走廊跟拍、《沉默的羔羊》POV 压迫；动作犯罪→《谍影重重》手持跟拍、《疾速追杀》长镜头走廊战、《盗梦空间》走廊倾斜；**打斗/格斗**→《疾速追杀》走廊长镜、《叶问》寸拳推近、《老男孩》一战长镜、《导火线》Handheld 缠斗、《卧虎藏龙》竹林侧跟、《英雄》俯瞰箭阵；**高速追逐**→《疯狂的麦克斯：狂暴之路》车载 Lead/Follow、《速度与激情》多机位追车、《碟中谍4》迪拜追车侧跟、《1917》跟随长镜；武侠仙侠→《卧虎藏龙》竹林纵跃、《英雄》水墨色块调度；科幻→《2001太空漫游》对称推拉、《黑客帝国》子弹时间；情感→《花样年华》慢推窄廊、《爱乐之城》长镜头歌舞；战争灾难→《拯救大兵瑞恩》手持冲击。无合适名作可写同类**经典镜头范式**（如希区柯克变焦、库布里克一点透视、斯科塞斯快速推拉）并说明与本镜差异。
-   - **高速追逐跟拍（强制，主动加入）**：凡 Beat 含**高速追逐**（载具追车/逃命、骑马/摩托/飞行器竞逐、屋顶/走廊/林间全速奔逃、被追缉冲刺、体育竞速等持续位移主节拍），拆镜时**主体相位须以高速跟拍承载**，**禁止** Static Hold + Wide 平拍或仅写「快速移动」而不写机位运动。`Shot Logic (CN)` 必填 `高速跟拍技法:`；`Video Content (CN)` 须写出摄影机与主体的**同步高速运动**（速度感、视差、前景掠过、机身晃动/稳定方式）。技法库（按题材筛选）：**Follow Shot**（后随）、**Lead Shot**（前引）、**Tracking Shot / Lateral Tracking**（侧向平行跟）、**Steadicam Glide / Gimbal Float**（稳定器全速跟）、**Handheld Chase**（手持冲击感）、**Car Mount / Bike Mount / Snorricam**（载具/机身绑定）、**Drone Chase / Cable Cam**（空中/索道追）、**Arc Shot at Speed**（弯道环绕）、**Counter-Move**（主体近、背景流）。选用原则：
-     - **追者跟被追者** → Follow Shot 或侧向 Tracking，保持追逐轴线与同向 Screen Direction。
-     - **被追者迎面/前导** → Lead Shot 或 Reverse Tracking，留 Lead Room。
-     - **载具追逐** → Car Mount + 交替 Lead/Follow；弯道用 Arc；超车用 Lateral Tracking + Whip Pan 接反打。
-     - **步跑/走廊/屋顶** → Steadicam/Gimbal 贴身后随或 Handheld 短促呼吸感；长距离可拆 Lead + Follow 对切。
-     - **多主体竞逐** → 平行 Tracking 拉开纵深，或 Drone 高位跟随队列。
-     - **追逐中的关键瞬间**（撞击、跃障、险些被抓）→ 可叠加 §五.4.1 升格，但**追逐主相位仍须常速高速跟拍**，升格只作短插，不得整段追逐全慢镜。
-     - 经典参照示例：《疯狂的麦克斯4》沙漠车队 Lead/Follow 交替、《谍影重重》手持楼梯追逐、《碟中谍4》迪拜追车侧跟。
-   - **打斗类运镜（强制，主动加入）**：凡 Beat 含**近身格斗、械斗、枪战交火、缠斗/擒拿、剑戟/刀棍对决、群殴、擂台/训练对抗、法术近身战、载具内/车顶近距搏斗**等（**不含**以持续位移为主的高速追逐主相位，追逐见上条；**不含**纯远景宏观军团对冲，见 §三.4 群体宏观场面），拆镜时**主体相位须以打斗运镜承载**，**禁止** Static Hold + Wide 平拍整段格斗或仅写「两人打斗」而不写机位运动与轴线。`Shot Logic (CN)` 必填 `打斗运镜技法:`；`Video Content (CN)` 须写出摄影机与格斗轴线的**同步运动**（冲击感、攻防换位、武器/拳锋轨迹可读、受力反馈相位）。与 §五.4.1 升格**叠加**使用：升格只作击打/闪避/命中等短插，**打斗主相位仍须常速运镜**，不得整段格斗全慢镜。技法库（按题材与空间筛选）：
-     - **Handheld Combat / 手持贴身格斗**（默认首选）：机位贴战圈外缘随攻防微移，短促 Breathing Handheld；适合走廊/房间/狭窄空间肉搏。参照：《谍影重重》楼梯战、《导火线》近身缠斗。
-     - **Steadicam / Gimbal Combat Circle**（稳定器绕战圈）：以战圈中心或动作轴为圆心做半弧/全弧 Orbit，保持双方同屏或交替可读；适合双人对决、剑戟对峙。参照：《叶问》圆桌对决、《疾速追杀2》镜厅战。
-     - **Long Take / One-Shot Corridor Fight**（走廊/空间一战长镜）：单镜内 Follow + Track + Whip Pan + Reframe 串联，按 Match on Action 切攻防相位；适合强调连续性与空间压迫。参照：《老男孩》走廊一战、《疾速追杀》走廊长镜。
-     - **Whip Pan / Swish Pan 攻防切镜**：拳锋/刃光/枪口转向瞬间甩镜接反打或下一击主拍，保持 Screen Direction 与 Action Axis；适合快节奏组合技、多人轮番出手。参照：《拳愿》擂台快切、《碟中谍6》浴室战甩镜。
-     - **Push In on Strike / Crash Zoom 冲击推近**：出拳/刺击/扣扳机前 Micro Push 或 Crash Zoom 至 Medium Close-up / Close-up，命中后可接 Static Hold 或 Pull Back；适合关键一击、终结技。参照：《叶问》寸拳推近、《杀死比尔》刃击特写。
-     - **Pull Back / Crane Up 战圈揭示**：从缠斗 Close-up 后拉至 Medium / Wide 揭示第三人入画、环境陷阱或群殴合围；适合由近及远、由单挑扩至群战。参照：《英雄》棋馆剑战后拉、《复仇者联盟》群殴揭示。
-     - **Low-Angle / Ground-Level Combat**（低机位/贴地）：Worm's-Eye 或 Ground-Level 跟拍扫腿、倒地、翻滚、擒拿；强调力量感与失衡。参照：《叶问2》码头群战低角、《摔跤吧！爸爸》贴地缠斗。
-     - **High-Angle / Top Shot 俯瞰战局**：Crane / Drone 高位俯瞰多人走位、阵法、包围圈收缩；个体作剪影/色块，禁中近景逐人细描。参照：《英雄》箭阵、《权力的游戏》混战俯瞰。
-     - **Profile Two-Shot / 侧面双人对决**：Profile Shot 或 Cowboy Shot 固定或微 Track，双方同轴侧向，武器/拳脚轨迹横贯画面；适合剑戟、枪斗、对称对峙。参照：《卧虎藏龙》竹林双剑、《黄金三镖客》决斗。
-     - **OTS / Dirty Single 缠斗过肩**：近距缠斗、锁喉、贴脸压制时用 Left/Right-Shoulder OTS 交替，禁全景复杂缠绕；配合 Push In / Handheld 微晃。参照：《谍影重重》贴身擒拿、《疾速追杀3》刀战 OTS。
-     - **Lateral Tracking 平行战轴跟拍**：机位与 Action Axis 平行侧移，跟随走位、换步、绕圈；适合擂台边线、走廊侧向、剑戟游走。参照：《卧虎藏龙》轻功纵跃侧跟、《007》火车顶格斗。
-     - **Snorricam / Body Mount 主体绑定**：机位绑于主攻/受击者胸背，拳锋/刃光迎面或贴身掠过；适合第一人称冲击感、极限闪避。参照：《谍影重重3》贴身绑定（须 AI 可生成性评估）。
-     - **Counter-Move / Motivated Reprame 闪避反移**：主体后撤/侧闪时机位前推或反向 Track，背景流式掠过；适合闪避、格挡后反击。参照：《黑客帝国》后仰闪避（常速机位段，Bullet Time 见 §五.4.1）。
-     - **Occlusion / Foreground Pass 遮挡接力**：柱/桌/门/人群前景掠过，Match on Action 接下一机位或下一击；适合复杂环境、群殴穿插。参照：《疾速追杀》掩体后出枪、《碟中谍4》沙暴遮挡。
-     - **Master + Intercut 主镜+插切**：Wide/Medium Master 交代战圈与 ENV，Insert / Close-up 切拳锋/刃光/脚步/受力表情，再 Match 回 Master；适合 AI 生成——降单镜复杂度、保动作可读。参照：多数港片/好莱坞动作片标准覆盖。
-     - **Dutch Angle 失衡倾斜**：受击、眩晕、环境倾斜时短相位 Dutch Angle，须写复位依据，禁全程倾斜。
-     - 选用原则：
-       - **双人对决/剑戟** → Profile Two-Shot + Steadicam Orbit 或 Lateral Tracking；关键一击 Push In + §五.4.1 升格短插。
-       - **狭窄空间肉搏** → Handheld Combat 或 Long Take Corridor；禁 Wide 复杂缠绕。
-       - **群殴/多人混战** → Master + Intercut + Whip Pan 切主攻；或 High-Angle 俯瞰 + 个别 MCU 锚点，禁单镜全员复杂动作。
-       - **枪战交火** → Cover-based Tracking + Occlusion Pass + Whip Pan 换掩体；命中瞬间 Push In / Crash Zoom + 升格。
-       - **法术/能量近身战** → Orbit + Push In 蓄力段 + §五.4.1 慢镜展示轨迹 + Pull Back 余波。
-       - **载具内/车顶近距搏斗** → Snorricam / Handheld + Counter-Move；与 §三.4 高速跟拍叠加时，**格斗相位优先打斗运镜**，载具位移用 Follow/Lead。
-       - **AI 可生成性（强制）**：单镜禁 3 人以上复杂缠斗；长 Take 超 8s 趋势拆 Shot；手部细描禁多指，见 §五.3。
-     - 经典参照示例：《疾速追杀》走廊长镜、《谍影重重》手持贴身战、《叶问》中近景寸拳推近、《老男孩》走廊一战、《卧虎藏龙》竹林侧跟、《导火线》近身缠斗 Handheld、《英雄》俯瞰箭阵。
+   - **运镜参照（强制）**：每场≥1镜；打斗/追逐/法术/轻功/宏观Beat全覆盖。`运镜经典参照:`片名+借鉴手法+本镜逻辑。**选用**：§5.5 联想库 → 写入 `打斗运镜技法`/`高速跟拍技法`/`AI高成本奇观`/`升格技法`。
+   - **高速追逐**：追逐主相位须跟拍，禁Static+Wide。详见 §5.5「追逐」。
+   - **打斗/术法近身**：须打斗运镜+轴线同步，禁Static+Wide；「正式决战≥10」逐Beat≥1 Shot。详见 §5.5「武打/术法」。
+   - **轻功/御剑/空域**：须 §5.5「轻功/飞翔」+ `AI高成本奇观:`；正式决战≥3 Beat。
+   - **宏观群体**：须 §5.5「宏观」+ `宏观群体规模/三要素`。
+
    - **对白运镜与说话人景别（强制）**：凡含**口型可读 Dialogue / 画内 OS·V.O.** 的 Shot，`Video Content (CN)` 须在对应 P 段**显式写出运镜**（Push In / OTS 反打 / Tracking / Static Hold MCU / Reframe / Rack Focus 等），将镜头落幅或过程对准**当前画内说话人**的 **Medium Shot / Medium Close-up / Close-up / OTS**；禁止对白相位仅用 Static Hold + Wide/Full/Master/Two Shot 承载说话人。多人对话按说话人切换运镜或切镜，每句至少一镜说话人主拍；听者反应镜不得替代主拍。
    - **对白运镜例外（强制判定）**：
      - **无画内说话人**（NARRATOR、真画外 V.O./旁白、隔门/对讲/声源不可见）：听者/环境/声源 + 闭口（§六.4）；禁对不存在主体 Push In。
@@ -187,11 +158,7 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
      - **抢话/单镜多句**：Whip Pan、反打或拆 P/Shot；每句仍须主拍。
      - **3 人+**：Index 内具名角色单人/OTS 主拍，禁群体广角承载口型对白。
      - **特效/宏观场面**：Beat 含特效相位或全体宏观场面（大军、灾难、仪式、环境级事件等）须 **Extreme Wide / Wide / Full** 体现规模；对白以特效/宏观动势为主拍，说话人可为远景/全景群像或画外，口型非必读；可 intercut 说话人 MCU 但不得压过宏观/特效可读性。`Shot Logic (CN)` 标注例外依据。
-     - **群体宏观场面（无明确数量，强制）**：上游 Beat 以**宏观群体词**描述规模、且**未给出具体数量**时（如大军、雄师、铁骑、机群、战机编队、舰队、船队、无人机群、兽潮、人海、洪流、漫山遍野/遮天蔽日等），本镜须**极致宏观**体现，**禁止**按小队/小簇/稀疏队列落位。拆镜与写作须同时满足：
-       - **景别/机位**：默认 **Extreme Wide Shot / Bird's-Eye View / Top Shot / 高位 Drone / Crane 俯瞰或大仰角**；陆地军团优先地平线铺满式广角，空中机群优先仰拍或高位俯瞰；个体仅作纹理/色块/剪影，**不得**中近景逐人可读。
-       - **画面密度（`Video Content (CN)` 硬约束）**：P1 或宏观主拍 P 段须**主动、显式**写出群体**布满画面**——如「大军自前景一直铺至地平线，左右两侧与画面上沿下沿均被队列填满，无明显留白」「机群密密麻麻遮满天空，仅边缘露出 ENV 天际线」。须同时写清：**前中后景三层均为高密度阵列**、**Crowded Frame / 饱和密度**、**Scale Contrast**（宏观阵列 vs 个别指挥/旗舰/烟尘/火光锚点）。禁只写「远处有一支军队/几架飞机」。
-       - **与背景群演区分**：§五.3 的 2–3 名虚化办公人员等**背景群演**仍按环境锚点小簇写法；本条仅适用于 Beat 主节拍即**宏观阵列/军团/机群**的场面，二者不可混用稀疏描述。
-       - **`Shot Logic (CN)`**：必填 `宏观群体规模:`（群体类型=大军|机群|舰队|…；数量口径=无明确数量→布满画面；景别=Extreme Wide|Bird's-Eye|…；密度策略=前中后景三层饱和|地平线铺满|天空遮满|…）。
+     - **群体宏观场面（§26/§三-D/§七-D）**：宏观词+无明确数量｜`宏观群体=是` → 极致宏观禁稀疏。**三要素**：无边无际(FG→BG满幅)｜细节整齐(同步/三层满编)｜压迫感(逼近/尘浪声浪)；高潮三项齐。**景别**：EWS/Bird's-Eye/Top/Drone/Crane/低角；个体=纹理剪影。**密度**：P1满幅+FG/MG/BG饱和+Crowded+Scale Contrast。**Beat≥6**：逐Beat≥1 Shot禁合并。**Shot Logic**：`宏观群体规模:` + `宏观群体三要素:`。**区分**：背景2–3人小簇(§五.3) ≠ 宏观主节拍。
    - **对白收束与景别落幅（强制）**：**对白结束判定** = 本组全部 `(Pn)` 语言读完 **且** 各 `(Pn)` 绑定的说话人/听者 **微表情链与微动作均完成落点结景**；组内须逐 `(Pn)` 落点后再切下一 `(Pn)` 或切换景别。**收束落幅**按 §三.1 执行：先读上游 `{对白组边界}` + `{下一节拍起幅}`，再选四档落幅与执行优先级（默认 **下一镜 P1 建置** 优于本镜 Pull Back）。Walk-and-Talk、Scene 末镜切场、上游强制特写/插帧、宏观主拍对白组按各自例外处理；`Shot Logic (CN)` 须写 `收束落幅判定`。
 5. **转场**：上游过渡 -> 具体运镜/光影/色调演进；可用视线、动作轴线、遮挡、图形 Match、Rack Focus、色调渐变/去色/冷暖切换、Defocus、自然推拉、声桥。禁止生硬切镜。  
 6. **闪回/回忆（强制继承 Stage 1 闪回三档，禁止升格）**：  
@@ -207,12 +174,11 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
    - **构图/画面组织**：Rule of Thirds、Golden Ratio、Golden Spiral、Symmetrical Composition、Asymmetrical Balance、Central Composition、Triangular Composition、Diagonal Composition、S-Curve Composition、Leading Lines、Vanishing Point、Frame within Frame、Foreground Framing、Natural Frame、Negative Space、Positive Space、Lead Room、Looking Room、Headroom、Nose Room、Deep Staging、Layered Composition、Foreground/Midground/Background、Silhouette Composition、Chiaroscuro Composition、Graphic Match Composition、Balanced Mass、Visual Weight、Open Frame、Closed Frame、Crowded Frame、Isolated Subject、Occlusion Layer、Depth Cues、Scale Contrast、Color Blocking、Shape Contrast、Texture Contrast、High/Low Horizon Line。
    - **镜头/焦段/透视**：Ultra Wide Angle、Wide Angle、Normal Lens、Telephoto、Long Lens、Macro Lens、Tilt-Shift、Anamorphic、Spherical Lens、Fisheye、Shallow Depth of Field、Deep Focus、Soft Focus、Selective Focus、Rack Focus、Split Diopter、Bokeh、Lens Compression、Perspective Distortion、Parallax、Foreground Magnification、Background Compression、Focus Pull、Focus Breathing、Whip Focus。
    - **机位/摄影机支撑**：Locked-Off Camera、Tripod、Dolly、Track、Slider、Crane、Jib、Steadicam、Gimbal、Handheld、Shoulder Rig、Drone、Cable Cam、Snorricam、Car Mount、Low Rig、Overhead Rig、Point-of-View Rig、Static Observer、Subjective Camera、Objective Camera、Surveillance Camera View、Phone Camera View、Screen View。
-   - **运镜/运动语汇**：Dolly In、Dolly Out、Push In、Pull Back、Track Left、Track Right、Tracking Shot、Follow Shot、Lead Shot、Lateral Tracking、Arc Shot、Orbit Shot、Crane Up、Crane Down、Boom Up、Boom Down、Tilt Up、Tilt Down、Pan Left、Pan Right、Whip Pan、Swish Pan、Roll、Pedestal Up、Pedestal Down、Truck In、Truck Out、Zoom In、Zoom Out、Crash Zoom、Slow Zoom、Handheld Drift、Breathing Handheld、Steadicam Glide、Gimbal Float、Reveal Move、Motivated Move、Counter-Move、Camera Reframe、Micro Push、Static Hold、Long Take、One-Shot、Plan-Sequence、High-Speed Follow、High-Speed Lead、Car Mount Chase、Bike Mount Chase、Snorricam、Drone Chase、Cable Cam Chase、Reverse Tracking、Parallel Chase Coverage、Handheld Combat、Combat Orbit、Push In on Strike、Pull Back Reveal、Profile Two-Shot Combat、Ground-Level Combat、Master + Intercut Fight、Occlusion Pass Combat。
-   - **高速追逐跟拍技法库（追逐 Beat 强制参考）**：Follow Shot、Lead Shot、Tracking / Lateral Tracking、Steadicam Glide、Gimbal Float、Handheld Chase、Car Mount、Bike Mount、Snorricam、Drone Chase、Cable Cam、Arc Shot at Speed、Counter-Move、Reverse Tracking、Parallel Chase Coverage。`Shot Logic (CN)` 须写 `高速跟拍技法:`；`Video Content (CN)` 须写出机位与主体同步运动及速度感（如「Gimbal 贴 CHAR 后腰全速后随，两侧廊柱成流式视差掠过」）。
-   - **打斗类运镜技法库（打斗 Beat 强制参考）**：Handheld Combat、Steadicam/Gimbal Combat Circle、Long Take / One-Shot Fight、Whip Pan / Swish Pan Cut、Push In on Strike、Crash Zoom、Pull Back Reveal、Crane Up / High-Angle Combat、Low-Angle / Ground-Level Combat、Profile Two-Shot、OTS / Dirty Single Grapple、Lateral Tracking on Action Axis、Snorricam / Body Mount、Counter-Move / Motivated Reframe、Occlusion Pass / Foreground Pass、Master + Intercut、Dutch Angle Impact。`Shot Logic (CN)` 须写 `打斗运镜技法:`；`Video Content (CN)` 须写出机位与格斗轴线同步运动及冲击相位（如「Handheld 贴战圈外缘随 CHAR 出拳前推半步，Whip Pan 甩至 CHAR 侧脸 Close-up 读受力反馈」）。
-   - **调度/轴线/视线**：180-Degree Rule、Eyeline Match、Screen Direction、Crossing Axis、Axis Reset、Blocking、Staging、Walk-and-Talk、Shot-Reverse-Shot、Match on Action、Reaction Coverage、Action Axis、Power Axis、Foreground Pass、Occlusion Reveal、Entrance/Exit Frame、Motivated Reposition、Foreground-to-Background Shift、Background-to-Foreground Shift。
-   - **转场/剪辑联想**：Cut、Hard Cut、Match Cut、Graphic Match、Action Match、Eyeline Match Cut、Sound Bridge、J-Cut、L-Cut、Cut on Motion、Cutaway、Insert Cut、Smash Cut、Fade In、Fade Out、Dissolve、Cross Dissolve、Iris、Wipe、Whip Pan Transition、Occlusion Transition、Light Flare Transition、Rack Focus Transition、Defocus Transition、Time-Lapse、Slow Motion、Bullet Time、Speed Ramp、Freeze Frame、Montage、Parallel Cutting。
-   - **高速动作升格技法库（打斗/特效/追逐强制参考）**：Slow Motion（慢动作）、Bullet Time（子弹时间/环绕定格）、Speed Ramp（变速：常速→慢→常）、Freeze Frame（撞击/决策定格）、Hyper Slow-Mo（超慢强调冲击）、Time Slice（多机位冻结环绕）、Phantom Cam Feel（高帧冲击感）。`Shot Logic (CN)` 须写 `升格技法:` 选用项 + 触发相位 + 参照逻辑；`Video Content (CN)` 须写出可见变速过程（如「拳锋距面颊数厘米处切入 Bullet Time 环绕半弧后恢复常速」）。
+   - **运镜/运动语汇**：Dolly In/Out｜Push In/Pull Back｜Tracking/Lateral/Arc/Orbit｜Follow/Lead｜Crane/Boom｜Whip Pan｜Handheld/Steadicam/Gimbal｜Long Take｜Snorricam｜Counter-Move｜Master+Intercut｜Drone/Cable Cam。
+   - **武打/仙侠/轻功/飞翔/宏观/追逐联想库**：见 §5.5（强制参考，按相位择项写入 Shot Logic）。
+   - **调度/轴线/视线**：180-Degree Rule｜Eyeline Match｜Screen Direction｜Action Axis｜Match on Action｜Occlusion Pass｜Foreground Pass。
+   - **转场/剪辑联想**：Match Cut｜Action Match｜Eyeline Match Cut｜Sound Bridge｜Whip Pan Transition｜Occlusion Transition｜Speed Ramp｜Bullet Time｜Freeze Frame。
+   - **升格**：见 §5.4.1；`升格技法:`+触发相位。
 
 ### 四、灯光设计 (Lighting Design)
 1. **三点布光**：Key=基调；Fill=反差；Back/Rim=分离。
@@ -246,14 +212,88 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
    - **群演**：若上游 Core Scene Info 含群演/背景人群，用自然语言写环境锚点群落分布 + 随机生态动作（数量、左右/前后位置、虚化程度、统一或随机反馈）；**禁止** `EXTRA:` 标签、禁止自造具名 `CHAR:`、禁止新增 Index 外个体；主配角关键动作/台词后补“统一反馈/随机反馈”。**宏观军团/机群/舰队等无明确数量的主节拍场面**不适用本条的稀疏小簇写法，须改按 §三.4 **群体宏观场面** 执行布满画面。
    - **受力反应**：施力方动作 -> 受力方生理/物理滞后反应。
 4. **空间重力与速度量化**：激烈动作写力度、速率、相对距离。
-4.1 **打斗/特效/高速动作升格（强制，主动加入）**：凡 Beat 含**打斗、械斗、枪战、爆炸、法术/能量释放、大规模破坏、体育竞技关键瞬间、载具碰撞、坠落/闪避极限动作**等（**不含**以持续位移为主的高速追逐主相位，追逐跟拍见 §三.4），拆镜时**须主动**安排 Slow Motion、Bullet Time、Speed Ramp、Freeze Frame 等升格技法，且**打斗主相位须 §三.4 打斗运镜**承载（升格只作短插，不得替代常速打斗运镜）。追逐 Beat 的升格**仅用于**撞击/跃障/抓握等关键瞬间短插，**追逐主相位须 §三.4 高速跟拍**。至少满足：`Shot Logic (CN)` 写 `升格技法:` + `打斗运镜技法:`（打斗镜）+ `运镜经典参照:`（可合并说明）；`Video Content (CN)` 在对应 P 段写明升格起止与可视变化。选用原则：
-   - **击打/碰撞/爆炸命中瞬间** → Bullet Time 或 Hyper Slow-Mo + 可选 Orbit/Arc 环绕，强调受力与 debris/能量扩散。
-   - **弹道/暗器/法术轨迹/飞溅物** → Slow Motion 或 Time Slice，保证轨迹与落点可读。
-   - **闪避/腾空/翻身/落地** → Speed Ramp（常速起势→慢镜悬空/最高点→常速落地）或慢推跟拍。
-   - **连续格斗组合** → 至少 1 段 Speed Ramp 或插入 1 镜 Bullet Time 定格关键一击；其余可用短慢镜强调拳锋/刃光。
-   - **大规模法术/环境毁灭** → 慢镜展示扩散波前 + 常速切人群/建筑反应，或 Wide 下 Bullet Time 环绕主体。
-   - **情绪落点叠加**（复仇一击、诀别挡刀、牺牲引爆）→ 慢镜 + Freeze Frame 或极慢 Pull Back。
-   - 无打斗的纯特效展示 Beat 同样适用；日常对话/静态文戏**不强制**升格，但若上游 Beat 已标注慢镜/定格须继承。
+4.1 **升格(§5.4.1)**：打斗/特效/极限动作Beat须Slow Mo/Bullet Time/Speed Ramp/Freeze；打斗主相位=常速运镜(§5.5)，升格只短插；追逐=高速跟拍。**配对**：击打/爆炸→Bullet Time+Orbit｜弹道/法术轨迹→Slow Mo/Time Slice｜闪避腾空→Speed Ramp｜组合技→≥1升格短插｜域场→慢镜波前+常速反应。
+4.2 **武术/法术动作(§七-B)**：`动作联想:`+项+三轴+轨迹+反馈；正式决战每Beat≥1。**武术**：起势｜试探｜拳/腿/格挡/闪避｜剑/刀/枪/双刀｜擒拿/气劲。**法术**：结印/引气｜五行｜御剑/剑阵｜符/阵｜护盾｜对撞/反制｜禁术｜域场｜法宝/法相｜收功。
+4.3 **轻功/飞翔/域场(§七-C)**：`AI高成本奇观:`+§5.5选用项+运镜+景别；正式决战≥3。
+4.4 **宏观群体(§七-D)**：`宏观动作联想:`+§5.5选用项+FG/MG/BG密度+三要素。
+
+#### 5.5 电影运镜联想技巧库（强制参考）
+**用法**：按 Beat 主相位从库择 1–2 项 → 写入 `Shot Logic` 对应字段 + `Video Content` 机位同步运动；`运镜经典参照:` 须可核对片名/名场面。**原则**：打斗主相位常速运镜；升格只短插(§5.4.1)；单镜禁3人+复杂缠斗；Long Take>8s拆镜。
+
+#### A. 武打/格斗/枪战（`打斗运镜技法:`）
+| 相位 | 运镜 | 景别/机位 | 升格 | 参照 |
+|---|---|---|---|---|
+| 对峙/起势 | Static Hold MCU / Profile Two-Shot | MS/MCU 侧轴 | 无 | 黄金三镖客/叶问 |
+| 窄空间肉搏 | Handheld Combat / Long Take | MCU/CU 贴战圈 | 命中短插 | 谍影重重/老男孩/导火线 |
+| 双决/剑戟 | Steadicam Orbit / Lateral Tracking | Profile/Cowboy | Push In+升格 | 卧虎藏龙/叶问 |
+| 快攻连击 | Whip Pan / Swish Pan Cut | MCU→CU 反打 | Speed Ramp | 疾速追杀/碟中谍6 |
+| 关键一击 | Push In / Crash Zoom | CU/ECU | Bullet Time短插 | 叶问/杀死比尔 |
+| 格挡/受力 | Counter-Move / Static Hold | CU 读反馈 | Hyper Slow-Mo | 导火线 |
+| 闪避/后撤 | Counter-Move / Motivated Reframe | MCU 背景流式掠过 | Speed Ramp | 黑客帝国 |
+| 群殴/混战 | Master+Intercut / High-Angle Top | Wide+Insert CU | 局部升格 | 英雄/叶问2 |
+| 枪战/掩体 | Tracking+Occlusion Pass | MS 贴掩体 | 命中Push In | 疾速追杀 |
+| 术法近身 | Orbit+Push In / Pull Back | MCU→Wide余波 | 轨迹Slow Mo | 英雄/卧虎藏龙 |
+| 战圈揭示 | Pull Back / Crane Up | CU→MS/Wide | 无 | 复仇者联盟 |
+| 贴地/扫腿 | Ground-Level / Worm's-Eye | Low CU | 无 | 摔跤吧爸爸 |
+| 第一人称冲击 | Snorricam / Body Mount | POV/CU | 闪避短插 | 谍影重重3 |
+| 失衡/受击 | Dutch Angle（短相位） | CU | Freeze可选 | — |
+
+**配对速查**：双决→Profile+Orbit+Lateral｜窄空间→Handheld+Long Take｜群殴→Master+Intercut+High-Angle｜枪战→Tracking+Occlusion｜术法→Orbit+Push In+Pull Back｜载具内→Snorricam+Handheld
+
+#### B. 轻功/檐上/壁跑/空域位移（`AI高成本奇观:` + `打斗运镜技法:`）
+| 相位 | 运镜 | 景别/机位 | 升格 | 参照 |
+|---|---|---|---|---|
+| 踏空/凌波 | Drone Follow / Crane 低→高 | EWS→MS 垂直纵深 | Speed Ramp起跳/落地 | 卧虎藏龙/英雄 |
+| 檐上/屋脊追逐 | Lateral Tracking / Gimbal Follow | MLS 贴屋脊线 | 跃空短插 | 卧虎藏龙 |
+| 竹冠/借力 | Arc Shot / Orbit 绕支点 | MS 读借力点 | 无 | 卧虎藏龙/英雄 |
+| 飞瀑/壁跑 | Crane Up+Follow / Low-Angle | 低角仰拍+垂直跟 | 水花Slow Mo | 英雄 |
+| 垂直升降 | Crane Up/Down / Boom | Wide 读高度差 | Speed Ramp | 卧虎藏龙 |
+| 俯冲掠地 | Follow / Lead 俯冲 | 高→低纵深 | Speed Ramp | 英雄/仙侠特效场 |
+
+**配对速查**：檐上→Lateral+Follow｜踏空→Drone/Crane垂直｜壁跑→Crane+Low-Angle｜借力→Arc+Orbit
+
+#### C. 御剑/飞翔/空战（`AI高成本奇观:`）
+| 相位 | 运镜 | 景别/机位 | 升格 | 参照 |
+|---|---|---|---|---|
+| 御剑冲天 | Crane Up / Drone 仰拍 | EWS/Bird's-Eye | 穿云Speed Ramp | 蜀山/仙侠CG参考 |
+| 双人竞逐 | Lead+Follow 并行 / Lateral | EWS 双体同框 | 超车Whip Pan | 卧虎藏龙 |
+| 云层对决 | Bird's-Eye / Drone Orbit | EWS 云岛为战台 | 对撞Bullet Time | 英雄/云海场 |
+| 空中换招 | Gimbal Orbit / Handheld 贴战圈 | MS 空中缠斗 | Whip Pan+升格 | 卧虎藏龙 |
+| 俯冲追击 | Follow 垂直下压 / Crash Dive | 高→低 | Speed Ramp | 英雄 |
+| 穿云破雾 | Crane Through / Follow | 穿云瞬间CU→EWS出云 | 出云亮度突变 | 仙侠空战 |
+| 托剑滑行 | Lateral Low Tracking | MLS 贴剑身弧线 | 尾迹Slow Mo | — |
+| 法相/巨物 | Crane Up+Pull Back Reveal | EWS Scale Contrast | 对撞升格 | 封神/域场参考 |
+| 天地法阵 | Drone Top+Crane 贯通 | EWS 地面—天顶双层 | 法阵展开Slow Mo | 英雄箭阵 |
+
+**配对速查**：冲天→Crane Up+Bird's-Eye｜竞逐→Lead/Follow并行｜空战换招→Gimbal Orbit+Whip Pan｜域场→EWS+Drone+Slow Mo波前
+
+#### D. 追逐（`高速跟拍技法:`）
+| 相位 | 运镜 | 景别 | 升格 | 参照 |
+|---|---|---|---|---|
+| 追者跟被追 | Follow / Tracking | MLS/MS | 撞击短插 | 谍影重重/1917 |
+| 被追前导 | Lead / Reverse Tracking | MS Lead Room | 跃障短插 | 麦克斯4 |
+| 载具追逐 | Car Mount+Lead/Follow交替 | MS 侧窗/路流 | 碰撞Bullet Time | 碟中谍4/速度与激情 |
+| 步跑/走廊 | Steadicam/Gimbal / Handheld | MS 贴身后随 | 抓握短插 | 谍影重重 |
+| 弯道/超车 | Arc at Speed / Lateral+Whip Pan | MS | 无 | 麦克斯4 |
+| 机群/剑阵掠阵 | Drone Chase / Cable Cam | EWS→MS | 无 | 壮志凌云2 |
+
+#### E. 宏观群体（`宏观群体规模:` + `宏观动作联想:`）
+| 相位 | 运镜 | 景别 | 三要素 | 参照 |
+|---|---|---|---|---|
+| 无边际建置 | Drone/Crane Bird's-Eye | EWS 地平线满幅 | 无边+整齐 | 拯救大兵瑞恩/英雄 |
+| 整齐细节 | Insert踏步/旗枪 + Pull Back | Insert→EWS同框 | 整齐 | 阅兵/叶问2 |
+| 压迫推进 | Low-Angle Tracking / Follow | 低角仰拍尘浪 | 压迫 | 麦克斯4/指环王 |
+| 两阵对垒 | Extreme Wide 双阵同框 | EWS 中线空带收窄 | 压迫+整齐 | 英雄/Red Cliff |
+| 冲锋对撞 | Tracking 中线 / Low-Angle | EWS→MS对撞 | 三要素齐 | Braveheart |
+| 箭阵/术法遮天 | High-Angle Top / Crane | EWS 顶空→地面 | 无边+压迫 | 英雄 |
+| 兽潮/机群满幅 | Bird's-Eye / Drone 俯瞰 | EWS 满幅 | 无边 | 指环王/Independence Day |
+
+#### F. 经典参照索引（`运镜经典参照:` 速查）
+**武打**：疾速追杀(走廊Long Take)｜谍影重重(Handheld)｜叶问(寸拳Push In)｜老男孩(一战长镜)｜导火线(贴身战)｜卧虎藏龙(竹林侧跟)｜英雄(箭阵/水墨调度)  
+**仙侠/轻功/飞翔**：卧虎藏龙(屋脊/竹林/瀑布)｜英雄(瀑布/箭阵/色块)｜蜀山/封神(御剑/法相EWS)  
+**追逐**：麦克斯4(Lead/Follow)｜谍影重重(楼梯/手持)｜碟中谍4(迪拜追车)｜1917(跟随长镜)  
+**宏观**：拯救大兵瑞恩(手持冲击/登陆)｜英雄(箭阵/大军)｜Braveheart(冲锋)
+
 5. **道具连续**：拾取/穿戴后，每镜交代仍握持/仍佩戴，直至明确放下。
 
 ### 六、对话与表情规范 (Dialogue & Expressions)
@@ -300,7 +340,7 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 1. **全局动态风格**：1–2 句重申项目基调；有 `Global_Style` 时首句须为 `全局动态风格：{原文}`。
 2. **运镜与动作流**（须完整呈现 Beat 完整逻辑六环节，并符合 §三.4、§五、§六、§七）：
    - **P1（环节 0+1+2+3 起幅）**：先复述/承接上一 Beat 或上镜全体站位可见状态 → 机位/景别 → `ENV:[...]` → 三层框架 → 逐实体七要素 → 主节拍起势；**宏观军团/机群等无明确数量**时 P1 须以 Extreme Wide / 俯瞰建置，并**主动写群体布满画面**（§三.4）。
-   - **P2…Pn（环节 3–6 过程）**：运镜/动作/对白/微表演/反馈；含 `(Pn)` 时写环节 4–5；移动写轨迹节点 FG/MG/BG+左中右；**打斗/特效**须写出升格起止（§五.4.1）+ **打斗运镜**机位与轴线运动（§三.4）；**高速追逐**须写出跟拍机位与同步运动（§三.4）；**宏观军团/机群等无明确数量**须写出群体**布满画面**的前中后景高密度阵列（§三.4）。
+   - **P2…Pn（环节 3–6 过程）**：运镜/动作/对白/微表演/反馈；含 `(Pn)` 时写环节 4–5；移动写轨迹节点 FG/MG/BG+左中右；**打斗/术法/轻功/空战**须 §5.5 运镜+升格分工(§5.4.1)；**追逐**须 §5.5「追逐」跟拍；**宏观**须布满画面三层阵列(§三.4)。
    - **终段（环节 3+6 落幅）**：动作/受力静止结果 + 全员反馈落点；按 §三.1 决定是否 Pull Back（判定只写 Shot Logic）。
    - 含语言时：完整原句 + 口型/闭口 + 听者微表演 + 对话布光；口型可读须写运镜+说话人景别（§三.4）。
    - 微表情/特效：起势→中段→落点；环节 5 中视线/肢体变化须锚定立体三轴（见 §七.3）。
@@ -363,11 +403,18 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 - `观察视角继承:`（=环节1）来源Beat=…；当前ENV=…；**环境—视角匹配**=主环境|衍生环境+自检结论；观察起点/角度/目标=…；视角变化=…；建置更新=…
 - `景深层次继承:`（=环节2）来源Beat=…；建置更新=…；前景/中景/背景框架与变更项=…
 - `主节拍规划继承:`（=环节3）来源Beat=…；核心动作=…；承接点=…；落点功能=…；本镜承担=…
-- `运镜经典参照:`（每场≥1镜；打斗/特效/追逐 Beat 全覆盖）片名/名场面=…；借鉴手法=…；本镜逻辑=…
-- `高速跟拍技法:`（高速追逐镜必填，其余 None）选用=Follow|Lead|Tracking|Car Mount|…；机位关系=…；参照逻辑=…
-- `打斗运镜技法:`（打斗/械斗/枪战/缠斗/对决镜必填，其余 None）选用=Handheld Combat|Whip Pan|Long Take|Push In on Strike|Master+Intercut|…；机位关系=…；Action Axis=…；参照逻辑=…
-- `升格技法:`（打斗/特效/追逐关键瞬间镜必填，其余 None）选用=Slow Mo|Bullet Time|Speed Ramp|Freeze|无；触发相位=…；参照逻辑=…
-- `宏观群体规模:`（大军/机群/舰队等无明确数量镜必填，其余 None）群体类型=…；数量口径=无明确数量→布满画面；景别=Extreme Wide|Bird's-Eye|…；密度策略=…
+- `正式决战继承:`（正式决战镜必填）Scene|Beat总数|本镜Beat|阶段
+- `动作联想:`（打斗/术法镜必填）§七-B项+三轴+轨迹+反馈
+- `AI高成本奇观:`（轻功/飞翔/域场镜必填）§七-C项+运镜+景别
+- `运镜联想:`（武打/轻功/飞翔/追逐/宏观镜必填）§5.5分区=…；相位=…；选用运镜=…；景别=…；升格=…|无
+- `运镜经典参照:`（每场≥1镜）片名+名场面+借鉴手法+本镜逻辑（§5.5-F）
+- `宏观动作联想:`（宏观镜必填）§5.5-E项+FG/MG/BG密度
+- `高速跟拍技法:`（追逐镜必填）选用+机位关系
+- `打斗运镜技法:`（打斗镜必填）选用+Action Axis+参照
+- `升格技法:`（关键瞬间镜必填）选用+触发相位
+- `宏观群体规模:`（宏观镜必填）类型=大军|机群|舰队|…；口径=布满画面；景别=…；密度=三层饱和|地平线|天空遮满
+- `宏观群体三要素:`（宏观镜必填）无边无际|细节整齐|压迫感=是|否；本镜主=…
+- `宏观群体继承:`（宏观Scene镜必填）Scene|Beat总数|本镜Beat|阶段|三要素
 - `收束落幅判定:`（=环节6）对白组完结=…；上游下一节拍起幅=…；四档=…；执行方式=…
 - `开场转场技巧说明:`（每个新 Scene 的首镜必填，见下候选库；禁 None）  
 - 非 Scene 首镜：`前接说明: 前一镜可见落点=…；本镜过渡手法=…；本镜画面提示词仅复述当前可见实体状态,不写承接上一镜。`
@@ -406,11 +453,11 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 
 #### 输出前自检（`Shot Logic` 末尾勾选）
 - **Beat 完整逻辑**：⓪ 全体站位 ① **ENV 环境—视角匹配**+观察视角 ② 三层+逐实体 ③ 运动方向与朝向+动作 ④ 对白咬合 ⑤ 微表演 ⑥ 承接+反馈。
-- 运镜：轴线 → 起镜/过渡/落镜 → **经典参照+逻辑已写 Shot Logic** → 对白运镜+收束落幅（§三.1、§三.4）→ 景别无越级。
-- 宏观群体：大军/机群/舰队等**无明确数量** → **宏观群体规模已写 Shot Logic** → **Video Content 已主动写布满画面+三层高密度阵列**（§三.4）。
-- 追逐：高速追逐镜 → **高速跟拍技法已选且写入 Video Content**（§三.4）→ 耗时已入时间预估。
-- 打斗：打斗/械斗/枪战/缠斗镜 → **打斗运镜技法已选且写入 Video Content**（§三.4）→ 与 §五.4.1 升格短插分工明确 → 耗时已入时间预估。
-- 升格：打斗/特效/追逐关键瞬间 → **升格技法已选且写入 Video Content**（§五.4.1）→ 耗时已入时间预估。
+- 运镜：轴线 → §5.5择项 → `运镜联想`+`运镜经典参照`+对应技法字段 → 对白运镜+收束(§三.1) → 景别无越级
+- 宏观群体：`宏观群体=是` → 规模+三要素+§5.5-E → Video满幅+Beat≥6未合并(§26)
+- 追逐：§5.5-D已选 → `高速跟拍技法`已写Video → 耗时入时间预估
+- 正式决战：`正式决战=是` → 继承+逐Beat≥1 Shot+§5.5 A/B/C+动作联想(§5.4.2)+奇观≥3
+- 打斗/升格：常速运镜(§5.5)+升格短插分工(§5.4.1)
 - 空间：七要素齐全 → **前后位置双轨（镜头+ENV/实体）** → ENV 已写 → 语言逐字可检索（§六.1）→ 实体标准表达（§一.0.1）。
 - `Video Content`：自然叙述 + P1/Pn → **无 Shot Logic 解释句入正文** → 无「上镜/承接上一镜」代指。
 
@@ -420,5 +467,5 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| (自动生成) | (核心动作简述) | (当前场景ID) | (Beat完整逻辑继承+切换判定+收束落幅+观察视角+主节拍+景深层次+运镜经典参照+高速跟拍技法+打斗运镜技法+升格技法+环境切换+防穿帮+时间预估+空间自检) |  |  | (整数秒数) |  |  |  | (六环节可视呈现：P1=环节1–3建置；Pn=环节3–6过程；含(Pn)对白+微表演；打斗/特效须写升格+打斗运镜；追逐须写高速跟拍；ENV必写；禁字段体与Shot Logic解释句) |  |  | (CHAR/PROP/ENV) |
+| (自动生成) | (核心动作简述) | (当前场景ID) | (Beat完整逻辑继承+切换判定+收束落幅+观察视角+主节拍+景深层次+运镜联想+运镜经典参照+高速跟拍技法+打斗运镜技法+升格技法+宏观群体字段+环境切换+防穿帮+时间预估+空间自检) |  |  | (整数秒数) |  |  |  | (六环节可视呈现：P1=环节1–3建置；Pn=环节3–6过程；含(Pn)对白+微表演；武打/轻功/空战/追逐/宏观须§5.5运镜+升格分工；ENV必写；禁字段体与Shot Logic解释句) |  |  | (CHAR/PROP/ENV) |
 | EP01_SC02_SH01 | 对峙压桌综合示例 | EP01_SC02 | Beat完整逻辑继承: 来源Beat=Beat 1；本镜覆盖环节=0|1|2|3|4|5|6；上一Beat全体站位承接=Scene首Beat开场建置；缺口=无。<br>切换判定: 时空关系=连续；桥接依据=同轴关系镜+全景→中近景递进；轴线状态=同侧，未过轴；跨幅级别=小跨幅。<br>观察视角继承: 来源Beat=Beat 1；当前ENV=ENV:[Office]；观察起点=会议桌侧；观察角度=Eye-level；观察目标=双人对峙区；视角变化=无；建置更新=是。<br>景深层次继承: 来源Beat=Beat 1；建置更新=是；前景/中景/背景建置见示例场景设定。<br>主节拍规划继承: 来源Beat=Beat 1；核心动作=Lin 前倾压桌索要文件，Chen 防守回应；承接点=会议桌对峙建置；落点功能=为下一镜调度预留空间；本镜承担=综合示例。<br>收束落幅判定: 对白组完结=是；上游下一节拍起幅=全景建置；四档=回全景建置；执行方式=本镜 Pull Back（路径 B 次选）。<br>环境切换声明: None。<br>对白覆盖: P2=Lin 主拍；P3=Chen 反打；P4=Pull Back 收束。<br>防穿帮自检: 双人轴线、口型对白、手部细节、群演反馈 -> OTS 正反打+Push In -> 本镜完成双句对白收束。<br>时间预估: 建置2s+语言3.5s+动作2s+微表情2s+收束2s+转场1s=串行12.5s；并行核 P2=2s，P3=2s；Duration=9s。<br>空间结构自检: 六环节 2–3 七要素齐全；关键道具有坐标；动态起落无冲突。 |  |  | 9 |  |  |  | 全局动态风格：现实主义职场剧质感，自然通透光，真实真人影像纹理。<br>运镜与动作流：P1 Eye-level Two Shot 中全景起幅，镜头面向 ENV:[Office] 会议桌右前角，三分构图锁定双人对峙。前景是会议桌上沿与杯口虚焦形成近距框景，PROP:[Desk] 桌沿距镜头约一步、位于下沿中部；中景中 CHAR:[@Lin] 距桌右前角一步、位于左三分之一、朝右前倾压桌，CHAR:[@Chen] 距桌后缘一步、位于右三分之一、朝左端坐回视；背景中文件柜前左后簇 2–3 名虚化办公人员停谈转头，百叶侧右后簇 1–2 人后退半步，目光朝中景双人区。P2 镜头沿桌沿 Steadicam Glide 低速侧移并 Micro Push In，从 P1 中全景推近至 CHAR:[@Lin] 中近景主拍，CHAR:[@Chen] 以虚焦过肩占画左三分之一形成 Dirty Single，焦点锁定 Lin 面部、下颌与口型；(P2) {Lin 前倾压桌发声，Chen 闭口聆听防备} — Dialogue (CHAR:[@Lin]) (voice_type: 对白, tone: 压迫恳切, speed: 中速, volume: 正常): "把文件给我" — {CHAR:[@Chen] 左肩微收、视线不回避，左后簇统一停谈、右后簇低声窃语}；Lin 说完后下颌微绷、唇线落结景，Chen 左肩微收后静止。P3 镜头 Left-Shoulder OTS 反打，Track 微移半幅并对 CHAR:[@Chen] Push In 落幅中近景，聚焦 Chen 抬眼开口的面部与口型，Lin 以虚焦肩背占画右三分之一；(P3) {Chen 抬眼开口回击，Lin 闭口压桌倾听} — Dialogue (CHAR:[@Chen]) (voice_type: 对白, tone: 冷静克制, speed: 中速, volume: 正常): "你先后退" — {CHAR:[@Lin] 下颌微绷、视线不退，桌沿手部仍保持压势}；Chen 说完后唇角抿紧、视线定住 Lin 落结景，Lin 指腹收紧桌沿半拍后静止。P4 Dolly Out / Pull Back 从 P3 中近景退回 P1 同级 Two Shot 中全景，复写 ENV:[Office] 前景/中景/背景：CHAR:[@Lin] 停于桌沿一步外保持压桌，CHAR:[@Chen] 文件仍压在掌下、抬眼与 Lin 对峙，桌沿居中分隔双人，背景群演维持旁观与避让姿态。<br>动态连续光影/焦点：靠窗自然侧光为主、顶灯柔补为辅，光比连续；P2/P3 浅景深锁定说话人面部，P4 Pull Back 后焦点回稳至双人关系平面与三层空间。<br>光线连动弧光：靠窗冷白侧光与室内暖顶光对比，服务对白张力升压至双人空间对峙收束。<br>物理文字生成：无。 |  |  | CHAR:[@Lin], CHAR:[@Chen], PROP:[Desk], ENV:[Office] |
