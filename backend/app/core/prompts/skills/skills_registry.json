@@ -83,6 +83,17 @@
             "legacy_refs": [
                 "skills/shot_generation.md"
             ]
+        },
+        {
+            "id": "shot_prompt_modification",
+            "title": "Shot Prompt Modification (分镜提示词修改)",
+            "type": "storyboard",
+            "prompts": [
+                "skills/shot_prompt_modification.md"
+            ],
+            "legacy_refs": [
+                "skills/shot_prompt_modification.md"
+            ]
         }
     ]
 }

@@ -30,6 +30,16 @@
     "notes": "当前实现未见稳定成功扣费路径，可按运营策略切换"
   },
   {
+    "key": "tool.tune_shot_prompt",
+    "tool_group": "agent_llm_ops",
+    "display_name": "分镜提示词修改",
+    "endpoints": ["/tools/tune_shot_prompt"],
+    "default_task_type": "llm_chat",
+    "source_categories": ["LLM"],
+    "billable": false,
+    "notes": "按剧本分析 API 路由，修改分镜视频提示词"
+  },
+  {
     "key": "tool.search_project_data",
     "tool_group": "agent_mcp_ops",
     "display_name": "项目内搜索（MCP）",

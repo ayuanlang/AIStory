@@ -38,7 +38,7 @@
 - **[Node 2] 选角导演 (Casting Director) - 角色深度塑造与美学落地**
   - 基于上游 characters 索引，落实主角级美学：真实肤质、去 3D 感、反同质化、合理头身比例。
   - 遵守 1.1 “四宫格与画幅强制基线”，转译为标准化、镜头友好的高质量中文提示词；`generation_prompt_en` 仅保留字段并置空。
-  - 精准复用 Subject Index 的 `entity_attributes`：种族、职业、发型发色、服饰风格、年龄、配饰；形成可文本还原的三维外显数据，防止脱稿乱编。
+  - 精准复用 Subject Index 的 `entity_attributes`：种族、职业、发型发色、服饰风格、年龄、配饰；形成可文本还原的三维外显数据，防止脱稿乱编；**且 Index 中已写明的任何其他要素均须按 §1.3「Subject Index 全要素零缺失回写」进入 `generation_prompt_cn`**。
 - **[Node 3] 美术指导 (Production Designer) - 场景深化与道具演化**
   - 基于上游环境实体与依赖关系做美术深化、材质升级、prompt 转译；不得重定义环境抽取边界、Clean Plate 归属、Subject 分类。
   - **材质与细节补充责任**：Stage 1 只提供剧情交互需要的空间约束，Stage 2-1 只提供实体清单与原文明示/行为必需属性；道具与环境的材质、纹理、工艺、配色、磨损、装饰层级、时代质感和高级美术细节，必须在本阶段基于 `Project Context`、实体用途与上游最小约束补足。不得反向要求上游剧本优化预写这些美术细节。
@@ -50,7 +50,7 @@
   - **先分类、后写入**：输出最终 JSON 前，对每条 Subject 做唯一数组归属：`character -> characters[]`，`prop -> props[]`，`environment -> environments[]`，`cover_poster -> posters[]`。禁止把所有实体套用 character 写法或塞入 `characters[]`。
   - **单实体单归属**：每个 Subject 只能出现一次且只在一个数组中；禁止跨数组重复、默认角色回退、道具/环境/海报借壳角色对象。归类不明时回看上游类型标记。
   - **防幻觉比对**：将角色/道具/场景/海报分别打包到目标 JSON 数组。
-  - **Final Consistency Report**：遗漏、错分、重复、全入角色数组时，废弃重算。
+  - **Final Consistency Report**：遗漏、错分、重复、全入角色数组、或任一 Subject 的 Index 要素未在 `generation_prompt_cn` 逐项体现时，废弃重算。
 
 ---
 
@@ -83,6 +83,10 @@
 ### 1.3 生图提示词与 Imagen 兼容规范
 - **全局 Clean Plate**：生图提示词只写可见物理实体；去除不可见专名、角色名、人称代词。Environment 可保留匿名低信息量群众氛围，但不可复用/识别/充当角色占位；背景人群需匹配项目时地、国家、族群/人种、阶层语境，避免时代错置与文化漂移。
 - **全局字段显式回写 (Global Write-back)**：`generation_prompt_cn` 必须自然吸收结构字段有效属性（类型描述/依赖/动作/功能等），转化为视觉词汇；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段原样保留；如名称含可见类别/物理信息，只吸收可见语义，不写不可见专名。
+- **Subject Index 全要素零缺失回写（强制，最高优先级）**：对 Subject Index 中**每一条**实体，输入侧已写明的**任何要素均不得遗漏**，必须在 `generation_prompt_cn` 中逐项体现为可检索的自然语言视觉描述；不可只写入 `description_cn`/`appearance_cn`/`clothing` 等结构字段而 prompt 缺项。
+  - **覆盖范围（逐条核对）**：`entity_attributes` 内**每一个**键值对（含材质/结构/光源/气象/标识文字 `visible_text`/`form_field_text`/`text_carrier`/排版与可读性要求、`empty_view_delta`/`fixed_*_delta`、依赖差异、`project_base_positioning`/`project_global_style`、Action Characteristics、形态/状态/数量修饰等）；`base_entity`/`dependency_reference` 所表达的衍生关系与相对基准的变化；`script_entity_coverage` 所覆盖的可见线索中凡属本实体、且可在画面中呈现的信息。
+  - **写法要求**：逐条转译为可见画面词，融入连贯中文短段；禁止用「同上」「延续上游」「与描述一致」等代指代替 prompt 内显式写出；禁止概括、弱化为抽象词（如「高级」「破败」「有标识」）、合并删项或只写部分字段。
+  - **输出前终检（强制）**：逐 Subject 列出 Index 要素清单 → 在 `generation_prompt_cn` 中逐条检索；任一条不可直接检索即判失败并重写。仅存在于 JSON 其他字段而 prompt 缺失，同样视为失败。
 - **全局光学优先级 (Global Optical Priority Gate)**：先满足亮度、可读性、主辅光、色温、空气感，再写风格/情绪；默认明亮通透。仅明确低照度题材或剧情可压暗，且关键信息仍可读。
 - **主光源先行与光影排序**：角色/道具/环境/海报均先写清主光源：来源、方向、照亮面；再写暗部补光/反光/环境光、轮廓光或背景分离、材质与色彩响应。禁止先堆风格/配色/装饰，再泛写“电影感光影”。
 - **灯光设计具体要求 (Lighting Design)**：

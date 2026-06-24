@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md
-# Prompt Updated At: 2026-06-21 18:00:00 +08:00
+# Prompt Updated At: 2026-06-24 12:00:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -82,6 +82,7 @@
 #### 3.1.2 舞台构筑与空间实体化
 - **Stage 中心**：`generation_prompt_cn` 围绕上游 `{Stage}` 组织；核心舞台清晰可见，优先放 MG 承载表演。先写固定实体与空间边界，再写 FG/MG/BG、光照、材质、Delta。
 - **Stage 实体回写**：把舞台边界、关键界面、固定物、通行路径转成可见结构，如门框、窗沿、桌边通道、柜台内外分界、台阶起点、栏杆转角；不重新发明边界。
+- **剧情相关实体空间关系回写（强制）**：上游与剧情交互/站位/动线/视线/座次直接相关的固定结构/家具/陈设，除各自 FG/MG/BG 层位外，须在 `description_cn` 与 `generation_prompt_cn` 中写清**实体间前后左右关系**（锚定空间基准或另一具名固定物，如椅在桌哪一侧/哪一头、门轴在哪侧、屏风相对主舞台的左右与前后面）；禁止只列物件名而不交代相对位置。纯装饰性远景点缀可只写层位与分布区段。
 - **动作支持**：若 Beat 要求穿门、绕桌、切换内外、跨阈值，必须保留通行净空、界面两侧结构、视线通廊。
 - **活动空间与氛围细节平衡**：主舞台、角色站位区、通行净空与主要动线须保持空旷清晰，不得被杂物阻塞。在此范围之外，须写入适量可见细节以强化画面美感与景深层次——如墙面/梁架装饰、陈设点缀、花草植被、星辰天象、雾气烟尘、粒子光效、悬挂物、远景点缀等；细节优先落于 BG 远层、画面边缘、顶部/底部非动线区或窗外远景，须写清景别、尺度与受光/分布逻辑，陪衬主构图、不抢主舞台。
 - **构图简洁有序**：明确主导构图策略，如三分法、对称、前景框景 + 中景主舞台 + 背景收束。主舞台、次级主体、引导线、留白区、通行动线服从同一秩序。
@@ -169,7 +170,7 @@
 - 字段按类型分离；`environments[]` 与 `posters[]` 使用 `atmosphere`、`visual_params` 等环境/海报字段，禁止角色字段借壳。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
 - 衍生环境若按“主环境名 + 空格 + 衍生类型/观察区域/可见方向”命名，输出 `name` 必须逐字符保留，`visual_dependencies` 必须回挂 `ENV:[主环境名]`，`dependency_strategy.type` 使用 `Type A/Type B`，`generation_prompt_cn` 必须写继承锚点与 Delta 差异。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`description_cn` 末尾须含「美学参考：」段落，逐条写明参考作品名与借用的具体视觉细节；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`description_cn` 末尾须含「美学参考：」段落，逐条写明参考作品名与借用的具体视觉细节；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）

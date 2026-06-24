@@ -3272,12 +3272,52 @@ export const rebindShotMediaAssets = async (payload = {}) => {
     return response.data;
 };
 
+export const persistShotMedia = async (shotId, payload = {}) => {
+    const response = await api.post(`/shots/${Number(shotId)}/persist-media`, {
+        slot: payload.slot || 'video',
+        ...(payload.source_url ? { source_url: payload.source_url } : {}),
+    });
+    return response.data;
+};
+
+export const persistEntityMedia = async (entityId, payload = {}) => {
+    const response = await api.post(`/entities/${Number(entityId)}/persist-media`, {
+        ...(payload.source_url ? { source_url: payload.source_url } : {}),
+    });
+    return response.data;
+};
+
 export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
     return await asyncLLMPost('/tools/translate', { q, from_lang, to_lang });
 };
 
 export const refinePrompt = async (original_prompt, instruction, type = 'image') => {
     return await asyncLLMPost('/tools/refine_prompt', { original_prompt, instruction, type });
+};
+
+export const tuneShotPrompt = async ({ original_prompt, instruction, prompt_lang = 'cn', function_name = 'script_analysis', system_api_id = null } = {}) => {
+    let resolvedApiId = system_api_id;
+    if (!resolvedApiId) {
+        resolvedApiId = Number(localStorage.getItem('func_api_script_analysis')) || null;
+    }
+    const apiContextStr = localStorage.getItem('__function_api_context');
+    if (apiContextStr) {
+        try {
+            const ctx = JSON.parse(apiContextStr);
+            if (ctx?.script_analysis?.system_api_id) {
+                resolvedApiId = ctx.script_analysis.system_api_id;
+            }
+        } catch (e) {
+            console.warn('[API] tuneShotPrompt: Failed to parse function API context', e);
+        }
+    }
+    return await asyncLLMPost('/tools/tune_shot_prompt', {
+        original_prompt,
+        instruction,
+        prompt_lang,
+        function_name,
+        system_api_id: resolvedApiId,
+    });
 };
 
 export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {

@@ -3070,6 +3070,37 @@ def _repair_shot_media_urls_from_assets(
                 resolved_end_frame_url,
             )
 
+    legacy_video_url = str(getattr(shot, "video_url", None) or "").strip()
+    if _is_ephemeral_provider_media_url(legacy_video_url):
+        resolved_video_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            legacy_video_url,
+            project=project,
+            shot_id=getattr(shot, "id", None),
+            asset_type_aliases={"video"},
+            media_type="video",
+        )
+        if resolved_video_url:
+            shot.video_url = resolved_video_url
+            video_meta = notes.get("video_metadata") if isinstance(notes.get("video_metadata"), dict) else {}
+            video_meta = dict(video_meta or {})
+            video_meta.pop("needs_persistence_retry", None)
+            video_meta.pop("ephemeral_binding", None)
+            video_meta["remote_localization_failed"] = False
+            notes["video_metadata"] = video_meta
+            notes["video_oss_uploaded"] = True
+            notes_changed = True
+            db.add(shot)
+            changed = True
+            logger.info(
+                "[LegacyAssetRepair] shot_id=%s slot=video project_id=%s legacy_url=%s repaired_url=%s",
+                getattr(shot, "id", None),
+                getattr(shot, "project_id", None),
+                legacy_video_url,
+                resolved_video_url,
+            )
+
     if notes_changed:
         shot.technical_notes = json.dumps(notes, ensure_ascii=False)
         db.add(shot)
@@ -3277,7 +3308,261 @@ def _replace_legacy_temp_urls_in_shot_payload(
                 notes["end_frame_url"] = resolved_end_frame_url
                 patched["technical_notes"] = notes if isinstance(raw_technical_notes, dict) else json.dumps(notes, ensure_ascii=False)
 
+    video_url = patched.get("video_url")
+    if _is_ephemeral_provider_media_url(video_url):
+        resolved_video_url = _resolve_precise_asset_library_url(
+            db,
+            current_user,
+            video_url,
+            project=project,
+            shot_id=getattr(shot, "id", None),
+            asset_type_aliases={"video"},
+            media_type="video",
+        )
+        if resolved_video_url:
+            patched["video_url"] = resolved_video_url
+
     return patched
+
+
+class ShotPersistMediaRequest(BaseModel):
+    slot: str = "video"
+    source_url: Optional[str] = None
+
+
+def _resolve_shot_media_slot_url(shot: Shot, slot: str) -> Tuple[str, str, Dict[str, Any], Dict[str, Any]]:
+    normalized_slot = str(slot or "video").strip().lower()
+    notes = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
+
+    if normalized_slot in {"start", "start_frame"}:
+        return (
+            str(getattr(shot, "image_url", None) or "").strip(),
+            "start_frame",
+            notes,
+            dict(notes.get("start_frame_metadata") or {}) if isinstance(notes.get("start_frame_metadata"), dict) else {},
+        )
+    if normalized_slot in {"end", "end_frame"}:
+        return (
+            str(notes.get("end_frame_url") or "").strip(),
+            "end_frame",
+            notes,
+            dict(notes.get("end_frame_metadata") or {}) if isinstance(notes.get("end_frame_metadata"), dict) else {},
+        )
+    if normalized_slot == "video":
+        return (
+            str(getattr(shot, "video_url", None) or "").strip(),
+            "video",
+            notes,
+            dict(notes.get("video_metadata") or {}) if isinstance(notes.get("video_metadata"), dict) else {},
+        )
+    raise HTTPException(status_code=400, detail=f"Unsupported media slot: {slot}")
+
+
+def _persist_shot_media_slot(
+    db: Session,
+    current_user: User,
+    project: Project,
+    shot: Shot,
+    *,
+    slot: str = "video",
+    source_url_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    source_url, asset_type, notes, slot_meta = _resolve_shot_media_slot_url(shot, slot)
+    if source_url_override:
+        source_url = str(source_url_override or "").strip()
+
+    if not source_url:
+        raise HTTPException(status_code=400, detail=f"Shot has no URL for slot={slot}")
+
+    if _is_durable_persisted_media_url(source_url, slot_meta):
+        return {
+            "shot_id": int(shot.id),
+            "slot": asset_type,
+            "source_url": source_url,
+            "persisted_url": source_url,
+            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta),
+            "already_persisted": True,
+            "metadata": slot_meta or None,
+        }
+
+    req_context: Dict[str, Any] = {
+        "shot_id": int(shot.id),
+        "project_id": int(getattr(shot, "project_id", None) or getattr(project, "id", None) or 0) or None,
+        "episode_id": getattr(shot, "episode_id", None),
+        "shot_number": getattr(shot, "shot_id", None),
+        "shot_name": getattr(shot, "shot_name", None),
+        "asset_type": asset_type,
+    }
+    filename_base = _build_persist_filename_base_from_context(req_context, db)
+
+    if asset_type == "video":
+        normalized_url, normalized_meta, oss_uploaded = _persist_remote_video_result(
+            current_user,
+            source_url,
+            slot_meta,
+            filename_base=filename_base,
+        )
+    else:
+        normalized_url, normalized_meta = _persist_remote_image_result(
+            current_user,
+            source_url,
+            slot_meta,
+        )
+        normalized_meta = dict(normalized_meta or {})
+        oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta)
+
+    normalized_url = str(normalized_url or "").strip() or source_url
+    normalized_meta = dict(normalized_meta or {})
+
+    bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
+        raw_url=source_url,
+        normalized_url=normalized_url,
+        normalized_meta=normalized_meta,
+    )
+
+    final_url = str(normalized_url or "").strip()
+    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta):
+        bind_url = final_url
+        ephemeral_binding = False
+    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta):
+        final_url = bind_url
+        ephemeral_binding = False
+    elif bind_url:
+        final_url = bind_url
+    else:
+        final_url = normalized_url or source_url
+
+    if not _is_durable_persisted_media_url(final_url, normalized_meta):
+        error_detail = str(
+            normalized_meta.get("remote_localization_error")
+            or "Failed to persist media to durable storage (OSS/local)"
+        ).strip()
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail,
+        )
+
+    try:
+        _register_asset_helper(db, current_user.id, final_url, req_context, normalized_meta)
+    except Exception as reg_exc:
+        logger.warning("[ShotMediaPersist] register asset failed | shot_id=%s slot=%s err=%s", shot.id, asset_type, reg_exc)
+
+    _bind_generated_media_to_shot(
+        db,
+        current_user,
+        req_context,
+        final_url,
+        bool(oss_uploaded and not ephemeral_binding),
+        normalized_meta,
+    )
+
+    db.refresh(shot)
+    return {
+        "shot_id": int(shot.id),
+        "slot": asset_type,
+        "source_url": source_url,
+        "persisted_url": final_url,
+        "oss_uploaded": bool(oss_uploaded and not ephemeral_binding),
+        "already_persisted": False,
+        "metadata": normalized_meta or None,
+    }
+
+
+class EntityPersistMediaRequest(BaseModel):
+    source_url: Optional[str] = None
+
+
+def _persist_entity_image(
+    db: Session,
+    current_user: User,
+    project: Project,
+    entity: Entity,
+    *,
+    source_url_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    source_url = str(source_url_override or getattr(entity, "image_url", None) or "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="Entity has no image URL")
+
+    attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
+    slot_meta = dict(attrs or {})
+
+    if _is_durable_persisted_media_url(source_url, slot_meta):
+        return {
+            "entity_id": int(entity.id),
+            "source_url": source_url,
+            "persisted_url": source_url,
+            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta),
+            "already_persisted": True,
+            "metadata": slot_meta or None,
+        }
+
+    entity_type = str(getattr(entity, "type", None) or "subject").strip().lower()
+    req_context: Dict[str, Any] = {
+        "entity_id": int(entity.id),
+        "project_id": int(getattr(project, "id", None) or getattr(entity, "project_id", None) or 0) or None,
+        "entity_name": getattr(entity, "name", None),
+        "subject_name": getattr(entity, "name", None),
+        "entity_type": entity_type,
+        "asset_type": "subject",
+        "category": entity_type,
+    }
+
+    normalized_url, normalized_meta = _persist_remote_image_result(
+        current_user,
+        source_url,
+        slot_meta,
+    )
+    normalized_meta = dict(normalized_meta or {})
+    oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta)
+
+    bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
+        raw_url=source_url,
+        normalized_url=str(normalized_url or "").strip() or None,
+        normalized_meta=normalized_meta,
+    )
+
+    final_url = str(normalized_url or "").strip()
+    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta):
+        bind_url = final_url
+        ephemeral_binding = False
+    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta):
+        final_url = bind_url
+        ephemeral_binding = False
+    elif bind_url:
+        final_url = bind_url
+    else:
+        final_url = normalized_url or source_url
+
+    if not _is_durable_persisted_media_url(final_url, normalized_meta):
+        error_detail = str(
+            normalized_meta.get("remote_localization_error")
+            or "Failed to persist entity image to durable storage (OSS/local)"
+        ).strip()
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    try:
+        _register_asset_helper(db, current_user.id, final_url, req_context, normalized_meta)
+    except Exception as reg_exc:
+        logger.warning("[EntityMediaPersist] register asset failed | entity_id=%s err=%s", entity.id, reg_exc)
+
+    _bind_generated_media_to_entity(
+        db,
+        current_user,
+        req_context,
+        final_url,
+        bool(oss_uploaded and not ephemeral_binding),
+    )
+
+    db.refresh(entity)
+    return {
+        "entity_id": int(entity.id),
+        "source_url": source_url,
+        "persisted_url": final_url,
+        "oss_uploaded": bool(oss_uploaded and not ephemeral_binding),
+        "already_persisted": False,
+        "metadata": normalized_meta or None,
+    }
 
 
 def _video_job_file_path(job_id: str) -> str:
@@ -11466,6 +11751,128 @@ class RefinePromptRequest(BaseModel):
     instruction: str
     type: str = "image"
 
+
+class TuneShotPromptRequest(BaseModel):
+    original_prompt: str
+    instruction: str
+    prompt_lang: str = "cn"
+    function_name: Optional[str] = "script_analysis"
+    system_api_id: Optional[int] = None
+
+
+_SHOT_PROMPT_MODIFICATION_SKILL = "skills/shot_prompt_modification.md"
+_REFINED_PROMPT_START = "<<<REFINED_PROMPT_START>>>"
+_REFINED_PROMPT_END = "<<<REFINED_PROMPT_END>>>"
+_SHOT_PROMPT_OUTPUT_DELIMITER = "----------------*****--------------"
+
+
+def _extract_refined_shot_prompt(raw_content: Any) -> str:
+    text = llm_service.sanitize_text_output(str(raw_content or "")).strip()
+    if not text:
+        return ""
+
+    delimiter_idx = text.find(_SHOT_PROMPT_OUTPUT_DELIMITER)
+    if delimiter_idx >= 0:
+        text = text[delimiter_idx + len(_SHOT_PROMPT_OUTPUT_DELIMITER):].strip()
+
+    start_idx = text.find(_REFINED_PROMPT_START)
+    end_idx = text.find(_REFINED_PROMPT_END)
+    if start_idx >= 0 and end_idx > start_idx:
+        extracted = text[start_idx + len(_REFINED_PROMPT_START):end_idx].strip()
+        if extracted:
+            return extracted
+
+    # Fallback: strip common markdown fences if markers are missing.
+    cleaned = re.sub(r"^```(?:markdown|md|text)?\s*", "", text, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
+@router.post("/tools/tune_shot_prompt")
+async def tune_shot_prompt(
+    req: TuneShotPromptRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            tune_shot_prompt,
+            user_id=current_user.id,
+            kind="tune_shot_prompt",
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+
+    user_id = current_user.id
+    original_prompt = str(req.original_prompt or "").strip()
+    instruction = str(req.instruction or "").strip()
+    if not original_prompt:
+        raise HTTPException(status_code=400, detail="original_prompt is required")
+    if not instruction:
+        raise HTTPException(status_code=400, detail="instruction is required")
+
+    function_name = _script_analysis_function_api_name(req.function_name or "script_analysis")
+    config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        user_id,
+        function_name,
+        req.system_api_id,
+        context="tune_shot_prompt",
+    )
+
+    try:
+        system_prompt = _resolve_prompt_text(_SHOT_PROMPT_MODIFICATION_SKILL)
+    except Exception as exc:
+        logger.error("Failed to load shot prompt modification skill: %s", exc)
+        raise HTTPException(status_code=500, detail="Prompt file 'skills/shot_prompt_modification.md' could not be loaded.")
+
+    prompt_lang = str(req.prompt_lang or "cn").strip().lower()
+    lang_label = "中文" if prompt_lang in {"cn", "zh", "zh-cn", "chinese"} else "English"
+
+    user_content = (
+        f"# Original Prompt ({lang_label})\n{original_prompt}\n\n"
+        f"# Modification Request\n{instruction}\n\n"
+        "Apply the modification request to the original prompt. "
+        "Return ONLY the required delimiter and tagged refined prompt."
+    )
+
+    _release_db_connection(db, "tune_shot_prompt_llm_call")
+
+    try:
+        llm_response = await llm_service.chat_completion_with_fallback(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            config,
+        )
+        raw_content = str((llm_response or {}).get("content", "") or "")
+        refined_prompt = _extract_refined_shot_prompt(raw_content)
+        if not refined_prompt:
+            raise HTTPException(status_code=422, detail="LLM response did not contain a refined prompt between output markers.")
+
+        return {
+            "refined_prompt": refined_prompt,
+            "system_api_id": selected_dropdown_id,
+            "function_name": function_name,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        with SessionLocal() as error_db:
+            billing_service.log_failed_transaction(
+                error_db,
+                user_id,
+                "llm_chat",
+                config.get("provider"),
+                config.get("model"),
+                str(exc),
+            )
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/tools/refine_prompt")
 async def refine_prompt(
     req: RefinePromptRequest,
@@ -13910,6 +14317,7 @@ SHOT_MARKDOWN_COLUMN_WHITELIST: Dict[str, Dict[str, str]] = {
     "voiceover": {"target": "tech_field", "field": "voiceover_text"},
     # Production / edit notes
     "vfxnotes": {"target": "tech_field", "field": "vfx_notes"},
+    "reviewnotes": {"target": "tech_field", "field": "review_notes"},
     "editnotes": {"target": "tech_field", "field": "edit_notes"},
     "continuity": {"target": "tech_field", "field": "continuity"},
     "transition": {"target": "tech_field", "field": "transition"},
@@ -23805,6 +24213,75 @@ def update_shot(
     db.commit()
     db.refresh(db_shot)
     return _refresh_shot_media_urls(db_shot, db)
+
+
+@router.post("/shots/{shot_id}/persist-media", response_model=Dict[str, Any])
+def persist_shot_media(
+    shot_id: int,
+    payload: ShotPersistMediaRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    db_shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
+    if not db_shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    scene = db.query(Scene).filter(Scene.id == db_shot.scene_id, _active_scene_clause()).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    project = _require_project_access(db, episode.project_id, current_user)
+
+    _repair_shot_media_urls_from_assets(db, current_user, project, db_shot)
+
+    result = _persist_shot_media_slot(
+        db,
+        current_user,
+        project,
+        db_shot,
+        slot=str(payload.slot or "video"),
+        source_url_override=payload.source_url,
+    )
+    refreshed = _refresh_shot_media_urls(db_shot, db)
+    result["shot"] = {
+        "id": refreshed.id,
+        "video_url": refreshed.video_url,
+        "image_url": refreshed.image_url,
+        "technical_notes": refreshed.technical_notes,
+    }
+    return result
+
+
+@router.post("/entities/{entity_id}/persist-media", response_model=Dict[str, Any])
+def persist_entity_media(
+    entity_id: int,
+    payload: EntityPersistMediaRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    entity = db.query(Entity).filter(Entity.id == entity_id, _active_entity_clause()).first()
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    project = _require_project_access(db, entity.project_id, current_user)
+    _repair_entity_image_url_from_assets(db, current_user, project, entity)
+
+    result = _persist_entity_image(
+        db,
+        current_user,
+        project,
+        entity,
+        source_url_override=payload.source_url,
+    )
+    result["entity"] = {
+        "id": entity.id,
+        "image_url": entity.image_url,
+        "custom_attributes": entity.custom_attributes,
+    }
+    return result
+
 
 @router.delete("/shots/{shot_id}")
 def delete_shot(

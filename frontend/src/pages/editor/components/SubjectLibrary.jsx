@@ -16,7 +16,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist
 } from '../editorHelpers';
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
@@ -109,6 +109,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     backfillEpisodeMediaFromLibrary,
+    persistEntityMedia,
     getCachedUserPreferences,
 } from '../../../services/api';
 
@@ -770,6 +771,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [subjectNotification, setSubjectNotification] = useState(null);
     const [subjectImageJobs, setSubjectImageJobs] = useState({});
     const [stoppingSubjectImageJobs, setStoppingSubjectImageJobs] = useState({});
+    const [entityOssPersistBusy, setEntityOssPersistBusy] = useState({});
     const [subjectGenerationHistory, setSubjectGenerationHistory] = useState([]);
     const [subjectGenerationHistoryLoading, setSubjectGenerationHistoryLoading] = useState(false);
     const [subjectGenerationHistoryDeletingId, setSubjectGenerationHistoryDeletingId] = useState('');
@@ -1092,17 +1094,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [projectId]);
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
-
-    const isEphemeralProviderMediaUrl = useCallback((url) => {
-        const rawUrl = String(url || '').trim();
-        if (!rawUrl) return false;
-        try {
-            const parsed = new URL(rawUrl, window.location.origin);
-            return /^file\d*\.aitohumanize\.com$/i.test(String(parsed.hostname || '').trim());
-        } catch {
-            return false;
-        }
-    }, []);
 
     const getTempMediaFilenameFromUrl = useCallback((url) => {
         const rawUrl = String(url || '').trim();
@@ -1971,13 +1962,63 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         });
         const latestEntity = (Array.isArray(latestEntities) ? latestEntities : []).find((item) => String(item?.id || '') === stableEntityId);
         const recoveredUrl = String(latestEntity?.image_url || '').trim();
-        if (!recoveredUrl || isEphemeralProviderMediaUrl(recoveredUrl)) {
+        if (!recoveredUrl || entityImageNeedsOssPersist({ ...latestEntity, image_url: recoveredUrl })) {
             return '';
         }
 
         applySubjectEntityImageLocally(stableEntityId, recoveredUrl);
         return recoveredUrl;
-    }, [applySubjectEntityImageLocally, fetchEntities, isEphemeralProviderMediaUrl, projectId]);
+    }, [applySubjectEntityImageLocally, entityImageNeedsOssPersist, fetchEntities, projectId]);
+
+    const handlePersistEntityImageToOss = useCallback(async (entityLike) => {
+        const entityId = String(entityLike?.id || '').trim();
+        const sourceUrl = String(entityLike?.image_url || '').trim();
+        if (!entityId || !sourceUrl) {
+            showSubjectNotification(t('当前主体没有可补传的图片地址。', 'No image URL available to persist.'), 'warning');
+            return false;
+        }
+        if (!entityImageNeedsOssPersist(entityLike)) {
+            showSubjectNotification(t('当前图片已是稳定存储地址。', 'Current image URL is already durable.'), 'info');
+            return true;
+        }
+
+        setEntityOssPersistBusy((prev) => ({ ...prev, [entityId]: true }));
+        onLog?.(t('正在补传主体图片到 OSS...', 'Uploading entity image to OSS...'), 'info');
+        try {
+            const result = await persistEntityMedia(entityId, { source_url: sourceUrl });
+            const persistedUrl = String(result?.persisted_url || result?.entity?.image_url || '').trim();
+            const mergedEntity = {
+                ...entityLike,
+                image_url: persistedUrl,
+                custom_attributes: result?.entity?.custom_attributes ?? entityLike?.custom_attributes,
+            };
+            if (!persistedUrl || entityImageNeedsOssPersist(mergedEntity)) {
+                throw new Error(t('补传后仍未获得稳定存储地址，请稍后重试。', 'Persisted URL is still not durable; please retry later.'));
+            }
+
+            await updateEntity(Number(entityId), { image_url: persistedUrl });
+            applySubjectEntityImageLocally(entityId, persistedUrl);
+            setViewingEntity((prev) => (
+                prev && String(prev.id) === entityId
+                    ? { ...prev, image_url: persistedUrl, custom_attributes: result?.entity?.custom_attributes ?? prev.custom_attributes }
+                    : prev
+            ));
+            onLog?.(t('主体图片已成功补传到 OSS。', 'Entity image uploaded to OSS successfully.'), 'success');
+            showSubjectNotification(t('主体图片已成功补传到 OSS。', 'Entity image uploaded to OSS successfully.'), 'success');
+            return true;
+        } catch (err) {
+            const detail = err?.response?.data?.detail || err?.message || t('未知错误', 'unknown error');
+            onLog?.(`${t('主体图片补传 OSS 失败', 'Entity image OSS upload failed')}: ${detail}`, 'error');
+            showSubjectNotification(`${t('主体图片补传 OSS 失败', 'Entity image OSS upload failed')}: ${detail}`, 'error');
+            return false;
+        } finally {
+            setEntityOssPersistBusy((prev) => {
+                const next = { ...prev };
+                delete next[entityId];
+                return next;
+            });
+        }
+    }, [applySubjectEntityImageLocally, onLog, showSubjectNotification, t]);
 
     const awaitPersistedSubjectEntityImage = useCallback(async (entityId, options = {}) => {
         const stableEntityId = String(entityId || '').trim();
@@ -5802,27 +5843,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             )}
 
                             {(() => {
-                                let isOssTemp = false;
-                                const urlStr = String(entity.image_url || '').toLowerCase();
-                                const isStableOss = urlStr.startsWith('/') || /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun/.test(urlStr);
-
-                                if (isStableOss) {
-                                    isOssTemp = false;
-                                } else {
-                                    try {
-                                        const attrs = entity.custom_attributes ? (typeof entity.custom_attributes === 'string' ? JSON.parse(entity.custom_attributes) : entity.custom_attributes) : {};
-                                        const providerDirectOss = Boolean(attrs && (attrs.provider_direct_oss_url || attrs.providerDirectOssUrl));
-                                        if (providerDirectOss) {
-                                            isOssTemp = false;
-                                        } else
-                                        if (attrs && attrs.oss_uploaded_success === false) {
-                                            isOssTemp = true;
-                                        }
-                                    } catch(e) {}
-                                    if (!isOssTemp && entity.image_url && typeof isEphemeralProviderMediaUrl === 'function' && isEphemeralProviderMediaUrl(entity.image_url)) {
-                                        isOssTemp = true;
-                                    }
-                                }
+                                const isOssTemp = entityImageNeedsOssPersist(entity);
                                 return (isOssTemp || isEntityAnalyzed(entity)) ? (
                                     <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1">
                                         {isEntityAnalyzed(entity) && (
@@ -5835,13 +5856,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             </div>
                                         )}
                                         {isOssTemp && (
-                                            <div 
-                                                className="inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
-                                                title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
-                                            >
-                                                <AlertTriangle size={12} />
-                                                <span>{t('临时图片', 'Temp')}</span>
-                                            </div>
+                                            <>
+                                                <div 
+                                                    className="inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow" 
+                                                    title={t('图片未持久化到OSS，目前为临时地址。', 'Image not yet persisted to OSS, using temporary link.')}
+                                                >
+                                                    <AlertTriangle size={12} />
+                                                    <span>{t('临时图片', 'Temp')}</span>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handlePersistEntityImageToOss(entity);
+                                                    }}
+                                                    disabled={Boolean(entityOssPersistBusy[String(entity.id)])}
+                                                    className="inline-flex items-center gap-1 rounded bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow"
+                                                >
+                                                    {entityOssPersistBusy[String(entity.id)] ? (
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                    ) : (
+                                                        <Upload className="w-3 h-3" />
+                                                    )}
+                                                    <span>{entityOssPersistBusy[String(entity.id)] ? t('补传中', 'Uploading') : t('补传 OSS', 'Upload OSS')}</span>
+                                                </button>
+                                            </>
                                         )}
                                     </div>
                                 ) : null;
@@ -6047,6 +6086,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     </div>
                                 )}
                                 
+                                {viewingEntity.id !== 'new' && entityImageNeedsOssPersist(viewingEntity) && (
+                                    <div className="absolute bottom-4 left-4 right-4 z-20 rounded-lg border border-amber-400/40 bg-amber-500/15 p-3 space-y-2 backdrop-blur-sm">
+                                        <div className="flex items-start gap-2 text-amber-100">
+                                            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                                            <div className="space-y-1 text-xs leading-relaxed">
+                                                <div className="font-bold">{t('图片尚未持久化到 OSS', 'Image not persisted to OSS')}</div>
+                                                <div>{t('当前为供应商临时地址，可能会过期。请尽快补传到 OSS。', 'The current link is a temporary provider URL and may expire. Upload it to OSS as soon as possible.')}</div>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                void handlePersistEntityImageToOss(viewingEntity);
+                                            }}
+                                            disabled={Boolean(entityOssPersistBusy[String(viewingEntity?.id || '')])}
+                                            className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-amber-950 px-3 py-1.5 text-xs font-bold"
+                                        >
+                                            {entityOssPersistBusy[String(viewingEntity?.id || '')] ? (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            ) : (
+                                                <Upload className="w-3.5 h-3.5" />
+                                            )}
+                                            <span>{entityOssPersistBusy[String(viewingEntity?.id || '')] ? t('补传中...', 'Uploading...') : t('补传 OSS', 'Upload to OSS')}</span>
+                                        </button>
+                                    </div>
+                                )}
+
                                 {viewingEntity.id !== 'new' && (
                                     <div className="absolute top-4 left-4 flex gap-2 z-10">
                                          

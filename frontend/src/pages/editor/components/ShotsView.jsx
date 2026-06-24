@@ -3,7 +3,6 @@
 import PromptMentionTextarea from './PromptMentionTextarea';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import TunePromptAgentModal from "./TunePromptAgentModal";
-import AgentChat from '../../../components/AgentChat';
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
 import FunctionApiSelector from '../../../components/FunctionApiSelector';
@@ -15,13 +14,13 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -112,6 +111,7 @@ import {
     recordSystemLogAction,
     rebindShotMediaAssets,
     backfillEpisodeMediaFromLibrary,
+    persistShotMedia,
     getCachedUserPreferences,
     markAssetAsCurrentProjectAsset,
 } from '../../../services/api';
@@ -552,6 +552,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setTimeout(() => setNotification(null), 3000);
     };
 
+    const [shotNotePopover, setShotNotePopover] = useState(null);
+    const [shotNoteDraft, setShotNoteDraft] = useState('');
+    const shotNotePopoverRef = useRef(null);
+
     useEffect(() => {
         projectEntitiesRef.current = Array.isArray(projectEntities) ? projectEntities : [];
     }, [projectEntities]);
@@ -618,6 +622,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const pickerCallbackRef = useRef(null);
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [videoStatuses, setVideoStatuses] = useState({});
+    const [shotMediaOssPersistBusy, setShotMediaOssPersistBusy] = useState({});
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
     const readStoredUsePrevVideo = useCallback(() => {
@@ -3435,6 +3440,29 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return await onUpdateShot(editingShot.id, updates);
     };
 
+    const handleApplyTunedShotPrompt = useCallback(async (refinedPrompt) => {
+        if (!editingShot?.id) return;
+        const nextPrompt = String(refinedPrompt || '').trim();
+        if (!nextPrompt) return;
+
+        const tech = parseTechnicalNotesSafe(editingShot.technical_notes);
+        tech.manual_video_prompt = true;
+
+        let updates;
+        if (shotPromptDisplayLang === 'cn') {
+            tech.video_prompt_cn = nextPrompt;
+            updates = { technical_notes: JSON.stringify(tech) };
+        } else {
+            updates = {
+                ...buildVideoPromptEnUpdates(nextPrompt),
+                technical_notes: JSON.stringify(tech),
+            };
+        }
+
+        setEditingShot((prev) => ({ ...(prev || {}), ...updates }));
+        await onUpdateShot(editingShot.id, updates);
+    }, [buildVideoPromptEnUpdates, editingShot, onUpdateShot, parseTechnicalNotesSafe, shotPromptDisplayLang]);
+
     const buildAssetDetailSavePatch = useCallback((shotRecord, modalType) => {
         if (!shotRecord || typeof shotRecord !== 'object') return {};
 
@@ -4401,6 +4429,99 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         await onUpdateShot(editingShot.id, { technical_notes: serialized });
     };
 
+    const getEditingShotTechNotes = useCallback(() => {
+        try {
+            const parsed = JSON.parse(editingShot?.technical_notes || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+            return {};
+        }
+    }, [editingShot?.technical_notes]);
+
+    const editingShotReviewNotes = useMemo(
+        () => String(getEditingShotTechNotes().review_notes || '').trim(),
+        [getEditingShotTechNotes],
+    );
+    const editingShotEditNotes = useMemo(
+        () => String(getEditingShotTechNotes().edit_notes || '').trim(),
+        [getEditingShotTechNotes],
+    );
+
+    const openShotNotePopover = useCallback((kind) => {
+        const tech = getEditingShotTechNotes();
+        const field = kind === 'review' ? 'review_notes' : 'edit_notes';
+        setShotNoteDraft(String(tech[field] || ''));
+        setShotNotePopover((prev) => (prev === kind ? null : kind));
+    }, [getEditingShotTechNotes]);
+
+    const saveShotNotePopover = useCallback(async () => {
+        if (!shotNotePopover) return;
+        const field = shotNotePopover === 'review' ? 'review_notes' : 'edit_notes';
+        const trimmed = String(shotNoteDraft || '').trim();
+        await updateShotTechnicalNotes((techObj) => {
+            if (trimmed) {
+                techObj[field] = trimmed;
+            } else {
+                delete techObj[field];
+            }
+        });
+        setShotNotePopover(null);
+    }, [shotNoteDraft, shotNotePopover, updateShotTechnicalNotes]);
+
+    useEffect(() => {
+        setShotNotePopover(null);
+        setShotNoteDraft('');
+    }, [editingShot?.id]);
+
+    useEffect(() => {
+        if (!shotNotePopover) return undefined;
+        const handleClickOutside = (event) => {
+            if (shotNotePopoverRef.current && !shotNotePopoverRef.current.contains(event.target)) {
+                setShotNotePopover(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [shotNotePopover]);
+
+    const renderShotNotePopoverPanel = (kind) => {
+        if (shotNotePopover !== kind) return null;
+        const isReview = kind === 'review';
+        return (
+            <div
+                className="absolute top-full right-0 mt-1 w-72 rounded-lg border border-white/10 bg-[#111114] shadow-2xl z-[120] p-3 space-y-2"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                    {isReview ? t('审核意见', 'Review Notes') : t('剪辑意见', 'Edit Notes')}
+                </div>
+                <textarea
+                    className="w-full bg-black/30 border border-white/10 rounded p-2 text-xs text-white min-h-[88px] focus:outline-none focus:border-primary/50 resize-y"
+                    value={shotNoteDraft}
+                    onChange={(e) => setShotNoteDraft(e.target.value)}
+                    placeholder={isReview ? t('填写审核意见...', 'Enter review notes...') : t('填写剪辑意见...', 'Enter edit notes...')}
+                    autoFocus
+                />
+                <div className="flex items-center justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setShotNotePopover(null)}
+                        className="px-2 py-1 text-[11px] rounded border border-white/10 text-white/70 hover:bg-white/5"
+                    >
+                        {t('取消', 'Cancel')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => { saveShotNotePopover(); }}
+                        className="px-2 py-1 text-[11px] rounded bg-primary/20 text-primary hover:bg-primary/30 border border-primary/30"
+                    >
+                        {t('保存', 'Save')}
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
     const applyVideoModeToShot = async (mode) => {
         await updateShotTechnicalNotes((techObj) => {
             techObj.video_mode_unified = mode;
@@ -5019,6 +5140,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     }
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                                    if (shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                        onLog?.(
+                                            t(
+                                                '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
+                                                'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
+                                            ),
+                                            'warning'
+                                        );
+                                    }
                                 }
                                 releaseShotVideoUi({ shotId: stableShotId, jobId });
                                 refreshShotAssetsMeta();
@@ -5037,6 +5167,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     }
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
+                                    if (shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                        onLog?.(
+                                            t(
+                                                '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
+                                                'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
+                                            ),
+                                            'warning'
+                                        );
+                                    }
                                     releaseShotVideoUi({ shotId: stableShotId, jobId });
                                     refreshShotAssetsMeta();
                                     await refreshShots();
@@ -6799,6 +6938,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev)); 
                     onLog?.('Start Frame Generated', 'success');
                     showNotification('Start Frame Generated', 'success');
+                    notifyShotMediaOssPersistWarning({ ...shotSnapshot, ...newData }, 'start');
                     refreshShotAssetsMeta();
                     Promise.resolve(refreshShots()).catch(() => {});
                 } else {
@@ -6917,6 +7057,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
                     onLog?.('End Frame Generated', 'success');
                     showNotification('End Frame Generated', 'success');
+                    notifyShotMediaOssPersistWarning({ ...shotSnapshot, ...newData, technical_notes: JSON.stringify(tech) }, 'end');
                     refreshShotAssetsMeta();
                     Promise.resolve(refreshShots()).catch(() => {});
                 } else {
@@ -7904,6 +8045,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
+                notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
 
                 // 2. Update Server & Master List (Async persistence)
                 try {
@@ -7983,6 +8125,177 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
         }
     };
+
+    const handlePersistShotMediaToOss = useCallback(async (shotLike = null, slot = 'video') => {
+        const normalizedSlot = String(slot || 'video').trim().toLowerCase();
+        const apiSlot = normalizedSlot === 'start' || normalizedSlot === 'start_frame'
+            ? 'start'
+            : normalizedSlot === 'end' || normalizedSlot === 'end_frame'
+                ? 'end'
+                : 'video';
+        const targetShot = shotLike || editingShot;
+        const targetShotId = String(targetShot?.id || '').trim();
+        const sourceUrl = resolveShotMediaSlotUrl(targetShot, apiSlot);
+        const needsPersist = apiSlot === 'start'
+            ? shotStartFrameNeedsOssPersist(targetShot)
+            : apiSlot === 'end'
+                ? shotEndFrameNeedsOssPersist(targetShot)
+                : shotVideoNeedsOssPersist(targetShot);
+
+        if (!targetShotId || !sourceUrl) {
+            showNotification(t('当前镜头没有可补传的素材地址。', 'No media URL available to persist.'), 'warning');
+            return false;
+        }
+        if (!needsPersist) {
+            showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
+            return true;
+        }
+
+        const busyKey = `${targetShotId}:${apiSlot}`;
+        setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
+        onLog?.(t('正在补传素材到 OSS...', 'Uploading media to OSS...'), 'info');
+        try {
+            const result = await persistShotMedia(targetShotId, {
+                slot: apiSlot,
+                source_url: sourceUrl,
+            });
+            const persistedUrl = String(result?.persisted_url || '').trim();
+            const refreshedShot = result?.shot && typeof result.shot === 'object' ? result.shot : null;
+            const mergedShot = {
+                ...targetShot,
+                ...(refreshedShot || {}),
+                ...(apiSlot === 'start' ? { image_url: persistedUrl || refreshedShot?.image_url || targetShot?.image_url } : {}),
+                ...(apiSlot === 'video' ? { video_url: persistedUrl || refreshedShot?.video_url || targetShot?.video_url } : {}),
+                technical_notes: refreshedShot?.technical_notes ?? targetShot?.technical_notes,
+            };
+            if (apiSlot === 'end' && persistedUrl) {
+                const tech = parseShotTechnicalNotes(mergedShot.technical_notes);
+                tech.end_frame_url = persistedUrl;
+                mergedShot.technical_notes = JSON.stringify(tech);
+            }
+
+            const stillNeedsPersist = apiSlot === 'start'
+                ? shotStartFrameNeedsOssPersist(mergedShot)
+                : apiSlot === 'end'
+                    ? shotEndFrameNeedsOssPersist(mergedShot)
+                    : shotVideoNeedsOssPersist(mergedShot);
+            if (!persistedUrl || stillNeedsPersist) {
+                throw new Error(t('补传后仍未获得稳定存储地址，请稍后重试。', 'Persisted URL is still not durable; please retry later.'));
+            }
+
+            const patch = apiSlot === 'start'
+                ? { image_url: persistedUrl }
+                : apiSlot === 'end'
+                    ? { technical_notes: mergedShot.technical_notes }
+                    : { video_url: persistedUrl };
+
+            setEditingShot((prev) => (prev && String(prev.id) === targetShotId ? { ...prev, ...patch } : prev));
+            try {
+                await onUpdateShot(targetShotId, patch);
+            } catch (updateErr) {
+                console.warn('[handlePersistShotMediaToOss] shot update failed:', updateErr);
+            }
+            refreshShotAssetsMeta();
+            Promise.resolve(refreshShots()).catch(() => {});
+            onLog?.(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
+            showNotification(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
+            return true;
+        } catch (err) {
+            const detail = err?.response?.data?.detail || err?.message || t('未知错误', 'unknown error');
+            onLog?.(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
+            showNotification(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
+            return false;
+        } finally {
+            setShotMediaOssPersistBusy((prev) => {
+                const next = { ...prev };
+                delete next[busyKey];
+                return next;
+            });
+        }
+    }, [editingShot, onLog, onUpdateShot, refreshShotAssetsMeta, refreshShots, showNotification, t]);
+
+    const notifyShotMediaOssPersistWarning = useCallback((shotLike, slot = 'video') => {
+        const apiSlot = slot === 'start' || slot === 'start_frame'
+            ? 'start'
+            : slot === 'end' || slot === 'end_frame'
+                ? 'end'
+                : 'video';
+        const needsPersist = apiSlot === 'start'
+            ? shotStartFrameNeedsOssPersist(shotLike)
+            : apiSlot === 'end'
+                ? shotEndFrameNeedsOssPersist(shotLike)
+                : shotVideoNeedsOssPersist(shotLike);
+        if (!needsPersist) return;
+
+        const labelZh = apiSlot === 'start'
+            ? '起始帧图片'
+            : apiSlot === 'end'
+                ? '结束帧图片'
+                : '视频';
+        const labelEn = apiSlot === 'start'
+            ? 'start frame image'
+            : apiSlot === 'end'
+                ? 'end frame image'
+                : 'video';
+
+        onLog?.(
+            t(
+                `警告：${labelZh}仍为供应商临时地址，尚未持久化到 OSS。请在详情页点击“补传 OSS”。`,
+                `Warning: ${labelEn} is still on a temporary provider URL and was not persisted to OSS. Use "Upload to OSS" in the detail panel.`
+            ),
+            'warning'
+        );
+        showNotification(
+            t(`${labelZh}未写入 OSS，请及时补传`, `${labelEn} not stored to OSS — please upload soon`),
+            'warning'
+        );
+    }, [onLog, showNotification, t]);
+
+    const renderOssPersistWarningPanel = useCallback((shotLike, slot, labels = {}) => {
+        const apiSlot = slot === 'start' || slot === 'start_frame'
+            ? 'start'
+            : slot === 'end' || slot === 'end_frame'
+                ? 'end'
+                : 'video';
+        const needsPersist = apiSlot === 'start'
+            ? shotStartFrameNeedsOssPersist(shotLike)
+            : apiSlot === 'end'
+                ? shotEndFrameNeedsOssPersist(shotLike)
+                : shotVideoNeedsOssPersist(shotLike);
+        if (!needsPersist) return null;
+
+        const stableShotId = String(shotLike?.id || '').trim();
+        const busyKey = `${stableShotId}:${apiSlot}`;
+        const titleZh = labels.titleZh || (apiSlot === 'start' ? '起始帧尚未持久化到 OSS' : apiSlot === 'end' ? '结束帧尚未持久化到 OSS' : '视频尚未持久化到 OSS');
+        const titleEn = labels.titleEn || (apiSlot === 'start' ? 'Start frame not persisted to OSS' : apiSlot === 'end' ? 'End frame not persisted to OSS' : 'Video not persisted to OSS');
+        const bodyZh = labels.bodyZh || '当前链接为供应商临时地址，可能会过期。请尽快补传到 OSS。';
+        const bodyEn = labels.bodyEn || 'The current link is a temporary provider URL and may expire. Upload it to OSS as soon as possible.';
+
+        return (
+            <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-3 space-y-2">
+                <div className="flex items-start gap-2 text-amber-100">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div className="space-y-1 text-xs leading-relaxed">
+                        <div className="font-bold">{t(titleZh, titleEn)}</div>
+                        <div>{t(bodyZh, bodyEn)}</div>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => handlePersistShotMediaToOss(shotLike, apiSlot)}
+                    disabled={Boolean(shotMediaOssPersistBusy[busyKey])}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-amber-950 px-3 py-1.5 text-xs font-bold"
+                >
+                    {shotMediaOssPersistBusy[busyKey] ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                        <Upload className="w-3.5 h-3.5" />
+                    )}
+                    <span>{shotMediaOssPersistBusy[busyKey] ? t('补传中...', 'Uploading...') : t('补传 OSS', 'Upload to OSS')}</span>
+                </button>
+            </div>
+        );
+    }, [handlePersistShotMediaToOss, shotMediaOssPersistBusy, t]);
 
     const probeVideoUrlReachable = useCallback(async (rawUrl, timeoutMs = 12000) => {
         const normalized = String(rawUrl || '').trim();
@@ -9593,6 +9906,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             <Video className="w-3 h-3" />
                                         </div>
                                     )}
+                                    {shotNeedsAnyOssPersist(shot) && (
+                                        <div
+                                            className="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow pointer-events-none"
+                                            title={t('部分素材未持久化到 OSS', 'Some media not persisted to OSS')}
+                                        >
+                                            <AlertTriangle size={12} />
+                                            <span>{shotVideoNeedsOssPersist(shot) ? t('临时视频', 'Temp Video') : t('临时图片', 'Temp Image')}</span>
+                                        </div>
+                                    )}
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
                                         {getShotDurationDisplayValue(shot.duration) || '0s'}
                                     </div>
@@ -9796,7 +10118,33 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             </h3>
                             <div className="flex items-center gap-2">
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型: ', 'Image: ')} />
-                                <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
+                                <div className="flex items-center gap-1" ref={shotNotePopoverRef}>
+                                    <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); openShotNotePopover('review'); }}
+                                            className={`p-1.5 rounded-md border transition-colors ${editingShotReviewNotes ? 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20' : 'border-white/10 bg-black/20 text-white/50 hover:text-white hover:bg-white/10'}`}
+                                            title={editingShotReviewNotes ? t('审核意见（已填写）', 'Review notes (filled)') : t('填写审核意见', 'Add review notes')}
+                                            aria-label={t('审核意见', 'Review notes')}
+                                        >
+                                            <CheckCircle2 className="w-4 h-4" />
+                                        </button>
+                                        {renderShotNotePopoverPanel('review')}
+                                    </div>
+                                    <div className="relative">
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); openShotNotePopover('edit'); }}
+                                            className={`p-1.5 rounded-md border transition-colors ${editingShotEditNotes ? 'border-sky-500/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20' : 'border-white/10 bg-black/20 text-white/50 hover:text-white hover:bg-white/10'}`}
+                                            title={editingShotEditNotes ? t('剪辑意见（已填写）', 'Edit notes (filled)') : t('填写剪辑意见', 'Add edit notes')}
+                                            aria-label={t('剪辑意见', 'Edit notes')}
+                                        >
+                                            <Scissors className="w-4 h-4" />
+                                        </button>
+                                        {renderShotNotePopoverPanel('edit')}
+                                    </div>
+                                </div>
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
@@ -10357,6 +10705,33 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 </div>
                                             )}
                                              {(editingShot.video_url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:bg-black/10"><Maximize2 className="text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/></div>}
+                                             {shotVideoNeedsOssPersist(editingShot) && (
+                                                <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2">
+                                                    <div
+                                                        className="inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow pointer-events-none"
+                                                        title={t('视频未持久化到 OSS', 'Video not persisted to OSS')}
+                                                    >
+                                                        <AlertTriangle size={12} />
+                                                        <span>{t('临时视频', 'Temp Video')}</span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handlePersistShotMediaToOss(editingShot, 'video');
+                                                        }}
+                                                        disabled={Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])}
+                                                        className="inline-flex items-center gap-1 rounded bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-amber-950 px-2 py-0.5 text-[10px] font-bold shadow"
+                                                    >
+                                                        {shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`] ? (
+                                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                                        ) : (
+                                                            <Upload className="w-3 h-3" />
+                                                        )}
+                                                        <span>{shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`] ? t('补传中', 'Uploading') : t('补传 OSS', 'Upload OSS')}</span>
+                                                    </button>
+                                                </div>
+                                             )}
                                              
                                              {/* Video Actions Overlay */}
                                              {!currentGeneratingState.video && (
@@ -11406,6 +11781,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
                                                                 ])}
+                                                                {renderOssPersistWarningPanel(editingShot, 'start')}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3 min-w-0">
@@ -11517,6 +11893,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
                                                                 ])}
+                                                                {renderOssPersistWarningPanel(editingShot, 'end')}
                                                                 {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3 min-w-0">
@@ -11653,6 +12030,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 </div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('素材名', 'Asset Name')}: {linkedAssetDetail.displayName || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
+                                                                {modalType === 'video' && renderOssPersistWarningPanel(editingShot, 'video', {
+                                                                    bodyZh: '当前链接为供应商临时地址（如 volces TOS 签名 URL），可能会过期。请尽快补传到 OSS。',
+                                                                    bodyEn: 'The current link is a temporary provider URL (e.g. volces TOS signed URL) and may expire. Upload it to OSS as soon as possible.',
+                                                                })}
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
                                                                 <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('素材实际时长', 'Asset Duration')}</div>
@@ -12281,6 +12662,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     </div>
                 </div>
             )}
+
+            <TunePromptAgentModal
+                isOpen={Boolean(tunePromptModalConfig.open)}
+                onClose={() => setTunePromptModalConfig({ open: false, targetField: null, initialValue: '' })}
+                initialValue={tunePromptModalConfig.initialValue || ''}
+                promptLang={shotPromptDisplayLang}
+                uiLang={uiLang}
+                onApply={handleApplyTunedShotPrompt}
+                onLog={onLog}
+            />
 
             {isSettingsOpen && (
                  <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8">

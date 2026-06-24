@@ -2166,3 +2166,154 @@ export const buildEpisodeDisplayLabel = ({ episodeNumber, title, fallbackNumber 
 
 
 export const mergeEntityPoolWithSubjectIndex = (entities, subjectText) => { return entities || []; };
+
+const EPHEMERAL_PROVIDER_HOST_PATTERNS = [
+    /^file\d*\.aitohumanize\.com$/i,
+    /(^|.+\.)aiquickdraw\.com$/i,
+    /(^|.+\.)volces\.com$/i,
+];
+
+const EPHEMERAL_PROVIDER_QUERY_MARKERS = [
+    'x-tos-algorithm',
+    'x-tos-signature',
+    'x-tos-credential',
+    'x-amz-algorithm',
+    'x-amz-signature',
+    'x-amz-credential',
+];
+
+export const isEphemeralProviderMediaUrl = (url) => {
+    const raw = String(url || '').trim();
+    if (!raw || raw.startsWith('/') || raw.startsWith('data:')) return false;
+    try {
+        const parsed = new URL(raw, window.location.origin);
+        const host = String(parsed.hostname || '').trim();
+        if (EPHEMERAL_PROVIDER_HOST_PATTERNS.some((pattern) => pattern.test(host))) {
+            return true;
+        }
+        const query = String(parsed.search || '').toLowerCase();
+        if (query && EPHEMERAL_PROVIDER_QUERY_MARKERS.some((marker) => query.includes(marker))) {
+            return true;
+        }
+    } catch {
+        return false;
+    }
+    return false;
+};
+
+export const isDurablePersistedMediaUrl = (url, metadata = null) => {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    if (isEphemeralProviderMediaUrl(raw)) return false;
+    if (raw.startsWith('/uploads/') || (raw.startsWith('/') && !raw.startsWith('//'))) return true;
+
+    const meta = metadata && typeof metadata === 'object' ? metadata : {};
+    if (meta.provider_direct_oss_url || meta.providerDirectOssUrl) return true;
+    if (meta.oss && typeof meta.oss === 'object') return true;
+
+    const lower = raw.toLowerCase();
+    if (/qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun|qiniucs\.com/.test(lower)) {
+        return true;
+    }
+    return false;
+};
+
+export const parseShotTechnicalNotes = (rawNotes) => {
+    if (rawNotes && typeof rawNotes === 'object') return rawNotes;
+    try {
+        const parsed = JSON.parse(String(rawNotes || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+export const mediaUrlNeedsOssPersist = (url, options = {}) => {
+    const rawUrl = String(url || '').trim();
+    if (!rawUrl) return false;
+
+    const metadata = options?.metadata && typeof options.metadata === 'object' ? options.metadata : {};
+    const ossUploadedFlag = options?.ossUploadedFlag;
+
+    if (ossUploadedFlag === false) return true;
+    if (metadata.needs_persistence_retry || metadata.ephemeral_binding || metadata.remote_localization_failed) {
+        return true;
+    }
+    if (metadata.oss_uploaded_success === false) return true;
+    return !isDurablePersistedMediaUrl(rawUrl, metadata);
+};
+
+export const resolveShotMediaSlotUrl = (shot, slot = 'video') => {
+    const normalizedSlot = String(slot || 'video').trim().toLowerCase();
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    if (normalizedSlot === 'start' || normalizedSlot === 'start_frame') {
+        return String(shot?.image_url || '').trim();
+    }
+    if (normalizedSlot === 'end' || normalizedSlot === 'end_frame') {
+        return String(tech?.end_frame_url || '').trim();
+    }
+    return String(shot?.video_url || '').trim();
+};
+
+export const shotStartFrameNeedsOssPersist = (shot) => {
+    const imageUrl = resolveShotMediaSlotUrl(shot, 'start');
+    if (!imageUrl) return false;
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    const meta = tech?.start_frame_metadata && typeof tech.start_frame_metadata === 'object'
+        ? tech.start_frame_metadata
+        : {};
+    return mediaUrlNeedsOssPersist(imageUrl, {
+        metadata: meta,
+        ossUploadedFlag: tech.start_frame_oss_uploaded,
+    });
+};
+
+export const shotEndFrameNeedsOssPersist = (shot) => {
+    const endUrl = resolveShotMediaSlotUrl(shot, 'end');
+    if (!endUrl) return false;
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    const meta = tech?.end_frame_metadata && typeof tech.end_frame_metadata === 'object'
+        ? tech.end_frame_metadata
+        : {};
+    return mediaUrlNeedsOssPersist(endUrl, {
+        metadata: meta,
+        ossUploadedFlag: tech.end_frame_oss_uploaded,
+    });
+};
+
+export const shotVideoNeedsOssPersist = (shot) => {
+    const videoUrl = resolveShotMediaSlotUrl(shot, 'video');
+    if (!videoUrl) return false;
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    const meta = tech?.video_metadata && typeof tech.video_metadata === 'object' ? tech.video_metadata : {};
+    return mediaUrlNeedsOssPersist(videoUrl, {
+        metadata: meta,
+        ossUploadedFlag: tech.video_oss_uploaded,
+    });
+};
+
+export const shotNeedsAnyOssPersist = (shot) => (
+    shotStartFrameNeedsOssPersist(shot)
+    || shotEndFrameNeedsOssPersist(shot)
+    || shotVideoNeedsOssPersist(shot)
+);
+
+export const parseEntityCustomAttributes = (rawAttrs) => {
+    if (rawAttrs && typeof rawAttrs === 'object') return rawAttrs;
+    try {
+        const parsed = JSON.parse(String(rawAttrs || '{}'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+export const entityImageNeedsOssPersist = (entity) => {
+    const imageUrl = String(entity?.image_url || '').trim();
+    if (!imageUrl) return false;
+    const attrs = parseEntityCustomAttributes(entity?.custom_attributes);
+    return mediaUrlNeedsOssPersist(imageUrl, {
+        metadata: attrs,
+        ossUploadedFlag: attrs.oss_uploaded_success,
+    });
+};

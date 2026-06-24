@@ -193,6 +193,7 @@ FUNCTION_MAP = [
     # Tools
     (r"POST /api/v1/tools/translate", "Tool: Translate"),
     (r"POST /api/v1/tools/refine_prompt", "Tool: Refine Prompt"),
+    (r"POST /api/v1/tools/tune_shot_prompt", "Tool: Tune Shot Prompt"),
     
     # Assets
     (r"POST /api/v1/assets/upload", "Upload Asset"),

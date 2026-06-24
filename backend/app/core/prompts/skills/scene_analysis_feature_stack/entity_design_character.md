@@ -206,7 +206,7 @@
 - 输出前逐条核对输入类型与输出数组；总数正确但归类错误仍失败。
 - 字段按类型分离；`characters[]` 才允许 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等角色字段。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` 核心要素，并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）

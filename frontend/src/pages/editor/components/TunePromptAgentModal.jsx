@@ -1,75 +1,134 @@
-import React from 'react';
-import AgentChat from '../../../components/AgentChat';
-import { streamAnalyzeScene } from '../../../services/api';
-import { X, Check } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Loader2, Sparkles, X } from 'lucide-react';
+import { tuneShotPrompt } from '../../../services/api';
 
+export default function TunePromptAgentModal({
+    isOpen,
+    onClose,
+    initialValue = '',
+    promptLang = 'cn',
+    uiLang = 'zh',
+    onApply,
+    onLog,
+}) {
+    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const [instruction, setInstruction] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-export default function TunePromptAgentModal({ isOpen, onClose, initialValue, onApply }) {
-    const t = (zh, en) => zh;
-    const systemPrompt = "你是一个提示词优化助手。你的任务是对用户给出的基础提示词进行扩展、修改、改写或优化。重要要求：必须严格保持原有的角色、道具或环境的标签格式（如 CHAR:[@Name] (描述)、PROP:[@Prop] 等），只返回修改后的提示词内容，不要有任何多余的废话或前缀。";
+    useEffect(() => {
+        if (isOpen) {
+            setInstruction('');
+            setIsSubmitting(false);
+        }
+    }, [isOpen, initialValue]);
 
     if (!isOpen) return null;
 
-    const handleSendCustom = async (queryText, history, callbacks) => {
-        // Build payload for analyze_scene LLM api explicitly
-        const payload = {
-            script_text: `【修改要求】\n${queryText}\n\n【原始提示词】\n${initialValue}`,
-            system_prompt: systemPrompt,
-            project_metadata: {},
-            reuse_subject_assets: []
-        };
-        return await streamAnalyzeScene(payload, callbacks);
+    const handleSubmit = async () => {
+        const trimmedInstruction = String(instruction || '').trim();
+        const originalPrompt = String(initialValue || '').trim();
+        if (!trimmedInstruction) {
+            onLog?.(t('请先填写修改意见', 'Please enter modification instructions first'), 'warning');
+            return;
+        }
+        if (!originalPrompt) {
+            onLog?.(t('当前提示词为空，无法修改', 'Current prompt is empty; nothing to modify'), 'warning');
+            return;
+        }
+
+        setIsSubmitting(true);
+        onLog?.(t('正在提交 LLM 修改提示词...', 'Submitting prompt modification to LLM...'), 'process');
+        try {
+            const res = await tuneShotPrompt({
+                original_prompt: originalPrompt,
+                instruction: trimmedInstruction,
+                prompt_lang: promptLang,
+            });
+            const refined = String(res?.refined_prompt || '').trim();
+            if (!refined) {
+                throw new Error(t('未返回有效提示词', 'No valid refined prompt returned'));
+            }
+            await onApply?.(refined);
+            onLog?.(t('提示词已更新', 'Prompt updated'), 'success');
+            onClose?.();
+        } catch (error) {
+            const detail = error?.response?.data?.detail || error?.message || String(error);
+            onLog?.(`${t('提示词修改失败', 'Prompt modification failed')}: ${detail}`, 'error');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl h-[70vh] shadow-2xl flex flex-col">
+            <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]">
                 <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
                     <div className="flex flex-col">
-                        <h3 className="font-bold text-lg text-white">
-                            {t('通过对话微调', 'Tune via Chat')}
+                        <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-primary" />
+                            {t('AI 提示词修改', 'AI Prompt Tuning')}
                         </h3>
                         <p className="text-xs text-white/50 mt-1">
-                            {t('对话生成的新提示词会自动更新到左侧文本框中。', 'Generated prompts will automatically apply to the text box.')}
+                            {t('填写修改意见后提交，将按分镜提示词格式返回并覆盖当前提示词。', 'Submit your edit request; the refined prompt will follow the shot format and replace the current text.')}
                         </p>
                     </div>
-                    <button 
+                    <button
+                        type="button"
                         onClick={onClose}
-                        className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                        disabled={isSubmitting}
+                        className="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-40"
                     >
                         <X className="w-5 h-5" />
                     </button>
                 </div>
 
-                <div className="flex-1 overflow-hidden">
-                    <AgentChat
-                        title={t('提示词调优助手', 'Prompt Tuning Assistant')}
-                        agentRole={t('你可以告诉我你是想要增加具体的描述、设定某种风格、更改角色的情感状态，或者是让画面感更强等。', 'Tell me how you would like to modify the prompt (e.g., add details, change style, alter emotion).')}
-                        onSend={handleSendCustom}
-                        defaultInput={''}
-                        enableQuickActions={false}
-                        embeddedMode={true}
-                        renderResult={(content, isTyping) => (
-                            <div className="relative group">
-                                <div className="p-3 bg-black/20 rounded-lg border border-white/5 text-sm font-mono whitespace-pre-wrap">
-                                    {content}
-                                </div>
-                                {!isTyping && content && (
-                                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                                        <button
-                                            onClick={() => {
-                                                onApply(content);
-                                            }}
-                                            className="px-3 py-1.5 flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded text-xs transition-colors shadow-lg"
-                                        >
-                                            <Check className="w-3.5 h-3.5" />
-                                            {t('应用该提示词', 'Apply Prompt')}
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    />
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-muted-foreground uppercase">
+                            {t('当前提示词（只读）', 'Current Prompt (Read-only)')}
+                        </label>
+                        <textarea
+                            readOnly
+                            value={initialValue || ''}
+                            className="w-full h-40 bg-black/30 border border-white/10 rounded-md p-3 text-xs text-white/80 font-mono resize-none focus:outline-none"
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-muted-foreground uppercase">
+                            {t('修改意见', 'Modification Instructions')}
+                        </label>
+                        <textarea
+                            value={instruction}
+                            onChange={(e) => setInstruction(e.target.value)}
+                            disabled={isSubmitting}
+                            placeholder={t(
+                                '例如：把 P2 的运镜改成缓慢推近；加强窗外冷光对比；让 Lin 的对白时视线更明确看向 Chen…',
+                                'e.g. Change P2 camera move to a slow push-in; increase cold window-light contrast; make Lin look more clearly at Chen during dialogue…'
+                            )}
+                            className="w-full h-36 bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white focus:outline-none focus:border-primary/50 resize-none disabled:opacity-60"
+                        />
+                    </div>
+                </div>
+
+                <div className="px-6 py-4 border-t border-white/10 flex justify-end gap-3 shrink-0 bg-black/20">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={isSubmitting}
+                        className="px-4 py-2 rounded hover:bg-white/10 text-sm disabled:opacity-40"
+                    >
+                        {t('取消', 'Cancel')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSubmit}
+                        disabled={isSubmitting || !instruction.trim()}
+                        className="px-6 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded text-sm font-medium flex items-center gap-2 disabled:opacity-40"
+                    >
+                        {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                        {isSubmitting ? t('提交中...', 'Submitting...') : t('提交修改', 'Submit')}
+                    </button>
                 </div>
             </div>
         </div>
