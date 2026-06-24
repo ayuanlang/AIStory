@@ -3818,18 +3818,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const preflightOnly = options?.preflightOnly === true || options?.setRunningReport === false;
         const countAligned = uniqueMarkdown.length > 0 && uniqueMarkdown.length === uniqueDb.length;
-        if (preflightOnly && uniqueDb.length > 0) {
-            const reason = countAligned ? 'preflight_count_aligned' : 'preflight_db_scenes_present';
+        if (preflightOnly) {
+            const reason = isConsistent
+                ? 'already_consistent'
+                : (uniqueDb.length > 0
+                    ? (countAligned ? 'preflight_count_aligned' : 'preflight_db_scenes_present')
+                    : 'preflight_inconsistent');
             if (onLog) {
                 onLog(
-                    `Scene markdown precheck (preflight): ${uniqueDb.length} scene(s) already in DB; skipping destructive repair (missing=${missingInDb.length}, extra=${extraInDb.length}).`,
-                    'info'
+                    `Scene markdown precheck (preflight): markdown=${uniqueMarkdown.length}, db=${uniqueDb.length}, consistent=${isConsistent ? 1 : 0}, missing=${missingInDb.length}, extra=${extraInDb.length}.`,
+                    isConsistent ? 'success' : 'info'
                 );
             }
             return {
                 checked: true,
                 hasSceneMarkdown: uniqueMarkdown.length > 0,
-                isConsistent: true,
+                isConsistent,
                 repaired: false,
                 reason,
                 markdownCount: uniqueMarkdown.length,
@@ -9423,6 +9427,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ai_scene_analysis_scene_markdown: '',
             ai_entity_design_result: '',
             ai_stage_outputs: '',
+            scene_content: '',
+            shot_content: '',
         };
 
         if (typeof onUpdateEpisodeInfo === 'function') {
@@ -9521,12 +9527,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             await clearPersistedStageAnalysisFields({ deferWorkspaceUiReset });
 
+            latestStage1RawTextRef.current = '';
+            latestStage2_1TextRef.current = '';
+            latestAnalysisRawTextRef.current = '';
+            latestAssetRawTextRef.current = '';
+            lastPersistPayloadSignatureRef.current = {};
+
+            if (typeof onRefreshEpisodes === 'function') {
+                try {
+                    await onRefreshEpisodes();
+                } catch (refreshErr) {
+                    if (onLog) onLog(`AI Script Analysis restart episode refresh warning: ${refreshErr?.message || refreshErr}`, 'warning');
+                }
+            }
+
             if (!preserveProgressUi) {
                 setAnalysisUiReport(null);
                 setAnalysisFlowStatus({ phase: 'idle', message: '' });
             }
         } catch (clearErr) {
             if (onLog) onLog(`AI Script Analysis restart clear warning: ${clearErr?.message || clearErr}`, 'warning');
+            throw clearErr;
         }
     }
 
@@ -9809,7 +9830,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             deferWorkspaceUiReset: false,
         });
 
-        const resumeState = await prepareSceneAnalysisResumeState();
+        const resumeState = (forceRegenerate || clearedBeforeRun)
+            ? null
+            : await prepareSceneAnalysisResumeState();
         if (!forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
@@ -10350,7 +10373,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             deferWorkspaceUiReset: false,
         });
 
-        const resumeState = await prepareSceneAnalysisResumeState();
+        const resumeState = (forceRegenerate || clearedBeforeRun)
+            ? null
+            : await prepareSceneAnalysisResumeState();
         if (!forceRegenerate && !clearedBeforeRun && await tryResumeAnalysisFromExistingArtifacts(resumeState, retryCount)) {
             return;
         }
@@ -11092,6 +11117,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             resetAutoSubjectsImportCache();
             setAdaptationText(adaptedScriptText);
+
+            await purgeEpisodeWorkspaceScenes('restart-stage2-clear');
+            if (typeof onUpdateEpisodeInfo === 'function') {
+                await onUpdateEpisodeInfo(activeEpisode.id, {
+                    ai_scene_analysis_subject_index: '',
+                    ai_scene_analysis_scene_markdown: '',
+                    ai_entity_design_result: '',
+                    scene_content: '',
+                });
+            }
 
             const stage2_1PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md');
             if (onLog) onLog('Restarting Stage 2.1 (Asset Extraction)...', 'info');
