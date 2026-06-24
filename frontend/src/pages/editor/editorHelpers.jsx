@@ -2182,6 +2182,110 @@ const EPHEMERAL_PROVIDER_QUERY_MARKERS = [
     'x-amz-credential',
 ];
 
+let ossActiveUrlSignaturesCache = null;
+let ossActiveUrlSignaturesPromise = null;
+
+const normalizeOssUrlSignatures = (payload) => {
+    const data = payload && typeof payload === 'object' ? payload : {};
+    return {
+        oss_enabled: Boolean(data.oss_enabled),
+        pool_count: Number(data.pool_count || 0),
+        providers: Array.isArray(data.providers) ? data.providers.map((item) => String(item || '').trim()).filter(Boolean) : [],
+        public_base_urls: Array.isArray(data.public_base_urls)
+            ? data.public_base_urls.map((item) => String(item || '').trim().replace(/\/+$/, '')).filter(Boolean)
+            : [],
+        hostnames: Array.isArray(data.hostnames)
+            ? data.hostnames.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+            : [],
+    };
+};
+
+export const getOssActiveUrlSignatures = () => ossActiveUrlSignaturesCache;
+
+export const setOssActiveUrlSignatures = (payload) => {
+    ossActiveUrlSignaturesCache = normalizeOssUrlSignatures(payload);
+    return ossActiveUrlSignaturesCache;
+};
+
+export const preloadOssActiveUrlSignatures = async (fetcher) => {
+    if (ossActiveUrlSignaturesCache) return ossActiveUrlSignaturesCache;
+    if (!ossActiveUrlSignaturesPromise) {
+        ossActiveUrlSignaturesPromise = Promise.resolve()
+            .then(async () => {
+                if (typeof fetcher !== 'function') return setOssActiveUrlSignatures({ oss_enabled: false });
+                const payload = await fetcher();
+                return setOssActiveUrlSignatures(payload);
+            })
+            .catch(() => setOssActiveUrlSignatures({ oss_enabled: false }))
+            .finally(() => {
+                ossActiveUrlSignaturesPromise = null;
+            });
+    }
+    return ossActiveUrlSignaturesPromise;
+};
+
+const legacyDurableMediaUrl = (raw) => {
+    const lower = String(raw || '').trim().toLowerCase();
+    return /qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun|qiniucs\.com/.test(lower);
+};
+
+export const urlMatchesConfiguredOss = (url, metadata = null, signatures = null) => {
+    const raw = String(url || '').trim();
+    if (!raw || isEphemeralProviderMediaUrl(raw)) return false;
+
+    const meta = metadata && typeof metadata === 'object' ? metadata : {};
+    const activeSignatures = signatures || ossActiveUrlSignaturesCache;
+
+    if (activeSignatures?.oss_enabled) {
+        if (raw.startsWith('/uploads/') || (raw.startsWith('/') && !raw.startsWith('//'))) {
+            return false;
+        }
+    } else if (raw.startsWith('/uploads/') || (raw.startsWith('/') && !raw.startsWith('//'))) {
+        return true;
+    }
+
+    if (!raw.toLowerCase().startsWith('http://') && !raw.toLowerCase().startsWith('https://')) {
+        return false;
+    }
+
+    if (activeSignatures?.oss_enabled) {
+        let hostname = '';
+        try {
+            hostname = String(new URL(raw).hostname || '').trim().toLowerCase();
+        } catch {
+            hostname = '';
+        }
+        const allowedHosts = new Set(activeSignatures.hostnames || []);
+        if (hostname && allowedHosts.has(hostname)) {
+            return true;
+        }
+        for (const base of activeSignatures.public_base_urls || []) {
+            const normalizedBase = String(base || '').trim().replace(/\/+$/, '');
+            if (normalizedBase && (raw === normalizedBase || raw.startsWith(`${normalizedBase}/`))) {
+                return true;
+            }
+        }
+        const ossMeta = meta.oss && typeof meta.oss === 'object' ? meta.oss : null;
+        if (ossMeta?.key && (hostname && allowedHosts.has(hostname))) {
+            return true;
+        }
+        if (meta.provider_direct_oss_url || meta.providerDirectOssUrl) {
+            const provider = String(meta.provider || '').trim().toLowerCase();
+            const configuredProviders = new Set(
+                (activeSignatures.providers || []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean),
+            );
+            if (provider && configuredProviders.has(provider)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (meta.provider_direct_oss_url || meta.providerDirectOssUrl) return true;
+    if (meta.oss && typeof meta.oss === 'object') return true;
+    return legacyDurableMediaUrl(raw);
+};
+
 export const isEphemeralProviderMediaUrl = (url) => {
     const raw = String(url || '').trim();
     if (!raw || raw.startsWith('/') || raw.startsWith('data:')) return false;
@@ -2205,17 +2309,7 @@ export const isDurablePersistedMediaUrl = (url, metadata = null) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
     if (isEphemeralProviderMediaUrl(raw)) return false;
-    if (raw.startsWith('/uploads/') || (raw.startsWith('/') && !raw.startsWith('//'))) return true;
-
-    const meta = metadata && typeof metadata === 'object' ? metadata : {};
-    if (meta.provider_direct_oss_url || meta.providerDirectOssUrl) return true;
-    if (meta.oss && typeof meta.oss === 'object') return true;
-
-    const lower = raw.toLowerCase();
-    if (/qiniu|clouddn\.com|backblaze|\.bkt\.|aistory|woola\.fun|qiniucs\.com/.test(lower)) {
-        return true;
-    }
-    return false;
+    return urlMatchesConfiguredOss(raw, metadata);
 };
 
 export const parseShotTechnicalNotes = (rawNotes) => {

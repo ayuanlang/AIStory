@@ -3287,6 +3287,18 @@ export const persistEntityMedia = async (entityId, payload = {}) => {
     return response.data;
 };
 
+export const fetchOssActiveUrlSignatures = async () => {
+    const response = await api.get('/storage/oss-active-url-signatures');
+    return response.data;
+};
+
+export const inspectStorageMediaUrl = async (url) => {
+    const response = await api.get('/storage/media-url-inspect', {
+        params: { url: String(url || '').trim() },
+    });
+    return response.data;
+};
+
 export const translateText = async (q, from_lang = 'en', to_lang = 'zh') => {
     return await asyncLLMPost('/tools/translate', { q, from_lang, to_lang });
 };

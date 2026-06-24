@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-06-23 12:00:00 +08:00
+# Prompt Updated At: 2026-06-24 18:00:00 +08:00
 
 
 
@@ -66,7 +66,7 @@
 
 - **动作/切换/环境**：`{行为过程}`/`{环境交互}`/`{结果落位}` 仅转换 Stage 1【动作/视觉节拍】；继承主节拍/主动作与完整因果链。`Beat切换说明` 继承切换判定四项；Scene 首 Beat 继承 `开场转场技巧: OT标签+中文释义`；**转场专拍 Beat** 完整继承 Stage 1 桥接情节与前后承接，禁止合并或删减。`[环境切换声明]` 有证据时继承完整链（视角衍生或状态/特效衍生）；仅 Stage 1 明确 `衍生环境=无：否决证据` 且极简场景可写 `None`。切至衍生环境后，后续 Beat 须沿用直至 Stage 1 明确返回。
 
-- **节拍时间控制**：严格继承Stage1边界。① Beat边界；决战≥10(§25)/宏观≥6(§26)禁合并 ②对白节奏 ③动作节奏 ④时间约束 ⑤Equivalent Duration；禁自行改边界。
+- **节拍时间控制**：严格继承 Stage 1 边界与 §28 规划。① Beat 边界与**Beat 总数/单 Beat 预估区间**（【节拍时间规划】+【Duration Estimate Basis】）；决战≥10(§26)/宏观≥6(§27)禁合并 ②对白节奏 ③动作节奏 ④时间约束（前3秒/闪回上限/维持时长等显式秒数）⑤Equivalent Duration；禁自行改边界。
 - **对白**：说话人、OS/V.O.、**成稿原文（含情绪标点，逐字）**、voice_type/tone/speed/volume、`标点意图`、听者反应；未说话者写闭口/倾听/None。
 - **Scene 等效时长**：表格 `Equivalent Duration` 列须与上述节拍时间控制一致；算式或依据写入 `{覆盖核销}` 或 Stage 1 已有 `{Duration Estimate Basis}` 字段（若 Stage 1 已写则完整继承）。
 
@@ -85,6 +85,10 @@
 - **{核销源}**：继承 Stage 1【核销源】；缺失标上游缺口。
 
 - **{故事内核}**：继承叙事目标、冲突态势、本场落点。
+
+- **{节拍时间规划}**：继承 Stage 1【节拍时间规划】（§28）：目标秒 T、计划 Beat 总数、单 Beat 预估区间、镜头偏好匹配策略、显式时限落点；缺失标 `上游节拍时间规划缺口`。
+
+- **{Duration Estimate Basis}**：继承 Stage 1【Duration Estimate Basis】（§28）完整算式与总和；缺失标 `上游Duration Estimate Basis缺口`。
 
 - **{细节特写规划}**：完整继承 Stage 1【细节特写规划】；Stage 1 无则标 `上游细节特写规划缺口`，**禁止**自行补充。
 

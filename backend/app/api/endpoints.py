@@ -2260,6 +2260,8 @@ def _persist_remote_image_result(
     current_user: User,
     media_url: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
+    *,
+    db: Optional[Session] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     raw = str(media_url or "").strip()
     if not raw:
@@ -2277,7 +2279,7 @@ def _persist_remote_image_result(
     hostname = str(parsed.hostname or "").strip().lower()
     if hostname in {"localhost", "127.0.0.1"}:
         return media_url, metadata
-    if oss_storage_service.is_managed_url(raw):
+    if oss_storage_service.is_active_managed_url(raw, db):
         logger.info(
             "[ImageResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
             getattr(current_user, "id", None),
@@ -2492,15 +2494,72 @@ def _attach_oss_metadata_from_managed_url(metadata: Dict[str, Any], url: str) ->
     return updated
 
 
-def _oss_upload_succeeded_for_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> bool:
+def _oss_upload_succeeded_for_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None, db: Optional[Session] = None) -> bool:
     if isinstance(metadata, dict) and isinstance(metadata.get("oss"), dict):
+        oss_meta = metadata.get("oss") or {}
+        if oss_meta.get("key") and _url_matches_configured_oss(str(url or ""), metadata, db):
+            return True
+    if _url_matches_configured_oss(str(url or ""), metadata, db):
         return True
-    if _is_provider_direct_oss_url(url, metadata):
-        return True
-    return bool(oss_storage_service.is_managed_url(str(url or "")))
+    return False
 
 
-def _is_provider_direct_oss_url(url: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> bool:
+def _url_matches_configured_oss(
+    url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+) -> bool:
+    raw = str(url or "").strip()
+    if not raw or _is_ephemeral_provider_media_url(raw):
+        return False
+    if oss_storage_service.is_active_managed_url(raw, db):
+        return True
+
+    meta = metadata if isinstance(metadata, dict) else {}
+    oss_meta = meta.get("oss") if isinstance(meta.get("oss"), dict) else {}
+    if oss_meta.get("key"):
+        pool, key = oss_storage_service.match_active_pool(raw, db)
+        if pool and key and str(oss_meta.get("key") or "").strip() == str(key).strip():
+            return True
+
+    if not raw.lower().startswith(("http://", "https://")):
+        return False
+
+    signatures = oss_storage_service.get_active_url_signatures(db)
+    if not signatures.get("oss_enabled"):
+        return False
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        hostname = str(parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    if not hostname:
+        return False
+
+    allowed_hosts = set(signatures.get("hostnames") or [])
+    if hostname in allowed_hosts:
+        return True
+
+    for base in signatures.get("public_base_urls") or []:
+        normalized_base = str(base or "").strip().rstrip("/")
+        if normalized_base and (raw.startswith(f"{normalized_base}/") or raw == normalized_base):
+            return True
+
+    if bool(meta.get("provider_direct_oss_url")):
+        provider = str(meta.get("provider") or "").strip().lower()
+        configured_providers = {str(item or "").strip().lower() for item in (signatures.get("providers") or [])}
+        if provider and provider in configured_providers:
+            return True
+
+    return False
+
+
+def _is_provider_direct_oss_url(
+    url: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+) -> bool:
     raw = str(url or "").strip()
     if not raw.lower().startswith(("http://", "https://")):
         return False
@@ -2510,10 +2569,10 @@ def _is_provider_direct_oss_url(url: Optional[str], metadata: Optional[Dict[str,
     if bool(meta.get("provider_direct_oss_url")):
         return True
     provider = str(meta.get("provider") or "").strip().lower()
-    # Grsai can directly write into configured OSS path and return an authorized OSS URL,
-    # but only treat known managed/public OSS hosts as direct-oss.
     if provider != "grsai":
         return False
+    if _url_matches_configured_oss(raw, metadata, db):
+        return True
     try:
         parsed = urllib.parse.urlparse(raw)
         hostname = str(parsed.hostname or "").strip().lower()
@@ -2536,6 +2595,7 @@ def _persist_remote_video_result(
     metadata: Optional[Dict[str, Any]] = None,
     *,
     filename_base: Optional[str] = None,
+    db: Optional[Session] = None,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
     raw = str(media_url or "").strip()
     updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
@@ -2543,12 +2603,12 @@ def _persist_remote_video_result(
         return media_url, updated_metadata or metadata, False
 
     if raw.startswith("/"):
-        return raw, updated_metadata, _oss_upload_succeeded_for_url(raw, updated_metadata)
+        return raw, updated_metadata, _oss_upload_succeeded_for_url(raw, updated_metadata, db)
 
     if not raw.lower().startswith(("http://", "https://")):
         return media_url, updated_metadata or metadata, False
 
-    if oss_storage_service.is_managed_url(raw):
+    if oss_storage_service.is_active_managed_url(raw, db):
         updated_metadata = _attach_oss_metadata_from_managed_url(updated_metadata, raw)
         logger.info(
             "[VideoResultNormalize] skip remote localization for managed oss url | user_id=%s url=%s",
@@ -2556,7 +2616,7 @@ def _persist_remote_video_result(
             raw,
         )
         return raw, updated_metadata, True
-    if _is_provider_direct_oss_url(raw, updated_metadata):
+    if _is_provider_direct_oss_url(raw, updated_metadata, db):
         updated_metadata["provider_direct_oss_url"] = True
         logger.info(
             "[VideoResultNormalize] skip localization for provider direct oss url | user_id=%s provider=%s url=%s",
@@ -2617,7 +2677,7 @@ def _persist_remote_video_result(
         return media_url, updated_metadata, False
 
     persisted_url = str(persisted_url or "").strip() or raw
-    oss_ok = _oss_upload_succeeded_for_url(persisted_url, updated_metadata)
+    oss_ok = _oss_upload_succeeded_for_url(persisted_url, updated_metadata, db)
 
     if persisted_url != source_url:
         updated_metadata["stored_from_remote_url"] = raw
@@ -2634,7 +2694,7 @@ def _persist_remote_video_result(
     elif persisted_url.startswith("/uploads/"):
         updated_metadata["stored_locally"] = True
 
-    if not _is_durable_persisted_media_url(persisted_url):
+    if not _is_durable_persisted_media_url(persisted_url, updated_metadata, db):
         updated_metadata["remote_localization_failed"] = True
         updated_metadata.setdefault(
             "remote_localization_error",
@@ -2753,17 +2813,24 @@ def _job_has_durable_result_url(job: Dict[str, Any]) -> bool:
     return _is_durable_persisted_media_url(current_url, meta)
 
 
-def _is_durable_persisted_media_url(value: Any, metadata: Optional[Dict[str, Any]] = None) -> bool:
+def _is_durable_persisted_media_url(
+    value: Any,
+    metadata: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+) -> bool:
     raw = str(value or "").strip()
     if not raw:
         return False
     if _is_ephemeral_provider_media_url(raw):
         return False
-    if raw.startswith("/uploads/"):
+
+    oss_enabled = oss_storage_service.is_enabled(db)
+    if raw.startswith("/uploads/") or (raw.startswith("/") and not raw.startswith("//")):
+        if oss_enabled:
+            return False
         return True
-    if _is_provider_direct_oss_url(raw, metadata):
-        return True
-    if oss_storage_service.is_managed_url(raw):
+
+    if _url_matches_configured_oss(raw, metadata, db):
         return True
     return False
 
@@ -2780,12 +2847,12 @@ def _resolve_video_persistence_source_url(result: Dict[str, Any]) -> str:
     return _extract_job_result_url(result)
 
 
-def _video_result_needs_persistence_retry(result: Any) -> bool:
+def _video_result_needs_persistence_retry(result: Any, db: Optional[Session] = None) -> bool:
     if not isinstance(result, dict):
         return False
     meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     current = str(result.get("url") or "").strip() or _extract_job_result_url(result)
-    if current and _is_durable_persisted_media_url(current, meta):
+    if current and _is_durable_persisted_media_url(current, meta, db):
         return False
     if meta.get("persistence_gave_up") is True:
         return False
@@ -2796,7 +2863,7 @@ def _video_result_needs_persistence_retry(result: Any) -> bool:
         return True
     if _is_ephemeral_provider_media_url(current) or _is_ephemeral_provider_media_url(source):
         return True
-    if current.lower().startswith(("http://", "https://")) and not oss_storage_service.is_managed_url(current):
+    if current.lower().startswith(("http://", "https://")) and not _url_matches_configured_oss(current, meta, db):
         return True
     return False
 
@@ -2848,42 +2915,79 @@ def _extract_media_filename_from_url(value: Any) -> str:
         return ""
 
 
-def _assert_allowed_persisted_media_url(value: Any, *, field_label: str) -> None:
+def _assert_allowed_persisted_media_url(
+    value: Any,
+    *,
+    field_label: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+) -> None:
     raw = str(value or "").strip()
     if not raw:
         return
     if _is_ephemeral_provider_media_url(raw):
         raise HTTPException(
             status_code=400,
-            detail=f"{field_label} cannot use a temporary provider URL; use a localized /uploads URL or another stable asset URL",
+            detail=f"{field_label} cannot use a temporary provider URL; persist to OSS first",
+        )
+    if oss_storage_service.is_enabled(db) and not _is_durable_persisted_media_url(raw, metadata, db):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_label} must use configured OSS storage URL; run persist-media first",
         )
 
 
-def _assert_allowed_shot_media_payload(update_data: Dict[str, Any]) -> None:
+def _assert_allowed_shot_media_payload(update_data: Dict[str, Any], db: Optional[Session] = None) -> None:
     if not isinstance(update_data, dict):
         return
 
-    _assert_allowed_persisted_media_url(update_data.get("image_url"), field_label="shot.image_url")
-
+    notes: Optional[Dict[str, Any]] = None
     raw_technical_notes = update_data.get("technical_notes")
-    if raw_technical_notes is None:
-        return
-
-    notes = raw_technical_notes if isinstance(raw_technical_notes, dict) else None
-    if notes is None and isinstance(raw_technical_notes, str):
+    if isinstance(raw_technical_notes, dict):
+        notes = raw_technical_notes
+    elif isinstance(raw_technical_notes, str):
         try:
             parsed = json.loads(raw_technical_notes)
             notes = parsed if isinstance(parsed, dict) else None
         except Exception:
             notes = None
 
-    if not isinstance(notes, dict):
-        return
+    start_meta = (
+        dict(notes.get("start_frame_metadata") or {})
+        if isinstance(notes, dict) and isinstance(notes.get("start_frame_metadata"), dict)
+        else {}
+    )
+    video_meta = (
+        dict(notes.get("video_metadata") or {})
+        if isinstance(notes, dict) and isinstance(notes.get("video_metadata"), dict)
+        else {}
+    )
+    end_meta = (
+        dict(notes.get("end_frame_metadata") or {})
+        if isinstance(notes, dict) and isinstance(notes.get("end_frame_metadata"), dict)
+        else {}
+    )
 
     _assert_allowed_persisted_media_url(
-        notes.get("end_frame_url"),
-        field_label="shot.technical_notes.end_frame_url",
+        update_data.get("image_url"),
+        field_label="shot.image_url",
+        metadata=start_meta,
+        db=db,
     )
+    _assert_allowed_persisted_media_url(
+        update_data.get("video_url"),
+        field_label="shot.video_url",
+        metadata=video_meta,
+        db=db,
+    )
+
+    if isinstance(notes, dict):
+        _assert_allowed_persisted_media_url(
+            notes.get("end_frame_url"),
+            field_label="shot.technical_notes.end_frame_url",
+            metadata=end_meta,
+            db=db,
+        )
 
 
 def _asset_meta_to_dict(raw_meta: Any) -> Dict[str, Any]:
@@ -3374,13 +3478,13 @@ def _persist_shot_media_slot(
     if not source_url:
         raise HTTPException(status_code=400, detail=f"Shot has no URL for slot={slot}")
 
-    if _is_durable_persisted_media_url(source_url, slot_meta):
+    if _is_durable_persisted_media_url(source_url, slot_meta, db):
         return {
             "shot_id": int(shot.id),
             "slot": asset_type,
             "source_url": source_url,
             "persisted_url": source_url,
-            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta),
+            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta, db),
             "already_persisted": True,
             "metadata": slot_meta or None,
         }
@@ -3401,15 +3505,17 @@ def _persist_shot_media_slot(
             source_url,
             slot_meta,
             filename_base=filename_base,
+            db=db,
         )
     else:
         normalized_url, normalized_meta = _persist_remote_image_result(
             current_user,
             source_url,
             slot_meta,
+            db=db,
         )
         normalized_meta = dict(normalized_meta or {})
-        oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta)
+        oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta, db)
 
     normalized_url = str(normalized_url or "").strip() or source_url
     normalized_meta = dict(normalized_meta or {})
@@ -3421,10 +3527,10 @@ def _persist_shot_media_slot(
     )
 
     final_url = str(normalized_url or "").strip()
-    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta):
+    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta, db):
         bind_url = final_url
         ephemeral_binding = False
-    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta):
+    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta, db):
         final_url = bind_url
         ephemeral_binding = False
     elif bind_url:
@@ -3432,7 +3538,7 @@ def _persist_shot_media_slot(
     else:
         final_url = normalized_url or source_url
 
-    if not _is_durable_persisted_media_url(final_url, normalized_meta):
+    if not _is_durable_persisted_media_url(final_url, normalized_meta, db):
         error_detail = str(
             normalized_meta.get("remote_localization_error")
             or "Failed to persist media to durable storage (OSS/local)"
@@ -3487,12 +3593,12 @@ def _persist_entity_image(
     attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
     slot_meta = dict(attrs or {})
 
-    if _is_durable_persisted_media_url(source_url, slot_meta):
+    if _is_durable_persisted_media_url(source_url, slot_meta, db):
         return {
             "entity_id": int(entity.id),
             "source_url": source_url,
             "persisted_url": source_url,
-            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta),
+            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta, db),
             "already_persisted": True,
             "metadata": slot_meta or None,
         }
@@ -3512,9 +3618,10 @@ def _persist_entity_image(
         current_user,
         source_url,
         slot_meta,
+        db=db,
     )
     normalized_meta = dict(normalized_meta or {})
-    oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta)
+    oss_uploaded = _oss_upload_succeeded_for_url(normalized_url, normalized_meta, db)
 
     bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
         raw_url=source_url,
@@ -3523,10 +3630,10 @@ def _persist_entity_image(
     )
 
     final_url = str(normalized_url or "").strip()
-    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta):
+    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta, db):
         bind_url = final_url
         ephemeral_binding = False
-    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta):
+    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta, db):
         final_url = bind_url
         ephemeral_binding = False
     elif bind_url:
@@ -3534,7 +3641,7 @@ def _persist_entity_image(
     else:
         final_url = normalized_url or source_url
 
-    if not _is_durable_persisted_media_url(final_url, normalized_meta):
+    if not _is_durable_persisted_media_url(final_url, normalized_meta, db):
         error_detail = str(
             normalized_meta.get("remote_localization_error")
             or "Failed to persist entity image to durable storage (OSS/local)"
@@ -24039,7 +24146,7 @@ def create_shot(
          raise
          
     try:
-        _assert_allowed_shot_media_payload(shot.dict(exclude_unset=True))
+        _assert_allowed_shot_media_payload(shot.dict(exclude_unset=True), db=db)
 
         db_shot = Shot(
             scene_id=scene_id,
@@ -24133,7 +24240,7 @@ def batch_create_shots(
             skipped += 1
             continue
         payload = shot.dict(exclude_unset=True)
-        _assert_allowed_shot_media_payload(payload)
+        _assert_allowed_shot_media_payload(payload, db=db)
 
         db_shot = Shot(
             scene_id=scene_id,
@@ -24201,7 +24308,7 @@ def update_shot(
 
     update_data = shot_in.dict(exclude_unset=True)
     update_data = _replace_legacy_temp_urls_in_shot_payload(db, current_user, project, db_shot, update_data)
-    _assert_allowed_shot_media_payload(update_data)
+    _assert_allowed_shot_media_payload(update_data, db=db)
 
     for key, value in update_data.items():
         setattr(db_shot, key, value)
@@ -24281,6 +24388,31 @@ def persist_entity_media(
         "custom_attributes": entity.custom_attributes,
     }
     return result
+
+
+@router.get("/storage/oss-active-url-signatures", response_model=Dict[str, Any])
+def get_oss_active_url_signatures(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    return oss_storage_service.get_active_url_signatures(db)
+
+
+@router.get("/storage/media-url-inspect", response_model=Dict[str, Any])
+def inspect_storage_media_url(
+    url: str = Query("", description="Media URL to inspect against active OSS pool configuration"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    raw = str(url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="url query parameter is required")
+    inspection = oss_storage_service.inspect_media_url(raw, db)
+    inspection["durable_persisted"] = _is_durable_persisted_media_url(raw, None, db)
+    inspection["oss_upload_succeeded"] = _oss_upload_succeeded_for_url(raw, None, db)
+    return inspection
 
 
 @router.delete("/shots/{shot_id}")
@@ -24527,7 +24659,7 @@ def create_entity(
         if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
             raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
 
-    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url")
+    _assert_allowed_persisted_media_url(entity.image_url, field_label="entity.image_url", db=db)
 
     normalized_name_candidates = set()
     for raw_name in (entity.name, entity.name_en):
@@ -25030,7 +25162,13 @@ def update_entity(
         )
         if resolved_image_url:
             update_data["image_url"] = resolved_image_url
-    _assert_allowed_persisted_media_url(update_data.get("image_url"), field_label="entity.image_url")
+    entity_attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
+    _assert_allowed_persisted_media_url(
+        update_data.get("image_url"),
+        field_label="entity.image_url",
+        metadata=entity_attrs,
+        db=db,
+    )
     
     # Separate standard columns from custom attributes
     standard_columns = {c.name for c in Entity.__table__.columns}
@@ -25145,7 +25283,13 @@ async def generate_sora_character(
             )
             if resolved_main_image_url:
                 req = req.copy(update={"main_image_url": resolved_main_image_url})
-        _assert_allowed_persisted_media_url(req.main_image_url, field_label="entity.image_url")
+        entity_attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
+        _assert_allowed_persisted_media_url(
+            req.main_image_url,
+            field_label="entity.image_url",
+            metadata=entity_attrs,
+            db=db,
+        )
         entity.image_url = req.main_image_url
     
     # Merge references into visual_dependencies or custom_attributes

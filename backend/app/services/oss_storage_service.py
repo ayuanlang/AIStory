@@ -858,13 +858,16 @@ class OSSStorageService:
             logger.warning("OSS upload_file failed | path=%s err=%s", target_path, exc)
             return None
 
-    def _extract_managed_target(self, url: str) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
+    def _extract_managed_target_from_pools(
+        self,
+        url: str,
+        pools: Optional[List[SimpleNamespace]],
+    ) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
         raw = str(url or "").strip()
-        if not raw:
+        if not raw or not pools:
             return None, None
 
         candidate_raw = raw
-        # Legacy records may store Qiniu URL without scheme, e.g. host/path.
         if "://" not in candidate_raw and "/" in candidate_raw:
             host_part = candidate_raw.split("/", 1)[0].strip().lower()
             if host_part.endswith("clouddn.com") or host_part.endswith("qiniucs.com") or ".bkt." in host_part:
@@ -879,7 +882,7 @@ class OSSStorageService:
         if not path:
             return None, None
 
-        for pool in self._get_all_pools(None):
+        for pool in pools:
             public_base_url = self._normalize_public_base_url(pool)
             if public_base_url and candidate_raw.startswith(f"{public_base_url}/"):
                 extracted_key = candidate_raw[len(public_base_url) + 1 :].split("?")[0]
@@ -912,6 +915,98 @@ class OSSStorageService:
                 return pool, path
 
         return None, None
+
+    def _extract_managed_target(self, url: str) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
+        return self._extract_managed_target_from_pools(url, self._get_all_pools(None))
+
+    def match_active_pool(self, url: str, db=None) -> Tuple[Optional[SimpleNamespace], Optional[str]]:
+        return self._extract_managed_target_from_pools(url, self._get_active_pools(db))
+
+    def is_active_managed_url(self, url: str, db=None) -> bool:
+        pool, key = self.match_active_pool(url, db)
+        return bool(pool and key)
+
+    def _pool_url_hosts(self, pool: SimpleNamespace) -> List[str]:
+        hosts: List[str] = []
+        public_base_url = self._normalize_public_base_url(pool)
+        if public_base_url:
+            try:
+                host = str(urllib.parse.urlparse(public_base_url).hostname or "").strip().lower()
+                if host:
+                    hosts.append(host)
+            except Exception:
+                pass
+        endpoint = str(getattr(pool, "endpoint", "") or "").strip()
+        if endpoint:
+            try:
+                host = str(urllib.parse.urlparse(endpoint).hostname or "").strip().lower()
+                if host:
+                    hosts.append(host)
+            except Exception:
+                pass
+        bucket = str(getattr(pool, "bucket", "") or "").strip().lower()
+        if bucket:
+            hosts.append(f"{bucket}.{hosts[-1]}" if hosts else bucket)
+        return sorted(set(host for host in hosts if host))
+
+    def get_active_url_signatures(self, db=None) -> Dict[str, Any]:
+        pools = self._get_active_pools(db)
+        public_base_urls: List[str] = []
+        hostnames: List[str] = []
+        providers: List[str] = []
+        for pool in pools:
+            provider = str(getattr(pool, "provider", "") or "").strip()
+            if provider:
+                providers.append(provider)
+            public_base_url = self._normalize_public_base_url(pool)
+            if public_base_url:
+                public_base_urls.append(public_base_url.rstrip("/"))
+            hostnames.extend(self._pool_url_hosts(pool))
+        return {
+            "oss_enabled": bool(pools),
+            "pool_count": len(pools),
+            "providers": sorted(set(providers)),
+            "public_base_urls": sorted(set(public_base_urls)),
+            "hostnames": sorted(set(hostnames)),
+        }
+
+    def inspect_media_url(self, url: str, db=None) -> Dict[str, Any]:
+        raw = str(url or "").strip()
+        signatures = self.get_active_url_signatures(db)
+        oss_enabled = bool(signatures.get("oss_enabled"))
+        active_pool, active_key = self.match_active_pool(raw, db)
+        any_pool, any_key = self._extract_managed_target(raw)
+        parsed_host = ""
+        try:
+            parsed_host = str(urllib.parse.urlparse(raw).hostname or "").strip().lower()
+        except Exception:
+            parsed_host = ""
+
+        local_upload = raw.startswith("/uploads/") or (
+            raw.startswith("/") and not raw.startswith("//") and not raw.startswith("/uploads/")
+        )
+        host_matches_signature = bool(parsed_host and parsed_host in set(signatures.get("hostnames") or []))
+        public_prefix_match = any(
+            raw.startswith(f"{base}/") or raw == base
+            for base in (signatures.get("public_base_urls") or [])
+            if base
+        )
+
+        return {
+            "url": raw,
+            "oss_enabled": oss_enabled,
+            "local_upload": bool(local_upload),
+            "matches_active_oss_pool": bool(active_pool and active_key),
+            "matches_any_configured_pool": bool(any_pool and any_key),
+            "host_matches_signature": host_matches_signature,
+            "public_base_prefix_match": public_prefix_match,
+            "oss": {
+                "provider": getattr(active_pool, "provider", None) if active_pool else getattr(any_pool, "provider", None),
+                "bucket": getattr(active_pool, "bucket", None) if active_pool else getattr(any_pool, "bucket", None),
+                "key": active_key or any_key,
+                "endpoint": getattr(active_pool, "endpoint", None) if active_pool else getattr(any_pool, "endpoint", None),
+            } if (active_key or any_key) else None,
+        }
 
     def is_managed_url(self, url: str) -> bool:
         _, key = self._extract_managed_target(url)
