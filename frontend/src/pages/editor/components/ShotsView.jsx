@@ -796,6 +796,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const shotLocalBatchSessionRef = useRef('');
     const shotLocalBatchStopRequestedRef = useRef(false);
     const selectedSceneIdRef = useRef('all');
+    const shotFiltersHydratedRef = useRef(false);
+    const skipShotFiltersPersistRef = useRef(false);
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
@@ -3216,23 +3218,40 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [activeEpisode?.id]);
 
     useEffect(() => {
-        if (!shotFilterStorageKey) return;
+        if (!shotFilterStorageKey) {
+            shotFiltersHydratedRef.current = false;
+            return;
+        }
+        shotFiltersHydratedRef.current = false;
         try {
             const raw = localStorage.getItem(shotFilterStorageKey);
-            if (!raw) return;
+            if (!raw) {
+                setSelectedSceneId('all');
+                setSceneCodeFilter('');
+                setShotIdFilter('');
+                return;
+            }
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
-                setSelectedSceneId(String(parsed.selectedSceneId || 'all'));
+                skipShotFiltersPersistRef.current = true;
+                const restoredSceneId = String(parsed.selectedSceneId || 'all').trim() || 'all';
+                setSelectedSceneId(restoredSceneId);
                 setSceneCodeFilter(String(parsed.sceneCodeFilter || ''));
                 setShotIdFilter(String(parsed.shotIdFilter || ''));
             }
         } catch (e) {
             console.warn('Failed to restore shot filters', e);
+        } finally {
+            shotFiltersHydratedRef.current = true;
         }
     }, [shotFilterStorageKey]);
 
     useEffect(() => {
-        if (!shotFilterStorageKey) return;
+        if (!shotFilterStorageKey || !shotFiltersHydratedRef.current) return;
+        if (skipShotFiltersPersistRef.current) {
+            skipShotFiltersPersistRef.current = false;
+            return;
+        }
         try {
             localStorage.setItem(shotFilterStorageKey, JSON.stringify({
                 selectedSceneId,
@@ -3243,6 +3262,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             console.warn('Failed to persist shot filters', e);
         }
     }, [shotFilterStorageKey, selectedSceneId, sceneCodeFilter, shotIdFilter]);
+
+    useEffect(() => {
+        if (!selectedSceneId || selectedSceneId === 'all' || !scenes.length) return;
+        const exists = scenes.some((scene) => String(scene.id) === String(selectedSceneId));
+        if (!exists) setSelectedSceneId('all');
+    }, [scenes, selectedSceneId]);
 
     useEffect(() => {
         const sceneId = focusRequest?.sceneId;
