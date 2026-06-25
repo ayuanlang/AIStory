@@ -2759,6 +2759,7 @@ def _media_result_needs_persistence_retry(result: Any) -> bool:
 _EPHEMERAL_PROVIDER_MEDIA_HOST_PATTERNS = [
     re.compile(r"^file\d*\.aitohumanize\.com$", re.IGNORECASE),
     re.compile(r"(^|.+\.)aiquickdraw\.com$", re.IGNORECASE),
+    re.compile(r"(^|.+\.)tempfile\.aiquickdraw\.com$", re.IGNORECASE),
     # Volcengine Ark / Seedance temporary TOS delivery URLs (must be localized to OSS).
     re.compile(r"(^|.+\.)volces\.com$", re.IGNORECASE),
 ]
@@ -2942,6 +2943,94 @@ def _build_generation_job_req_context(job: Dict[str, Any], db: Optional[Session]
     return req_context
 
 
+def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    stable_job_id = str(job_id or (job or {}).get("job_id") or "").strip()
+    merged = dict(job or {})
+    if stable_job_id:
+        merged["job_id"] = stable_job_id
+
+    with VIDEO_JOB_LOCK:
+        live = dict(VIDEO_JOB_STORE.get(stable_job_id) or {})
+    if live:
+        for key, value in live.items():
+            if value in (None, ""):
+                continue
+            if merged.get(key) in (None, ""):
+                merged[key] = value
+
+    if stable_job_id:
+        file_job = _read_video_job_file(stable_job_id)
+        if isinstance(file_job, dict):
+            for key, value in file_job.items():
+                if value in (None, ""):
+                    continue
+                if merged.get(key) in (None, ""):
+                    merged[key] = value
+
+        try:
+            from app.services.generation_task_queue import get_generation_task_status
+
+            task_row = get_generation_task_status(stable_job_id) or {}
+            task_user_id = task_row.get("user_id")
+            if task_user_id not in (None, "") and merged.get("user_id") in (None, ""):
+                merged["user_id"] = int(task_user_id)
+            task_payload = task_row.get("payload") if isinstance(task_row.get("payload"), dict) else {}
+            for key in (
+                "shot_id", "project_id", "episode_id", "scene_id", "shot_number", "shot_name",
+                "asset_type", "provider", "model", "prompt", "username",
+            ):
+                if task_payload.get(key) not in (None, "") and merged.get(key) in (None, ""):
+                    merged[key] = task_payload.get(key)
+        except Exception:
+            pass
+
+    return merged
+
+
+def _resolve_job_owner_user(db: Session, job: Dict[str, Any]) -> Optional[Any]:
+    from app.models.all_models import User
+
+    try:
+        user_id = int(job.get("user_id") or 0)
+    except Exception:
+        user_id = 0
+    if user_id > 0:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            return user
+
+    username = str(job.get("username") or "").strip()
+    if username:
+        user = db.query(User).filter(User.username == username).first()
+        if user:
+            return user
+
+    shot_id = job.get("shot_id")
+    if shot_id:
+        try:
+            shot = db.query(Shot).filter(Shot.id == int(shot_id)).first()
+        except Exception:
+            shot = None
+        if shot:
+            project_id = getattr(shot, "project_id", None)
+            if not project_id and getattr(shot, "scene_id", None):
+                scene = db.query(Scene).filter(Scene.id == int(shot.scene_id)).first()
+                if scene and getattr(scene, "episode_id", None):
+                    episode = db.query(Episode).filter(Episode.id == int(scene.episode_id)).first()
+                    if episode:
+                        project_id = getattr(episode, "project_id", None)
+            if project_id:
+                project = db.query(Project).filter(Project.id == int(project_id)).first()
+                owner_id = int(getattr(project, "owner_id", 0) or 0) if project else 0
+                if owner_id > 0:
+                    user = db.query(User).filter(User.id == owner_id).first()
+                    if user:
+                        job.setdefault("user_id", owner_id)
+                        job.setdefault("project_id", int(project_id))
+                        return user
+    return None
+
+
 def _stage_ephemeral_media_job_result(
     job_id: str,
     job: Dict[str, Any],
@@ -2973,33 +3062,44 @@ def _stage_ephemeral_media_job_result(
     staged_result["url"] = raw_url
     staged_result["metadata"] = staged_meta
 
+    temp_label = f" temp_filename={temp_filename}" if temp_filename else ""
+    log_prefix = "VideoJobPersist" if media_kind == "video" else "ImageJobPersist"
+
+    if media_kind == "video":
+        job = _hydrate_video_job_record(job_id, job)
+
     try:
         user_id = int(job.get("user_id") or 0)
     except Exception:
         user_id = 0
-    if user_id <= 0:
-        return staged_result
 
     from app.db.session import SessionLocal
-    from app.models.all_models import User
 
     db = SessionLocal()
     try:
-        current_user = db.query(User).filter(User.id == user_id).first()
-        if not current_user:
-            return staged_result
-
+        current_user = _resolve_job_owner_user(db, job)
         req_context = _build_generation_job_req_context(job, db)
         if media_kind == "video" and not str(req_context.get("asset_type") or "").strip():
             req_context["asset_type"] = "video"
 
-        log_prefix = "VideoJobPersist" if media_kind == "video" else "ImageJobPersist"
-        temp_label = f" temp_filename={temp_filename}" if temp_filename else ""
+        if not current_user:
+            logger.warning(
+                "[%s] staged ephemeral provider url without owner user | job_id=%s shot_id=%s user_id=%s%s url=%s",
+                log_prefix,
+                job_id,
+                req_context.get("shot_id"),
+                user_id or None,
+                temp_label,
+                raw_url,
+            )
+            return staged_result
+
         logger.warning(
-            "[%s] staged ephemeral provider url | job_id=%s shot_id=%s%s url=%s",
+            "[%s] staged ephemeral provider url | job_id=%s shot_id=%s user_id=%s%s url=%s",
             log_prefix,
             job_id,
             req_context.get("shot_id"),
+            getattr(current_user, "id", None),
             temp_label,
             raw_url,
         )
@@ -3012,6 +3112,12 @@ def _stage_ephemeral_media_job_result(
                 raw_url,
                 oss_uploaded_success=False,
                 media_metadata=staged_meta,
+            )
+        elif media_kind == "video":
+            logger.warning(
+                "[VideoJobPersist] ephemeral url saved to job but shot_id missing | job_id=%s url=%s",
+                job_id,
+                raw_url,
             )
 
         request_mode = str(req_context.get("mode") or "").strip().lower()
@@ -5102,6 +5208,7 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
 
 
 def _maybe_retry_video_job_result_persistence(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    job = _hydrate_video_job_record(job_id, job)
     status = _normalize_generation_status(job.get("status"))
     if status not in {"succeeded", "completed", "done", "waiting_callback"}:
         return job
@@ -5281,55 +5388,29 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
     if not isinstance(result, dict):
         return result
 
+    job = _hydrate_video_job_record(job_id, job)
     result = _stage_ephemeral_media_job_result(job_id, job, result, media_kind="video")
     raw_url = _extract_job_result_url(result)
     if not raw_url:
         return result
 
-    try:
-        user_id = int(job.get("user_id") or 0)
-    except Exception:
-        user_id = 0
-    if user_id <= 0:
-        return result
-
     from app.db.session import SessionLocal
-    from app.models.all_models import User
 
     db = SessionLocal()
     try:
-        current_user = db.query(User).filter(User.id == user_id).first()
+        current_user = _resolve_job_owner_user(db, job)
         if not current_user:
+            logger.warning(
+                "[VideoJobPersist] skipped oss persistence because owner user unresolved | job_id=%s shot_id=%s url=%s",
+                job_id,
+                job.get("shot_id"),
+                raw_url,
+            )
             return result
 
-        req_context: Dict[str, Any] = {}
-        for key in (
-            "prompt", "negative_prompt", "provider", "model", "aspect_ratio",
-            "duration", "project_id", "episode_id", "scene_id", "shot_id",
-            "shot_number", "shot_name", "asset_type", "seed", "subject_id"
-        ):
-            value = job.get(key)
-            if value is not None and value != "":
-                req_context[key] = value
-
+        req_context = _build_generation_job_req_context(job, db)
         if not str(req_context.get("asset_type") or "").strip():
             req_context["asset_type"] = "video"
-
-        # Backfill project/episode context from shot when missing, so registration does not early-return.
-        if not req_context.get("project_id") and req_context.get("shot_id"):
-            try:
-                shot_row = db.query(Shot).filter(Shot.id == int(req_context.get("shot_id"))).first()
-                if shot_row:
-                    if getattr(shot_row, "project_id", None):
-                        req_context["project_id"] = int(shot_row.project_id)
-                    if getattr(shot_row, "episode_id", None):
-                        req_context["episode_id"] = int(shot_row.episode_id)
-                    if getattr(shot_row, "shot_id", None) and not req_context.get("shot_number"):
-                        req_context["shot_number"] = shot_row.shot_id
-                    if getattr(shot_row, "shot_name", None) and not req_context.get("shot_name"):
-                        req_context["shot_name"] = shot_row.shot_name
-            except Exception:
-                pass
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         logger.info(
@@ -5405,6 +5486,7 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         db.close()
 
 def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    job = _hydrate_video_job_record(job_id, job)
     provider_task_id = _extract_job_provider_task_id(job)
     callback_ticket = _extract_job_provider_callback_ticket(job)
     if not callback_ticket:
@@ -5442,7 +5524,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
 
     updates: Dict[str, Any] = {}
     first_success_finalize = current_status not in {"succeeded", "completed", "done"}
-    if callback_result_url and callback_result_url != current_result_url and not current_has_stable_result:
+    if callback_result_url and not current_has_stable_result:
         if _is_ephemeral_provider_media_url(callback_result_url) and isinstance(result, dict):
             effective_job = dict(job)
             effective_job.update(updates)
@@ -5453,7 +5535,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
                 media_kind="video",
             )
             callback_result_url = _extract_job_result_url(updates["result"])
-        else:
+        elif callback_result_url != current_result_url:
             updates["result"] = result
     elif callback_result_url and current_has_stable_result:
         logger.info(
@@ -5565,7 +5647,7 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                 with VIDEO_JOB_LOCK:
                     direct_live = dict(VIDEO_JOB_STORE.get(direct_job_id) or direct_live)
             if _extract_job_provider_callback_ticket(direct_live) in {"", stable_ticket}:
-                return [(direct_job_id, direct_live)]
+                return [(direct_job_id, _hydrate_video_job_record(direct_job_id, direct_live))]
 
         direct_db = _read_video_job_file(direct_job_id)
         if isinstance(direct_db, dict):
@@ -5578,7 +5660,7 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
             if _extract_job_provider_callback_ticket(direct_db) in {"", stable_ticket}:
                 with VIDEO_JOB_LOCK:
                     VIDEO_JOB_STORE[direct_job_id] = dict(direct_db)
-                return [(direct_job_id, dict(direct_db))]
+                return [(direct_job_id, _hydrate_video_job_record(direct_job_id, dict(direct_db)))]
 
     with VIDEO_JOB_LOCK:
         live_jobs = [(job_id, dict(job or {})) for job_id, job in VIDEO_JOB_STORE.items()]
@@ -5586,7 +5668,7 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
     for job_id, job in live_jobs:
         if _extract_job_provider_callback_ticket(job) != stable_ticket:
             continue
-        matches.append((job_id, job))
+        matches.append((job_id, _hydrate_video_job_record(job_id, job)))
         seen_job_ids.add(job_id)
         if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
             return matches
@@ -5603,7 +5685,7 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                 continue
             with VIDEO_JOB_LOCK:
                 VIDEO_JOB_STORE[job_id] = dict(db_job)
-            matches.append((job_id, dict(db_job)))
+            matches.append((job_id, _hydrate_video_job_record(job_id, dict(db_job))))
             seen_job_ids.add(job_id)
             if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
                 return matches
@@ -5635,7 +5717,7 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
                     continue
                 with VIDEO_JOB_LOCK:
                     VIDEO_JOB_STORE[job_id] = dict(file_job)
-                matches.append((job_id, dict(file_job)))
+                matches.append((job_id, _hydrate_video_job_record(job_id, dict(file_job))))
                 seen_job_ids.add(job_id)
                 if len(matches) >= GENERATION_CALLBACK_JOB_MATCH_MAX_ITEMS:
                     break
@@ -37994,6 +38076,8 @@ def get_generate_video_job_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _hydrate_video_job_record(job_id, job)
 
     if "result" in job:
         compact_result = _compact_job_result(job.get("result"))
