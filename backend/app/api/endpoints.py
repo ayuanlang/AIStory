@@ -2974,17 +2974,46 @@ def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None)
             task_user_id = task_row.get("user_id")
             if task_user_id not in (None, "") and merged.get("user_id") in (None, ""):
                 merged["user_id"] = int(task_user_id)
-            task_payload = task_row.get("payload") if isinstance(task_row.get("payload"), dict) else {}
+            task_payload = _parse_generation_task_payload(task_row)
+            recovered_fields: Dict[str, Any] = {}
             for key in (
                 "shot_id", "project_id", "episode_id", "scene_id", "shot_number", "shot_name",
                 "asset_type", "provider", "model", "prompt", "username",
             ):
-                if task_payload.get(key) not in (None, "") and merged.get(key) in (None, ""):
+                if task_payload.get(key) in (None, ""):
+                    continue
+                if merged.get(key) in (None, ""):
                     merged[key] = task_payload.get(key)
+                    recovered_fields[key] = task_payload.get(key)
+            if recovered_fields:
+                logger.info(
+                    "[VideoJob] hydrated missing fields from task payload | job_id=%s fields=%s",
+                    stable_job_id,
+                    sorted(list(recovered_fields.keys())),
+                )
+                _set_video_job(stable_job_id, **recovered_fields)
         except Exception:
             pass
 
     return merged
+
+
+def _parse_generation_task_payload(task_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(task_row, dict):
+        return {}
+    payload = task_row.get("payload")
+    if isinstance(payload, dict):
+        return dict(payload)
+    raw_json = task_row.get("payload_json")
+    if isinstance(raw_json, dict):
+        return dict(raw_json)
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def _resolve_job_owner_user(db: Session, job: Dict[str, Any]) -> Optional[Any]:
@@ -3187,6 +3216,67 @@ def _assert_allowed_persisted_media_url(
             status_code=400,
             detail=f"{field_label} must use configured OSS storage URL; run persist-media first",
         )
+
+
+def _normalize_ephemeral_shot_media_update(
+    update_data: Dict[str, Any],
+    *,
+    existing_shot: Optional[Shot] = None,
+) -> Dict[str, Any]:
+    patched = dict(update_data or {})
+
+    def _ensure_ephemeral_notes(
+        url_value: Any,
+        *,
+        meta_key: str,
+        oss_flag_key: str,
+    ) -> None:
+        url = str(url_value or "").strip()
+        if not url or not _is_ephemeral_provider_media_url(url):
+            return
+
+        raw_notes = patched.get("technical_notes")
+        if raw_notes is None and existing_shot is not None:
+            notes = _asset_meta_to_dict(getattr(existing_shot, "technical_notes", None))
+        elif isinstance(raw_notes, dict):
+            notes = dict(raw_notes)
+        elif isinstance(raw_notes, str):
+            notes = _asset_meta_to_dict(raw_notes)
+        else:
+            notes = {}
+
+        slot_meta = dict(notes.get(meta_key) or {}) if isinstance(notes.get(meta_key), dict) else {}
+        if slot_meta.get("ephemeral_binding") and slot_meta.get("needs_persistence_retry"):
+            return
+
+        notes[meta_key] = _build_ephemeral_media_metadata(url, slot_meta)
+        notes[oss_flag_key] = False
+        if isinstance(raw_notes, dict):
+            patched["technical_notes"] = notes
+        else:
+            patched["technical_notes"] = json.dumps(notes, ensure_ascii=False)
+
+    if "video_url" in patched:
+        _ensure_ephemeral_notes(patched.get("video_url"), meta_key="video_metadata", oss_flag_key="video_oss_uploaded")
+    if "image_url" in patched:
+        _ensure_ephemeral_notes(patched.get("image_url"), meta_key="start_frame_metadata", oss_flag_key="start_frame_oss_uploaded")
+
+    raw_notes = patched.get("technical_notes")
+    notes_dict: Optional[Dict[str, Any]] = None
+    if isinstance(raw_notes, dict):
+        notes_dict = dict(raw_notes)
+    elif isinstance(raw_notes, str):
+        notes_dict = _asset_meta_to_dict(raw_notes)
+    if isinstance(notes_dict, dict) and notes_dict.get("end_frame_url"):
+        end_url = str(notes_dict.get("end_frame_url") or "").strip()
+        if end_url and _is_ephemeral_provider_media_url(end_url):
+            end_meta = dict(notes_dict.get("end_frame_metadata") or {}) if isinstance(notes_dict.get("end_frame_metadata"), dict) else {}
+            if not (end_meta.get("ephemeral_binding") and end_meta.get("needs_persistence_retry")):
+                notes_dict["end_frame_metadata"] = _build_ephemeral_media_metadata(end_url, end_meta)
+                notes_dict["end_frame_oss_uploaded"] = False
+                patched["technical_notes"] = notes_dict if isinstance(raw_notes, dict) else json.dumps(notes_dict, ensure_ascii=False)
+
+    return patched
 
 
 def _assert_allowed_shot_media_payload(
@@ -24683,6 +24773,7 @@ def update_shot(
 
     update_data = shot_in.dict(exclude_unset=True)
     update_data = _replace_legacy_temp_urls_in_shot_payload(db, current_user, project, db_shot, update_data)
+    update_data = _normalize_ephemeral_shot_media_update(update_data, existing_shot=db_shot)
     _assert_allowed_shot_media_payload(update_data, db=db, existing_shot=db_shot)
 
     for key, value in update_data.items():
