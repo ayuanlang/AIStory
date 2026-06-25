@@ -108,6 +108,7 @@ from app.services.script_analysis_flow import (
     update_scene_unit_orchestration_status,
     upsert_pipeline_node_status,
     validate_analyze_scene_llm_finish_reason,
+    validate_single_scene_markdown_for_orchestration,
     wrap_scene_unit_as_script_block,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -7847,6 +7848,44 @@ def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_t
     return f"{source.rstrip()}\n\n{adapted}".strip()
 
 
+def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
+    if isinstance(exc, (OperationalError, SQLAlchemyTimeoutError)):
+        return True
+    if isinstance(exc, HTTPException):
+        status = int(getattr(exc, "status_code", 500) or 500)
+        detail = str(getattr(exc, "detail", "") or "")
+        if status in (408, 429, 500, 502, 503, 504):
+            return True
+        if detail.startswith(
+            (
+                "SCENE_MARKDOWN_EMPTY_FOR_SCENE:",
+                "SCENE_MARKDOWN_SCENE_ID_MISMATCH:",
+                "SCENE_MARKDOWN_EMPTY",
+                "SCENE_MARKDOWN_NO_SCENE_ROW",
+                "SCENE_MARKDOWN_PARSE_FAILED",
+                "SCENE_MARKDOWN_ORCHESTRATION_FAILED",
+            )
+        ):
+            return True
+        if status == 422 and detail.startswith("SCENE_MARKDOWN_"):
+            return True
+        if "LLM_STREAM" in detail.upper() or "TIMEOUT" in detail.upper():
+            return True
+        return False
+    msg = str(exc or "").lower()
+    if "database is locked" in msg or "timeout" in msg or "rate limit" in msg:
+        return True
+    return False
+
+
+def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
+    if isinstance(exc, HTTPException):
+        detail = str(getattr(exc, "detail", "") or "")
+        if detail.startswith("SCENE_MARKDOWN_"):
+            return detail.split(":", 1)[0] if ":" in detail else detail
+    return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
+
+
 async def _run_scene_markdown_node_per_scene(
     *,
     raw_payload: Dict[str, Any],
@@ -7956,135 +7995,286 @@ async def _run_scene_markdown_node_per_scene(
         node_episode_id,
     )
 
-    semaphore = asyncio.Semaphore(max_concurrency)
     progress_lock = asyncio.Lock()
     completed_count = 0
+    retried_scene_ids: Set[str] = set()
 
-    async def _run_one_scene(index: int, unit: Any) -> Tuple[int, str, Any]:
+    async def _mark_scene_orchestration_status(
+        task_db: Session,
+        *,
+        scene_id: str,
+        import_status: str,
+        parse_status: str,
+        scene_markdown: Optional[str] = None,
+        parse_error_code: Optional[str] = None,
+    ) -> None:
+        if node_project_id <= 0 or node_episode_id <= 0:
+            return
+        update_scene_unit_orchestration_status(
+            task_db,
+            project_id=node_project_id,
+            episode_id=node_episode_id,
+            scene_id=scene_id,
+            import_status=import_status,
+            parse_status=parse_status,
+            scene_markdown=scene_markdown,
+            parse_error_code=parse_error_code,
+        )
+        task_db.commit()
+
+    async def _run_one_scene(
+        index: int,
+        unit: Any,
+        *,
+        local_semaphore: asyncio.Semaphore,
+        max_attempts: int = SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+    ) -> Tuple[int, str, str, Any, int]:
         nonlocal completed_count
-        async with semaphore:
+        last_exc: Optional[Exception] = None
+        attempts_used = 0
+
+        async with local_semaphore:
             task_db = SessionLocal()
             try:
-                if node_project_id > 0 and node_episode_id > 0:
-                    update_scene_unit_orchestration_status(
-                        task_db,
-                        project_id=node_project_id,
-                        episode_id=node_episode_id,
-                        scene_id=unit.scene_id,
-                        import_status="running",
-                        parse_status="success",
-                        parse_error_code=None,
-                    )
-                    task_db.commit()
-
-                single_scene_block = wrap_scene_unit_as_script_block(unit)
-                single_scene_instruction = (
-                    f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
-                    "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
-                )
-                scene_payload = dict(raw_payload)
-                scene_payload["skip_episode_persist"] = True
-                scene_payload["text"] = _replace_adapted_script_in_beats_user_input(
-                    f"{single_scene_instruction}\n\n{user_text}",
-                    single_scene_block,
-                )
-                result = await analyze_scene(
-                    AnalyzeSceneRequest(**scene_payload),
-                    current_user=current_user,
-                    db=task_db,
-                    async_mode="0",
-                )
-                scene_text = _extract_analysis_text_from_result(result).strip()
-                if not scene_text:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"SCENE_MARKDOWN_EMPTY_FOR_SCENE:{unit.scene_id}",
-                    )
-
-                if node_episode_id > 0:
-                    episode_row = task_db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
-                    if episode_row is not None:
-                        patch_episode_scene_markdown_by_scene(
-                            task_db,
-                            episode=episode_row,
-                            scene_id=unit.scene_id,
-                            markdown=scene_text,
-                            scene_order=index,
-                        )
-
-                if node_project_id > 0 and node_episode_id > 0:
-                    update_scene_unit_orchestration_status(
-                        task_db,
-                        project_id=node_project_id,
-                        episode_id=node_episode_id,
-                        scene_id=unit.scene_id,
-                        import_status="success",
-                        parse_status="success",
-                        scene_markdown=scene_text,
-                        parse_error_code=None,
-                    )
-                    task_db.commit()
-
-                async with progress_lock:
-                    completed_count += 1
-                    if node_project_id > 0 and node_episode_id > 0:
-                        progress = 5.0 + (85.0 * completed_count / max(total_scenes, 1))
-                        upsert_pipeline_node_status(
-                            db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            script_id=script_id,
-                            node_name="scene_markdown",
-                            status="running",
-                            progress_percent=progress,
-                            error_message=f"completed {completed_count}/{total_scenes}: {unit.scene_id}",
-                        )
-                        db.commit()
-
-                return index, unit.scene_id, scene_text, result
-            except Exception as scene_exc:
-                if node_project_id > 0 and node_episode_id > 0:
-                    error_code = (
-                        f"SCENE_MARKDOWN_EMPTY_FOR_SCENE:{unit.scene_id}"
-                        if isinstance(scene_exc, HTTPException)
-                        and str(getattr(scene_exc, "detail", "")).startswith("SCENE_MARKDOWN_EMPTY_FOR_SCENE:")
-                        else "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
-                    )
+                for attempt in range(1, max_attempts + 1):
+                    attempts_used = attempt
                     try:
-                        update_scene_unit_orchestration_status(
-                            task_db,
-                            project_id=node_project_id,
-                            episode_id=node_episode_id,
-                            scene_id=unit.scene_id,
-                            import_status="failed",
-                            parse_status="failed",
-                            parse_error_code=error_code,
+                        if node_project_id > 0 and node_episode_id > 0:
+                            await _mark_scene_orchestration_status(
+                                task_db,
+                                scene_id=unit.scene_id,
+                                import_status="running",
+                                parse_status="success",
+                                parse_error_code=None,
+                            )
+
+                        single_scene_block = wrap_scene_unit_as_script_block(unit)
+                        single_scene_instruction = (
+                            f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
+                            "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
                         )
-                        task_db.commit()
-                    except Exception:
-                        task_db.rollback()
-                raise
+                        scene_payload = dict(raw_payload)
+                        scene_payload["skip_episode_persist"] = True
+                        scene_payload["text"] = _replace_adapted_script_in_beats_user_input(
+                            f"{single_scene_instruction}\n\n{user_text}",
+                            single_scene_block,
+                        )
+                        result = await analyze_scene(
+                            AnalyzeSceneRequest(**scene_payload),
+                            current_user=current_user,
+                            db=task_db,
+                            async_mode="0",
+                        )
+                        scene_text = _extract_analysis_text_from_result(result).strip()
+                        validation_error = validate_single_scene_markdown_for_orchestration(scene_text, unit.scene_id)
+                        if validation_error:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=f"{validation_error}:{unit.scene_id}",
+                            )
+
+                        if node_episode_id > 0:
+                            episode_row = task_db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
+                            if episode_row is not None:
+                                patch_episode_scene_markdown_by_scene(
+                                    task_db,
+                                    episode=episode_row,
+                                    scene_id=unit.scene_id,
+                                    markdown=scene_text,
+                                    scene_order=index,
+                                )
+
+                        if node_project_id > 0 and node_episode_id > 0:
+                            await _mark_scene_orchestration_status(
+                                task_db,
+                                scene_id=unit.scene_id,
+                                import_status="success",
+                                parse_status="success",
+                                scene_markdown=scene_text,
+                                parse_error_code=None,
+                            )
+
+                        if attempt > 1:
+                            retried_scene_ids.add(str(unit.scene_id))
+                            logger.info(
+                                "[scene_markdown] scene orchestration recovered on retry | scene_id=%s attempt=%s/%s project_id=%s episode_id=%s",
+                                unit.scene_id,
+                                attempt,
+                                max_attempts,
+                                node_project_id,
+                                node_episode_id,
+                            )
+
+                        async with progress_lock:
+                            completed_count += 1
+                            if node_project_id > 0 and node_episode_id > 0:
+                                progress = 5.0 + (85.0 * completed_count / max(total_scenes, 1))
+                                upsert_pipeline_node_status(
+                                    db,
+                                    project_id=node_project_id,
+                                    episode_id=node_episode_id,
+                                    script_id=script_id,
+                                    node_name="scene_markdown",
+                                    status="running",
+                                    progress_percent=progress,
+                                    error_message=f"completed {completed_count}/{total_scenes}: {unit.scene_id}",
+                                )
+                                db.commit()
+
+                        return index, unit.scene_id, scene_text, result, attempts_used
+                    except Exception as scene_exc:
+                        last_exc = scene_exc
+                        retryable = _is_retryable_scene_orchestration_error(scene_exc)
+                        if attempt >= max_attempts or not retryable:
+                            error_code = _scene_orchestration_error_code(scene_exc, unit.scene_id)
+                            try:
+                                await _mark_scene_orchestration_status(
+                                    task_db,
+                                    scene_id=unit.scene_id,
+                                    import_status="failed",
+                                    parse_status="failed",
+                                    parse_error_code=error_code,
+                                )
+                            except Exception:
+                                task_db.rollback()
+                            raise
+
+                        retried_scene_ids.add(str(unit.scene_id))
+                        logger.warning(
+                            "[scene_markdown] scene orchestration attempt failed, retrying | scene_id=%s attempt=%s/%s project_id=%s episode_id=%s error=%s",
+                            unit.scene_id,
+                            attempt,
+                            max_attempts,
+                            node_project_id,
+                            node_episode_id,
+                            str(getattr(scene_exc, "detail", "") or scene_exc),
+                        )
+                        try:
+                            await _mark_scene_orchestration_status(
+                                task_db,
+                                scene_id=unit.scene_id,
+                                import_status="queued",
+                                parse_status="success",
+                                parse_error_code=_scene_orchestration_error_code(scene_exc, unit.scene_id),
+                            )
+                        except Exception:
+                            task_db.rollback()
+                        await asyncio.sleep(SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC * attempt)
+
+                if last_exc is not None:
+                    raise last_exc
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{unit.scene_id}",
+                )
             finally:
                 task_db.close()
 
-    outcomes = await asyncio.gather(
-        *[_run_one_scene(index, unit) for index, unit in enumerate(scene_units, start=1)],
-        return_exceptions=True,
-    )
+    async def _run_scene_batch(
+        indexed_units: List[Tuple[int, Any]],
+        *,
+        batch_concurrency: int,
+        max_attempts: int = SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+    ) -> List[Any]:
+        batch_semaphore = asyncio.Semaphore(max(1, batch_concurrency))
+        return await asyncio.gather(
+            *[
+                _run_one_scene(index, unit, local_semaphore=batch_semaphore, max_attempts=max_attempts)
+                for index, unit in indexed_units
+            ],
+            return_exceptions=True,
+        )
+
+    indexed_scene_units = list(enumerate(scene_units, start=1))
+    success_by_index: Dict[int, Tuple[int, str, str, Any, int]] = {}
+    pending_units = indexed_scene_units
+
+    for batch_round in range(SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS + 1):
+        if not pending_units:
+            break
+        batch_concurrency = max_concurrency if batch_round == 0 else 1
+        if batch_round > 0:
+            logger.warning(
+                "[scene_markdown] batch retry round %s for %s failed scenes | project_id=%s episode_id=%s scene_ids=%s",
+                batch_round,
+                len(pending_units),
+                node_project_id,
+                node_episode_id,
+                [unit.scene_id for _, unit in pending_units],
+            )
+        round_outcomes = await _run_scene_batch(
+            pending_units,
+            batch_concurrency=batch_concurrency,
+            max_attempts=SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+        )
+        next_pending: List[Tuple[int, Any]] = []
+        for (index, unit), outcome in zip(pending_units, round_outcomes):
+            if isinstance(outcome, Exception):
+                next_pending.append((index, unit))
+                logger.error(
+                    "[scene_markdown] scene orchestration failed | scene_id=%s scene_order=%s project_id=%s episode_id=%s error=%s",
+                    unit.scene_id,
+                    index,
+                    node_project_id,
+                    node_episode_id,
+                    str(getattr(outcome, "detail", "") or outcome),
+                )
+                continue
+            success_by_index[int(outcome[0])] = outcome
+        pending_units = next_pending
+
+    failed_scene_reports: List[Dict[str, Any]] = []
+    for index, unit in indexed_scene_units:
+        if index not in success_by_index:
+            failed_scene_reports.append(
+                {
+                    "scene_id": str(unit.scene_id),
+                    "scene_order": int(index),
+                    "error_code": "SCENE_MARKDOWN_ORCHESTRATION_FAILED",
+                }
+            )
+
+    if failed_scene_reports:
+        if node_project_id > 0 and node_episode_id > 0:
+            upsert_pipeline_node_status(
+                db,
+                project_id=node_project_id,
+                episode_id=node_episode_id,
+                script_id=script_id,
+                node_name="scene_markdown",
+                status="failed",
+                progress_percent=min(95.0, 5.0 + (85.0 * len(success_by_index) / max(total_scenes, 1))),
+                error_code="SCENE_MARKDOWN_PARTIAL_FAILURE",
+                error_message=(
+                    f"failed {len(failed_scene_reports)}/{total_scenes}: "
+                    + ", ".join(item["scene_id"] for item in failed_scene_reports)
+                ),
+            )
+            db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SCENE_MARKDOWN_PARTIAL_FAILURE",
+                "failed_count": len(failed_scene_reports),
+                "total_count": total_scenes,
+                "failed_scenes": failed_scene_reports,
+                "succeeded_count": len(success_by_index),
+            },
+        )
 
     per_scene_outputs: List[str] = []
     per_scene_results: List[Dict[str, Any]] = []
     last_result: Any = None
-    for outcome in outcomes:
-        if isinstance(outcome, Exception):
-            raise outcome
-        _index, scene_id, scene_text, result = outcome
+    for index, _unit in indexed_scene_units:
+        outcome = success_by_index[index]
+        _index, scene_id, scene_text, result, attempts_used = outcome
         per_scene_outputs.append(scene_text)
         per_scene_results.append(
             {
                 "scene_id": str(scene_id),
                 "scene_order": int(_index),
                 "markdown": scene_text,
+                "attempts": int(attempts_used),
             }
         )
         last_result = result
@@ -8092,6 +8282,12 @@ async def _run_scene_markdown_node_per_scene(
     merged_text = merge_scenes_table_markdown_outputs(per_scene_outputs)
     if not merged_text:
         raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_MERGE_FAILED")
+
+    orchestration_meta = {
+        "per_scene_retried_scene_ids": sorted(retried_scene_ids),
+        "per_scene_retry_attempts_max": SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+        "per_scene_batch_retry_rounds": SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+    }
 
     if isinstance(last_result, dict):
         merged_result = dict(last_result)
@@ -8103,6 +8299,7 @@ async def _run_scene_markdown_node_per_scene(
         merged_result["per_scene_source"] = scene_units_source
         merged_result["per_scene_persist_mode"] = "by_scene"
         merged_result["per_scene_outputs"] = per_scene_results
+        merged_result.update(orchestration_meta)
         return merged_result
     return {
         "result": merged_text,
@@ -8113,6 +8310,7 @@ async def _run_scene_markdown_node_per_scene(
         "per_scene_source": scene_units_source,
         "per_scene_persist_mode": "by_scene",
         "per_scene_outputs": per_scene_results,
+        **orchestration_meta,
     }
 
 
@@ -26585,6 +26783,9 @@ class UserPageOut(BaseModel):
 
 USER_ACTIVE_LEVEL_DEFAULT = 1
 USER_BATCH_PARALLEL_LIMIT_MAX = 12
+SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
+SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
+SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 1
 
 
 def _normalize_user_active_level(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:

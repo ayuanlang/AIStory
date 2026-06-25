@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
@@ -945,6 +947,40 @@ def resolve_progress_issue(
     return True
 
 
+_EPISODE_SCENE_MARKDOWN_PATCH_LOCKS: Dict[int, threading.Lock] = {}
+_EPISODE_SCENE_MARKDOWN_PATCH_LOCKS_GUARD = threading.Lock()
+
+
+def _get_episode_scene_markdown_patch_lock(episode_id: int) -> threading.Lock:
+    eid = int(episode_id)
+    with _EPISODE_SCENE_MARKDOWN_PATCH_LOCKS_GUARD:
+        lock = _EPISODE_SCENE_MARKDOWN_PATCH_LOCKS.get(eid)
+        if lock is None:
+            lock = threading.Lock()
+            _EPISODE_SCENE_MARKDOWN_PATCH_LOCKS[eid] = lock
+        return lock
+
+
+def validate_single_scene_markdown_for_orchestration(scene_text: Any, expected_scene_id: str) -> Optional[str]:
+    text = str(scene_text or "").strip()
+    if not text:
+        return "SCENE_MARKDOWN_EMPTY"
+    expected = str(expected_scene_id or "").strip()
+    if not expected:
+        return "SCENE_MARKDOWN_EXPECTED_SCENE_ID_MISSING"
+    try:
+        units = parse_scene_units_from_scenes_table(text)
+    except SceneMarkerParseError as exc:
+        return str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
+    if not units:
+        return "SCENE_MARKDOWN_NO_SCENE_ROW"
+    expected_lower = expected.lower()
+    matched = any(str(unit.scene_id or "").strip().lower() == expected_lower for unit in units)
+    if not matched:
+        return f"SCENE_MARKDOWN_SCENE_ID_MISMATCH:{expected}"
+    return None
+
+
 def _load_episode_stage_outputs_obj(episode: Any) -> Dict[str, Any]:
     raw = str(getattr(episode, "ai_stage_outputs", "") or "").strip()
     if not raw:
@@ -970,48 +1006,75 @@ def patch_episode_scene_markdown_by_scene(
     if not sid or not md:
         return {"scene_id": sid, "patched": False}
 
-    stage_outputs = _load_episode_stage_outputs_obj(episode)
-    stages = stage_outputs.setdefault("stages", {})
-    stage2 = stages.setdefault("stage2", {"key": "stage2", "outputs": {}})
-    outputs = stage2.setdefault("outputs", {})
-    by_scene_slot = outputs.setdefault(
-        "scene_markdown_by_scene",
-        {
-            "key": "scene_markdown_by_scene",
-            "kind": "json",
-            "title": "场景分析结果（分场景）",
-            "content": "{}",
-        },
-    )
-    content_raw = str(by_scene_slot.get("content") or "").strip() or "{}"
-    try:
-        by_scene_map = json.loads(content_raw)
-        if not isinstance(by_scene_map, dict):
-            by_scene_map = {}
-    except Exception:
-        by_scene_map = {}
+    episode_id_int = int(getattr(episode, "id", 0) or 0)
+    lock = _get_episode_scene_markdown_patch_lock(episode_id_int) if episode_id_int > 0 else threading.Lock()
+    max_attempts = 3
+    last_error: Optional[Exception] = None
 
-    entry = dict(by_scene_map.get(sid) or {}) if isinstance(by_scene_map.get(sid), dict) else {}
-    entry.update(
-        {
-            "scene_id": sid,
-            "markdown": md,
-            "updated_at": now_bj_iso(),
-        }
-    )
-    if scene_order is not None:
-        entry["scene_order"] = int(scene_order)
-    if scene_name:
-        entry["scene_name"] = str(scene_name).strip()
-    by_scene_map[sid] = entry
-    by_scene_slot["content"] = json.dumps(by_scene_map, ensure_ascii=False, indent=2)
-    episode.ai_stage_outputs = json.dumps(stage_outputs, ensure_ascii=False, indent=2)
-    db.commit()
-    try:
-        db.refresh(episode)
-    except Exception:
-        pass
-    return {"scene_id": sid, "patched": True, "scene_count": len(by_scene_map)}
+    with lock:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if episode_id_int > 0:
+                    fresh_episode = db.query(models.Episode).filter(models.Episode.id == episode_id_int).first()
+                    if fresh_episode is not None:
+                        episode = fresh_episode
+
+                stage_outputs = _load_episode_stage_outputs_obj(episode)
+                stages = stage_outputs.setdefault("stages", {})
+                stage2 = stages.setdefault("stage2", {"key": "stage2", "outputs": {}})
+                outputs = stage2.setdefault("outputs", {})
+                by_scene_slot = outputs.setdefault(
+                    "scene_markdown_by_scene",
+                    {
+                        "key": "scene_markdown_by_scene",
+                        "kind": "json",
+                        "title": "场景分析结果（分场景）",
+                        "content": "{}",
+                    },
+                )
+                content_raw = str(by_scene_slot.get("content") or "").strip() or "{}"
+                try:
+                    by_scene_map = json.loads(content_raw)
+                    if not isinstance(by_scene_map, dict):
+                        by_scene_map = {}
+                except Exception:
+                    by_scene_map = {}
+
+                entry = dict(by_scene_map.get(sid) or {}) if isinstance(by_scene_map.get(sid), dict) else {}
+                entry.update(
+                    {
+                        "scene_id": sid,
+                        "markdown": md,
+                        "updated_at": now_bj_iso(),
+                    }
+                )
+                if scene_order is not None:
+                    entry["scene_order"] = int(scene_order)
+                if scene_name:
+                    entry["scene_name"] = str(scene_name).strip()
+                by_scene_map[sid] = entry
+                by_scene_slot["content"] = json.dumps(by_scene_map, ensure_ascii=False, indent=2)
+                episode.ai_stage_outputs = json.dumps(stage_outputs, ensure_ascii=False, indent=2)
+                db.commit()
+                try:
+                    db.refresh(episode)
+                except Exception:
+                    pass
+                return {"scene_id": sid, "patched": True, "scene_count": len(by_scene_map)}
+            except OperationalError as exc:
+                last_error = exc
+                db.rollback()
+                msg = str(exc or "").lower()
+                if attempt >= max_attempts or "database is locked" not in msg:
+                    raise
+                time.sleep(0.15 * attempt)
+            except Exception:
+                db.rollback()
+                raise
+
+    if last_error is not None:
+        raise last_error
+    return {"scene_id": sid, "patched": False}
 
 
 __all__ = [
@@ -1057,4 +1120,5 @@ __all__ = [
     "upsert_pipeline_node_status",
     "validate_analyze_scene_llm_finish_reason",
     "validate_scene_markdown_import_text",
+    "validate_single_scene_markdown_for_orchestration",
 ]
