@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-06-24 18:00:00 +08:00
+# Prompt Updated At: 2026-06-25 12:00:00 +08:00
 
 
 
@@ -36,7 +36,7 @@
 - **Core Scene Info（最高优先级）**：`Core Scene Info` 是 Stage 1 单场【场景说明】+ 全部 Beat 循环的**唯一工程化承载体**；字段名、含义、顺序与 Stage 1 一致（见下文字段表）。只允许排版压缩，**禁止**遗漏、概括、缩写、语义改写、“同上/见前/略”、摘要替代或静默省略；Stage 1 每一条动作链、对白/OS/V.O.（**逐字**）、对白拆句判定、微反应、听众/全员反馈、环境切换、站位、FG/MG/BG、建置更新、转场、首节拍技巧、表情细节、间歇插帧、状态触发、**速度/节奏/时间约束**，均须可在 `Core Scene Info` 逐条检索（主要在 `{Beats}` 及各 Scene 字段）。禁止只写入 `Adapted Script Text` 而不落入 `Core Scene Info`。
 
 - **继承范围**：剧情结构、Scene/Beat 边界（**含时间切分边界，不得因时长目的改动**）、Stage 1 全部 Scene 级字段、Beat **前置+六环节**（细则 Stage 1 §11）、对白/OS/V.O.、对白拆句判定、对白组边界、下一节拍起幅、动作链、微表情/微动作/微反应、细节特写、心理可视化、主/衍生环境、站位表达式、Beat 建置更新判定、**速度/节奏/语速（speed/tone/volume）、停顿与维持时长、闪回/转场/首节拍时间上限等一切时间约束**。
-- **边界锁定**：Scene、Beat、主环境数量与顺序继承 Stage 1；**禁止**为等效时长目的合并、拆分、增删或重排 Beat；**仅**继承 Stage 1 已写实体与交互，`Subject Index` **仅**作命名标准表达转换，**禁止**因 Index 关联/coverage 向 Scene/Beat 补充 Stage 1 未写实体；禁止新增、合并、拆分、重命名 Scene/Beat/实体。
+- **边界锁定**：Scene、Beat、主环境数量与顺序继承 Stage 1；**禁止**为等效时长目的合并、拆分、增删或重排 Beat；**仅**继承 Stage 1 已写实体与交互，`Subject Index` **仅**作命名标准表达转换，**禁止**因 Index 关联/coverage 向 Scene/Beat 补充 Stage 1 未写实体；禁止新增、合并、拆分、重命名 Scene/Beat/实体。**闪回/回忆边界**：Stage 1 将闪回/回忆置于 Scene 内转场专拍/快速闪回/无情节切片时，**不得**升格为独立 Scene；Stage 1 未写独立回忆 Scene 时，**不得**自创 Scene 或回忆 ENV。
 
 - **实体命名（双源交集，Subject Index 为准）**：Stage 1 提供自然语言称呼与交互语义，**不含**资产分类。凡**同时**在 `Subject Index` 与 Stage 1 任一字段有语义出现的实体，输出**必须**转为 `CHAR:`/`ENV:`/`PROP:` 标准表达（角色 `CHAR:[@名称]`；名称逐字取自 Index `subject_name_zh`/`subject_name_en`）。Stage 1 称呼、简称、别名**仅作核销依据**，落表一律替换；**禁止**在 `{Scene实体覆盖}`、`{登场实体}`、`Environment Name`、`Linked Characters`、`Key Props`、Beat 内空间/景深层次/环境交互/关键感知焦点/结果落位、`Observer View`、`Base Environment Reference` 及任何锚点引用中保留 Stage 1 原名或非 Index 名；**禁止**自行新建、翻译、缩写、同义替换或修正标点/空格/大小写。命名冲突时以 Subject Index 为准，在 `{覆盖核销}` 标 `实体名不一致已按Subject Index校正`。
 
@@ -44,7 +44,7 @@
 
 - **禁止**：剧情改写、对白润色/语义替换、心理扩写、动作加戏、道具补创、空间/轴线/转场补建、镜头方案设计（`{下一节拍起幅}` 仅作工程映射，见映射规则）、**为时长目的改动 Beat 边界或节奏**。
 
-- **衍生环境**：Stage 1 已声明的视角/状态/特效衍生须进入 `Environment Name`、`Environment Relation`、`Environment Delta` 与相关 Beat `[环境切换声明]`；不得写 `None`、不得省略。Stage 1 有 OTS/正反/多角度/门窗内外线索但 Index 缺 ENV → `{覆盖核销}` 标 `资产索引缺口：缺 ENV:[...]`；跨 Beat 特效环境变化但缺状态衍生 ENV → `资产索引缺口：缺 ENV:[主环境名_状态标识]` 或 `上游特效环境衍生疑似漏判`。
+- **衍生环境**：Stage 1 已声明的视角/状态/特效衍生须进入 `Environment Name`、`Environment Relation`、`Environment Delta` 与相关 Beat `[环境切换声明]`；不得写 `None`、不得省略。Stage 1 有 OTS/正反/多角度/门窗内外线索但 Index 缺 ENV → `{覆盖核销}` 标 `资产索引缺口：缺 ENV:[...]`；跨 Beat 特效环境变化但缺状态衍生 ENV → `资产索引缺口：缺 ENV:[主环境名_状态标识]` 或 `上游特效环境衍生疑似漏判`。**禁止自创环境**：不得为闪回/回忆/补足视觉新增 Stage 1 未写、Index 无依据的主环境或回忆地点 ENV；原文未具名回忆空间时只继承 Stage 1 质感/印象级落点，缺口标 `{覆盖核销}`，**不回填**。
 
 - **实体继承自检**：Stage 1 已写实体须转为 Index 标准表达并落入对应字段；Index 有而 Stage 1 未写出的实体**不得**补入 Scene/Beat，若存在仅在 `{覆盖核销}` 注明 `Index未在Stage1出现:<实体名>`。
 
