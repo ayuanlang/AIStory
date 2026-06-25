@@ -20,7 +20,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -623,6 +623,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [generatingStateByShot, setGeneratingStateByShot] = useState({});
     const [videoStatuses, setVideoStatuses] = useState({});
     const [shotMediaOssPersistBusy, setShotMediaOssPersistBusy] = useState({});
+    const [mediaPersistGraceRefreshSeq, setMediaPersistGraceRefreshSeq] = useState(0);
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
     const readStoredUsePrevVideo = useCallback(() => {
@@ -657,6 +658,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
         });
     }, [activeEpisode?.episode_number, activeEpisode?.id]);
+
+    useEffect(() => {
+        const shotPool = [editingShot, ...(shots || [])].filter(Boolean);
+        let minWaitMs = 0;
+        shotPool.forEach((shot) => {
+            const waitMs = shotNeedsAnyOssPersistGraceWaitMs(shot);
+            if (waitMs > 0 && (!minWaitMs || waitMs < minWaitMs)) {
+                minWaitMs = waitMs;
+            }
+        });
+        if (!minWaitMs) return undefined;
+        const timer = setTimeout(() => {
+            setMediaPersistGraceRefreshSeq((seq) => seq + 1);
+        }, minWaitMs + 100);
+        return () => clearTimeout(timer);
+    }, [editingShot, shots, mediaPersistGraceRefreshSeq]);
 
     const _getInMemorySortedShots = () => sortShotsForContinuation(shots || []);
 
@@ -8193,6 +8210,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ...(apiSlot === 'video' ? { video_url: persistedUrl || refreshedShot?.video_url || targetShot?.video_url } : {}),
                 technical_notes: refreshedShot?.technical_notes ?? targetShot?.technical_notes,
             };
+            if (result?.oss_uploaded === true) {
+                const tech = parseShotTechnicalNotes(mergedShot.technical_notes);
+                if (apiSlot === 'video') {
+                    tech.video_oss_uploaded = true;
+                    if (tech.video_metadata && typeof tech.video_metadata === 'object') {
+                        const meta = { ...tech.video_metadata };
+                        delete meta.ephemeral_binding;
+                        delete meta.needs_persistence_retry;
+                        delete meta.remote_localization_failed;
+                        tech.video_metadata = meta;
+                    }
+                } else if (apiSlot === 'start') {
+                    tech.start_frame_oss_uploaded = true;
+                } else if (apiSlot === 'end') {
+                    tech.end_frame_oss_uploaded = true;
+                }
+                mergedShot.technical_notes = typeof refreshedShot?.technical_notes === 'object'
+                    ? tech
+                    : JSON.stringify(tech);
+            }
             if (apiSlot === 'end' && persistedUrl) {
                 const tech = parseShotTechnicalNotes(mergedShot.technical_notes);
                 tech.end_frame_url = persistedUrl;
@@ -8204,7 +8241,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 : apiSlot === 'end'
                     ? shotEndFrameNeedsOssPersist(mergedShot)
                     : shotVideoNeedsOssPersist(mergedShot);
-            if (!persistedUrl || stillNeedsPersist) {
+            if (!persistedUrl) {
+                throw new Error(t('补传后仍未获得稳定存储地址，请稍后重试。', 'Persisted URL is still not durable; please retry later.'));
+            }
+            if (stillNeedsPersist && result?.oss_uploaded !== true) {
                 throw new Error(t('补传后仍未获得稳定存储地址，请稍后重试。', 'Persisted URL is still not durable; please retry later.'));
             }
 

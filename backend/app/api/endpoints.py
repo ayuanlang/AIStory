@@ -2694,6 +2694,34 @@ def _persist_remote_video_result(
     elif persisted_url.startswith("/uploads/"):
         updated_metadata["stored_locally"] = True
 
+    localized_success = _is_persisted_media_localization_success(
+        persisted_url,
+        source_url=source_url,
+        metadata=updated_metadata,
+        db=db,
+        oss_uploaded=oss_ok,
+    )
+    if localized_success:
+        updated_metadata = _clear_ephemeral_persist_flags(updated_metadata)
+        updated_metadata["stored_from_remote_url"] = raw
+        updated_metadata["remote_localization_failed"] = False
+        updated_metadata.pop("remote_localization_error", None)
+        if temp_filename:
+            updated_metadata["temporary_source_filename"] = temp_filename
+        if resolved_kie_download_url:
+            updated_metadata["stored_from_remote_url_source"] = source_url
+            updated_metadata["stored_from_remote_url_resolved_via"] = "kie_download_url"
+        if oss_ok:
+            updated_metadata["oss_uploaded_success"] = True
+        logger.info(
+            "[VideoResultNormalize] stored remote video | user_id=%s source_url=%s normalized_url=%s oss=%s",
+            user_id,
+            source_url,
+            persisted_url,
+            oss_ok,
+        )
+        return persisted_url, updated_metadata, oss_ok
+
     if not _is_durable_persisted_media_url(persisted_url, updated_metadata, db):
         updated_metadata["remote_localization_failed"] = True
         updated_metadata.setdefault(
@@ -2740,11 +2768,15 @@ def _resolve_media_bind_url(
     raw_url: str,
     normalized_url: Optional[str],
     normalized_meta: Dict[str, Any],
+    oss_uploaded: bool = False,
+    db: Optional[Session] = None,
 ) -> Tuple[Optional[str], bool, Dict[str, Any]]:
     return _resolve_video_bind_url(
         raw_url=raw_url,
         normalized_url=normalized_url,
         normalized_meta=normalized_meta,
+        oss_uploaded=oss_uploaded,
+        db=db,
     )
 
 
@@ -2853,11 +2885,16 @@ def _video_result_needs_persistence_retry(result: Any, db: Optional[Session] = N
         return False
     meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     current = str(result.get("url") or "").strip() or _extract_job_result_url(result)
-    if current and _is_durable_persisted_media_url(current, meta, db):
+    source = _resolve_video_persistence_source_url(result)
+    if current and _is_persisted_media_localization_success(
+        current,
+        source_url=source,
+        metadata=meta,
+        db=db,
+    ):
         return False
     if meta.get("persistence_gave_up") is True:
         return False
-    source = _resolve_video_persistence_source_url(result)
     if not source:
         return False
     if meta.get("remote_localization_failed") or meta.get("needs_persistence_retry") or meta.get("ephemeral_binding"):
@@ -2869,22 +2906,77 @@ def _video_result_needs_persistence_retry(result: Any, db: Optional[Session] = N
     return False
 
 
+def _clear_ephemeral_persist_flags(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    cleaned = dict(meta or {})
+    for key in (
+        "ephemeral_binding",
+        "needs_persistence_retry",
+        "remote_localization_failed",
+        "remote_localization_error",
+        "pending_source_url",
+        "persistence_retry_count",
+        "persistence_retry_at",
+    ):
+        cleaned.pop(key, None)
+    cleaned["remote_localization_failed"] = False
+    return cleaned
+
+
+def _ensure_media_bound_at(meta: Optional[Dict[str, Any]], *, refresh: bool = False) -> Dict[str, Any]:
+    stamped = dict(meta or {})
+    if refresh or not stamped.get("media_bound_at"):
+        stamped["media_bound_at"] = now_bj_iso()
+    return stamped
+
+
+def _is_persisted_media_localization_success(
+    url: Any,
+    *,
+    source_url: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+    oss_uploaded: bool = False,
+) -> bool:
+    raw = str(url or "").strip()
+    if not raw or _is_ephemeral_provider_media_url(raw):
+        return False
+    if oss_uploaded or _oss_upload_succeeded_for_url(raw, metadata, db):
+        return True
+    if _is_durable_persisted_media_url(raw, metadata, db):
+        return True
+    source = str(source_url or "").strip()
+    if source and raw != source and raw.lower().startswith(("http://", "https://")):
+        return True
+    return False
+
+
 def _resolve_video_bind_url(
     *,
     raw_url: str,
     normalized_url: Optional[str],
     normalized_meta: Dict[str, Any],
+    oss_uploaded: bool = False,
+    db: Optional[Session] = None,
 ) -> Tuple[Optional[str], bool, Dict[str, Any]]:
     meta = dict(normalized_meta or {})
     durable = str(normalized_url or "").strip()
-    if durable and _is_durable_persisted_media_url(durable, meta):
+    if durable and _is_persisted_media_localization_success(
+        durable,
+        source_url=raw_url,
+        metadata=meta,
+        db=db,
+        oss_uploaded=oss_uploaded,
+    ):
+        meta = _clear_ephemeral_persist_flags(meta)
+        if oss_uploaded:
+            meta["oss_uploaded_success"] = True
         return durable, False, meta
 
     source = str(raw_url or "").strip()
     if not source:
         return None, False, meta
 
-    if _is_provider_direct_oss_url(source, meta):
+    if _is_provider_direct_oss_url(source, meta, db):
         # Provider-side direct OSS links are stable; do not mark ephemeral/retry.
         return source, False, meta
 
@@ -2911,7 +3003,7 @@ def _build_ephemeral_media_metadata(
     meta["remote_localization_failed"] = True
     if temp_filename:
         meta.setdefault("temporary_source_filename", temp_filename)
-    return meta
+    return _ensure_media_bound_at(meta, refresh=True)
 
 
 def _build_generation_job_req_context(job: Dict[str, Any], db: Optional[Session] = None) -> Dict[str, Any]:
@@ -2941,6 +3033,57 @@ def _build_generation_job_req_context(job: Dict[str, Any], db: Optional[Session]
         except Exception:
             pass
     return req_context
+
+
+def _enrich_media_metadata_from_generation_context(
+    meta: Optional[Dict[str, Any]],
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fill provider/model and generation params into media metadata without overwriting existing values."""
+    enriched = dict(meta or {})
+    ctx = context if isinstance(context, dict) else {}
+
+    for key in (
+        "provider",
+        "model",
+        "prompt",
+        "negative_prompt",
+        "aspect_ratio",
+        "submit_aspect_ratio",
+        "duration",
+        "seed",
+        "width",
+        "height",
+        "resolution",
+        "image_size",
+        "system_api_id",
+        "shot_id",
+        "project_id",
+        "episode_id",
+        "scene_id",
+        "shot_number",
+        "shot_name",
+        "asset_type",
+        "job_id",
+        "idempotency_key",
+    ):
+        if enriched.get(key) not in (None, ""):
+            continue
+        value = ctx.get(key)
+        if value not in (None, ""):
+            enriched[key] = value
+
+    smart_meta = enriched.get("smart_routing") if isinstance(enriched.get("smart_routing"), dict) else {}
+    if not smart_meta and isinstance(ctx.get("smart_routing"), dict):
+        smart_meta = ctx.get("smart_routing") or {}
+    if not enriched.get("provider") and smart_meta.get("provider"):
+        enriched["provider"] = smart_meta.get("provider")
+    if not enriched.get("model") and smart_meta.get("model"):
+        enriched["model"] = smart_meta.get("model")
+    if enriched.get("system_api_id") is None and smart_meta.get("system_api_id") is not None:
+        enriched["system_api_id"] = smart_meta.get("system_api_id")
+
+    return enriched
 
 
 def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -3089,7 +3232,6 @@ def _stage_ephemeral_media_job_result(
     )
     staged_result = dict(result)
     staged_result["url"] = raw_url
-    staged_result["metadata"] = staged_meta
 
     temp_label = f" temp_filename={temp_filename}" if temp_filename else ""
     log_prefix = "VideoJobPersist" if media_kind == "video" else "ImageJobPersist"
@@ -3108,6 +3250,10 @@ def _stage_ephemeral_media_job_result(
     try:
         current_user = _resolve_job_owner_user(db, job)
         req_context = _build_generation_job_req_context(job, db)
+        staged_meta = _enrich_media_metadata_from_generation_context(staged_meta, job)
+        staged_meta = _enrich_media_metadata_from_generation_context(staged_meta, req_context)
+        staged_meta["job_id"] = job_id
+        staged_result["metadata"] = staged_meta
         if media_kind == "video" and not str(req_context.get("asset_type") or "").strip():
             req_context["asset_type"] = "video"
 
@@ -3642,6 +3788,65 @@ def _refresh_managed_media_url(url: Any, db: Session) -> str:
         return raw
 
 
+def _repair_stale_ephemeral_shot_media_notes(shot: Shot, db: Optional[Session] = None) -> bool:
+    """Clear ephemeral persist flags when the stored URL is already on managed OSS."""
+    if not shot:
+        return False
+
+    changed = False
+    notes = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
+    if not isinstance(notes, dict):
+        notes = {}
+
+    def _repair_slot(
+        media_url: str,
+        meta_key: str,
+        oss_flag_key: str,
+    ) -> None:
+        nonlocal changed
+        url = str(media_url or "").strip()
+        if not url:
+            return
+        slot_meta = dict(notes.get(meta_key) or {}) if isinstance(notes.get(meta_key), dict) else {}
+        has_stale_flags = bool(
+            slot_meta.get("ephemeral_binding")
+            or slot_meta.get("needs_persistence_retry")
+            or slot_meta.get("remote_localization_failed")
+            or notes.get(oss_flag_key) is False
+        )
+        if not has_stale_flags:
+            return
+        if not (
+            _is_persisted_media_localization_success(
+                url,
+                source_url=str(
+                    slot_meta.get("remote_localization_source_url")
+                    or slot_meta.get("pending_source_url")
+                    or ""
+                ).strip()
+                or None,
+                metadata=slot_meta,
+                db=db,
+            )
+            or _is_durable_persisted_media_url(url, slot_meta, db)
+        ):
+            return
+        notes[meta_key] = _clear_ephemeral_persist_flags(slot_meta)
+        notes[oss_flag_key] = True
+        changed = True
+
+    _repair_slot(str(getattr(shot, "video_url", None) or "").strip(), "video_metadata", "video_oss_uploaded")
+    _repair_slot(str(getattr(shot, "image_url", None) or "").strip(), "start_frame_metadata", "start_frame_oss_uploaded")
+    _repair_slot(str(notes.get("end_frame_url") or "").strip(), "end_frame_metadata", "end_frame_oss_uploaded")
+
+    if changed:
+        if isinstance(getattr(shot, "technical_notes", None), dict):
+            shot.technical_notes = notes
+        else:
+            shot.technical_notes = json.dumps(notes, ensure_ascii=False)
+    return changed
+
+
 def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
     if not shot:
         return shot
@@ -3650,17 +3855,31 @@ def _refresh_shot_media_urls(shot: Shot, db: Session) -> Shot:
     shot.video_url = _refresh_managed_media_url(getattr(shot, "video_url", None), db)
 
     notes = _asset_meta_to_dict(getattr(shot, "technical_notes", None))
-    if not notes:
-        return shot
+    if notes:
+        end_frame_url = str(notes.get("end_frame_url") or "").strip()
+        refreshed_end = _refresh_managed_media_url(end_frame_url, db)
+        if refreshed_end and refreshed_end != end_frame_url:
+            notes["end_frame_url"] = refreshed_end
+            if isinstance(shot.technical_notes, dict):
+                shot.technical_notes = notes
+            else:
+                shot.technical_notes = json.dumps(notes, ensure_ascii=False)
 
-    end_frame_url = str(notes.get("end_frame_url") or "").strip()
-    refreshed_end = _refresh_managed_media_url(end_frame_url, db)
-    if refreshed_end and refreshed_end != end_frame_url:
-        notes["end_frame_url"] = refreshed_end
-        if isinstance(shot.technical_notes, dict):
-            shot.technical_notes = notes
-        else:
-            shot.technical_notes = json.dumps(notes, ensure_ascii=False)
+    if _repair_stale_ephemeral_shot_media_notes(shot, db):
+        try:
+            db.add(shot)
+            db.commit()
+            db.refresh(shot)
+        except Exception as exc:
+            logger.warning(
+                "[ShotMediaRepair] failed to persist stale ephemeral note cleanup | shot_id=%s err=%s",
+                getattr(shot, "id", None),
+                exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
     return shot
 
 
@@ -3830,13 +4049,43 @@ def _persist_shot_media_slot(
     if not source_url:
         raise HTTPException(status_code=400, detail=f"Shot has no URL for slot={slot}")
 
-    if _is_durable_persisted_media_url(source_url, slot_meta, db):
+    if _is_persisted_media_localization_success(
+        source_url,
+        source_url=source_url,
+        metadata=slot_meta,
+        db=db,
+    ) or _is_durable_persisted_media_url(source_url, slot_meta, db):
+        oss_ok = _oss_upload_succeeded_for_url(source_url, slot_meta, db) or _is_persisted_media_localization_success(
+            source_url,
+            source_url=source_url,
+            metadata=slot_meta,
+            db=db,
+        )
+        if oss_ok and asset_type == "video":
+            clean_meta = _clear_ephemeral_persist_flags(dict(slot_meta or {}))
+            clean_meta["oss_uploaded_success"] = True
+            _bind_generated_media_to_shot(
+                db,
+                current_user,
+                {
+                    "shot_id": int(shot.id),
+                    "project_id": int(getattr(shot, "project_id", None) or getattr(project, "id", None) or 0) or None,
+                    "episode_id": getattr(shot, "episode_id", None),
+                    "shot_number": getattr(shot, "shot_id", None),
+                    "shot_name": getattr(shot, "shot_name", None),
+                    "asset_type": asset_type,
+                },
+                source_url,
+                True,
+                clean_meta,
+            )
+            db.refresh(shot)
         return {
             "shot_id": int(shot.id),
             "slot": asset_type,
             "source_url": source_url,
             "persisted_url": source_url,
-            "oss_uploaded": _oss_upload_succeeded_for_url(source_url, slot_meta, db),
+            "oss_uploaded": oss_ok,
             "already_persisted": True,
             "metadata": slot_meta or None,
         }
@@ -3876,13 +4125,28 @@ def _persist_shot_media_slot(
         raw_url=source_url,
         normalized_url=normalized_url,
         normalized_meta=normalized_meta,
+        oss_uploaded=oss_uploaded,
+        db=db,
     )
 
-    final_url = str(normalized_url or "").strip()
-    if final_url and _is_durable_persisted_media_url(final_url, normalized_meta, db):
-        bind_url = final_url
+    localization_ok = _is_persisted_media_localization_success(
+        normalized_url,
+        source_url=source_url,
+        metadata=normalized_meta,
+        db=db,
+        oss_uploaded=oss_uploaded,
+    )
+    if localization_ok:
+        final_url = normalized_url
+        normalized_meta = _clear_ephemeral_persist_flags(normalized_meta)
         ephemeral_binding = False
-    elif bind_url and _is_durable_persisted_media_url(bind_url, normalized_meta, db):
+    elif bind_url and _is_persisted_media_localization_success(
+        bind_url,
+        source_url=source_url,
+        metadata=normalized_meta,
+        db=db,
+        oss_uploaded=oss_uploaded,
+    ):
         final_url = bind_url
         ephemeral_binding = False
     elif bind_url:
@@ -3890,7 +4154,13 @@ def _persist_shot_media_slot(
     else:
         final_url = normalized_url or source_url
 
-    if not _is_durable_persisted_media_url(final_url, normalized_meta, db):
+    if not _is_persisted_media_localization_success(
+        final_url,
+        source_url=source_url,
+        metadata=normalized_meta,
+        db=db,
+        oss_uploaded=oss_uploaded,
+    ):
         error_detail = str(
             normalized_meta.get("remote_localization_error")
             or "Failed to persist media to durable storage (OSS/local)"
@@ -3899,6 +4169,15 @@ def _persist_shot_media_slot(
             status_code=502,
             detail=error_detail,
         )
+
+    bind_oss_flag = bool(
+        (oss_uploaded or _oss_upload_succeeded_for_url(final_url, normalized_meta, db))
+        and not ephemeral_binding
+        and not _is_ephemeral_provider_media_url(final_url)
+    )
+    if bind_oss_flag:
+        normalized_meta = _clear_ephemeral_persist_flags(normalized_meta)
+        normalized_meta["oss_uploaded_success"] = True
 
     try:
         _register_asset_helper(db, current_user.id, final_url, req_context, normalized_meta)
@@ -3910,7 +4189,7 @@ def _persist_shot_media_slot(
         current_user,
         req_context,
         final_url,
-        bool(oss_uploaded and not ephemeral_binding),
+        bind_oss_flag,
         normalized_meta,
     )
 
@@ -3920,7 +4199,7 @@ def _persist_shot_media_slot(
         "slot": asset_type,
         "source_url": source_url,
         "persisted_url": final_url,
-        "oss_uploaded": bool(oss_uploaded and not ephemeral_binding),
+        "oss_uploaded": bind_oss_flag,
         "already_persisted": False,
         "metadata": normalized_meta or None,
     }
@@ -4491,6 +4770,7 @@ _JOB_RESULT_METADATA_KEYS = (
     "remote_localization_failed",
     "remote_localization_error",
     "remote_localization_source_url",
+    "oss_uploaded_success",
     "stored_from_remote_url",
     "stored_from_remote_url_source",
     "stored_from_remote_url_resolved_via",
@@ -4748,6 +5028,7 @@ def _build_result_from_provider_callback(
     payload: Dict[str, Any],
     *,
     fallback_provider: Optional[str] = None,
+    fallback_model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
@@ -4788,11 +5069,25 @@ def _build_result_from_provider_callback(
             provider_candidates.append(text)
     resolved_provider = provider_candidates[0] if provider_candidates else ""
 
+    model_candidates: List[str] = []
+    for candidate in (
+        payload.get("model"),
+        payload.get("model_name"),
+        payload.get("modelName"),
+        fallback_model,
+    ):
+        text = str(candidate or "").strip()
+        if text:
+            model_candidates.append(text)
+    resolved_model = model_candidates[0] if model_candidates else ""
+
     metadata: Dict[str, Any] = {
         "provider": resolved_provider,
         "status": _normalize_generation_status(payload.get("status")),
         "payload_truncated": bool(payload.get("payload_truncated")),
     }
+    if resolved_model:
+        metadata["model"] = resolved_model
     if callback_payload_size > 0:
         metadata["callback_payload_size_bytes"] = callback_payload_size
     callback_result_url = _extract_job_result_url(payload)
@@ -5035,6 +5330,7 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     result = _build_result_from_provider_callback(
         callback_payload,
         fallback_provider=str(job.get("provider") or "").strip() or None,
+        fallback_model=str(job.get("model") or "").strip() or None,
     )
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
@@ -5361,8 +5657,15 @@ def _maybe_retry_video_job_result_persistence(job_id: str, job: Dict[str, Any]) 
         )
         persisted = _finalize_video_job_result_persistence(job_id, job, retry_input)
         persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
-        if persisted_url and _is_durable_persisted_media_url(persisted_url):
-            _set_video_job(job_id, result=persisted)
+        persisted_meta = persisted.get("metadata") if isinstance(persisted, dict) and isinstance(persisted.get("metadata"), dict) else {}
+        source_before = _resolve_video_persistence_source_url(result)
+        if persisted_url and _is_persisted_media_localization_success(
+            persisted_url,
+            source_url=source_before,
+            metadata=persisted_meta,
+            oss_uploaded=bool(persisted_meta.get("oss_uploaded_success")),
+        ):
+            _set_video_job(job_id, result=persisted, status="succeeded", finished_at=now_bj_iso())
             with VIDEO_JOB_LOCK:
                 updated = dict(VIDEO_JOB_STORE.get(job_id) or job)
             logger.info(
@@ -5503,6 +5806,12 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
             req_context["asset_type"] = "video"
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        metadata = _enrich_media_metadata_from_generation_context(metadata, job)
+        metadata = _enrich_media_metadata_from_generation_context(metadata, req_context)
+        for dim_key in ("width", "height"):
+            if result.get(dim_key) not in (None, "") and metadata.get(dim_key) in (None, ""):
+                metadata[dim_key] = result.get(dim_key)
+        metadata["job_id"] = job_id
         logger.info(
             "[VideoJobPersist] start | job_id=%s user_id=%s shot_id=%s raw_url=%s metadata_keys=%s",
             job_id,
@@ -5518,6 +5827,7 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
             raw_url,
             metadata,
             filename_base=filename_base,
+            db=db,
         )
         logger.info(
             "[VideoJobPersist] normalized | job_id=%s user_id=%s shot_id=%s normalized_url=%s oss=%s",
@@ -5531,28 +5841,46 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if normalized_meta is None:
             normalized_meta = {}
         normalized_meta["idempotency_key"] = job_id
+        normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, metadata)
+        normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, job)
+        normalized_meta = _enrich_media_metadata_from_generation_context(normalized_meta, req_context)
 
         bind_url, ephemeral_binding, normalized_meta = _resolve_video_bind_url(
             raw_url=raw_url,
             normalized_url=str(normalized_url or "").strip() or None,
             normalized_meta=normalized_meta,
+            oss_uploaded=oss_uploaded,
+            db=db,
         )
 
         finalized_result = dict(result)
         display_url = str(normalized_url or "").strip()
-        if display_url and _is_durable_persisted_media_url(display_url):
+        if display_url and _is_persisted_media_localization_success(
+            display_url,
+            source_url=raw_url,
+            metadata=normalized_meta,
+            db=db,
+            oss_uploaded=oss_uploaded,
+        ):
             finalized_result["url"] = display_url
+            finalized_result["metadata"] = _clear_ephemeral_persist_flags(normalized_meta)
         elif bind_url:
             finalized_result["url"] = bind_url
+            finalized_result["metadata"] = normalized_meta
         elif display_url:
             finalized_result["url"] = display_url
-        if normalized_meta is not None:
             finalized_result["metadata"] = normalized_meta
 
-        if bind_url:
-            bind_oss_flag = bool(oss_uploaded and not ephemeral_binding)
+        shot_bind_url = str(finalized_result.get("url") or bind_url or "").strip()
+        if shot_bind_url:
+            bind_meta = finalized_result.get("metadata") if isinstance(finalized_result.get("metadata"), dict) else normalized_meta
+            bind_oss_flag = bool(
+                oss_uploaded
+                and not ephemeral_binding
+                and not _is_ephemeral_provider_media_url(shot_bind_url)
+            )
             try:
-                _register_asset_helper(db, current_user.id, bind_url, req_context, normalized_meta)
+                _register_asset_helper(db, current_user.id, shot_bind_url, req_context, bind_meta)
             except Exception as reg_exc:
                 logger.warning(f"[_finalize_video_job_result_persistence] _register_asset_helper failed: {reg_exc}")
 
@@ -5561,9 +5889,9 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                     db,
                     current_user,
                     req_context,
-                    bind_url,
+                    shot_bind_url,
                     oss_uploaded_success=bind_oss_flag,
-                    media_metadata=normalized_meta,
+                    media_metadata=bind_meta,
                 )
             except Exception as bind_exc:
                 logger.warning(f"[_finalize_video_job_result_persistence] _bind_generated_media_to_shot failed: {bind_exc}")
@@ -5596,6 +5924,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     result = _build_result_from_provider_callback(
         callback_payload,
         fallback_provider=str(job.get("provider") or "").strip() or None,
+        fallback_model=str(job.get("model") or "").strip() or None,
     )
     current_result_url = _extract_job_result_url(job.get("result"))
     callback_result_url = _extract_job_result_url(result or {})
@@ -5676,8 +6005,16 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
                         persisted_result_url = str(persisted_result.get("url") or "").strip()
                     effective_current_result = updates.get("result") if "result" in updates else job.get("result")
                     effective_current_result_url = _extract_job_result_url(effective_current_result)
+                    persisted_meta = persisted_result.get("metadata") if isinstance(persisted_result, dict) and isinstance(persisted_result.get("metadata"), dict) else {}
                     if persisted_result_url and (
-                        persisted_result_url != effective_current_result_url or persisted_result != effective_current_result
+                        persisted_result_url != effective_current_result_url
+                        or persisted_result != effective_current_result
+                        or _is_persisted_media_localization_success(
+                            persisted_result_url,
+                            source_url=callback_result_url or effective_current_result_url,
+                            metadata=persisted_meta,
+                            oss_uploaded=bool(persisted_meta.get("oss_uploaded_success")),
+                        )
                     ):
                         updates["result"] = persisted_result
                         callback_result_url = persisted_result_url
@@ -33220,6 +33557,21 @@ def _bind_generated_media_to_shot(
         except Exception:
             normalized_media_metadata = dict(media_metadata)
 
+    bind_context: Dict[str, Any] = {}
+    for bind_key in (
+        "provider", "model", "prompt", "negative_prompt", "aspect_ratio", "duration", "seed",
+        "width", "height", "resolution", "image_size", "system_api_id", "shot_id", "project_id",
+        "episode_id", "scene_id", "shot_number", "shot_name", "asset_type", "job_id", "idempotency_key",
+    ):
+        bind_value = get_attr(req, bind_key)
+        if bind_value not in (None, ""):
+            bind_context[bind_key] = bind_value
+    if isinstance(normalized_media_metadata, dict):
+        normalized_media_metadata = _enrich_media_metadata_from_generation_context(
+            normalized_media_metadata,
+            bind_context,
+        )
+
     tech = {}
     try:
         tech = json.loads(shot.technical_notes or "{}")
@@ -33230,11 +33582,16 @@ def _bind_generated_media_to_shot(
 
     if asset_type in {"start_frame", "start"}:
         metadata_changed = False
+        start_url_changed = shot.image_url != media_url
         if isinstance(normalized_media_metadata, dict):
             previous_meta = tech.get("start_frame_metadata")
             if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
                 tech["start_frame_metadata"] = normalized_media_metadata
                 metadata_changed = True
+        if start_url_changed:
+            start_meta = tech.get("start_frame_metadata") if isinstance(tech.get("start_frame_metadata"), dict) else {}
+            tech["start_frame_metadata"] = _ensure_media_bound_at(start_meta, refresh=True)
+            metadata_changed = True
         if (
             shot.image_url != media_url
             or (oss_uploaded_success is not None and tech.get("start_frame_oss_uploaded") != oss_uploaded_success)
@@ -33248,11 +33605,16 @@ def _bind_generated_media_to_shot(
 
     elif asset_type in {"end_frame", "end"}:
         metadata_changed = False
+        end_url_changed = tech.get("end_frame_url") != media_url
         if isinstance(normalized_media_metadata, dict):
             previous_meta = tech.get("end_frame_metadata")
             if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
                 tech["end_frame_metadata"] = normalized_media_metadata
                 metadata_changed = True
+        if end_url_changed:
+            end_meta = tech.get("end_frame_metadata") if isinstance(tech.get("end_frame_metadata"), dict) else {}
+            tech["end_frame_metadata"] = _ensure_media_bound_at(end_meta, refresh=True)
+            metadata_changed = True
         if (
             tech.get("end_frame_url") != media_url
             or (oss_uploaded_success is not None and tech.get("end_frame_oss_uploaded") != oss_uploaded_success)
@@ -33266,11 +33628,20 @@ def _bind_generated_media_to_shot(
 
     elif asset_type == "video":
         metadata_changed = False
+        video_url_changed = shot.video_url != media_url
         if isinstance(normalized_media_metadata, dict):
             previous_meta = tech.get("video_metadata")
             if not isinstance(previous_meta, dict) or previous_meta != normalized_media_metadata:
                 tech["video_metadata"] = normalized_media_metadata
                 metadata_changed = True
+        if video_url_changed:
+            video_meta = dict(normalized_media_metadata) if isinstance(normalized_media_metadata, dict) else (
+                tech.get("video_metadata") if isinstance(tech.get("video_metadata"), dict) else {}
+            )
+            video_meta = _ensure_media_bound_at(video_meta, refresh=True)
+            video_meta = _enrich_media_metadata_from_generation_context(video_meta, bind_context)
+            tech["video_metadata"] = video_meta
+            metadata_changed = True
         if (
             shot.video_url != media_url
             or (oss_uploaded_success is not None and tech.get("video_oss_uploaded") != oss_uploaded_success)
@@ -37227,6 +37598,29 @@ async def _run_generate_video(
             if effective_negative_prompt:
                 stable_meta["negative_prompt_submitted"] = effective_negative_prompt
             stable_meta["negative_prompt_source"] = negative_prompt_source
+            stable_meta = _enrich_media_metadata_from_generation_context(
+                stable_meta,
+                {
+                    "provider": req.provider,
+                    "model": req.model,
+                    "prompt": prompt_text,
+                    "negative_prompt": effective_negative_prompt,
+                    "duration": req.duration,
+                    "aspect_ratio": aspect_ratio,
+                    "seed": active_seed,
+                    "width": resolved_video_width,
+                    "height": resolved_video_height,
+                    "resolution": resolved_video_resolution,
+                    "image_size": resolved_video_image_size,
+                    "shot_id": getattr(req, "shot_id", None),
+                    "project_id": getattr(req, "project_id", None),
+                    "episode_id": getattr(req, "episode_id", None),
+                    "scene_id": getattr(req, "scene_id", None),
+                    "shot_number": getattr(req, "shot_number", None),
+                    "shot_name": getattr(req, "shot_name", None),
+                    "asset_type": getattr(req, "asset_type", None) or "video",
+                },
+            )
             result["metadata"] = stable_meta
         logger.info(
             "[GenerateVideo][Config] req_provider=%s req_model=%s runtime_llm_config=%s",
@@ -37608,7 +38002,16 @@ async def _run_generate_video_job(
         user_principal = _snapshot_user_principal(user)
 
         req_obj = VideoGenerationRequest(**req_payload)
-        _set_video_job(job_id, status="submit", started_at=now_bj_iso())
+        _set_video_job(
+            job_id,
+            status="submit",
+            started_at=now_bj_iso(),
+            provider=req_provider,
+            model=req_model,
+            prompt=req_payload.get("prompt"),
+            duration=req_payload.get("duration"),
+            aspect_ratio=req_payload.get("aspect_ratio"),
+        )
         logger.info(
             "[VideoJob] started | job_id=%s user_id=%s provider=%s model=%s callback_ticket=%s",
             job_id,
@@ -38119,6 +38522,11 @@ async def submit_generate_video_endpoint(
         shot_number=req_payload.get("shot_number"),
         shot_name=req_payload.get("shot_name"),
         asset_type=req_payload.get("asset_type"),
+        provider=req_payload.get("provider"),
+        model=req_payload.get("model"),
+        prompt=req_payload.get("prompt"),
+        duration=req_payload.get("duration"),
+        aspect_ratio=req_payload.get("aspect_ratio"),
         provider_callback_ticket=provider_callback_ticket,
         created_at=now,
         started_at=None,

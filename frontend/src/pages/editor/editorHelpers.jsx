@@ -2309,7 +2309,8 @@ export const isDurablePersistedMediaUrl = (url, metadata = null) => {
     const raw = String(url || '').trim();
     if (!raw) return false;
     if (isEphemeralProviderMediaUrl(raw)) return false;
-    return urlMatchesConfiguredOss(raw, metadata);
+    if (urlMatchesConfiguredOss(raw, metadata)) return true;
+    return legacyDurableMediaUrl(raw);
 };
 
 export const parseShotTechnicalNotes = (rawNotes) => {
@@ -2322,19 +2323,64 @@ export const parseShotTechnicalNotes = (rawNotes) => {
     }
 };
 
+export const EPHEMERAL_MEDIA_PERSIST_GRACE_MS = 30_000;
+
+export const parseMediaBoundAtMs = (metadata, fallbackMs = null) => {
+    const meta = metadata && typeof metadata === 'object' ? metadata : {};
+    const raw = meta.media_bound_at || meta.bound_at;
+    if (raw) {
+        const parsed = Date.parse(String(raw));
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return Number.isFinite(fallbackMs) ? fallbackMs : null;
+};
+
+export const parseShotMediaUpdatedAtMs = (shot) => {
+    const candidate = shot?.updated_at || shot?.updatedAt || shot?.modified_at || shot?.modifiedAt || shot?.created_at || shot?.createdAt;
+    if (!candidate) return null;
+    const parsed = Date.parse(String(candidate));
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const isWithinMediaPersistGracePeriod = (metadata, options = {}) => {
+    const graceMs = Number(options?.graceMs) > 0 ? Number(options.graceMs) : EPHEMERAL_MEDIA_PERSIST_GRACE_MS;
+    const boundMs = parseMediaBoundAtMs(metadata, options?.generatedAtMs ?? null);
+    if (!boundMs) return false;
+    return (Date.now() - boundMs) < graceMs;
+};
+
+export const getMediaPersistGraceRemainingMs = (metadata, options = {}) => {
+    const graceMs = Number(options?.graceMs) > 0 ? Number(options.graceMs) : EPHEMERAL_MEDIA_PERSIST_GRACE_MS;
+    const boundMs = parseMediaBoundAtMs(metadata, options?.generatedAtMs ?? null);
+    if (!boundMs) return 0;
+    return Math.max(0, graceMs - (Date.now() - boundMs));
+};
+
 export const mediaUrlNeedsOssPersist = (url, options = {}) => {
     const rawUrl = String(url || '').trim();
     if (!rawUrl) return false;
 
     const metadata = options?.metadata && typeof options.metadata === 'object' ? options.metadata : {};
-    const ossUploadedFlag = options?.ossUploadedFlag;
 
-    if (ossUploadedFlag === false) return true;
+    // URL is already on managed OSS — stale ephemeral metadata must not keep the temp badge.
+    if (isDurablePersistedMediaUrl(rawUrl, metadata)) {
+        return false;
+    }
+
+    // Freshly generated media: give OSS upload/retry a short window before warning UI.
+    if (isWithinMediaPersistGracePeriod(metadata, options)) {
+        return false;
+    }
+
+    const ossUploadedFlag = options?.ossUploadedFlag;
+    if (ossUploadedFlag === false) {
+        return true;
+    }
     if (metadata.needs_persistence_retry || metadata.ephemeral_binding || metadata.remote_localization_failed) {
         return true;
     }
     if (metadata.oss_uploaded_success === false) return true;
-    return !isDurablePersistedMediaUrl(rawUrl, metadata);
+    return true;
 };
 
 export const resolveShotMediaSlotUrl = (shot, slot = 'video') => {
@@ -2359,6 +2405,7 @@ export const shotStartFrameNeedsOssPersist = (shot) => {
     return mediaUrlNeedsOssPersist(imageUrl, {
         metadata: meta,
         ossUploadedFlag: tech.start_frame_oss_uploaded,
+        generatedAtMs: parseShotMediaUpdatedAtMs(shot),
     });
 };
 
@@ -2372,6 +2419,7 @@ export const shotEndFrameNeedsOssPersist = (shot) => {
     return mediaUrlNeedsOssPersist(endUrl, {
         metadata: meta,
         ossUploadedFlag: tech.end_frame_oss_uploaded,
+        generatedAtMs: parseShotMediaUpdatedAtMs(shot),
     });
 };
 
@@ -2383,6 +2431,7 @@ export const shotVideoNeedsOssPersist = (shot) => {
     return mediaUrlNeedsOssPersist(videoUrl, {
         metadata: meta,
         ossUploadedFlag: tech.video_oss_uploaded,
+        generatedAtMs: parseShotMediaUpdatedAtMs(shot),
     });
 };
 
@@ -2391,6 +2440,29 @@ export const shotNeedsAnyOssPersist = (shot) => (
     || shotEndFrameNeedsOssPersist(shot)
     || shotVideoNeedsOssPersist(shot)
 );
+
+export const shotNeedsAnyOssPersistGraceWaitMs = (shot) => {
+    if (!shot) return 0;
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    const updatedMs = parseShotMediaUpdatedAtMs(shot);
+    const waits = [];
+
+    const videoUrl = resolveShotMediaSlotUrl(shot, 'video');
+    if (videoUrl && !isDurablePersistedMediaUrl(videoUrl, tech?.video_metadata || {})) {
+        waits.push(getMediaPersistGraceRemainingMs(tech?.video_metadata || {}, { generatedAtMs: updatedMs }));
+    }
+    const startUrl = resolveShotMediaSlotUrl(shot, 'start');
+    if (startUrl && !isDurablePersistedMediaUrl(startUrl, tech?.start_frame_metadata || {})) {
+        waits.push(getMediaPersistGraceRemainingMs(tech?.start_frame_metadata || {}, { generatedAtMs: updatedMs }));
+    }
+    const endUrl = resolveShotMediaSlotUrl(shot, 'end');
+    if (endUrl && !isDurablePersistedMediaUrl(endUrl, tech?.end_frame_metadata || {})) {
+        waits.push(getMediaPersistGraceRemainingMs(tech?.end_frame_metadata || {}, { generatedAtMs: updatedMs }));
+    }
+
+    const active = waits.filter((ms) => ms > 0);
+    return active.length ? Math.min(...active) : 0;
+};
 
 export const parseEntityCustomAttributes = (rawAttrs) => {
     if (rawAttrs && typeof rawAttrs === 'object') return rawAttrs;
@@ -2409,5 +2481,6 @@ export const entityImageNeedsOssPersist = (entity) => {
     return mediaUrlNeedsOssPersist(imageUrl, {
         metadata: attrs,
         ossUploadedFlag: attrs.oss_uploaded_success,
+        generatedAtMs: parseShotMediaUpdatedAtMs(entity),
     });
 };
