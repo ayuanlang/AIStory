@@ -5777,12 +5777,34 @@ def _maybe_retry_image_job_result_persistence(job_id: str, job: Dict[str, Any]) 
         _clear_image_callback_persist_inflight(job_id)
 
 
+def _video_callback_result_needs_oss_persist(
+    candidate_result: Any,
+    db: Optional[Session] = None,
+) -> bool:
+    if not isinstance(candidate_result, dict):
+        return False
+    current_url = _extract_job_result_url(candidate_result)
+    if not current_url:
+        return False
+    meta = candidate_result.get("metadata") if isinstance(candidate_result.get("metadata"), dict) else {}
+    if _is_persisted_media_localization_success(
+        current_url,
+        source_url=current_url,
+        metadata=meta,
+        db=db,
+        oss_uploaded=bool(meta.get("oss_uploaded_success")),
+    ):
+        return False
+    if _video_result_needs_persistence_retry(candidate_result, db):
+        return True
+    return _is_ephemeral_provider_media_url(current_url)
+
+
 def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return result
 
     job = _hydrate_video_job_record(job_id, job)
-    result = _stage_ephemeral_media_job_result(job_id, job, result, media_kind="video")
     raw_url = _extract_job_result_url(result)
     if not raw_url:
         return result
@@ -5855,15 +5877,29 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
 
         finalized_result = dict(result)
         display_url = str(normalized_url or "").strip()
-        if display_url and _is_persisted_media_localization_success(
-            display_url,
-            source_url=raw_url,
-            metadata=normalized_meta,
-            db=db,
-            oss_uploaded=oss_uploaded,
+        bind_oss_flag = False
+        if display_url and (
+            oss_uploaded
+            or _oss_upload_succeeded_for_url(display_url, normalized_meta, db)
+            or _is_persisted_media_localization_success(
+                display_url,
+                source_url=raw_url,
+                metadata=normalized_meta,
+                db=db,
+                oss_uploaded=oss_uploaded,
+            )
         ):
             finalized_result["url"] = display_url
             finalized_result["metadata"] = _clear_ephemeral_persist_flags(normalized_meta)
+            if oss_uploaded or _oss_upload_succeeded_for_url(display_url, normalized_meta, db):
+                finalized_result["metadata"]["oss_uploaded_success"] = True
+            bind_oss_flag = bool(
+                not _is_ephemeral_provider_media_url(display_url)
+                and (
+                    oss_uploaded
+                    or _oss_upload_succeeded_for_url(display_url, finalized_result["metadata"], db)
+                )
+            )
         elif bind_url:
             finalized_result["url"] = bind_url
             finalized_result["metadata"] = normalized_meta
@@ -5875,10 +5911,14 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
         if shot_bind_url:
             bind_meta = finalized_result.get("metadata") if isinstance(finalized_result.get("metadata"), dict) else normalized_meta
             bind_oss_flag = bool(
-                oss_uploaded
+                (oss_uploaded or _oss_upload_succeeded_for_url(shot_bind_url, bind_meta, db))
                 and not ephemeral_binding
                 and not _is_ephemeral_provider_media_url(shot_bind_url)
             )
+            if bind_oss_flag and isinstance(bind_meta, dict):
+                bind_meta = _clear_ephemeral_persist_flags(dict(bind_meta))
+                bind_meta["oss_uploaded_success"] = True
+                finalized_result["metadata"] = bind_meta
             try:
                 _register_asset_helper(db, current_user.id, shot_bind_url, req_context, bind_meta)
             except Exception as reg_exc:
@@ -5893,8 +5933,24 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                     oss_uploaded_success=bind_oss_flag,
                     media_metadata=bind_meta,
                 )
+                logger.info(
+                    "[VideoJobPersist] shot bound | job_id=%s shot_id=%s media_url=%s oss=%s",
+                    job_id,
+                    req_context.get("shot_id"),
+                    shot_bind_url,
+                    bind_oss_flag,
+                )
             except Exception as bind_exc:
                 logger.warning(f"[_finalize_video_job_result_persistence] _bind_generated_media_to_shot failed: {bind_exc}")
+
+        if shot_bind_url and _is_persisted_media_localization_success(
+            shot_bind_url,
+            source_url=raw_url,
+            metadata=finalized_result.get("metadata") if isinstance(finalized_result.get("metadata"), dict) else normalized_meta,
+            db=db,
+            oss_uploaded=bind_oss_flag if shot_bind_url else False,
+        ):
+            _set_video_job(job_id, result=finalized_result, status="succeeded")
 
         return finalized_result
     except Exception as exc:
@@ -5945,14 +6001,19 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     first_success_finalize = current_status not in {"succeeded", "completed", "done"}
     if callback_result_url and not current_has_stable_result:
         if _is_ephemeral_provider_media_url(callback_result_url) and isinstance(result, dict):
-            effective_job = dict(job)
-            effective_job.update(updates)
-            updates["result"] = _stage_ephemeral_media_job_result(
-                job_id,
-                effective_job,
-                dict(result),
-                media_kind="video",
-            )
+            existing_result = job.get("result") if isinstance(job.get("result"), dict) else None
+            existing_url = _extract_job_result_url(existing_result)
+            if existing_url == callback_result_url and isinstance(existing_result, dict):
+                updates["result"] = dict(existing_result)
+            else:
+                effective_job = dict(job)
+                effective_job.update(updates)
+                updates["result"] = _stage_ephemeral_media_job_result(
+                    job_id,
+                    effective_job,
+                    dict(result),
+                    media_kind="video",
+                )
             callback_result_url = _extract_job_result_url(updates["result"])
         elif callback_result_url != current_result_url:
             updates["result"] = result
@@ -5993,7 +6054,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
             result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
         )
         current_result = job.get("result") if isinstance(job.get("result"), dict) else None
-        should_persist_on_callback = first_success_finalize
+        should_persist_on_callback = _video_callback_result_needs_oss_persist(candidate_result)
         if candidate_result and should_persist_on_callback:
             if _mark_video_callback_persist_inflight(job_id):
                 try:
@@ -6003,21 +6064,18 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
                     persisted_result_url = _extract_job_result_url(persisted_result)
                     if not persisted_result_url and isinstance(persisted_result, dict):
                         persisted_result_url = str(persisted_result.get("url") or "").strip()
-                    effective_current_result = updates.get("result") if "result" in updates else job.get("result")
-                    effective_current_result_url = _extract_job_result_url(effective_current_result)
                     persisted_meta = persisted_result.get("metadata") if isinstance(persisted_result, dict) and isinstance(persisted_result.get("metadata"), dict) else {}
-                    if persisted_result_url and (
-                        persisted_result_url != effective_current_result_url
-                        or persisted_result != effective_current_result
-                        or _is_persisted_media_localization_success(
-                            persisted_result_url,
-                            source_url=callback_result_url or effective_current_result_url,
-                            metadata=persisted_meta,
-                            oss_uploaded=bool(persisted_meta.get("oss_uploaded_success")),
-                        )
-                    ):
+                    persist_source_url = _resolve_video_persistence_source_url(candidate_result)
+                    if persisted_result_url:
                         updates["result"] = persisted_result
                         callback_result_url = persisted_result_url
+                        if _is_persisted_media_localization_success(
+                            persisted_result_url,
+                            source_url=persist_source_url,
+                            metadata=persisted_meta,
+                            oss_uploaded=bool(persisted_meta.get("oss_uploaded_success")),
+                        ):
+                            updates["status"] = "succeeded"
                 finally:
                     _clear_video_callback_persist_inflight(job_id)
             else:
@@ -6026,6 +6084,7 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
                     job_id,
                     callback_ticket,
                 )
+                return _maybe_retry_video_job_result_persistence(job_id, job)
 
         if current_error:
             updates["error"] = None
