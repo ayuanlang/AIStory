@@ -15045,23 +15045,86 @@ def _is_markdown_table_separator(line: str) -> bool:
     return True
 
 
-def _normalize_markdown_table_cells(cells: List[str], header_count: int) -> List[str]:
+def _find_shot_pipe_merge_column_indices(headers: List[str]) -> List[int]:
+    """Columns whose cell text may contain unescaped pipe separators."""
+    indices: List[int] = []
+    preferred_aliases = [
+        ["shot logic (cn)", "shot_logic_cn", "镜头逻辑", "镜头逻辑（中文）"],
+        ["video content (cn)", "video_prompt_cn", "视频内容（中文）"],
+        ["start frame (cn)", "start_frame_cn", "起始帧（中文）"],
+        ["keyframes (cn)", "keyframes_cn", "关键帧（中文）"],
+        ["end frame (cn)", "end_frame_cn", "结束帧（中文）"],
+    ]
+    normalized_headers = [_normalize_shot_markdown_col_key(h) for h in headers]
+    for aliases in preferred_aliases:
+        alias_norms = {_normalize_shot_markdown_col_key(a) for a in aliases}
+        for idx, normalized_header in enumerate(normalized_headers):
+            if normalized_header in alias_norms:
+                if idx not in indices:
+                    indices.append(idx)
+                break
+            if any(
+                alias and (alias in normalized_header or normalized_header in alias)
+                for alias in alias_norms
+            ):
+                if idx not in indices:
+                    indices.append(idx)
+                break
+    if not indices:
+        indices = [3]
+    return indices
+
+
+def _reconcile_shot_markdown_row_cells(
+    cells: List[str],
+    header_count: int,
+    merge_column_indices: Optional[List[int]] = None,
+) -> List[str]:
+    """Re-align shot markdown row cells when unescaped pipes inflated the column count."""
+    vals = [str(c or "").strip() for c in (cells or [])]
     if header_count <= 0:
         return []
-    vals = []
+    if len(vals) <= header_count:
+        while len(vals) < header_count:
+            vals.append("")
+        return vals[:header_count]
+
+    merge_indices = list(merge_column_indices or [3])
+    while len(vals) > header_count:
+        overflow = len(vals) - header_count
+        merge_idx = merge_indices[0] if merge_indices else header_count - 1
+        merge_idx = max(0, min(int(merge_idx), header_count - 1))
+        merge_end = min(len(vals), merge_idx + overflow + 1)
+        merged = "|".join(vals[merge_idx:merge_end])
+        vals = vals[:merge_idx] + [merged] + vals[merge_end:]
+        if len(vals) > header_count:
+            if len(merge_indices) > 1:
+                merge_indices = merge_indices[1:]
+                continue
+            tail = " | ".join(vals[header_count - 1 :])
+            vals = vals[: header_count - 1] + [tail]
+
+    while len(vals) < header_count:
+        vals.append("")
+    return vals[:header_count]
+
+
+def _normalize_markdown_table_cells(
+    cells: List[str],
+    header_count: int,
+    *,
+    merge_column_indices: Optional[List[int]] = None,
+) -> List[str]:
+    if header_count <= 0:
+        return []
+    vals = _reconcile_shot_markdown_row_cells(cells, header_count, merge_column_indices)
     import re
-    for c in (cells or []):
+    normalized: List[str] = []
+    for c in vals:
         if c:
             c = re.sub(r"(?i)<br\s*/?>", "\n", str(c)).replace("\\n", "\n").strip()
-        vals.append(c)
-
-    if len(vals) < header_count:
-        vals.extend([""] * (header_count - len(vals)))
-        return vals
-    if len(vals) > header_count:
-        merged_tail = " | ".join(vals[header_count - 1:])
-        return vals[: header_count - 1] + [merged_tail]
-    return vals
+        normalized.append(c or "")
+    return normalized
 
 
 def _looks_like_markdown_table_row_for_shots(line: str) -> bool:
@@ -15205,6 +15268,7 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
     header_count = len(headers)
     if header_count <= 0:
         return [], [], 0
+    merge_column_indices = _find_shot_pipe_merge_column_indices(headers)
 
     rows: List[Dict[str, str]] = []
     table_line_count = 0
@@ -15217,7 +15281,11 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
         if all(not str(c or "").strip() for c in row_cells):
             row_cells = []
             return
-        normalized = _normalize_markdown_table_cells(row_cells, header_count)
+        normalized = _normalize_markdown_table_cells(
+            row_cells,
+            header_count,
+            merge_column_indices=merge_column_indices,
+        )
         rows.append({headers[i]: normalized[i] for i in range(header_count)})
         row_cells = []
 
@@ -15551,6 +15619,73 @@ def _validate_shot_rows_for_apply_with_tolerance(
         raise HTTPException(status_code=status_code, detail=f"{source_label} failed structural validation: {detail}")
 
     return normalized_rows, skipped_errors
+
+
+def _resolve_shots_data_for_apply(
+    scene: Scene,
+    provided_content: Any,
+    *,
+    source_label: str,
+    status_code: int = 400,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Prefer freshly parsed stored markdown over stale provided staging rows."""
+    markdown_rows: List[Dict[str, Any]] = []
+    markdown_skipped: List[str] = []
+    raw_value = str(getattr(scene, "ai_shots_result", None) or "").strip()
+
+    if raw_value.startswith("{"):
+        try:
+            legacy = json.loads(raw_value)
+            if isinstance(legacy, dict) and legacy.get("raw_text"):
+                raw_value = str(legacy.get("raw_text") or "").strip()
+        except Exception:
+            pass
+
+    if raw_value:
+        try:
+            _, parsed_rows, _ = _parse_shot_markdown_or_raise(
+                raw_value,
+                source_label=f"{source_label} (stored markdown)",
+                status_code=status_code,
+            )
+            markdown_rows, markdown_skipped = _validate_shot_rows_for_apply_with_tolerance(
+                parsed_rows,
+                source_label=f"{source_label} (stored markdown)",
+                status_code=status_code,
+            )
+        except HTTPException:
+            markdown_rows = []
+            markdown_skipped = []
+
+    provided_rows: List[Dict[str, Any]] = []
+    provided_skipped: List[str] = []
+    if provided_content is not None:
+        try:
+            provided_rows, provided_skipped = _validate_shot_rows_for_apply_with_tolerance(
+                provided_content,
+                source_label=f"{source_label} (provided content)",
+                status_code=status_code,
+            )
+        except HTTPException:
+            provided_rows = []
+            provided_skipped = []
+
+    if markdown_rows and not provided_rows:
+        return markdown_rows, markdown_skipped
+    if provided_rows and not markdown_rows:
+        return provided_rows, provided_skipped
+    if len(markdown_rows) > len(provided_rows):
+        logger.info(
+            "[apply_scene_ai_result] prefer stored markdown rows over provided content | markdown=%s provided=%s",
+            len(markdown_rows),
+            len(provided_rows),
+        )
+        return markdown_rows, markdown_skipped
+    if len(provided_rows) > len(markdown_rows):
+        return provided_rows, provided_skipped
+    if markdown_rows:
+        return markdown_rows, markdown_skipped
+    return provided_rows, provided_skipped
 
 
 def _parse_shot_markdown_or_raise(
@@ -24901,32 +25036,27 @@ def apply_scene_ai_result(
     skipped_row_errors: List[str] = []
     
     # 1. Determine Source
-    if data and data.content:
+    provided_content = None
+    if data and data.content is not None:
+        provided_content = data.content
+
+    if str(getattr(scene, "ai_shots_result", None) or "").strip():
+        shots_data, skipped_row_errors = _resolve_shots_data_for_apply(
+            scene,
+            provided_content,
+            source_label="Scene shot table",
+            status_code=400,
+        )
+    elif provided_content is not None:
         shots_data, skipped_row_errors = _validate_shot_rows_for_apply_with_tolerance(
-            data.content,
+            provided_content,
             source_label="Provided scene shot table",
             status_code=400,
         )
     else:
-        # Parse from stored Markdown table
-        raw_value = scene.ai_shots_result or ""
-        if isinstance(raw_value, str) and raw_value.strip().startswith('{'):
-            # Legacy wrapper stored in ai_shots_result
-            try:
-                legacy = json.loads(raw_value)
-                if isinstance(legacy, dict) and legacy.get("raw_text"):
-                    raw_value = legacy.get("raw_text")
-                    scene.ai_shots_result = raw_value
-            except Exception:
-                pass
-
-        _, shots_data, _ = _parse_shot_markdown_or_raise(
-            raw_value or "",
-            source_label="Stored scene shot table",
-            status_code=409,
-        )
-        shots_data, skipped_row_errors = _validate_shot_rows_for_apply_with_tolerance(
-            shots_data,
+        shots_data, skipped_row_errors = _resolve_shots_data_for_apply(
+            scene,
+            None,
             source_label="Stored scene shot table",
             status_code=409,
         )

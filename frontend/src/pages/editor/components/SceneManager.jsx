@@ -11,7 +11,7 @@ import ProjectStatusBar from '../../../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
-import { parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
+import { parseScenesFromMarkdownTable, parseShotsFromMarkdownTable } from '../../../lib/sceneTableParser';
 
 const normalizeOriginalScriptText = (value) => {
     const raw = typeof value === 'string' ? value.trim() : '';
@@ -24,6 +24,27 @@ const normalizeOriginalScriptText = (value) => {
 const parseScenesFromEpisodeText = (text) => parseScenesFromMarkdownTable(text, {
     normalizeOriginalScriptText,
 });
+
+const resolveAiShotsStagingRows = (rawText, serverContent = [], warnings = []) => {
+    const content = Array.isArray(serverContent) ? serverContent : [];
+    const markdown = String(rawText || '').trim();
+    if (!markdown) {
+        return { content, warnings: Array.isArray(warnings) ? [...warnings] : [] };
+    }
+
+    const reparsed = parseShotsFromMarkdownTable(markdown);
+    const reparsedRows = Array.isArray(reparsed?.rows) ? reparsed.rows : [];
+    const nextWarnings = Array.isArray(warnings) ? [...warnings] : [];
+
+    if (reparsedRows.length > content.length) {
+        nextWarnings.push(
+            `Reparsed ${reparsedRows.length} shots from stored markdown (staging table had ${content.length}).`
+        );
+        return { content: reparsedRows, warnings: nextWarnings };
+    }
+
+    return { content, warnings: nextWarnings };
+};
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -2134,8 +2155,33 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                     return;
                 }
                 setShotSupplementImportReport(null);
-                await applySceneAIResult(editingScene.id, { content: aiShotsStaging.content || [] });
-                onLog?.(t('镜头已应用到数据库。', 'Shots applied to database.'), 'success');
+
+                const resolved = resolveAiShotsStagingRows(
+                    aiShotsStaging.rawText,
+                    aiShotsStaging.content || [],
+                    aiShotsStaging.warnings || []
+                );
+                if (resolved.content.length === 0) {
+                    throw new Error(t('没有可应用的分镜行。请先刷新 Markdown 或保存完整分镜表。', 'No shot rows to apply. Refresh markdown or save a complete shot table first.'));
+                }
+                if (resolved.content.length !== (aiShotsStaging.content || []).length) {
+                    setAiShotsStaging((prev) => ({
+                        ...prev,
+                        content: resolved.content,
+                        warnings: resolved.warnings,
+                    }));
+                    onLog?.(
+                        t(
+                            `已从原始 Markdown 重新解析 ${resolved.content.length} 条镜头，准备应用。`,
+                            `Reparsed ${resolved.content.length} shots from raw markdown before apply.`
+                        ),
+                        'warning'
+                    );
+                }
+
+                await updateSceneLatestAIResult(editingScene.id, resolved.content);
+                await applySceneAIResult(editingScene.id, null);
+                onLog?.(t(`镜头已应用到数据库（${resolved.content.length} 条）。`, `Shots applied to database (${resolved.content.length} rows).`), 'success');
             }
 
             if (typeof refreshShots === 'function') {
@@ -4117,15 +4163,22 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
 
         try {
             const latest = await getSceneLatestAIResult(sceneId);
+            const rawText = latest?.raw_text || '';
+            const serverContent = Array.isArray(latest?.content) ? latest.content : [];
+            const resolved = resolveAiShotsStagingRows(
+                rawText,
+                serverContent,
+                Array.isArray(latest?.warnings) ? latest.warnings : []
+            );
             setAiShotsStaging(prev => ({
                 ...prev,
                 loading: false,
                 sceneId,
-                content: Array.isArray(latest?.content) ? latest.content : [],
-                rawText: latest?.raw_text || '',
+                content: resolved.content,
+                rawText,
                 usage: latest?.usage || null,
                 timestamp: latest?.timestamp || null,
-                warnings: Array.isArray(latest?.warnings) ? latest.warnings : [],
+                warnings: resolved.warnings,
             }));
         } catch (e) {
             console.error(e);

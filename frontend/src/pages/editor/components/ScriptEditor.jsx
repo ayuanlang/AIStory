@@ -349,6 +349,13 @@ const countEntityPayloadItemsCoveredInDb = (items, entityType, dbEntities) => {
     }, 0);
 };
 
+const countDbEntitiesByType = (entityType, dbEntities) => {
+    const normalizedType = normalizeAssetReportType(entityType);
+    return (Array.isArray(dbEntities) ? dbEntities : []).filter(
+        (entity) => normalizeAssetReportType(entity?.type) === normalizedType,
+    ).length;
+};
+
 const countSubjectIndexEntriesCoveredInDb = (entries, entityType, dbEntities) => {
     if (!Array.isArray(entries) || entries.length === 0) return 0;
     const normalizedType = normalizeAssetReportType(entityType);
@@ -5226,7 +5233,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         let mounted = true;
         const loadAssets = async () => {
-            if (!isEpisodeOnePage || !projectId) {
+            if (!projectId) {
                 if (mounted) setAvailableSubjectAssets([]);
                 return;
             }
@@ -5244,7 +5251,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         loadAssets();
         return () => { mounted = false; };
-    }, [isEpisodeOnePage, projectId, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
+    }, [projectId, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
 
     useEffect(() => {
         let mounted = true;
@@ -13062,12 +13069,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const hasAssetDesignPayload = Object.values(assetDesignCounts).some((count) => count > 0);
 
+        const dbEntityCountsByType = {
+            character: countDbEntitiesByType('character', dbEntities),
+            prop: countDbEntitiesByType('prop', dbEntities),
+            environment: countDbEntitiesByType('environment', dbEntities),
+            poster: countDbEntitiesByType('poster', dbEntities),
+        };
+
         const resolveImportedAssetCount = (type, categoryKey, categoryEntries, designItems) => {
             const fromReport = resolveImportReportAssetHandledCount(importReport, type, categoryKey);
+            const fromResolved = toPositiveCount(analysisUiReport?.resolvedAssetHandledCounts?.[type]);
             const fromDbMatch = hasAssetDesignPayload
                 ? countEntityPayloadItemsCoveredInDb(designItems, type, dbEntities)
                 : countSubjectIndexEntriesCoveredInDb(categoryEntries, type, dbEntities);
-            return Math.max(fromReport, fromDbMatch);
+            const fromDbTotal = toPositiveCount(dbEntityCountsByType[type]);
+            return Math.max(fromReport, fromResolved, fromDbMatch, fromDbTotal);
         };
 
         const buildAssetRow = (key, labelZh, labelEn, categoryKey) => {

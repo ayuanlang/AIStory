@@ -15,7 +15,9 @@ import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
 import {
     cleanMarkdownTableCells,
     reconcileSceneTableRowCells,
+    reconcileShotTableRowCells,
     buildSceneTableHeaderMap,
+    buildShotTableHeaderMap,
     getSceneTableFallbackIndices,
     normalizeSceneTableHeaderKey,
 } from '../lib/sceneTableParser';
@@ -2486,6 +2488,7 @@ const Editor = ({
                 let inShotTable = false;
                 let inSceneTable = false;
                 let shotHeaderMap = {};
+                let shotTableHeaders = [];
                 let sceneHeaderMap = {};
                 let sceneTableHeaders = [];
                 let sceneTableHeaderMap = {};
@@ -2515,17 +2518,8 @@ const Editor = ({
                         addLog("Found Shot Header (or Forced Type).", "info");
                         shotLines.push(line); 
                         
-                        // Parse Header Map
-                        const curCols = line.split('|').map(c => c.trim());
-                        // ... (same as original code)
-                        if (curCols.length > 0 && curCols[0] === "") curCols.shift();
-                        if (curCols.length > 0 && curCols[curCols.length-1] === "") curCols.pop();
-                        
-                        shotHeaderMap = {};
-                        curCols.forEach((col, idx) => {
-                             const key = col.toLowerCase().replace(/[\(\)（）\s\.]/g, '');
-                             shotHeaderMap[key] = idx;
-                        });
+                        shotTableHeaders = cleanMarkdownTableCells(line);
+                        shotHeaderMap = buildShotTableHeaderMap(shotTableHeaders);
                         continue;
                     }
                     else if (canScene && (isSceneKey || (effectiveImportType === 'scene' && !inSceneTable && line.includes('|') && cols.length > 2))) {
@@ -2628,6 +2622,10 @@ const Editor = ({
                          // B. Handle Shot Row
                          else if (inShotTable) {
                              shotLines.push(line);
+
+                             if (shotTableHeaders.length > 0) {
+                                 cols = reconcileShotTableRowCells(cleanMarkdownTableCells(line), shotTableHeaders);
+                             }
                              
                              const useMap = Object.keys(shotHeaderMap).length > 0;
                              
@@ -3000,6 +2998,7 @@ const Editor = ({
                     const dbCharacterCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'character').length;
                     const dbPropCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'prop').length;
                     const dbEnvironmentCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'environment').length;
+                    const dbPosterCount = dbEntities.filter((item) => canonicalSubjectType(item?.type) === 'poster').length;
                     dbPersistedCounts = {
                         scenes: {
                             currentEpisode: Array.isArray(dbScenesRaw) ? dbScenesRaw.length : 0,
@@ -3009,6 +3008,7 @@ const Editor = ({
                             character: dbCharacterCount,
                             prop: dbPropCount,
                             environment: dbEnvironmentCount,
+                            poster: dbPosterCount,
                         },
                     };
 

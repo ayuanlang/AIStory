@@ -233,3 +233,175 @@ export function parseScenesFromMarkdownTable(text, options = {}) {
 
     return rows;
 }
+
+const SHOT_PIPE_MERGE_HEADER_ALIASES = [
+    ['shot logic (cn)', 'shot_logic_cn', '镜头逻辑', '镜头逻辑（中文）'],
+    ['video content (cn)', 'video_prompt_cn', '视频内容（中文）'],
+    ['start frame (cn)', 'start_frame_cn', '起始帧（中文）'],
+    ['keyframes (cn)', 'keyframes_cn', '关键帧（中文）'],
+    ['end frame (cn)', 'end_frame_cn', '结束帧（中文）'],
+];
+
+export function normalizeShotTableHeaderKey(header) {
+    return String(header || '').toLowerCase().replace(/[\s_\-./()（）:：]/g, '');
+}
+
+export function findShotTableColIdx(headers, aliases) {
+    const normalizedHeaders = (headers || []).map((header) => normalizeShotTableHeaderKey(header));
+    const aliasSet = new Set((aliases || []).map((alias) => normalizeShotTableHeaderKey(alias)));
+    for (let idx = 0; idx < normalizedHeaders.length; idx += 1) {
+        const normalized = normalizedHeaders[idx];
+        for (const alias of aliasSet) {
+            if (!alias) continue;
+            if (normalized === alias || normalized.includes(alias) || alias.includes(normalized)) {
+                return idx;
+            }
+        }
+    }
+    return -1;
+}
+
+export function findShotPipeMergeColumnIndices(headers) {
+    const indices = [];
+    for (const aliases of SHOT_PIPE_MERGE_HEADER_ALIASES) {
+        const idx = findShotTableColIdx(headers, aliases);
+        if (idx >= 0 && !indices.includes(idx)) indices.push(idx);
+    }
+    return indices.length > 0 ? indices : [3];
+}
+
+export function reconcileShotTableRowCells(cells, headers) {
+    const headerCount = Array.isArray(headers) ? headers.length : 0;
+    if (!headerCount) return Array.isArray(cells) ? [...cells] : [];
+
+    let row = Array.isArray(cells) ? cells.map((cell) => String(cell || '').trim()) : [];
+    const mergeIndices = findShotPipeMergeColumnIndices(headers);
+
+    while (row.length > headerCount) {
+        const overflow = row.length - headerCount;
+        const mergeIdx = Math.max(0, Math.min(mergeIndices[0] ?? headerCount - 1, headerCount - 1));
+        const mergeEnd = Math.min(row.length, mergeIdx + overflow + 1);
+        const merged = row.slice(mergeIdx, mergeEnd).join('|');
+        row = [...row.slice(0, mergeIdx), merged, ...row.slice(mergeEnd)];
+        if (row.length > headerCount) {
+            if (mergeIndices.length > 1) {
+                mergeIndices.shift();
+                continue;
+            }
+            const tail = row.slice(headerCount - 1).join(' | ');
+            row = [...row.slice(0, headerCount - 1), tail];
+        }
+    }
+
+    while (row.length < headerCount) row.push('');
+    return row.slice(0, headerCount);
+}
+
+export function buildShotTableHeaderMap(headers) {
+    const map = {};
+    (headers || []).forEach((header, idx) => {
+        const key = normalizeShotTableHeaderKey(header);
+        if (key) map[key] = idx;
+    });
+    return map;
+}
+
+function isMarkdownTableSeparatorLine(line) {
+    const cols = splitMarkdownTableRow(line);
+    if (!cols.length) return false;
+    return cols.every((col) => {
+        const token = String(col || '').replace(/\s/g, '').replace(/^:+|:+$/g, '');
+        return token.length >= 3 && /^-+$/.test(token);
+    });
+}
+
+function looksLikeShotMarkdownTableRow(line) {
+    const text = String(line || '').trim();
+    if (!text) return false;
+    if (text.startsWith('|')) return true;
+    return (text.match(/\|/g) || []).length >= 2;
+}
+
+export function parseShotsFromMarkdownTable(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    let headerIdx = -1;
+    let separatorIdx = -1;
+
+    for (let i = 0; i < lines.length - 1; i += 1) {
+        const headerLine = String(lines[i] || '').trim();
+        const sepLine = String(lines[i + 1] || '').trim();
+        if (!looksLikeShotMarkdownTableRow(headerLine)) continue;
+        if (splitMarkdownTableRow(headerLine).length < 2) continue;
+        if (isMarkdownTableSeparatorLine(sepLine)) {
+            headerIdx = i;
+            separatorIdx = i + 1;
+            break;
+        }
+    }
+
+    if (headerIdx < 0 || separatorIdx < 0) {
+        return { headers: [], rows: [], tableLineCount: 0 };
+    }
+
+    const headers = splitMarkdownTableRow(lines[headerIdx].trim()).map(
+        (header) => String(header || '').replace(/[*_]/g, '').trim()
+    );
+    const headerCount = headers.length;
+    if (!headerCount) {
+        return { headers: [], rows: [], tableLineCount: 0 };
+    }
+
+    const rows = [];
+    let tableLineCount = 0;
+    let rowCells = [];
+
+    const flushRow = () => {
+        if (!rowCells.length || rowCells.every((cell) => !String(cell || '').trim())) {
+            rowCells = [];
+            return;
+        }
+        const normalized = reconcileShotTableRowCells(rowCells, headers);
+        const row = {};
+        headers.forEach((header, idx) => {
+            row[header] = String(normalized[idx] || '')
+                .replace(/<br\s*\/?>/gi, '\n')
+                .replace(/\\n/g, '\n')
+                .trim();
+        });
+        rows.push(row);
+        rowCells = [];
+    };
+
+    for (let i = separatorIdx + 1; i < lines.length; i += 1) {
+        const stripped = String(lines[i] || '').trim();
+        if (!stripped) continue;
+        if (stripped.startsWith('#')) break;
+
+        if (looksLikeShotMarkdownTableRow(stripped)) {
+            if (isMarkdownTableSeparatorLine(stripped)) continue;
+            tableLineCount += 1;
+            const cells = splitMarkdownTableRow(stripped);
+            if (!cells.length) continue;
+
+            if (!rowCells.length) {
+                rowCells = [...cells];
+            } else if (rowCells.length >= headerCount) {
+                flushRow();
+                rowCells = [...cells];
+            } else {
+                rowCells.push(...cells);
+            }
+
+            if (rowCells.length >= headerCount) flushRow();
+            continue;
+        }
+
+        if (rowCells.length > 0) {
+            const lastIdx = rowCells.length - 1;
+            rowCells[lastIdx] = `${rowCells[lastIdx]}\n${stripped}`.trim();
+        }
+    }
+
+    flushRow();
+    return { headers, rows, tableLineCount };
+}

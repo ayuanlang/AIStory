@@ -5,6 +5,11 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import TunePromptAgentModal from "./TunePromptAgentModal";
 import { MediaPickerModal, MediaDetailModal } from './MediaModals';
 import { ImportModal } from './ImportModal';
+import {
+    cleanMarkdownTableCells,
+    reconcileShotTableRowCells,
+    buildShotTableHeaderMap,
+} from '../../../lib/sceneTableParser';
 import FunctionApiSelector from '../../../components/FunctionApiSelector';
 import { useFunctionApis } from '../../../components/useFunctionApis';
 import { ReferenceManager } from './SceneManager';
@@ -5928,6 +5933,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const parsedShots = [];
         let headerFound = false;
         let headerMap = {}; // Map normalized header string to column index
+        let shotTableHeaders = [];
 
         const splitCombinedCnPrompt = (raw) => {
             const textVal = String(raw || '').trim();
@@ -5999,22 +6005,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              
              // Process Row splitting logic consistently for Header and Data
              if (line.includes('|') && !line.includes('---')) {
-                 const cols = line.split('|').map(c => c.trim());
-                 if (cols.length > 0 && cols[0] === '') cols.shift();
-                 if (cols.length > 0 && cols[cols.length-1] === '') cols.pop();
+                 let cols = cleanMarkdownTableCells(line);
 
                  if (isHeader) {
                      headerFound = true;
-                     cols.forEach((col, idx) => {
-                         // Normalize header key: remove special chars, lowercase
-                         const key = col.toLowerCase().replace(/[\(\)（）\s\.]/g, '');
-                         headerMap[key] = idx;
-                     });
+                     shotTableHeaders = cols;
+                     headerMap = buildShotTableHeaderMap(shotTableHeaders);
                      onLog?.("Parsed Headers: " + Object.keys(headerMap).join(", "), "info");
                      continue;
                  }
                  
                  if (headerFound) {
+                     if (shotTableHeaders.length > 0) {
+                         cols = reconcileShotTableRowCells(cols, shotTableHeaders);
+                     }
                      const clean = (t) => t ? t.replace(/<br\/?>/gi, '\n') : '';
                      
                      // Helper to get value by possible keys
