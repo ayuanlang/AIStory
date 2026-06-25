@@ -11608,7 +11608,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         await syncSceneUnitsProgress({
                             project_id: Number(projectId),
                             episode_id: Number(activeEpisode.id),
-                            script_text: singleImportText,
+                            script_text: singleSceneImportText,
                             partial: true,
                             target_scene_id: targetSceneId,
                         });
