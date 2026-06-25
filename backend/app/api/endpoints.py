@@ -2896,6 +2896,146 @@ def _resolve_video_bind_url(
     return None, False, meta
 
 
+def _build_ephemeral_media_metadata(
+    raw_url: str,
+    base_meta: Optional[Dict[str, Any]] = None,
+    *,
+    temp_filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    meta = dict(base_meta or {})
+    meta["ephemeral_binding"] = True
+    meta["needs_persistence_retry"] = True
+    meta.setdefault("pending_source_url", raw_url)
+    meta.setdefault("remote_localization_source_url", raw_url)
+    meta["remote_localization_failed"] = True
+    if temp_filename:
+        meta.setdefault("temporary_source_filename", temp_filename)
+    return meta
+
+
+def _build_generation_job_req_context(job: Dict[str, Any], db: Optional[Session] = None) -> Dict[str, Any]:
+    req_context: Dict[str, Any] = {}
+    for key in (
+        "prompt", "negative_prompt", "provider", "model", "aspect_ratio",
+        "duration", "project_id", "episode_id", "scene_id", "shot_id",
+        "shot_number", "shot_name", "asset_type", "seed", "subject_id",
+        "entity_id", "entity_name", "entity_type", "subject_name", "subject_type", "mode",
+    ):
+        value = job.get(key)
+        if value is not None and value != "":
+            req_context[key] = value
+
+    if db is not None and not req_context.get("project_id") and req_context.get("shot_id"):
+        try:
+            shot_row = db.query(Shot).filter(Shot.id == int(req_context.get("shot_id"))).first()
+            if shot_row:
+                if getattr(shot_row, "project_id", None):
+                    req_context["project_id"] = int(shot_row.project_id)
+                if getattr(shot_row, "episode_id", None):
+                    req_context["episode_id"] = int(shot_row.episode_id)
+                if getattr(shot_row, "shot_id", None) and not req_context.get("shot_number"):
+                    req_context["shot_number"] = shot_row.shot_id
+                if getattr(shot_row, "shot_name", None) and not req_context.get("shot_name"):
+                    req_context["shot_name"] = shot_row.shot_name
+        except Exception:
+            pass
+    return req_context
+
+
+def _stage_ephemeral_media_job_result(
+    job_id: str,
+    job: Dict[str, Any],
+    result: Dict[str, Any],
+    *,
+    media_kind: str = "video",
+) -> Dict[str, Any]:
+    """Save ephemeral provider URL to job metadata and bind shot/entity before OSS download."""
+    if not isinstance(result, dict):
+        return result
+
+    raw_url = _extract_job_result_url(result)
+    if not raw_url or not _is_ephemeral_provider_media_url(raw_url):
+        return result
+
+    existing_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    if _is_durable_persisted_media_url(raw_url, existing_meta):
+        return result
+    if existing_meta.get("ephemeral_binding") and existing_meta.get("needs_persistence_retry"):
+        return result
+
+    temp_filename = _extract_media_filename_from_url(raw_url)
+    staged_meta = _build_ephemeral_media_metadata(
+        raw_url,
+        existing_meta,
+        temp_filename=temp_filename or None,
+    )
+    staged_result = dict(result)
+    staged_result["url"] = raw_url
+    staged_result["metadata"] = staged_meta
+
+    try:
+        user_id = int(job.get("user_id") or 0)
+    except Exception:
+        user_id = 0
+    if user_id <= 0:
+        return staged_result
+
+    from app.db.session import SessionLocal
+    from app.models.all_models import User
+
+    db = SessionLocal()
+    try:
+        current_user = db.query(User).filter(User.id == user_id).first()
+        if not current_user:
+            return staged_result
+
+        req_context = _build_generation_job_req_context(job, db)
+        if media_kind == "video" and not str(req_context.get("asset_type") or "").strip():
+            req_context["asset_type"] = "video"
+
+        log_prefix = "VideoJobPersist" if media_kind == "video" else "ImageJobPersist"
+        temp_label = f" temp_filename={temp_filename}" if temp_filename else ""
+        logger.warning(
+            "[%s] staged ephemeral provider url | job_id=%s shot_id=%s%s url=%s",
+            log_prefix,
+            job_id,
+            req_context.get("shot_id"),
+            temp_label,
+            raw_url,
+        )
+
+        if req_context.get("shot_id"):
+            _bind_generated_media_to_shot(
+                db,
+                current_user,
+                req_context,
+                raw_url,
+                oss_uploaded_success=False,
+                media_metadata=staged_meta,
+            )
+
+        request_mode = str(req_context.get("mode") or "").strip().lower()
+        if media_kind == "image" and request_mode != "joint_diptych":
+            _bind_generated_media_to_entity(
+                db,
+                current_user,
+                req_context,
+                raw_url,
+                oss_uploaded_success=False,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[EphemeralStage] bind failed | job_id=%s media_kind=%s error=%s",
+            job_id,
+            media_kind,
+            exc,
+        )
+    finally:
+        db.close()
+
+    return staged_result
+
+
 def _extract_media_filename_from_url(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -2921,11 +3061,17 @@ def _assert_allowed_persisted_media_url(
     field_label: str,
     metadata: Optional[Dict[str, Any]] = None,
     db: Optional[Session] = None,
+    existing_value: Any = None,
 ) -> None:
     raw = str(value or "").strip()
     if not raw:
         return
     if _is_ephemeral_provider_media_url(raw):
+        meta = metadata if isinstance(metadata, dict) else {}
+        if meta.get("ephemeral_binding") or meta.get("needs_persistence_retry"):
+            return
+        if existing_value is not None and str(existing_value or "").strip() == raw:
+            return
         raise HTTPException(
             status_code=400,
             detail=f"{field_label} cannot use a temporary provider URL; persist to OSS first",
@@ -2937,7 +3083,11 @@ def _assert_allowed_persisted_media_url(
         )
 
 
-def _assert_allowed_shot_media_payload(update_data: Dict[str, Any], db: Optional[Session] = None) -> None:
+def _assert_allowed_shot_media_payload(
+    update_data: Dict[str, Any],
+    db: Optional[Session] = None,
+    existing_shot: Optional[Shot] = None,
+) -> None:
     if not isinstance(update_data, dict):
         return
 
@@ -2973,20 +3123,26 @@ def _assert_allowed_shot_media_payload(update_data: Dict[str, Any], db: Optional
         field_label="shot.image_url",
         metadata=start_meta,
         db=db,
+        existing_value=getattr(existing_shot, "image_url", None) if existing_shot is not None else None,
     )
     _assert_allowed_persisted_media_url(
         update_data.get("video_url"),
         field_label="shot.video_url",
         metadata=video_meta,
         db=db,
+        existing_value=getattr(existing_shot, "video_url", None) if existing_shot is not None else None,
     )
 
     if isinstance(notes, dict):
+        existing_notes: Dict[str, Any] = {}
+        if existing_shot is not None:
+            existing_notes = _asset_meta_to_dict(getattr(existing_shot, "technical_notes", None))
         _assert_allowed_persisted_media_url(
             notes.get("end_frame_url"),
             field_label="shot.technical_notes.end_frame_url",
             metadata=end_meta,
             db=db,
+            existing_value=existing_notes.get("end_frame_url") if isinstance(existing_notes, dict) else None,
         )
 
 
@@ -4103,6 +4259,20 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
+def _seconds_since_iso_timestamp(value: Any) -> Optional[float]:
+    parsed = _parse_iso_datetime(value)
+    if not parsed:
+        return None
+    try:
+        if parsed.tzinfo is not None:
+            reference = datetime.now(parsed.tzinfo)
+        else:
+            reference = datetime.utcnow()
+        return max(0.0, (reference - parsed).total_seconds())
+    except Exception:
+        return None
+
+
 def _job_sort_key(item: Dict[str, Any]) -> datetime:
     for field in ("created_at", "started_at", "finished_at"):
         parsed = _parse_iso_datetime(item.get(field))
@@ -4111,21 +4281,51 @@ def _job_sort_key(item: Dict[str, Any]) -> datetime:
     return datetime.utcnow()
 
 
+_JOB_RESULT_TOP_LEVEL_KEYS = ("url", "type", "provider", "model", "error")
+_JOB_RESULT_METADATA_KEYS = (
+    "provider",
+    "model",
+    "task_id",
+    "job_id",
+    "status",
+    "persistence_retry_count",
+    "persistence_retry_at",
+    "needs_persistence_retry",
+    "persistence_gave_up",
+    "remote_localization_failed",
+    "remote_localization_error",
+    "remote_localization_source_url",
+    "stored_from_remote_url",
+    "stored_from_remote_url_source",
+    "stored_from_remote_url_resolved_via",
+    "pending_source_url",
+    "ephemeral_binding",
+    "provider_direct_oss_url",
+    "stored_locally",
+    "temporary_source_filename",
+    "persist_attempts",
+    "idempotency_key",
+)
+
+
 def _compact_job_result(result: Any) -> Any:
     if not isinstance(result, dict):
         return result
 
     compact: Dict[str, Any] = {}
-    for key in ("url", "type", "provider", "model", "error"):
+    for key in _JOB_RESULT_TOP_LEVEL_KEYS:
         if key in result:
             compact[key] = result.get(key)
 
     metadata = result.get("metadata")
     if isinstance(metadata, dict):
         compact_meta = {}
-        for key in ("provider", "model", "task_id", "job_id", "status"):
+        for key in _JOB_RESULT_METADATA_KEYS:
             if key in metadata:
                 compact_meta[key] = metadata.get(key)
+        oss_meta = metadata.get("oss")
+        if isinstance(oss_meta, dict) and oss_meta:
+            compact_meta["oss"] = dict(oss_meta)
         if compact_meta:
             compact["metadata"] = compact_meta
 
@@ -4477,6 +4677,7 @@ def _finalize_image_job_result_persistence(job_id: str, job: Dict[str, Any], res
     if not isinstance(result, dict):
         return result
 
+    result = _stage_ephemeral_media_job_result(job_id, job, result, media_kind="image")
     raw_url = _extract_job_result_url(result)
     if not raw_url:
         return result
@@ -4646,8 +4847,19 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
+    first_success_finalize = current_status not in {"succeeded", "completed", "done"}
     if callback_result_url and callback_result_url != current_result_url and not current_has_stable_result:
-        updates["result"] = result
+        if _is_ephemeral_provider_media_url(callback_result_url) and isinstance(result, dict):
+            effective_job = dict(job)
+            effective_job.update(updates)
+            updates["result"] = _stage_ephemeral_media_job_result(
+                job_id,
+                effective_job,
+                dict(result),
+                media_kind="image",
+            )
+        else:
+            updates["result"] = result
     elif callback_result_url and current_has_stable_result:
         logger.info(
             "[ImageJob] ignored callback result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
@@ -4662,8 +4874,28 @@ def _maybe_finalize_image_job_from_grsai_callback(job_id: str, job: Dict[str, An
         if not job.get("finished_at"):
             updates["finished_at"] = now_bj_iso()
 
+    if (
+        normalized_status == "succeeded"
+        and isinstance(updates.get("result"), dict)
+        and _extract_job_result_url(updates.get("result"))
+        and first_success_finalize
+    ):
+        early_save: Dict[str, Any] = {
+            "status": updates.get("status") or normalized_status,
+            "result": updates["result"],
+        }
+        if updates.get("finished_at"):
+            early_save["finished_at"] = updates["finished_at"]
+        if provider_task_id:
+            early_save["provider_task_id"] = provider_task_id
+        _set_image_job(job_id, **early_save)
+        with IMAGE_JOB_LOCK:
+            job = dict(IMAGE_JOB_STORE.get(job_id) or job)
+
     if normalized_status == "succeeded" and (not current_has_stable_result or "result" in updates):
-        candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
+        candidate_result = updates.get("result") if isinstance(updates.get("result"), dict) else (
+            result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
+        )
         if candidate_result:
             if _mark_image_callback_persist_inflight(job_id):
                 try:
@@ -4899,48 +5131,57 @@ def _maybe_retry_video_job_result_persistence(job_id: str, job: Dict[str, Any]) 
         return job
 
     min_interval = _media_persistence_retry_interval_seconds()
-    last_retry_at = meta.get("persistence_retry_at")
-    if last_retry_at:
-        parsed = _parse_iso_datetime(last_retry_at)
-        if parsed and (datetime.utcnow() - parsed).total_seconds() < min_interval:
-            return job
+    elapsed_since_retry = _seconds_since_iso_timestamp(meta.get("persistence_retry_at"))
+    if elapsed_since_retry is not None and elapsed_since_retry < min_interval:
+        return job
 
     source_url = _resolve_video_persistence_source_url(result)
     if not source_url:
         return job
 
-    retry_input = dict(result)
-    retry_input["url"] = source_url
-    meta["persistence_retry_count"] = retry_count + 1
-    meta["persistence_retry_at"] = now_bj_iso()
-    meta["needs_persistence_retry"] = True
-    retry_input["metadata"] = meta
+    if not _mark_video_callback_persist_inflight(job_id):
+        logger.debug("[VideoJobPersist] skip retry persistence while in-flight | job_id=%s", job_id)
+        return job
 
-    logger.info(
-        "[VideoJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
-        job_id,
-        retry_count + 1,
-        max_retries,
-        source_url,
-    )
-    persisted = _finalize_video_job_result_persistence(job_id, job, retry_input)
-    persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
-    if persisted_url and _is_durable_persisted_media_url(persisted_url):
-        _set_video_job(job_id, result=persisted)
-        with VIDEO_JOB_LOCK:
-            updated = dict(VIDEO_JOB_STORE.get(job_id) or job)
+    try:
+        retry_input = dict(result)
+        retry_input["url"] = source_url
+        meta["persistence_retry_count"] = retry_count + 1
+        meta["persistence_retry_at"] = now_bj_iso()
+        meta["needs_persistence_retry"] = True
+        retry_input["metadata"] = meta
+
+        reserved_result = dict(result)
+        reserved_result["metadata"] = dict(meta)
+        _set_video_job(job_id, result=reserved_result)
+
         logger.info(
-            "[VideoJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+            "[VideoJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
             job_id,
-            persisted_url,
+            retry_count + 1,
+            max_retries,
+            source_url,
         )
-        return updated
+        persisted = _finalize_video_job_result_persistence(job_id, job, retry_input)
+        persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
+        if persisted_url and _is_durable_persisted_media_url(persisted_url):
+            _set_video_job(job_id, result=persisted)
+            with VIDEO_JOB_LOCK:
+                updated = dict(VIDEO_JOB_STORE.get(job_id) or job)
+            logger.info(
+                "[VideoJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+                job_id,
+                persisted_url,
+            )
+            return updated
 
-    if isinstance(persisted, dict) and persisted != result:
-        _set_video_job(job_id, result=persisted)
-        with VIDEO_JOB_LOCK:
-            return dict(VIDEO_JOB_STORE.get(job_id) or job)
-    return job
+        if isinstance(persisted, dict) and persisted != result:
+            _set_video_job(job_id, result=persisted)
+            with VIDEO_JOB_LOCK:
+                return dict(VIDEO_JOB_STORE.get(job_id) or job)
+        return job
+    finally:
+        _clear_video_callback_persist_inflight(job_id)
 
 
 def _media_persistence_poll_max_retries() -> int:
@@ -4981,56 +5222,66 @@ def _maybe_retry_image_job_result_persistence(job_id: str, job: Dict[str, Any]) 
         return job
 
     min_interval = _media_persistence_retry_interval_seconds()
-    last_retry_at = meta.get("persistence_retry_at")
-    if last_retry_at:
-        parsed = _parse_iso_datetime(last_retry_at)
-        if parsed and (datetime.utcnow() - parsed).total_seconds() < min_interval:
-            return job
+    elapsed_since_retry = _seconds_since_iso_timestamp(meta.get("persistence_retry_at"))
+    if elapsed_since_retry is not None and elapsed_since_retry < min_interval:
+        return job
 
     source_url = _resolve_media_persistence_source_url(result)
     if not source_url:
         return job
 
-    retry_input = dict(result)
-    retry_input["url"] = source_url
-    meta["persistence_retry_count"] = retry_count + 1
-    meta["persistence_retry_at"] = now_bj_iso()
-    meta["needs_persistence_retry"] = True
-    retry_input["metadata"] = meta
+    if not _mark_image_callback_persist_inflight(job_id):
+        logger.debug("[ImageJobPersist] skip retry persistence while in-flight | job_id=%s", job_id)
+        return job
 
-    logger.info(
-        "[ImageJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
-        job_id,
-        retry_count + 1,
-        max_retries,
-        source_url,
-    )
-    persisted = _finalize_image_job_result_persistence(job_id, job, retry_input)
-    persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
-    if not persisted_url and isinstance(persisted, dict):
-        persisted_url = _extract_job_result_url(persisted)
-    if persisted_url and _is_durable_persisted_media_url(persisted_url):
-        _set_image_job(job_id, result=persisted, status="succeeded", finished_at=now_bj_iso())
-        with IMAGE_JOB_LOCK:
-            updated = dict(IMAGE_JOB_STORE.get(job_id) or job)
+    try:
+        retry_input = dict(result)
+        retry_input["url"] = source_url
+        meta["persistence_retry_count"] = retry_count + 1
+        meta["persistence_retry_at"] = now_bj_iso()
+        meta["needs_persistence_retry"] = True
+        retry_input["metadata"] = meta
+
+        reserved_result = dict(result)
+        reserved_result["metadata"] = dict(meta)
+        _set_image_job(job_id, result=reserved_result)
+
         logger.info(
-            "[ImageJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+            "[ImageJobPersist] retry persistence | job_id=%s attempt=%s/%s source_url=%s",
             job_id,
-            persisted_url,
+            retry_count + 1,
+            max_retries,
+            source_url,
         )
-        return updated
+        persisted = _finalize_image_job_result_persistence(job_id, job, retry_input)
+        persisted_url = str(persisted.get("url") or "").strip() if isinstance(persisted, dict) else ""
+        if not persisted_url and isinstance(persisted, dict):
+            persisted_url = _extract_job_result_url(persisted)
+        if persisted_url and _is_durable_persisted_media_url(persisted_url):
+            _set_image_job(job_id, result=persisted, status="succeeded", finished_at=now_bj_iso())
+            with IMAGE_JOB_LOCK:
+                updated = dict(IMAGE_JOB_STORE.get(job_id) or job)
+            logger.info(
+                "[ImageJobPersist] retry persistence succeeded | job_id=%s persisted_url=%s",
+                job_id,
+                persisted_url,
+            )
+            return updated
 
-    if isinstance(persisted, dict) and persisted != result:
-        _set_image_job(job_id, result=persisted)
-        with IMAGE_JOB_LOCK:
-            return dict(IMAGE_JOB_STORE.get(job_id) or job)
-    return job
+        if isinstance(persisted, dict) and persisted != result:
+            _set_image_job(job_id, result=persisted)
+            with IMAGE_JOB_LOCK:
+                return dict(IMAGE_JOB_STORE.get(job_id) or job)
+        return job
+    finally:
+        _clear_image_callback_persist_inflight(job_id)
 
 
 def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return result
 
+    result = _stage_ephemeral_media_job_result(job_id, job, result, media_kind="video")
     raw_url = _extract_job_result_url(result)
     if not raw_url:
         return result
@@ -5081,6 +5332,14 @@ def _finalize_video_job_result_persistence(job_id: str, job: Dict[str, Any], res
                 pass
 
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        logger.info(
+            "[VideoJobPersist] start | job_id=%s user_id=%s shot_id=%s raw_url=%s metadata_keys=%s",
+            job_id,
+            getattr(current_user, "id", None),
+            req_context.get("shot_id"),
+            raw_url,
+            sorted(list(metadata.keys())) if isinstance(metadata, dict) else [],
+        )
 
         filename_base = _build_persist_filename_base_from_context(req_context, db)
         normalized_url, normalized_meta, oss_uploaded = _persist_remote_video_result(
@@ -5182,8 +5441,20 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
     callback_has_ephemeral_result = bool(callback_result_url) and _is_ephemeral_provider_media_url(callback_result_url)
 
     updates: Dict[str, Any] = {}
+    first_success_finalize = current_status not in {"succeeded", "completed", "done"}
     if callback_result_url and callback_result_url != current_result_url and not current_has_stable_result:
-        updates["result"] = result
+        if _is_ephemeral_provider_media_url(callback_result_url) and isinstance(result, dict):
+            effective_job = dict(job)
+            effective_job.update(updates)
+            updates["result"] = _stage_ephemeral_media_job_result(
+                job_id,
+                effective_job,
+                dict(result),
+                media_kind="video",
+            )
+            callback_result_url = _extract_job_result_url(updates["result"])
+        else:
+            updates["result"] = result
     elif callback_result_url and current_has_stable_result:
         logger.info(
             "[VideoJob] ignored callback result url because stable result already exists | job_id=%s callback_ticket=%s current_result_url=%s callback_result_url=%s",
@@ -5198,9 +5469,31 @@ def _maybe_finalize_video_job_from_provider_callback(job_id: str, job: Dict[str,
         if not job.get("finished_at"):
             updates["finished_at"] = now_bj_iso()
 
+    if (
+        normalized_status == "succeeded"
+        and isinstance(updates.get("result"), dict)
+        and _extract_job_result_url(updates.get("result"))
+        and first_success_finalize
+    ):
+        early_save: Dict[str, Any] = {
+            "status": updates.get("status") or normalized_status,
+            "result": updates["result"],
+        }
+        if updates.get("finished_at"):
+            early_save["finished_at"] = updates["finished_at"]
+        if provider_task_id:
+            early_save["provider_task_id"] = provider_task_id
+        _set_video_job(job_id, **early_save)
+        with VIDEO_JOB_LOCK:
+            job = dict(VIDEO_JOB_STORE.get(job_id) or job)
+
     if normalized_status == "succeeded":
-        candidate_result = result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
-        if candidate_result:
+        candidate_result = updates.get("result") if isinstance(updates.get("result"), dict) else (
+            result if isinstance(result, dict) else (job.get("result") if isinstance(job.get("result"), dict) else None)
+        )
+        current_result = job.get("result") if isinstance(job.get("result"), dict) else None
+        should_persist_on_callback = first_success_finalize
+        if candidate_result and should_persist_on_callback:
             if _mark_video_callback_persist_inflight(job_id):
                 try:
                     effective_job = dict(job)
@@ -24308,7 +24601,7 @@ def update_shot(
 
     update_data = shot_in.dict(exclude_unset=True)
     update_data = _replace_legacy_temp_urls_in_shot_payload(db, current_user, project, db_shot, update_data)
-    _assert_allowed_shot_media_payload(update_data, db=db)
+    _assert_allowed_shot_media_payload(update_data, db=db, existing_shot=db_shot)
 
     for key, value in update_data.items():
         setattr(db_shot, key, value)

@@ -14806,6 +14806,11 @@ class MediaGenerationService:
                     raise
         except Exception as e:
             _debug_log(f"Download failed: {e}", "error")
+            logger.warning(
+                "[MediaService] remote media download/save failed | url=%s err=%s",
+                url,
+                e,
+            )
         return url
 
     async def _process_veo_image_async(self, url_or_path, aspect_ratio):
