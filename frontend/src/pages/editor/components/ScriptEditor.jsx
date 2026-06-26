@@ -12191,6 +12191,50 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return { subjectNo, subjectType, subjectName };
         };
 
+        const isTableSeparatorLine = (line) => {
+            const trimmed = String(line || '').trim();
+            return /\|\s*:?-{3,}:?/.test(trimmed) || /^[\s\|:\-]*$/.test(trimmed);
+        };
+        const isSubjectIndexHeaderLine = (line) => {
+            const normalized = String(line || '').toLowerCase();
+            return normalized.includes('subject_no') && normalized.includes('subject_type');
+        };
+        const buildRowObjectFromHeadersAndCells = (headers, cells) => (
+            (headers || []).reduce((acc, header, headerIdx) => {
+                const stableHeader = String(header || '').trim();
+                if (!stableHeader) return acc;
+                acc[stableHeader] = cleanCell(cells[headerIdx]);
+                return acc;
+            }, {})
+        );
+        const pushEntryFromPipeCells = ({ headers, cells, sourceLine, sourceBlock, rowIndex }) => {
+            const resolvedHeaders = (Array.isArray(headers) && headers.length)
+                ? headers
+                : [...SUBJECT_INDEX_STANDARD_HEADERS];
+            const resolvedCells = reconcileSceneTableRowCells(
+                Array.isArray(cells) ? cells : cleanMarkdownTableCells(sourceLine),
+                resolvedHeaders
+            );
+            const typeIdx = pickHeaderIndex(resolvedHeaders, [/subject_?type/, /^type$/, /类型/, /类别/]);
+            const noIdx = pickHeaderIndex(resolvedHeaders, [/subject_?no/, /^id$/, /编号/]);
+            const nameIdx = pickHeaderIndex(resolvedHeaders, [/subject_?name_?exact/, /subject_?name_?zh/, /subject_?name_?en/, /subject_?name/, /^name$/, /名称/, /名字/]);
+            const rawType = typeIdx >= 0 ? cleanCell(resolvedCells[typeIdx]) : cleanCell(resolvedCells[1]);
+            const subjectNo = noIdx >= 0 ? cleanCell(resolvedCells[noIdx]) : cleanCell(resolvedCells[0]);
+            const name = nameIdx >= 0
+                ? cleanCell(resolvedCells[nameIdx])
+                : cleanCell(resolvedCells[2] || resolvedCells.find((cell, cellIdx) => cellIdx !== typeIdx && cellIdx !== noIdx && String(cell || '').trim()) || '');
+            pushEntry({
+                rowObject: buildRowObjectFromHeadersAndCells(resolvedHeaders, resolvedCells),
+                fieldOrder: resolvedHeaders,
+                rawType,
+                subjectNo,
+                name,
+                sourceLine,
+                sourceBlock,
+                rowIndex,
+            });
+        };
+
         const entries = [];
         const seen = new Set();
         const pushEntry = ({ rowObject = null, fieldOrder = null, rawType, subjectNo, name, sourceLine, sourceBlock, rowIndex }) => {
@@ -12229,23 +12273,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (parsed?.headers?.length && parsed?.rows?.length) {
             const headers = parsed.headers;
             const typeIdx = pickHeaderIndex(headers, [/subject_?type/, /^type$/, /类型/, /类别/]);
-            const noIdx = pickHeaderIndex(headers, [/subject_?no/, /^id$/, /编号/]);
-            const nameIdx = pickHeaderIndex(headers, [/subject_?name_?exact/, /subject_?name_?zh/, /subject_?name_?en/, /subject_?name/, /^name$/, /名称/, /名字/]);
             if (typeIdx >= 0) {
                 parsed.rows.forEach((row, idx) => {
-                    const rawType = cleanCell(row[typeIdx]);
-                    const subjectNo = noIdx >= 0 ? cleanCell(row[noIdx]) : '';
-                    const name = nameIdx >= 0 ? cleanCell(row[nameIdx]) : cleanCell(row.find((cell, cellIdx) => cellIdx !== typeIdx && cellIdx !== noIdx && String(cell || '').trim()) || '');
-                    const rowObject = headers.reduce((acc, header, headerIdx) => {
-                        acc[String(header || '').trim()] = cleanCell(row[headerIdx]);
-                        return acc;
-                    }, {});
-                    pushEntry({
-                        rowObject,
-                        fieldOrder: headers,
-                        rawType,
-                        subjectNo,
-                        name,
+                    pushEntryFromPipeCells({
+                        headers,
+                        cells: row,
                         sourceLine: `| ${row.map(cleanCell).join(' | ')} |`,
                         sourceBlock: buildMarkdownTable(headers, [row]),
                         rowIndex: idx,
@@ -12254,19 +12286,51 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
+        if (!entries.length) {
+            const pipeLines = source
+                .split('\n')
+                .map((line) => String(line || '').trim())
+                .filter((line) => line.includes('|'));
+            let headers = [...SUBJECT_INDEX_STANDARD_HEADERS];
+            const headerLine = pipeLines.find(isSubjectIndexHeaderLine);
+            if (headerLine) {
+                const parsedHeaders = cleanMarkdownTableCells(headerLine).map((cell) => String(cell || '').trim()).filter(Boolean);
+                if (parsedHeaders.length) headers = parsedHeaders;
+            }
+            pipeLines.forEach((line, idx) => {
+                if (isTableSeparatorLine(line) || isSubjectIndexHeaderLine(line)) return;
+                if (/\bsubject_(?:no|type)\s*=/i.test(line)) return;
+                const cells = reconcileSceneTableRowCells(cleanMarkdownTableCells(line), headers);
+                const firstCell = cleanCell(cells[0] || '');
+                const secondCell = cleanCell(cells[1] || '');
+                if (!firstCell || !secondCell) return;
+                if (['subject_no', 'subject_id', 'id', '编号'].includes(firstCell.toLowerCase())) return;
+                if (!normalizeSubjectIndexTypeForAssetTask(secondCell)) return;
+                pushEntryFromPipeCells({
+                    headers,
+                    cells,
+                    sourceLine: line,
+                    sourceBlock: buildMarkdownTable(headers, [cells]),
+                    rowIndex: idx,
+                });
+            });
+        }
+
         source.split('\n').forEach((line, idx) => {
             const detected = detectSubjectIndexLineType(line);
             if (!detected.isSubjectRow) return;
             const normalizedLine = String(line || '').replace(/^\s*>\s*/, '').replace(/^[-*+]\s+/, '').trim();
-            const cells = normalizedLine.includes('|')
-                ? normalizedLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+            const pipeHeaders = [...SUBJECT_INDEX_STANDARD_HEADERS];
+            const reconciledCells = normalizedLine.includes('|')
+                ? reconcileSceneTableRowCells(cleanMarkdownTableCells(normalizedLine), pipeHeaders)
                 : [];
-            const rawType = getKeyValue(normalizedLine, 'subject_type') || detected.type || cells[1] || '';
-            const subjectNo = getKeyValue(normalizedLine, 'subject_no') || cells[0] || '';
+            const rawType = getKeyValue(normalizedLine, 'subject_type') || detected.type || reconciledCells[1] || '';
+            const subjectNo = getKeyValue(normalizedLine, 'subject_no') || reconciledCells[0] || '';
             const name = getKeyValue(normalizedLine, 'subject_name_exact')
                 || getKeyValue(normalizedLine, 'subject_name_zh')
                 || getKeyValue(normalizedLine, 'subject_name_en')
-                || cells.slice(2).find((cell) => cell && !/^subject_/i.test(cell))
+                || reconciledCells[2]
+                || reconciledCells.slice(2).find((cell) => cell && !/^subject_/i.test(cell))
                 || '';
             const rowObject = {};
             const keyValueMatches = Array.from(normalizedLine.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([^|\n`]*)/g));
@@ -12276,19 +12340,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (!fieldKey) return;
                     rowObject[fieldKey] = String(match?.[2] || '').trim();
                 });
-            }
-            if (!Object.keys(rowObject).length) {
-                rowObject.subject_no = subjectNo;
-                rowObject.subject_type = rawType;
-                rowObject.subject_name_exact = name;
-            } else {
                 if (rowObject.subject_no == null && subjectNo) rowObject.subject_no = subjectNo;
                 if (rowObject.subject_type == null && rawType) rowObject.subject_type = rawType;
                 if (rowObject.subject_name_exact == null && name) rowObject.subject_name_exact = name;
+                pushEntry({
+                    rowObject,
+                    fieldOrder: Object.keys(rowObject),
+                    rawType,
+                    subjectNo,
+                    name,
+                    sourceLine: line,
+                    sourceBlock: line,
+                    rowIndex: idx,
+                });
+                return;
+            }
+            if (reconciledCells.length >= 2) {
+                pushEntryFromPipeCells({
+                    headers: pipeHeaders,
+                    cells: reconciledCells,
+                    sourceLine: line,
+                    sourceBlock: buildMarkdownTable(pipeHeaders, [reconciledCells]),
+                    rowIndex: idx,
+                });
+                return;
             }
             pushEntry({
-                rowObject,
-                fieldOrder: Object.keys(rowObject),
+                rowObject: {
+                    subject_no: subjectNo,
+                    subject_type: rawType,
+                    subject_name_exact: name,
+                },
+                fieldOrder: ['subject_no', 'subject_type', 'subject_name_exact'],
                 rawType,
                 subjectNo,
                 name,
@@ -12517,7 +12600,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const beginEditPhase2RerunEntry = useCallback((entry) => {
         if (!entry?.key) return;
-        const normalizedFields = normalizeSubjectIndexEntryFields(entry?.fields, entry);
+        let fields = (entry?.fields && typeof entry.fields === 'object') ? { ...entry.fields } : {};
+        const sourceSnippet = String(entry?.sourceBlock || entry?.sourceLine || '').trim();
+        if (sourceSnippet) {
+            const reparsedEntries = parseSubjectIndexEntriesForAssetRerun(sourceSnippet);
+            const reparsed = reparsedEntries.find((item) => item.key === entry.key) || reparsedEntries[0];
+            if (reparsed?.fields && typeof reparsed.fields === 'object') {
+                fields = { ...reparsed.fields, ...fields };
+            }
+        }
+        const normalizedFields = normalizeSubjectIndexEntryFields(fields, entry);
         setPhase2RerunModal((prev) => ({
             ...prev,
             editingSubjectKey: entry.key,
@@ -12529,7 +12621,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 },
             },
         }));
-    }, []);
+    }, [parseSubjectIndexEntriesForAssetRerun]);
 
     const updatePhase2RerunEntryEditField = useCallback((entryKey, fieldKey, value) => {
         if (!entryKey || !fieldKey) return;
