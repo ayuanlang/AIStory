@@ -1084,6 +1084,7 @@ VIDEO_JOB_TASKS: Dict[str, Any] = {}
 
 IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
 VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
+_JOB_TIMEOUT_CHECK_STATUSES = frozenset({"queued", "running", "waiting_callback", "callback_processing"})
 
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
@@ -1356,6 +1357,29 @@ def _run_callback_compensation_once() -> None:
         if not callback_ticket:
             continue
 
+        if kind == "image":
+            job = _maybe_finalize_stuck_job(
+                kind="image",
+                job_id=job_id,
+                job=job,
+                set_job_func=_set_image_job,
+                task_store=IMAGE_JOB_TASKS,
+                lock=IMAGE_JOB_LOCK,
+                timeout_seconds=IMAGE_JOB_MAX_RUNNING_SECONDS,
+            )
+        else:
+            job = _maybe_finalize_stuck_job(
+                kind="video",
+                job_id=job_id,
+                job=job,
+                set_job_func=_set_video_job,
+                task_store=VIDEO_JOB_TASKS,
+                lock=VIDEO_JOB_LOCK,
+                timeout_seconds=VIDEO_JOB_MAX_RUNNING_SECONDS,
+            )
+        if _normalize_generation_status(job.get("status")) == "failed":
+            continue
+
         upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
         if "callback_pending" in upstream_state:
             mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
@@ -1393,6 +1417,40 @@ def _run_callback_compensation_once() -> None:
 
         retry_attempts = _safe_int(job.get("callback_submit_retries"), 0)
         if retry_attempts >= max_submit_retries:
+            if elapsed_seconds >= retry_after_seconds:
+                max_running_seconds = (
+                    VIDEO_JOB_MAX_RUNNING_SECONDS if kind == "video" else IMAGE_JOB_MAX_RUNNING_SECONDS
+                )
+                timeout_message = (
+                    f"{kind} job callback wait exhausted after {elapsed_seconds}s "
+                    f"(retries={retry_attempts}/{max_submit_retries}, limit={max_running_seconds}s)"
+                )
+                if kind == "image":
+                    _set_image_job(
+                        job_id,
+                        status="failed",
+                        finished_at=now_bj_iso(),
+                        error=timeout_message,
+                        upstream_submit_state="callback_wait_exhausted",
+                    )
+                else:
+                    _set_video_job(
+                        job_id,
+                        status="failed",
+                        finished_at=now_bj_iso(),
+                        error=timeout_message,
+                        upstream_submit_state="callback_wait_exhausted",
+                    )
+                mark_generation_task_status_external(job_id, status="failed", error=timeout_message)
+                logger.warning(
+                    "[%sJob] callback wait exhausted | job_id=%s callback_ticket=%s elapsed_seconds=%s retries=%s/%s",
+                    "Image" if kind == "image" else "Video",
+                    job_id,
+                    callback_ticket,
+                    elapsed_seconds,
+                    retry_attempts,
+                    max_submit_retries,
+                )
             continue
 
         queue_row = get_generation_task_status(job_id) or {}
@@ -36007,6 +36065,14 @@ def _resolve_job_elapsed_seconds(job: Dict[str, Any]) -> Optional[int]:
     return max(0, int((datetime.utcnow() - anchor_dt).total_seconds()))
 
 
+def _job_is_subject_to_running_timeout(job: Dict[str, Any]) -> bool:
+    status = _normalize_generation_status(job.get("status"))
+    upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
+    if status in _JOB_TIMEOUT_CHECK_STATUSES:
+        return True
+    return "callback_pending" in upstream_state
+
+
 def _maybe_finalize_stuck_job(
     *,
     kind: str,
@@ -36017,25 +36083,40 @@ def _maybe_finalize_stuck_job(
     lock: threading.Lock,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
-    status = str(job.get("status") or "").strip().lower()
-    if status not in {"queued", "running"}:
+    if not _job_is_subject_to_running_timeout(job):
         return job
 
     elapsed_seconds = _resolve_job_elapsed_seconds(job)
     if elapsed_seconds is None or elapsed_seconds < timeout_seconds:
         return job
 
-    timeout_message = f"{kind} job timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
-    set_job_func(
-        job_id,
-        status="failed",
-        finished_at=now_bj_iso(),
-        error=timeout_message,
+    status = _normalize_generation_status(job.get("status"))
+    upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
+    is_callback_wait = (
+        status in {"waiting_callback", "callback_processing"}
+        or "callback_pending" in upstream_state
     )
+    if is_callback_wait:
+        timeout_message = (
+            f"{kind} job callback wait timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
+        )
+        upstream_submit_state = "callback_wait_timeout"
+    else:
+        timeout_message = f"{kind} job timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
+        upstream_submit_state = None
 
-    with lock:
-        task_ref = task_store.get(job_id)
-    _cancel_generation_task_ref(task_ref or job_id, user_id=job.get("user_id"), reason=f"{kind} job timed out")
+    update_fields: Dict[str, Any] = {
+        "status": "failed",
+        "finished_at": now_bj_iso(),
+        "error": timeout_message,
+    }
+    if upstream_submit_state:
+        update_fields["upstream_submit_state"] = upstream_submit_state
+    set_job_func(job_id, **update_fields)
+
+    from app.services.generation_task_queue import mark_generation_task_status_external
+
+    mark_generation_task_status_external(job_id, status="failed", error=timeout_message)
 
     with lock:
         updated = dict((IMAGE_JOB_STORE if kind == "image" else VIDEO_JOB_STORE).get(job_id) or {})
@@ -36233,24 +36314,16 @@ def get_generate_image_job_status(
     owner_username = str(job.get("username") or "").strip()
     owner_username_norm = owner_username.lower()
 
+    job = _maybe_finalize_stuck_job(
+        kind="image",
+        job_id=job_id,
+        job=job,
+        set_job_func=_set_image_job,
+        task_store=IMAGE_JOB_TASKS,
+        lock=IMAGE_JOB_LOCK,
+        timeout_seconds=IMAGE_JOB_MAX_RUNNING_SECONDS,
+    )
     image_status = str(job.get("status") or "").strip().lower()
-    if image_status in {"queued", "running"}:
-        elapsed_seconds = _resolve_job_elapsed_seconds(job)
-        if elapsed_seconds is not None and elapsed_seconds >= IMAGE_JOB_MAX_RUNNING_SECONDS:
-            timeout_message = f"image job timed out after {elapsed_seconds}s (limit={IMAGE_JOB_MAX_RUNNING_SECONDS}s)"
-            _set_image_job(
-                job_id,
-                status="failed",
-                finished_at=now_bj_iso(),
-                error=timeout_message,
-            )
-            with IMAGE_JOB_LOCK:
-                task_ref = IMAGE_JOB_TASKS.get(job_id)
-            _cancel_generation_task_ref(task_ref or job_id, user_id=owner_id, reason=timeout_message)
-            with IMAGE_JOB_LOCK:
-                job = dict(IMAGE_JOB_STORE.get(job_id) or job)
-
-    current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
     current_username_norm = current_username.lower()
     is_superuser = bool(current_claims.get("is_superuser"))
@@ -39148,22 +39221,16 @@ def get_generate_video_job_status(
     owner_username = str(job.get("username") or "").strip()
     owner_username_norm = owner_username.lower()
 
+    job = _maybe_finalize_stuck_job(
+        kind="video",
+        job_id=job_id,
+        job=job,
+        set_job_func=_set_video_job,
+        task_store=VIDEO_JOB_TASKS,
+        lock=VIDEO_JOB_LOCK,
+        timeout_seconds=VIDEO_JOB_MAX_RUNNING_SECONDS,
+    )
     video_status = str(job.get("status") or "").strip().lower()
-    if video_status in {"queued", "running"}:
-        elapsed_seconds = _resolve_job_elapsed_seconds(job)
-        if elapsed_seconds is not None and elapsed_seconds >= VIDEO_JOB_MAX_RUNNING_SECONDS:
-            timeout_message = f"video job timed out after {elapsed_seconds}s (limit={VIDEO_JOB_MAX_RUNNING_SECONDS}s)"
-            _set_video_job(
-                job_id,
-                status="failed",
-                finished_at=now_bj_iso(),
-                error=timeout_message,
-            )
-            with VIDEO_JOB_LOCK:
-                task_ref = VIDEO_JOB_TASKS.get(job_id)
-            _cancel_generation_task_ref(task_ref or job_id, user_id=owner_id, reason=timeout_message)
-            with VIDEO_JOB_LOCK:
-                job = dict(VIDEO_JOB_STORE.get(job_id) or job)
 
     current_user_id = current_claims.get("user_id")
     current_username = str(current_claims.get("username") or "").strip()
