@@ -8126,6 +8126,14 @@ async def _run_scene_markdown_node_per_scene(
                         scene_text = _extract_analysis_text_from_result(result).strip()
                         validation_error = validate_single_scene_markdown_for_orchestration(scene_text, unit.scene_id)
                         if validation_error:
+                            logger.warning(
+                                "[scene_markdown] validation failed | scene_id=%s scene_order=%s error=%s output_chars=%s output_preview=%s",
+                                unit.scene_id,
+                                index,
+                                validation_error,
+                                len(scene_text),
+                                scene_text[:500],
+                            )
                             raise HTTPException(
                                 status_code=422,
                                 detail=f"{validation_error}:{unit.scene_id}",
@@ -8254,6 +8262,7 @@ async def _run_scene_markdown_node_per_scene(
 
     indexed_scene_units = list(enumerate(scene_units, start=1))
     success_by_index: Dict[int, Tuple[int, str, str, Any, int]] = {}
+    scene_failure_codes: Dict[str, str] = {}
     pending_units = indexed_scene_units
 
     for batch_round in range(SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS + 1):
@@ -8278,6 +8287,8 @@ async def _run_scene_markdown_node_per_scene(
         for (index, unit), outcome in zip(pending_units, round_outcomes):
             if isinstance(outcome, Exception):
                 next_pending.append((index, unit))
+                failure_code = _scene_orchestration_error_code(outcome, unit.scene_id)
+                scene_failure_codes[str(unit.scene_id)] = failure_code
                 logger.error(
                     "[scene_markdown] scene orchestration failed | scene_id=%s scene_order=%s project_id=%s episode_id=%s error=%s",
                     unit.scene_id,
@@ -8293,11 +8304,16 @@ async def _run_scene_markdown_node_per_scene(
     failed_scene_reports: List[Dict[str, Any]] = []
     for index, unit in indexed_scene_units:
         if index not in success_by_index:
+            raw_failure_code = str(
+                scene_failure_codes.get(str(unit.scene_id))
+                or "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
+            ).strip()
+            error_code = raw_failure_code.split(":", 1)[0] if raw_failure_code else "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
             failed_scene_reports.append(
                 {
                     "scene_id": str(unit.scene_id),
                     "scene_order": int(index),
-                    "error_code": "SCENE_MARKDOWN_ORCHESTRATION_FAILED",
+                    "error_code": error_code,
                 }
             )
 
@@ -11207,7 +11223,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             or "entity_design" in prompt_file_lower
             or "subject_generation" in prompt_file_lower
             or mode_lower.startswith("2_pass_generate_assets")
-            or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats"}
+            or mode_lower in {"entity_design", "beats_generation", "scene_planning_beats", "scene_beats_only"}
         )
 
         def _trim_to_scenes_block(raw_text: Any) -> str:

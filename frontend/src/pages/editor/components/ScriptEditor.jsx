@@ -1818,6 +1818,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!normalized) {
             return '';
         }
+        if (stable.startsWith('{') && stable.includes('SCENE_MARKDOWN_PARTIAL_FAILURE')) {
+            try {
+                const parsed = JSON.parse(stable);
+                const failedScenes = Array.isArray(parsed?.failed_scenes) ? parsed.failed_scenes : [];
+                const failedCount = Number(parsed?.failed_count) || failedScenes.length;
+                const totalCount = Number(parsed?.total_count) || failedCount;
+                const sceneDetails = failedScenes
+                    .map((item) => {
+                        const sceneId = String(item?.scene_id || '').trim();
+                        const errorCode = String(item?.error_code || 'SCENE_MARKDOWN_ORCHESTRATION_FAILED').trim();
+                        return sceneId ? `${sceneId}(${errorCode})` : errorCode;
+                    })
+                    .filter(Boolean)
+                    .join(', ');
+                return t(
+                    `场景编排失败：${failedCount}/${totalCount} 场未通过校验。${sceneDetails ? `失败场景：${sceneDetails}。` : ''}常见原因：LLM 未返回含 Scene ID 的 Scenes Table、Scene ID 不匹配，或返回了 Subject Index。系统将尝试逐场重试。`,
+                    `Scene beats orchestration failed: ${failedCount}/${totalCount} scene(s) did not pass validation.${sceneDetails ? ` Failed scenes: ${sceneDetails}.` : ''} Common causes: missing Scenes Table with Scene ID, Scene ID mismatch, or Subject Index returned instead. Sequential per-scene retry will be attempted.`
+                );
+            } catch (_) {
+                // fall through to generic handling
+            }
+        }
+        if (
+            normalized.includes('scene_markdown_partial_failure')
+            || normalized.includes('scene_markdown_orchestration_failed')
+        ) {
+            return t(
+                '场景编排失败：后端并行编排未返回有效的 Scenes Table。请检查 Stage 2.1 资产清单是否完整，或稍后重试单场重排。',
+                'Scene beats orchestration failed: backend parallel orchestration did not return valid Scenes Table output. Verify Stage 2.1 Subject Index is complete, or retry a single scene.'
+            );
+        }
         if (
             normalized.includes('analysis_output_truncated')
             || normalized.includes('truncated')
@@ -6624,6 +6655,79 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             });
 
+            const runSequentialSceneFallback = async (reason = '') => {
+                if (reason) {
+                    onLog?.(`[${label}] ${reason}`, 'warning');
+                }
+                onLog?.(
+                    `[${label}] falling back to sequential per-scene orchestration for ${orchestrationSceneCount} scene(s).`,
+                    'warning'
+                );
+                setAnalysisFlowStatus({
+                    phase: 'scene_beats',
+                    message: t(
+                        `并行编排未成功，正在逐场生成场景编排（共 ${orchestrationSceneCount} 场）...`,
+                        `Parallel orchestration did not succeed; generating scene beats sequentially (${orchestrationSceneCount} scenes)...`
+                    ),
+                });
+
+                const validatedOutputs = [];
+                let sequentialLastResult = null;
+                for (const unit of sceneUnits) {
+                    const sceneId = String(unit?.sceneId || '').trim();
+                    if (!sceneId) continue;
+                    const sceneLabel = `${label} [${sceneId}]`;
+                    const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
+                    const singleSceneBody = [
+                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。`,
+                        buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
+                    ].join('\n\n');
+                    let sceneAttempt = null;
+                    for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
+                        if (fallbackAttempt > 0) {
+                            onLog?.(
+                                `[${sceneLabel}] validation failed, auto retry ${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}...`,
+                                'warning'
+                            );
+                        }
+                        const attempt = await runSingleStage2_2Attempt({
+                            attemptLabel: sceneLabel,
+                            attemptUserInputBody: singleSceneBody,
+                            attemptFinalUserInput: singleSceneBody,
+                            fallbackAttempt,
+                            disableEpisodeRecovery: shouldDisableEpisodeRecovery,
+                        });
+                        if (attempt.stage2_2Check?.ok) {
+                            sceneAttempt = attempt;
+                            break;
+                        }
+                        lastError = attempt.stage2_2Check?.reason || lastError;
+                    }
+                    if (!sceneAttempt?.stage2_2Check?.ok) {
+                        throw new Error(lastError || `${sceneLabel} failed during sequential fallback.`);
+                    }
+                    sequentialLastResult = sceneAttempt.stage2_2Result;
+                    validatedOutputs.push({
+                        sceneId,
+                        sceneOrder: unit?.sceneOrder,
+                        markdown: sceneAttempt.stage2_2Check.normalizedText,
+                    });
+                }
+
+                const sceneMarkdownPatchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
+                    validatedOutputs,
+                    sceneUnits
+                );
+                return {
+                    perSceneParallel: true,
+                    sceneMarkdownPatchMap,
+                    stage2_2Text: mergeStage2_2SceneTableOutputs(validatedOutputs.map((item) => item.markdown)),
+                    stage2_2Result: sequentialLastResult,
+                    stage2_2Check: { ok: true, normalizedText: '' },
+                };
+            };
+
+            let parallelOrchestrationFailed = false;
             for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
                 if (fallbackAttempt > 0) {
                     onLog?.(
@@ -6638,13 +6742,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ),
                     });
                 }
-                const attempt = await runSingleStage2_2Attempt({
-                    attemptLabel: `${label} (sync-orchestration)`,
-                    attemptUserInputBody: stage2_2UserInputBody,
-                    attemptFinalUserInput: finalStage2_2UserInput,
-                    fallbackAttempt,
-                    disableEpisodeRecovery: true,
-                });
+                let attempt;
+                try {
+                    attempt = await runSingleStage2_2Attempt({
+                        attemptLabel: `${label} (sync-orchestration)`,
+                        attemptUserInputBody: stage2_2UserInputBody,
+                        attemptFinalUserInput: finalStage2_2UserInput,
+                        fallbackAttempt,
+                        disableEpisodeRecovery: true,
+                    });
+                } catch (orchErr) {
+                    parallelOrchestrationFailed = true;
+                    lastError = orchErr?.message || String(orchErr || '');
+                    break;
+                }
                 const perSceneOutputs = extractPerSceneOutputsFromResult(attempt.stage2_2Result);
                 if (attempt.stage2_2Result?.meta?.recovered_from_episode_poll) {
                     lastError = t(
@@ -6697,7 +6808,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     `${label} did not return valid per-scene orchestration outputs.`
                 );
             }
-            throw new Error(lastError || `${label} failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+            return runSequentialSceneFallback(
+                parallelOrchestrationFailed
+                    ? t('后端并行编排请求失败，正在逐场重试。', 'Backend parallel orchestration request failed; retrying scenes sequentially.')
+                    : t('后端并行编排校验未通过，正在逐场重试。', 'Backend parallel orchestration validation failed; retrying scenes sequentially.')
+            );
         }
 
         for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
