@@ -9,6 +9,8 @@ import {
     cleanMarkdownTableCells,
     reconcileShotTableRowCells,
     buildShotTableHeaderMap,
+    dedupeShotsForDisplay,
+    dedupeShotRowsForImport,
 } from '../../../lib/sceneTableParser';
 import FunctionApiSelector from '../../../components/FunctionApiSelector';
 import { useFunctionApis } from '../../../components/useFunctionApis';
@@ -4836,6 +4838,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 filtered = filtered.filter((shot) => String(shot?.shot_id || '').toUpperCase().includes(normalizedShotId));
             }
 
+            filtered = dedupeShotsForDisplay(filtered, {
+                sceneId: selectedSceneId === 'all' ? null : selectedSceneId,
+            });
+
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
                 setShots(filtered);
                 setHasShotInitialLoadCompleted(true);
@@ -6095,6 +6101,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
 
         if (parsedShots.length > 0) {
+            const { rows: dedupedParsedShots, warnings: dedupeWarnings } = dedupeShotRowsForImport(parsedShots, {
+                sceneId: selectedSceneId,
+            });
+            dedupeWarnings.forEach((msg) => onLog?.(`Import dedupe: ${msg}`, 'warning'));
+            parsedShots.length = 0;
+            parsedShots.push(...dedupedParsedShots);
+
             let shouldOverwrite = false;
             // Removed redundant currentScene fetch here
             
@@ -6194,7 +6207,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 try {
                     const sceneSpecific = await fetchShots(selectedSceneId);
                     if (sceneSpecific && sceneSpecific.length > 0) {
-                        setShots(sceneSpecific.map(normalizeShotPromptDefaults));
+                        setShots(
+                            dedupeShotsForDisplay(
+                                sceneSpecific.map(normalizeShotPromptDefaults),
+                                { sceneId: selectedSceneId },
+                            ),
+                        );
                     }
                 } catch(e) { console.error("Post-import fetch failed", e); }
 

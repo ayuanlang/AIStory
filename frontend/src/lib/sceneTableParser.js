@@ -405,3 +405,59 @@ export function parseShotsFromMarkdownTable(text) {
     flushRow();
     return { headers, rows, tableLineCount };
 }
+
+export function normalizeShotBusinessId(value) {
+    return String(value || '')
+        .replace(/\*\*/g, '')
+        .replace(/^shot\s*/i, '')
+        .trim()
+        .toUpperCase();
+}
+
+export function dedupeShotRowsForImport(rows, { sceneId = null } = {}) {
+    if (!Array.isArray(rows) || rows.length === 0) return { rows: [], warnings: [] };
+
+    const deduped = [];
+    const indexByKey = new Map();
+    const warnings = [];
+    const stableSceneId = sceneId != null ? String(sceneId) : '';
+
+    rows.forEach((row, zeroIdx) => {
+        if (!row || typeof row !== 'object') return;
+        const idx = zeroIdx + 1;
+        const rawShotId = row['Shot ID'] ?? row.shot_id ?? row['镜头ID'] ?? '';
+        const businessId = normalizeShotBusinessId(rawShotId) || `__row_${idx}`;
+        const dedupKey = `${stableSceneId}::${businessId}`;
+        if (indexByKey.has(dedupKey)) {
+            const prevIdx = indexByKey.get(dedupKey);
+            warnings.push(`duplicate Shot ID '${businessId}' at rows ${prevIdx} and ${idx}; kept row ${idx}`);
+            deduped[prevIdx - 1] = row;
+            return;
+        }
+        indexByKey.set(dedupKey, idx);
+        deduped.push(row);
+    });
+
+    return { rows: deduped, warnings };
+}
+
+export function dedupeShotsForDisplay(shots, { sceneId = null } = {}) {
+    if (!Array.isArray(shots) || shots.length === 0) return [];
+
+    const orderedKeys = [];
+    const bestByKey = new Map();
+
+    for (const shot of shots) {
+        if (!shot) continue;
+        const sid = sceneId != null ? String(sceneId) : String(shot.scene_id || '');
+        const businessId = normalizeShotBusinessId(shot.shot_id);
+        const key = businessId ? `${sid}::${businessId}` : `${sid}::__db_${shot.id}`;
+        if (!bestByKey.has(key)) orderedKeys.push(key);
+        const prev = bestByKey.get(key);
+        const curId = Number(shot.id || 0);
+        const prevId = Number(prev?.id || 0);
+        if (!prev || curId >= prevId) bestByKey.set(key, shot);
+    }
+
+    return orderedKeys.map((key) => bestByKey.get(key)).filter(Boolean);
+}

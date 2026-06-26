@@ -15683,6 +15683,151 @@ def _collect_missing_shot_required_fields(row: Dict[str, Any]) -> List[str]:
     return missing_fields
 
 
+def _normalize_shot_business_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\*\*", "", text)
+    text = re.sub(r"(?i)^shot\s*", "", text)
+    return text.strip().upper()
+
+
+def _extract_shot_row_business_id(row: Dict[str, Any], *, fallback_index: Optional[int] = None) -> str:
+    shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
+    normalized = _normalize_shot_business_id(shot_id)
+    if normalized:
+        return normalized
+    if fallback_index is not None:
+        return f"__row_{int(fallback_index)}"
+    return ""
+
+
+def _shot_record_db_id(shot: Any) -> int:
+    if isinstance(shot, dict):
+        try:
+            return int(shot.get("id") or 0)
+        except Exception:
+            return 0
+    try:
+        return int(getattr(shot, "id", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _shot_record_scene_id(shot: Any) -> int:
+    if isinstance(shot, dict):
+        try:
+            return int(shot.get("scene_id") or 0)
+        except Exception:
+            return 0
+    try:
+        return int(getattr(shot, "scene_id", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _shot_record_business_key(shot: Any) -> str:
+    scene_id = _shot_record_scene_id(shot)
+    if isinstance(shot, dict):
+        business_id = _normalize_shot_business_id(shot.get("shot_id"))
+    else:
+        business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
+    if not business_id:
+        return f"{scene_id}::__db_{_shot_record_db_id(shot)}"
+    return f"{scene_id}::{business_id}"
+
+
+def _dedupe_shot_rows_for_import(
+    rows: List[Dict[str, Any]],
+    *,
+    scene_id: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    deduped: List[Dict[str, Any]] = []
+    index_by_key: Dict[str, int] = {}
+    warnings: List[str] = []
+    stable_scene_id = int(scene_id or 0)
+
+    for idx, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        business_id = _extract_shot_row_business_id(row, fallback_index=idx)
+        dedup_key = f"{stable_scene_id}::{business_id}"
+        if dedup_key in index_by_key:
+            prev_idx = index_by_key[dedup_key]
+            warnings.append(
+                f"duplicate Shot ID '{business_id}' at rows {prev_idx} and {idx}; kept row {idx}"
+            )
+            deduped[index_by_key[dedup_key] - 1] = row
+            continue
+        index_by_key[dedup_key] = len(deduped) + 1
+        deduped.append(row)
+
+    return deduped, warnings
+
+
+def _dedupe_active_shot_records_for_display(shots: List[Any]) -> List[Any]:
+    if not shots:
+        return []
+    ordered_keys: List[str] = []
+    best_by_key: Dict[str, Any] = {}
+    for shot in shots:
+        key = _shot_record_business_key(shot)
+        if key not in best_by_key:
+            ordered_keys.append(key)
+        existing = best_by_key.get(key)
+        if existing is None or _shot_record_db_id(shot) >= _shot_record_db_id(existing):
+            best_by_key[key] = shot
+    return [best_by_key[key] for key in ordered_keys if key in best_by_key]
+
+
+def _soft_delete_duplicate_active_shots_in_db(
+    db: Session,
+    *,
+    scene_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+) -> int:
+    filters = [_active_shot_clause()]
+    if scene_id is not None:
+        filters.append(Shot.scene_id == int(scene_id))
+    if episode_id is not None:
+        filters.append(Shot.episode_id == int(episode_id))
+
+    shots = db.query(Shot).filter(*filters).order_by(Shot.id.asc()).all()
+    if not shots:
+        return 0
+
+    grouped: Dict[str, List[Shot]] = {}
+    for shot in shots:
+        business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
+        if not business_id:
+            continue
+        key = f"{int(getattr(shot, 'scene_id', 0) or 0)}::{business_id}"
+        grouped.setdefault(key, []).append(shot)
+
+    duplicate_ids: List[int] = []
+    for group in grouped.values():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda item: int(getattr(item, "id", 0) or 0))
+        duplicate_ids.extend(int(item.id) for item in group[:-1])
+
+    if not duplicate_ids:
+        return 0
+
+    now = now_bj_iso()
+    db.query(Shot).filter(Shot.id.in_(duplicate_ids)).update(
+        {Shot.is_deleted: True, Shot.deleted_at: now},
+        synchronize_session=False,
+    )
+    logger.info(
+        "[shot_import.dedup] soft_deleted duplicate active shots count=%s scene_id=%s episode_id=%s",
+        len(duplicate_ids),
+        scene_id,
+        episode_id,
+    )
+    return len(duplicate_ids)
+
+
 def _escape_shot_markdown_cell(value: Any) -> str:
     if value is None:
         return ""
@@ -15769,7 +15914,8 @@ def _validate_shot_rows_or_raise(
             detail += f"; and {len(row_errors) - 5} more rows"
         raise HTTPException(status_code=status_code, detail=f"{source_label} failed structural validation: {detail}")
 
-    return normalized_rows
+    deduped_rows, _ = _dedupe_shot_rows_for_import(normalized_rows)
+    return deduped_rows
 
 
 def _validate_shot_rows_for_apply_with_tolerance(
@@ -15816,7 +15962,11 @@ def _validate_shot_rows_for_apply_with_tolerance(
             detail += f"; and {len(skipped_errors) - 5} more rows"
         raise HTTPException(status_code=status_code, detail=f"{source_label} failed structural validation: {detail}")
 
-    return normalized_rows, skipped_errors
+    deduped_rows, dedupe_warnings = _dedupe_shot_rows_for_import(normalized_rows)
+    for warning in dedupe_warnings:
+        skipped_errors.append(f"dedupe: {warning}")
+
+    return deduped_rows, skipped_errors
 
 
 def _resolve_shots_data_for_apply(
@@ -22596,9 +22746,11 @@ def read_episode_shots(
             Shot.technical_notes.label("technical_notes"),
         )
         rows = compact_query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
-        return [_build_compact_shot_payload(row, db) for row in rows]
+        deduped_rows = _dedupe_active_shot_records_for_display(rows)
+        return [_build_compact_shot_payload(row, db) for row in deduped_rows]
 
     shots = query.order_by(Shot.id).offset(safe_skip).limit(safe_limit).all()
+    shots = _dedupe_active_shot_records_for_display(shots)
     repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
     return [_refresh_shot_media_urls(shot, db) for shot in repaired]
 
@@ -24970,6 +25122,18 @@ def _import_scene_shot_rows_to_db(
     """
     skipped_row_errors = list(skipped_row_errors or [])
 
+    locked_scene = db.query(Scene).filter(Scene.id == scene_id).with_for_update().first()
+    if not locked_scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    deduped_shots_data, dedupe_warnings = _dedupe_shot_rows_for_import(
+        list(shots_data or []),
+        scene_id=scene_id,
+    )
+    for warning in dedupe_warnings:
+        skipped_row_errors.append(f"dedupe: {warning}")
+    shots_data = deduped_shots_data
+
     # 1) Extract and normalize associated entities text only (no auto-create).
     try:
         if shots_data:
@@ -25181,8 +25345,11 @@ def _import_scene_shot_rows_to_db(
         db.add(shot)
 
     db.commit()
+    _soft_delete_duplicate_active_shots_in_db(db, scene_id=scene_id)
+    db.commit()
 
     applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
+    applied_shots = _dedupe_active_shot_records_for_display(applied_shots)
     if skipped_row_errors:
         try:
             for shot in applied_shots:
@@ -25302,6 +25469,7 @@ def read_shots(
         Shot.scene_id == scene_id,
         _active_shot_clause(),
     ).all()
+    shots = _dedupe_active_shot_records_for_display(shots)
     repaired = _repair_shots_media_urls_from_assets(db, current_user, project, shots)
     return [_refresh_shot_media_urls(shot, db) for shot in repaired]
 
