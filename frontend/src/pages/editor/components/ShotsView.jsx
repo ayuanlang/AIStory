@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -4868,6 +4868,91 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [activeEpisode?.id, selectedSceneId, sceneCodeFilter, shotIdFilter, normalizeShotPromptDefaults]);
 
+    const syncShotVideoAfterOssPersist = useCallback(async ({
+        shotId,
+        jobId = '',
+        initialUrl = '',
+        maxWaitMs = EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS,
+    } = {}) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return false;
+
+        const resolveLocalShot = () => (
+            (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
+            || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+            || { id: stableShotId }
+        );
+
+        const applyPersistedShot = async (shotRecord) => {
+            if (!shotRecord || !isShotVideoOssPersistComplete(shotRecord)) return false;
+            const normalized = normalizeShotPromptDefaults(shotRecord);
+            setEditingShot((prev) => (prev && String(prev.id) === stableShotId ? { ...prev, ...normalized } : prev));
+            setMediaPersistGraceRefreshSeq((seq) => seq + 1);
+            refreshShotAssetsMeta();
+            await refreshShots();
+            return true;
+        };
+
+        const startedAt = Date.now();
+        const stableJobId = String(jobId || '').trim();
+
+        while (Date.now() - startedAt < maxWaitMs) {
+            if (stableJobId) {
+                try {
+                    const status = await getVideoGenerationJobStatus(stableJobId);
+                    const resultUrl = extractVideoJobResultUrl(status);
+                    const resultMeta = status?.result?.metadata && typeof status.result.metadata === 'object'
+                        ? status.result.metadata
+                        : {};
+                    if (
+                        resultUrl
+                        && (
+                            isDurablePersistedMediaUrl(resultUrl, resultMeta)
+                            || resultMeta.oss_uploaded_success === true
+                        )
+                    ) {
+                        const merged = mergeShotVideoOssPersistState(resolveLocalShot(), {
+                            videoUrl: resultUrl,
+                            ossUploaded: true,
+                        });
+                        if (await applyPersistedShot(merged)) {
+                            onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
+                            return true;
+                        }
+                    }
+                } catch (syncErr) {
+                    console.warn('[syncShotVideoAfterOssPersist] job poll failed:', syncErr);
+                }
+            }
+
+            try {
+                const latestShot = await fetchShot(stableShotId);
+                if (latestShot?.id && await applyPersistedShot(latestShot)) {
+                    onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
+                    return true;
+                }
+            } catch (syncErr) {
+                console.warn('[syncShotVideoAfterOssPersist] fetchShot failed:', syncErr);
+            }
+
+            const localShot = resolveLocalShot();
+            const localUrl = String(localShot?.video_url || initialUrl || '').trim();
+            if (localUrl && isDurablePersistedMediaUrl(localUrl, parseShotTechnicalNotes(localShot?.technical_notes)?.video_metadata)) {
+                const merged = mergeShotVideoOssPersistState(localShot, { videoUrl: localUrl, ossUploaded: true });
+                if (await applyPersistedShot(merged)) {
+                    onLog?.(t('视频已写入 OSS，界面已刷新。', 'Video persisted to OSS; UI refreshed.'), 'success');
+                    return true;
+                }
+            }
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS);
+            });
+        }
+
+        return false;
+    }, [normalizeShotPromptDefaults, onLog, refreshShotAssetsMeta, refreshShots, t]);
+
     useEffect(() => {
         setHasShotInitialLoadCompleted(false);
         allEpisodeShotsRef.current = [];
@@ -5193,7 +5278,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     }
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
-                                    if (shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                }
+                                if (serverBoundVideoUrl && shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
+                                    const synced = await syncShotVideoAfterOssPersist({
+                                        shotId: stableShotId,
+                                        jobId,
+                                        initialUrl: serverBoundVideoUrl,
+                                    });
+                                    if (!synced) {
                                         onLog?.(
                                             t(
                                                 '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
@@ -5221,13 +5313,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     setEditingShot(prev => (prev && String(prev.id) === stableShotId ? { ...prev, ...newData } : prev));
                                     onLog?.(`Recovered video generation completed for shot ${stableShotId}.`, 'success');
                                     if (shotVideoNeedsOssPersist({ id: stableShotId, video_url: serverBoundVideoUrl })) {
-                                        onLog?.(
-                                            t(
-                                                '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
-                                                'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
-                                            ),
-                                            'warning'
-                                        );
+                                        const synced = await syncShotVideoAfterOssPersist({
+                                            shotId: stableShotId,
+                                            jobId,
+                                            initialUrl: serverBoundVideoUrl,
+                                        });
+                                        if (!synced) {
+                                            onLog?.(
+                                                t(
+                                                    '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
+                                                    'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
+                                                ),
+                                                'warning'
+                                            );
+                                        }
                                     }
                                     releaseShotVideoUi({ shotId: stableShotId, jobId });
                                     refreshShotAssetsMeta();
@@ -5292,10 +5391,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         onUpdateShot,
         readVideoJobStateStorage,
         releaseShotVideoUi,
+        refreshShotAssetsMeta,
         refreshShots,
         setEditingShot,
         setPendingVideoJob,
         setShotGeneratingState,
+        syncShotVideoAfterOssPersist,
+        t,
         writeVideoJobStateStorage,
     ]);
 
@@ -8109,7 +8211,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 
                 onLog?.('Video Generated', 'success');
                 showNotification('Video Generated', 'success');
-                notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
 
                 // 2. Update Server & Master List (Async persistence)
                 try {
@@ -8121,6 +8222,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 refreshShotAssetsMeta();
                 Promise.resolve(refreshShots()).catch(() => {});
                 setVideoStatuses(prev => { const n = {...prev}; delete n[targetShotId]; return n; });
+
+                const needsOssSync = shotVideoNeedsOssPersist({ ...shotSnapshot, ...newData });
+                if (needsOssSync) {
+                    void syncShotVideoAfterOssPersist({
+                        shotId: targetShotId,
+                        jobId: createdVideoJobId,
+                        initialUrl: resolvedVideoUrl,
+                    }).then((synced) => {
+                        if (!synced) {
+                            notifyShotMediaOssPersistWarning({ ...shotSnapshot, video_url: resolvedVideoUrl }, 'video');
+                        }
+                    });
+                }
                 }
             }
 
@@ -8277,6 +8391,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     : { video_url: persistedUrl };
 
             setEditingShot((prev) => (prev && String(prev.id) === targetShotId ? { ...prev, ...patch } : prev));
+            setMediaPersistGraceRefreshSeq((seq) => seq + 1);
             try {
                 await onUpdateShot(targetShotId, patch);
             } catch (updateErr) {

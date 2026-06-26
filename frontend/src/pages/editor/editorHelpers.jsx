@@ -2464,6 +2464,60 @@ export const shotNeedsAnyOssPersistGraceWaitMs = (shot) => {
     return active.length ? Math.min(...active) : 0;
 };
 
+export const EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS = 120_000;
+export const EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS = 2500;
+
+export const extractVideoJobResultUrl = (statusPayload) => {
+    const root = statusPayload && typeof statusPayload === 'object' ? statusPayload : {};
+    const nested = root.result && typeof root.result === 'object' ? root.result : {};
+    return String(
+        nested.url
+        || nested.video_url
+        || nested.videoUrl
+        || root.url
+        || root.video_url
+        || root.videoUrl
+        || ''
+    ).trim();
+};
+
+export const mergeShotVideoOssPersistState = (shotLike, patch = {}) => {
+    const merged = { ...(shotLike && typeof shotLike === 'object' ? shotLike : {}) };
+    const videoUrl = String(patch.videoUrl || patch.video_url || merged.video_url || '').trim();
+    if (videoUrl) merged.video_url = videoUrl;
+
+    const tech = parseShotTechnicalNotes(
+        patch.technicalNotes !== undefined
+            ? patch.technicalNotes
+            : (patch.technical_notes !== undefined ? patch.technical_notes : merged.technical_notes)
+    );
+
+    const ossUploaded = patch.ossUploaded !== false && patch.oss_uploaded !== false;
+    if (ossUploaded) {
+        tech.video_oss_uploaded = true;
+        const meta = tech.video_metadata && typeof tech.video_metadata === 'object'
+            ? { ...tech.video_metadata }
+            : {};
+        delete meta.ephemeral_binding;
+        delete meta.needs_persistence_retry;
+        delete meta.remote_localization_failed;
+        meta.oss_uploaded_success = true;
+        tech.video_metadata = meta;
+    }
+
+    if (patch.technicalNotes !== undefined && patch.technicalNotes && typeof patch.technicalNotes === 'object') {
+        merged.technical_notes = patch.technicalNotes;
+    } else if (patch.technical_notes !== undefined) {
+        merged.technical_notes = patch.technical_notes;
+    } else {
+        merged.technical_notes = JSON.stringify(tech);
+    }
+
+    return merged;
+};
+
+export const isShotVideoOssPersistComplete = (shotLike) => !shotVideoNeedsOssPersist(shotLike);
+
 export const parseEntityCustomAttributes = (rawAttrs) => {
     if (rawAttrs && typeof rawAttrs === 'object') return rawAttrs;
     try {

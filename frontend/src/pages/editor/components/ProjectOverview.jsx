@@ -162,21 +162,10 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
-import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
+import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled } from '../editorConstants';
 export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onRefreshEpisodes, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview' }) => {
     const functionApiConfigs = useFunctionApis();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
-    const resolveVideoSoundFromInfo = (payload) => {
-        const src = (payload && typeof payload === 'object') ? payload : {};
-        const visual = (src.tech_params && src.tech_params.visual_standard && typeof src.tech_params.visual_standard === 'object')
-            ? src.tech_params.visual_standard
-            : {};
-        const defaults = (src.project_generation_defaults && typeof src.project_generation_defaults === 'object')
-            ? src.project_generation_defaults
-            : {};
-        const candidate = src.video_sound ?? src.sound ?? defaults.sound ?? visual.sound;
-        return candidate === false ? false : true;
-    };
     const resolveProjectSeedFromInfo = (payload) => {
         const src = (payload && typeof payload === 'object') ? payload : {};
         const generation = (src.generation && typeof src.generation === 'object') ? src.generation : {};
@@ -977,7 +966,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                      merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                      merged.tone = normalizeProjectEpisodeTone(merged.tone);
                      merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
-                     merged.video_sound = resolveVideoSoundFromInfo(merged);
+                     merged.video_sound = resolveProjectVideoSoundEnabled(merged);
                      merged.generation_seed = resolveProjectSeedFromInfo(merged);
                      merged.project_share_users = normalizeUserListValues(merged.project_share_users);
                      merged.project_reviewer_users = normalizeUserListValues(merged.project_reviewer_users);
@@ -1385,7 +1374,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     const handleSave = async () => {
         try {
-            const resolvedVideoSound = info.video_sound === false ? false : true;
+            const resolvedVideoSound = resolveProjectVideoSoundEnabled(info);
             const seedParsed = Number(info.generation_seed);
             const resolvedSeed = Number.isFinite(seedParsed) && seedParsed > 0
                 ? Math.trunc(seedParsed)
@@ -2404,7 +2393,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         <label className="text-xs text-muted-foreground uppercase font-bold">{t('视频声音', 'Video Sound')}</label>
                         <select
                             className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none"
-                            value={info.video_sound === false ? 'off' : 'on'}
+                            value={resolveProjectVideoSoundEnabled(info) ? 'on' : 'off'}
                             onChange={(e) => updateField('video_sound', e.target.value !== 'off')}
                         >
                             <option value="on">{t('有', 'Enabled')}</option>

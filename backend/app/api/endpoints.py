@@ -8143,6 +8143,15 @@ async def _run_scene_markdown_node_per_scene(
                                 )
 
                         if node_project_id > 0 and node_episode_id > 0:
+                            import_scene_markdown_stage(
+                                task_db,
+                                project_id=node_project_id,
+                                episode_id=node_episode_id,
+                                script_text=scene_text,
+                                script_id=script_id,
+                                partial=True,
+                                target_scene_id=unit.scene_id,
+                            )
                             await _mark_scene_orchestration_status(
                                 task_db,
                                 scene_id=unit.scene_id,
@@ -9538,23 +9547,25 @@ async def run_scene_analysis_flow_node(
                 )
 
             if node_key == "scene_markdown":
-                # Step 4: per-scene parallel orchestration already persisted scene units individually.
+                # Step 4: parallel orchestration imports each scene as soon as LLM returns;
+                # only the single-call path needs a bulk import here.
                 scene_markdown_started_perf = time.perf_counter()
                 per_scene_parallel = isinstance(result, dict) and bool(result.get("per_scene_parallel"))
                 try:
                     import_started_perf = time.perf_counter()
                     if per_scene_parallel:
+                        per_scene_outputs = (result or {}).get("per_scene_outputs") or []
                         logger.info(
-                            "[场景编排2.2] Step 4 skipped merged import; per-scene outputs already persisted | project_id=%s | episode_id=%s | scene_count=%s",
+                            "[场景编排2.2] Step 4 skipped bulk import; per-scene imports completed during orchestration | project_id=%s | episode_id=%s | scene_count=%s",
                             node_project_id,
                             node_episode_id,
-                            len((result or {}).get("per_scene_outputs") or []),
+                            len(per_scene_outputs),
                         )
                         import_result = {
-                            "scene_count": len((result or {}).get("per_scene_outputs") or []),
+                            "scene_count": len(per_scene_outputs),
                             "scene_ids": [
                                 str(item.get("scene_id") or "").strip()
-                                for item in ((result or {}).get("per_scene_outputs") or [])
+                                for item in per_scene_outputs
                                 if str(item.get("scene_id") or "").strip()
                             ],
                             "parse_source": "per_scene_parallel",
@@ -13946,12 +13957,30 @@ def _to_positive_int_or_none(value: Any) -> Optional[int]:
     return parsed if parsed > 0 else None
 
 
+def _resolve_project_video_sound(global_info: Any, *, default: bool = True) -> bool:
+    gi = global_info if isinstance(global_info, dict) else {}
+    defaults_raw = gi.get("project_generation_defaults")
+    defaults = defaults_raw if isinstance(defaults_raw, dict) else {}
+    tech_params = gi.get("tech_params") if isinstance(gi.get("tech_params"), dict) else {}
+    visual = tech_params.get("visual_standard") if isinstance(tech_params.get("visual_standard"), dict) else {}
+    for candidate in (
+        gi.get("video_sound"),
+        gi.get("sound"),
+        defaults.get("sound"),
+        visual.get("sound"),
+    ):
+        if candidate is None:
+            continue
+        return _to_bool(candidate)
+    return default
+
+
 def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
     gi = dict(global_info) if isinstance(global_info, dict) else {}
 
     defaults_raw = gi.get("project_generation_defaults")
     defaults = dict(defaults_raw) if isinstance(defaults_raw, dict) else {}
-    # Read-only normalization: unify alias keys but do NOT infer or inject business defaults.
+    # Read-only normalization: unify alias keys; video_sound defaults to enabled when unset.
     tech_params = gi.get("tech_params") if isinstance(gi.get("tech_params"), dict) else {}
     visual_standard = tech_params.get("visual_standard") if isinstance(tech_params.get("visual_standard"), dict) else {}
 
@@ -14033,6 +14062,14 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
         defaults.setdefault("quality", quality)
         visual_standard.setdefault("quality", quality)
 
+    tech_params["visual_standard"] = visual_standard
+    gi["tech_params"] = tech_params
+    gi["project_generation_defaults"] = defaults
+
+    resolved_sound = _resolve_project_video_sound(gi, default=True)
+    gi["video_sound"] = resolved_sound
+    defaults["sound"] = resolved_sound
+    visual_standard["sound"] = resolved_sound
     tech_params["visual_standard"] = visual_standard
     gi["tech_params"] = tech_params
     gi["project_generation_defaults"] = defaults
@@ -17842,6 +17879,9 @@ def read_project(
     
     project.cover_image = get_project_cover_image(db, project.id)
     if project.global_info:
+        project.global_info = _ensure_project_generation_defaults(
+            dict(project.global_info) if isinstance(project.global_info, dict) else {}
+        )
         project.aspectRatio = project.global_info.get('aspectRatio')
     project.description = (project.global_info or {}).get("notes")
     project.generation_seed = resolved_seed

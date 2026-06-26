@@ -212,3 +212,29 @@ export const formatManagedUserHint = (value, t) => {
         : t('留空即可，保存时才会校验输入的用户', 'Leave empty if unused. Entered users will be validated on save');
 };
 
+/** Default: video generation includes sound (项目信息「视频声音」= 有). */
+export const DEFAULT_PROJECT_VIDEO_SOUND_ENABLED = true;
+
+export const resolveProjectVideoSoundEnabled = (payload, { defaultEnabled = DEFAULT_PROJECT_VIDEO_SOUND_ENABLED } = {}) => {
+    const src = (payload && typeof payload === 'object') ? payload : {};
+    const visual = (src.tech_params?.visual_standard && typeof src.tech_params.visual_standard === 'object')
+        ? src.tech_params.visual_standard
+        : {};
+    const defaults = (src.project_generation_defaults && typeof src.project_generation_defaults === 'object')
+        ? src.project_generation_defaults
+        : {};
+    const candidates = [src.video_sound, src.sound, defaults.sound, visual.sound];
+    for (const candidate of candidates) {
+        if (candidate === undefined || candidate === null) continue;
+        if (candidate === false || candidate === 0) return false;
+        if (candidate === true || candidate === 1) return true;
+        if (typeof candidate === 'string') {
+            const raw = candidate.trim().toLowerCase();
+            if (raw === 'off' || raw === 'false' || raw === '0' || raw === 'no' || raw === 'n' || raw === '无') return false;
+            if (raw === 'on' || raw === 'true' || raw === '1' || raw === 'yes' || raw === 'y' || raw === '有') return true;
+        }
+        return Boolean(candidate);
+    }
+    return defaultEnabled;
+};
+

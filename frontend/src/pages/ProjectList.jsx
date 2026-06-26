@@ -2118,15 +2118,17 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                             
                                         </div>
 
-                                        <label className="flex items-center gap-2 text-sm mt-1 mb-1 cursor-pointer select-none">
-                                            <input
-                                                type="checkbox"
-                                                className="h-4 w-4"
-                                                checked={newVideoSoundEnabled}
-                                                onChange={(e) => setNewVideoSoundEnabled(Boolean(e.target.checked))}
-                                            />
-                                            <span>{t('视频生成默认开启声音', 'Enable sound by default for video generation')}</span>
-                                        </label>
+                                        <div className="flex flex-col gap-1 mt-1 mb-1">
+                                            <label className="text-xs text-muted-foreground uppercase font-bold">{t('视频声音', 'Video Sound')}</label>
+                                            <select
+                                                className="w-full px-4 py-2.5 bg-background border border-white/15 rounded-lg focus:ring-2 focus:ring-primary/30 focus:border-primary/50 outline-none text-sm"
+                                                value={newVideoSoundEnabled ? 'on' : 'off'}
+                                                onChange={(e) => setNewVideoSoundEnabled(e.target.value !== 'off')}
+                                            >
+                                                <option value="on">{t('有', 'Enabled')}</option>
+                                                <option value="off">{t('无', 'Disabled')}</option>
+                                            </select>
+                                        </div>
 
                                         <label className="block text-sm font-semibold tracking-wide text-primary mt-4 mb-2">{t('剧本内容（可选）', 'Script Content (Optional)')}</label>
                                         <textarea
