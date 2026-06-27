@@ -22702,14 +22702,31 @@ async def regenerate_scene(
         "1) Scene markdown table rows (importable by scene parser).\n"
     )
 
+    current_scene_section = wrap_injection_section(
+        "当前场景",
+        "Current Scene (Markdown Row):\n" + scene_snapshot,
+    )
+    original_script_section = wrap_injection_section(
+        "原始剧本依据",
+        "[Original Script Grounding]\n" + original_script_grounding_block,
+    )
+    scene_subject_seeds_section = wrap_injection_section(
+        "场景Subject种子",
+        "[Current Scene Subject Seeds]\n" + scene_subject_seeds_block,
+    )
+    user_supplement_section = wrap_injection_section(
+        "用户补充要求",
+        "[User Supplement Requirements]\n" + user_requirements,
+    )
+
     user_prompt = (
         f"{wrap_injection_section('项目信息', project_context_block)}\n\n"
         f"Source Scene Database ID: {db_scene.id}\n\n"
-        f"{wrap_injection_section('当前场景', f'Current Scene (Markdown Row):\\n{scene_snapshot}')}\n\n"
-        f"{wrap_injection_section('原始剧本依据', f'[Original Script Grounding]\\n{original_script_grounding_block}')}\n\n"
-        f"{wrap_injection_section('场景Subject种子', f'[Current Scene Subject Seeds]\\n{scene_subject_seeds_block}')}\n\n"
+        f"{current_scene_section}\n\n"
+        f"{original_script_section}\n\n"
+        f"{scene_subject_seeds_section}\n\n"
         f"{existing_subjects_block}\n\n"
-        f"{wrap_injection_section('用户补充要求', f'[User Supplement Requirements]\\n{user_requirements}')}\n\n"
+        f"{user_supplement_section}\n\n"
         "Task Instructions:\n"
         "- Use Project Context + Current Scene + Original Script Grounding + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
         "- Original Script Grounding is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing location anchors, or has major core scene info / visual-guidance errors.\n"

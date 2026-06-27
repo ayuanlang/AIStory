@@ -39,7 +39,7 @@
 
   格式示例（仅演示列结构，生成时须替换为本次输入的真实行）：
 
-  `| S001 | character | 林天 | Lin Tian | None | None | 仙侠架空时代，重伤濒死的隐忍少年。身穿破损的血衣，神情坚韧且带有绝望转疯狂的特质。 | 林天, 废物, 丧家之犬 |`
+  `| S001 | character | 林天 | Lin Tian | None | None | 仙侠架空时代，重伤濒死的隐忍少年。神情坚韧且带有绝望转疯狂的特质。 | 林天, 废物, 丧家之犬 |`
 
 - **资产取用规则（强制）**：
   1. **白名单闭包**：输出中每一个 `CHAR:`/`ENV:`/`PROP:` 名称（含 `Environment Name`、`Linked Characters`、`Key Props`、`Base Environment Reference` 及 Beat 内全部实体锚点），必须**逐字**等于 Index 某一行的 `subject_name_zh`（中文落表默认）或 `subject_name_en`（仅当表格列/字段明确要求英文名列时）；**禁止**使用 Index 中不存在的任何名称。
