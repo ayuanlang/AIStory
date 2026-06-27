@@ -2471,11 +2471,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatusHistory((prev) => {
             const lastItem = prev[prev.length - 1];
+            // For scene orchestration phases with a per-scene highlightHint, always add a new
+            // entry so every scene's status update is visible (not overwritten by the next scene).
+            const isSceneOrchestrationHint = highlightHint && /「EP\d+_SC\d+」/i.test(highlightHint);
             if (lastItem && lastItem.phase === phase && lastItem.message === message) {
                 if (highlightHint && highlightHint !== String(lastItem.highlightHint || '').trim()) {
-                    return [...prev.slice(0, -1), { ...lastItem, highlightHint }];
+                    if (isSceneOrchestrationHint) {
+                        // Fall through to add a new entry below
+                    } else {
+                        return [...prev.slice(0, -1), { ...lastItem, highlightHint }];
+                    }
+                } else {
+                    return prev;
                 }
-                return prev;
             }
             const now = Date.now();
             const next = [...prev];
@@ -7967,7 +7975,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         await clearSceneMarkdownPatchForScenes(orchestrationSceneIds, {
                             source: `${logPhasePrefix}-orchestration-clear`,
                         });
-                        onLog?.(`[${label}] cleared stale orchestration data for ${orchestrationSceneIds.length} scene(s).`, 'info');
+                        onLog?.(`[${label}] cleared stale orchestration data for ${orchestrationSceneCount} scene(s).`, 'info');
                     }
                 } catch (clearErr) {
                     onLog?.(`[${label}] orchestration pre-clear warning: ${clearErr?.message || clearErr}`, 'warning');
@@ -13430,7 +13438,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         stage1RawText: stage1SourceText,
                         stage2_1Text: stage2_1Text || undefined,
                     });
-                    onLog?.(`已清理 ${rerunSceneIds.length} 场场景编排过程数据，等待 LLM 返回新结果。`, 'info');
+                    onLog?.(`已清理 ${orchestrationSceneCount} 场场景编排过程数据，等待 LLM 返回新结果。`, 'info');
                 } catch (clearErr) {
                     onLog?.(`场景编排过程数据清理警告：${clearErr?.message || clearErr}`, 'warning');
                 }
