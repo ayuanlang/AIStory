@@ -2583,6 +2583,7 @@ const Editor = ({
                                 };
 
                                 const scData = {
+                                    scene_id: getSceneVal('scene_id', ['sceneid', 'scene_id', '场景id']),
                                     scene_no: getSceneVal('scene_no', ['sceneno', 'scene_no', '场次序号', '场次']),
                                     scene_name: getSceneVal('scene_name', ['scenename', 'title', 'scene_name', '场景名称']),
                                     equivalent_duration: getSceneVal('equivalent_duration', ['equivalentduration', 'duration', 'equivalent_duration']),
@@ -2592,6 +2593,24 @@ const Editor = ({
                                     linked_characters: getSceneVal('linked_characters', ['linkedcharacters', 'linked_characters', '关联角色', '角色', 'characters']),
                                     key_props: getSceneVal('key_props', ['keyprops', 'key_props', '关键道具', '道具', 'props']),
                                 };
+
+                                if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
+                                    const sceneIdVal = String(scData.scene_id || '').trim();
+                                    const derivedFromId = toSceneNumber(sceneIdVal);
+                                    if (Number.isFinite(derivedFromId) && derivedFromId > 0) {
+                                        scData.scene_no = String(derivedFromId);
+                                    } else if (sceneIdVal) {
+                                        scData.scene_no = sceneIdVal;
+                                    } else if (scData.scene_name) {
+                                        scData.scene_no = String(scData.scene_name).trim();
+                                    } else {
+                                        scData.scene_no = String(pendingSceneRows.length + 1);
+                                    }
+                                    addLog(
+                                        `Scene row missing Scene No; derived scene_no=${scData.scene_no}.`,
+                                        'warning'
+                                    );
+                                }
 
                                 const linkedByHeader = sceneTableHeaderMap.linked_characters !== undefined;
                                 const propsByHeader = sceneTableHeaderMap.key_props !== undefined;
@@ -2603,7 +2622,6 @@ const Editor = ({
                                 }
                                 
                                 if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
-                                    // addLog("Skipping empty Scene row", "info"); // Optional log
                                     continue;
                                 }
 
@@ -2905,10 +2923,14 @@ const Editor = ({
                 if (sceneLines.length > 0) { ... }
                 */
                 
-                // Just force refresh
-                if (sceneLines.length > 0 || shotLines.length > 0) {
+                if (
+                    (Number(importStats.scenesCreated || 0) + Number(importStats.scenesUpdated || 0)) > 0
+                    || shotLines.length > 0
+                ) {
                     changesMade = true;
                     reloadRequired = true;
+                } else if (sceneLines.length > 0 && pendingSceneRows.length <= 0) {
+                    addLog('Scene table parsed but no importable scene rows were found (check Scene No / Scene ID columns).', 'warning');
                 }
 
                 if (autoSupplementSceneSubjects && id && importedSceneRows.length > 0) {

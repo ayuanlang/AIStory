@@ -2554,6 +2554,20 @@ export const shotNeedsAnyOssPersistGraceWaitMs = (shot) => {
 
 export const EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS = 120_000;
 export const EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS = 2500;
+export const EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS = 60_000;
+
+export const getShotVideoMediaBoundAtMs = (shot) => {
+    const tech = parseShotTechnicalNotes(shot?.technical_notes);
+    const meta = tech?.video_metadata && typeof tech.video_metadata === 'object' ? tech.video_metadata : {};
+    return parseMediaBoundAtMs(meta, parseShotMediaUpdatedAtMs(shot));
+};
+
+export const shotVideoEligibleForAutoOssPersistRetry = (shot) => {
+    if (!shotVideoNeedsOssPersist(shot)) return false;
+    const boundMs = getShotVideoMediaBoundAtMs(shot);
+    if (!boundMs) return false;
+    return (Date.now() - boundMs) >= EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS;
+};
 
 export const extractVideoJobResultUrl = (statusPayload) => {
     const root = statusPayload && typeof statusPayload === 'object' ? statusPayload : {};

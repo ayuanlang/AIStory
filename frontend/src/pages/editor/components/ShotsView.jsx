@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, shotVideoEligibleForAutoOssPersistRetry, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -636,6 +636,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [shotMediaOssPersistBusy, setShotMediaOssPersistBusy] = useState({});
     const [mediaPersistGraceRefreshSeq, setMediaPersistGraceRefreshSeq] = useState(0);
+    const autoVideoOssPersistAttemptedRef = useRef(new Set());
+    const autoVideoOssPersistTimerRef = useRef(null);
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
     const readStoredUsePrevVideo = useCallback(() => {
@@ -8539,7 +8541,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
-    const handlePersistShotMediaToOss = useCallback(async (shotLike = null, slot = 'video') => {
+    const handlePersistShotMediaToOss = useCallback(async (shotLike = null, slot = 'video', options = {}) => {
+        const isAuto = options?.auto === true;
         const normalizedSlot = String(slot || 'video').trim().toLowerCase();
         const apiSlot = normalizedSlot === 'start' || normalizedSlot === 'start_frame'
             ? 'start'
@@ -8556,17 +8559,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 : shotVideoNeedsOssPersist(targetShot);
 
         if (!targetShotId || !sourceUrl) {
-            showNotification(t('当前镜头没有可补传的素材地址。', 'No media URL available to persist.'), 'warning');
+            if (!isAuto) {
+                showNotification(t('当前镜头没有可补传的素材地址。', 'No media URL available to persist.'), 'warning');
+            }
             return false;
         }
         if (!needsPersist) {
-            showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
+            if (!isAuto) {
+                showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
+            }
             return true;
         }
 
         const busyKey = `${targetShotId}:${apiSlot}`;
         setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
-        onLog?.(t('正在补传素材到 OSS...', 'Uploading media to OSS...'), 'info');
+        onLog?.(
+            isAuto
+                ? t('检测到临时视频已超过 1 分钟，正在自动补传到 OSS...', 'Temporary video is over 1 minute old; auto-uploading to OSS...')
+                : t('正在补传素材到 OSS...', 'Uploading media to OSS...'),
+            'info'
+        );
         try {
             const result = await persistShotMedia(targetShotId, {
                 slot: apiSlot,
@@ -8634,13 +8646,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
             refreshShotAssetsMeta();
             Promise.resolve(refreshShots()).catch(() => {});
-            onLog?.(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
-            showNotification(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
+            onLog?.(
+                isAuto
+                    ? t('临时视频已自动补传到 OSS。', 'Temporary video auto-uploaded to OSS.')
+                    : t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'),
+                'success'
+            );
+            if (!isAuto) {
+                showNotification(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
+            }
             return true;
         } catch (err) {
             const detail = err?.response?.data?.detail || err?.message || t('未知错误', 'unknown error');
-            onLog?.(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
-            showNotification(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
+            onLog?.(
+                isAuto
+                    ? `${t('临时视频自动补传 OSS 失败', 'Temporary video auto OSS upload failed')}: ${detail}`
+                    : `${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`,
+                'error'
+            );
+            if (!isAuto) {
+                showNotification(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
+            }
             return false;
         } finally {
             setShotMediaOssPersistBusy((prev) => {
@@ -8650,6 +8676,67 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
         }
     }, [editingShot, onLog, onUpdateShot, refreshShotAssetsMeta, refreshShots, showNotification, t]);
+
+    useEffect(() => {
+        if (autoVideoOssPersistTimerRef.current) {
+            clearTimeout(autoVideoOssPersistTimerRef.current);
+            autoVideoOssPersistTimerRef.current = null;
+        }
+
+        const shotPool = [editingShot, ...(shots || [])].filter(Boolean);
+        const seenShotIds = new Set();
+        let nextRetryAtMs = null;
+
+        shotPool.forEach((shot) => {
+            const shotId = String(shot?.id || '').trim();
+            if (!shotId || seenShotIds.has(shotId)) return;
+            seenShotIds.add(shotId);
+
+            if (!shotVideoNeedsOssPersist(shot)) return;
+
+            const boundMs = getShotVideoMediaBoundAtMs(shot);
+            if (!boundMs) return;
+
+            const videoUrl = String(shot.video_url || '').trim();
+            const attemptKey = `${shotId}:${videoUrl}`;
+            if (autoVideoOssPersistAttemptedRef.current.has(attemptKey)) return;
+
+            const ageMs = Date.now() - boundMs;
+            if (ageMs >= EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS) {
+                const busyKey = `${shotId}:video`;
+                if (shotMediaOssPersistBusy[busyKey]) return;
+                autoVideoOssPersistAttemptedRef.current.add(attemptKey);
+                void handlePersistShotMediaToOss(shot, 'video', { auto: true });
+                return;
+            }
+
+            const retryAt = boundMs + EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS;
+            if (!nextRetryAtMs || retryAt < nextRetryAtMs) {
+                nextRetryAtMs = retryAt;
+            }
+        });
+
+        if (nextRetryAtMs) {
+            const delayMs = Math.max(100, nextRetryAtMs - Date.now() + 100);
+            autoVideoOssPersistTimerRef.current = setTimeout(() => {
+                autoVideoOssPersistTimerRef.current = null;
+                setMediaPersistGraceRefreshSeq((seq) => seq + 1);
+            }, delayMs);
+        }
+
+        return () => {
+            if (autoVideoOssPersistTimerRef.current) {
+                clearTimeout(autoVideoOssPersistTimerRef.current);
+                autoVideoOssPersistTimerRef.current = null;
+            }
+        };
+    }, [
+        editingShot,
+        shots,
+        mediaPersistGraceRefreshSeq,
+        shotMediaOssPersistBusy,
+        handlePersistShotMediaToOss,
+    ]);
 
     const notifyShotMediaOssPersistWarning = useCallback((shotLike, slot = 'video') => {
         const apiSlot = slot === 'start' || slot === 'start_frame'

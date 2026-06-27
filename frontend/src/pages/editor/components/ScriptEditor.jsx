@@ -695,6 +695,52 @@ const waitForEpisodeSceneCount = async (
     return lastCount;
 };
 
+const resolveSceneImportAppliedCount = (importReport) => {
+    if (!importReport || typeof importReport !== 'object') return 0;
+    const created = Number(importReport?.importStats?.scenesCreated || 0);
+    const updated = Number(importReport?.importStats?.scenesUpdated || 0);
+    if (created + updated > 0) return created + updated;
+    const rowsWithId = Array.isArray(importReport?.importedSceneRows)
+        ? importReport.importedSceneRows.filter((row) => row?.id).length
+        : 0;
+    if (rowsWithId > 0) return rowsWithId;
+    return Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows.length : 0;
+};
+
+const isSuccessfulSceneImportReport = (importReport) => (
+    importReport
+    && typeof importReport === 'object'
+    && importReport.ok !== false
+    && resolveSceneImportAppliedCount(importReport) > 0
+);
+
+const canSkipBatchSceneImport = async ({
+    fetchScenesFn,
+    episodeId,
+    patchSceneIds,
+    liveImportedIds,
+}) => {
+    const patchIds = (Array.isArray(patchSceneIds) ? patchSceneIds : [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean);
+    const liveIds = new Set(
+        (Array.isArray(liveImportedIds) ? liveImportedIds : [])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+    );
+    if (patchIds.length <= 0 || liveIds.size < patchIds.length) return false;
+    if (!patchIds.every((id) => liveIds.has(id))) return false;
+    const stableEpisodeId = Number(episodeId || 0);
+    if (!stableEpisodeId || typeof fetchScenesFn !== 'function') return false;
+    const dbCount = await waitForEpisodeSceneCount(
+        fetchScenesFn,
+        stableEpisodeId,
+        patchIds.length,
+        { retries: 5, delayMs: 400 },
+    );
+    return dbCount >= patchIds.length;
+};
+
 const mergeSceneImportReports = (reports = []) => {
     const validReports = (Array.isArray(reports) ? reports : []).filter((item) => item && typeof item === 'object');
     if (!validReports.length) return null;
@@ -3982,6 +4028,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const idx = sourceHeaderMap.has(key) ? sourceHeaderMap.get(key) : -1;
                     return idx >= 0 ? String(cells[idx] || '') : '';
                 });
+                const outputSceneNoIdx = outputHeaders.findIndex((h) => {
+                    const key = normalize(h);
+                    return key.includes('sceneno') || key.includes('场次');
+                });
+                const outputSceneIdIdx = outputHeaders.findIndex((h) => {
+                    const key = normalize(h);
+                    return key.includes('sceneid') || key.includes('场景id');
+                });
+                if (outputSceneNoIdx >= 0) {
+                    while (mappedRow.length <= outputSceneNoIdx) mappedRow.push('');
+                    if (!String(mappedRow[outputSceneNoIdx] || '').trim()) {
+                        const sid = outputSceneIdIdx >= 0
+                            ? String(mappedRow[outputSceneIdIdx] || '').trim()
+                            : sceneId;
+                        const scMatch = sid.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i)
+                            || sid.match(/\b0*([0-9]{1,4})\b/);
+                        const derivedNo = scMatch?.[1] ? String(parseInt(scMatch[1], 10)) : '';
+                        mappedRow[outputSceneNoIdx] = derivedNo || sid || String(outputRows.length + 1);
+                    }
+                }
                 outputRows.push(mappedRow);
             }
         }
@@ -4027,7 +4093,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
 
             const importResult = await onImportText(payload, importType, importOptions);
-            return importResult || true;
+            if (!importResult || typeof importResult !== 'object') {
+                return false;
+            }
+            if (importType === 'scene' && !isSuccessfulSceneImportReport(importResult)) {
+                if (onLog) {
+                    onLog(
+                        t(
+                            '场景表已解析但未写入任何场景记录（请检查 Scene No / Scene ID 列）。',
+                            'Scene table parsed but no scene rows were created or updated (check Scene No / Scene ID columns).'
+                        ),
+                        'warning'
+                    );
+                }
+                return false;
+            }
+            return importResult;
         } catch (e) {
             if (onLog) onLog(`Import failed: ${e.message}`, 'error');
             alert(t('导入失败：', 'Import failed: ') + (e?.message || e));
@@ -6384,10 +6465,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             suppressAlerts: true,
             autoSupplementSceneSubjects: false,
         });
-        if (!sceneImportReport) {
+        if (!isSuccessfulSceneImportReport(sceneImportReport)) {
             throw new Error(t(
-                `[场景导入] ${stableSceneId} 导入失败：未返回有效结果。`,
-                `[Scene import] ${stableSceneId} failed: import returned no result.`
+                `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No 或解析失败）。`,
+                `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No or parse failure).`
             ));
         }
 
@@ -10768,6 +10849,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (onLog) onLog(`Scene markdown precheck failed (continue analysis): ${preflightErr?.message || preflightErr}`, 'warning');
         }
 
+        let dbSceneCount = 0;
+        if (activeEpisode?.id) {
+            const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+            dbSceneCount = Array.isArray(dbScenes) ? dbScenes.length : 0;
+        }
+        if (
+            sceneAnalysisText
+            && dbSceneCount <= 0
+            && scenePreflightResult?.hasSceneMarkdown
+            && !scenePreflightResult?.repaired
+        ) {
+            try {
+                const repairResult = await ensureSceneTableConsistencyBeforePhase2(sceneAnalysisText, {
+                    setRunningReport: false,
+                    preflightOnly: false,
+                });
+                if (repairResult?.repaired) {
+                    preflightSceneSyncNotice = t(
+                        '检测到场景分析结果已写入工作区但场景表为空，已从 Markdown 重新导入场景。',
+                        'Scene analysis markdown was present in workspace but the scene table was empty; scenes were re-imported from markdown.'
+                    );
+                    const repairedScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+                    dbSceneCount = Array.isArray(repairedScenes) ? repairedScenes.length : 0;
+                }
+            } catch (repairErr) {
+                if (onLog) onLog(`Resume scene re-import from markdown failed: ${repairErr?.message || repairErr}`, 'warning');
+            }
+        }
+
         let resolvedSubjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
         if (!resolvedSubjectIndexText && sceneAnalysisText) {
             const fallbackSections = extractAnalysisSections(sceneAnalysisText);
@@ -10792,7 +10902,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const hasSubjectIndex = Boolean(resolvedSubjectIndexText);
 
         let decision = 'phase1';
-        if (hasSceneMarkdown && hasSubjectIndex && hasCompleteSubjectsJson) {
+        if (hasSceneMarkdown && hasSubjectIndex && hasCompleteSubjectsJson && dbSceneCount > 0) {
             decision = 'completed';
         } else if (hasSubjectIndex) {
             decision = 'phase2';
@@ -10809,7 +10919,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (onLog) {
             onLog(
-                `[Analysis Resume] decision=${decision} sceneMarkdown=${hasSceneMarkdown ? 1 : 0} subjectIndex=${hasSubjectIndex ? 1 : 0} subjectsJson=${hasSubjectsJson ? 1 : 0} completeSubjectsJson=${hasCompleteSubjectsJson ? 1 : 0}`,
+                `[Analysis Resume] decision=${decision} sceneMarkdown=${hasSceneMarkdown ? 1 : 0} subjectIndex=${hasSubjectIndex ? 1 : 0} subjectsJson=${hasSubjectsJson ? 1 : 0} completeSubjectsJson=${hasCompleteSubjectsJson ? 1 : 0} dbScenes=${dbSceneCount}`,
                 decision === 'phase1' ? 'info' : 'warning'
             );
         }
@@ -10826,9 +10936,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.ai_scene_analysis_scene_markdown,
         activeEpisode?.ai_scene_analysis_subject_index,
+        activeEpisode?.id,
         buildSubjectConsistencyReport,
         ensureSceneTableConsistencyBeforePhase2,
         extractAnalysisSections,
+        fetchScenes,
         getAnalysisEntitiesPayloadFromJsonText,
         llmAssetRawResultContent,
         llmRawResultContent,
@@ -11850,11 +11962,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let branchImportReport = null;
                     const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
                     if (localParallelPatchMap && Object.keys(localParallelPatchMap).length > 0) {
-                        branchImportReport = await importScenesFromPerScenePatchMap(localParallelPatchMap, {
-                            subjectsJson: result?.subjects_json || null,
-                            replaceExistingScenes: liveImported.length <= 0,
-                            skipSceneIds: liveImported,
+                        const patchSceneIds = Object.keys(localParallelPatchMap).filter(Boolean);
+                        const skipBatchImport = await canSkipBatchSceneImport({
+                            fetchScenesFn: fetchScenes,
+                            episodeId: activeEpisode?.id,
+                            patchSceneIds,
+                            liveImportedIds: liveImported,
                         });
+                        if (skipBatchImport) {
+                            onLog?.(
+                                t(
+                                    `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
+                                    `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                                ),
+                                'success'
+                            );
+                            branchImportReport = {
+                                ok: true,
+                                changed: true,
+                                importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                                importedSceneRows: [],
+                            };
+                        } else {
+                            branchImportReport = await importScenesFromPerScenePatchMap(localParallelPatchMap, {
+                                subjectsJson: result?.subjects_json || null,
+                                replaceExistingScenes: liveImported.length <= 0,
+                                skipSceneIds: liveImported,
+                            });
+                        }
                     } else {
                         branchImportReport = await runAutoImportAndSwitchToScenes(localImportSourceText || localFinalAnalysisText || '', {
                             switchToScenes: false,
@@ -12107,11 +12242,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
                 if (parallelSceneMarkdownPatchMap && Object.keys(parallelSceneMarkdownPatchMap).length > 0) {
-                    importReport = await importScenesFromPerScenePatchMap(parallelSceneMarkdownPatchMap, {
-                        subjectsJson: result?.subjects_json || null,
-                        replaceExistingScenes: liveImported.length <= 0,
-                        skipSceneIds: liveImported,
+                    const patchSceneIds = Object.keys(parallelSceneMarkdownPatchMap).filter(Boolean);
+                    const skipBatchImport = await canSkipBatchSceneImport({
+                        fetchScenesFn: fetchScenes,
+                        episodeId: activeEpisode?.id,
+                        patchSceneIds,
+                        liveImportedIds: liveImported,
                     });
+                    if (skipBatchImport) {
+                        onLog?.(
+                            t(
+                                `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
+                                `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                            ),
+                            'success'
+                        );
+                        importReport = {
+                            ok: true,
+                            changed: true,
+                            importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                            importedSceneRows: [],
+                        };
+                    } else {
+                        importReport = await importScenesFromPerScenePatchMap(parallelSceneMarkdownPatchMap, {
+                            subjectsJson: result?.subjects_json || null,
+                            replaceExistingScenes: liveImported.length <= 0,
+                            skipSceneIds: liveImported,
+                        });
+                    }
                 } else {
                     importReport = await runAutoImportAndSwitchToScenes(importSourceText || finalAnalysisText || '', {
                         switchToScenes: false,
@@ -12642,14 +12800,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (restartScenePatchMap) {
                     const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
                     const patchSceneIds = Object.keys(restartScenePatchMap).filter(Boolean);
-                    if (liveImported.length >= patchSceneIds.length) {
+                    const skipBatchImport = await canSkipBatchSceneImport({
+                        fetchScenesFn: fetchScenes,
+                        episodeId: activeEpisode?.id,
+                        patchSceneIds,
+                        liveImportedIds: liveImported,
+                    });
+                    if (skipBatchImport) {
                         onLog?.(
                             t(
-                                `全部 ${patchSceneIds.length} 场场景已在编排过程中逐场回写并导入，跳过批次导入。`,
-                                `All ${patchSceneIds.length} scene(s) were written back and imported during orchestration; skipping batch import.`
+                                `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
+                                `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
                             ),
                             'success'
                         );
+                        importReport = {
+                            ok: true,
+                            changed: true,
+                            importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                            importedSceneRows: [],
+                        };
                     } else {
                         importReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
                             replaceExistingScenes: liveImported.length <= 0,
@@ -12667,11 +12837,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     });
                 }
                 if (!importReport) {
-                    await triggerSceneArrangementRegenerationTask(validatedBeatsText, {
-                        reason: t('自动导入未返回结果，请检查导入配置或返回格式。', 'Auto-import returned no result.'),
-                        source: 'stage2-restart-empty-import',
-                    });
+                    throw new Error(t(
+                        '自动导入未返回结果，场景未写入工作区。请检查导入配置或返回格式。',
+                        'Auto-import returned no result; scenes were not written to the workspace.'
+                    ));
                 }
+                const restartExpectedCount = restartScenePatchMap
+                    ? Object.keys(restartScenePatchMap).filter(Boolean).length
+                    : (Array.isArray(parseMarkdownTable(validatedBeatsText)?.rows)
+                        ? parseMarkdownTable(validatedBeatsText).rows.length
+                        : 1);
+                const dbSceneCountAfterRestartImport = await waitForEpisodeSceneCount(
+                    fetchScenes,
+                    activeEpisode?.id,
+                    restartExpectedCount || 1,
+                    { retries: 15, delayMs: 600 },
+                );
+                assertWorkspaceSceneImportComplete({
+                    importReport,
+                    expectedSceneCount: restartExpectedCount || 1,
+                    dbSceneCount: dbSceneCountAfterRestartImport,
+                    t,
+                });
             } catch (importErr) {
                 await triggerSceneArrangementRegenerationTask(validatedBeatsText, {
                     reason: t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`),
@@ -13001,6 +13188,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     suppressAlerts: true,
                     autoSupplementSceneSubjects: false,
                 });
+                if (!isSuccessfulSceneImportReport(importReport)) {
+                    throw new Error(t(
+                        `[场景导入] ${targetSceneId} 导入失败：场景未写入数据库。`,
+                        `[Scene import] ${targetSceneId} failed: scene was not persisted to the database.`
+                    ));
+                }
                 if (projectId && activeEpisode?.id) {
                     try {
                         await syncSceneUnitsProgress({
@@ -13017,14 +13210,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } else if (allScenePatchMap && Object.keys(allScenePatchMap).length > 0) {
                 const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
                 const patchSceneIds = Object.keys(allScenePatchMap).filter(Boolean);
-                if (liveImported.length >= patchSceneIds.length) {
+                const skipBatchImport = await canSkipBatchSceneImport({
+                    fetchScenesFn: fetchScenes,
+                    episodeId: activeEpisode?.id,
+                    patchSceneIds,
+                    liveImportedIds: liveImported,
+                });
+                if (skipBatchImport) {
                     onLog?.(
                         t(
-                            `全部 ${patchSceneIds.length} 场场景已在编排过程中逐场回写并导入，跳过批次导入。`,
-                            `All ${patchSceneIds.length} scene(s) were written back and imported during orchestration; skipping batch import.`
+                            `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
+                            `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
                         ),
                         'success'
                     );
+                    importReport = {
+                        ok: true,
+                        changed: true,
+                        importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                        importedSceneRows: [],
+                    };
                 } else {
                     importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
                         replaceExistingScenes: liveImported.length <= 0 && rerunMode === 'all',
@@ -13041,6 +13246,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                 });
             }
+            if (!importReport) {
+                throw new Error(t(
+                    '自动导入未返回结果，场景未写入数据库。请检查导入配置或返回格式。',
+                    'Auto-import returned no result; scenes were not written to the database.'
+                ));
+            }
+            const rerunExpectedCount = rerunMode === 'single'
+                ? 1
+                : (allScenePatchMap ? Object.keys(allScenePatchMap).filter(Boolean).length : orchestrationSceneCount || 1);
+            const dbSceneCountAfterRerunImport = await waitForEpisodeSceneCount(
+                fetchScenes,
+                activeEpisode?.id,
+                rerunExpectedCount || 1,
+                { retries: 15, delayMs: 600 },
+            );
+            assertWorkspaceSceneImportComplete({
+                importReport,
+                expectedSceneCount: rerunExpectedCount || 1,
+                dbSceneCount: dbSceneCountAfterRerunImport,
+                t,
+            });
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
                 message: t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
