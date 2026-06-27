@@ -138,6 +138,7 @@ const deriveSceneOrchestrationPhase = (unit) => {
     const parseStatus = String(unit.parse_status || '').trim().toLowerCase();
     if (importStatus === 'success') return 'imported';
     if (importStatus === 'importing') return 'importing';
+    if (importStatus === 'awaiting_workspace_import') return 'llm_returned';
     if (importStatus === 'llm_returned') return 'llm_returned';
     if (importStatus === 'llm_running' || importStatus === 'running') return 'llm_submit';
     if (importStatus === 'failed' || parseStatus === 'failed') return 'failed';

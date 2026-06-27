@@ -7947,7 +7947,48 @@ def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
             return detail if "," in detail or detail.count(":") > 1 else detail
         if detail.startswith("SCENE_MARKDOWN_") or detail.startswith("SCENES_TABLE_"):
             return detail
+    exc_type = type(exc).__name__
+    msg = str(exc or "").strip().replace("\n", " ")[:240]
+    if msg:
+        return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}:{exc_type}:{msg}"
     return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
+
+
+def _import_scene_markdown_stage_with_retry(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    script_text: str,
+    script_id: Optional[str],
+    target_scene_id: str,
+    max_attempts: int = 3,
+) -> None:
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        try:
+            import_scene_markdown_stage(
+                db=db,
+                project_id=int(project_id),
+                episode_id=int(episode_id),
+                script_text=script_text,
+                script_id=script_id,
+                partial=True,
+                target_scene_id=target_scene_id,
+            )
+            return
+        except OperationalError as exc:
+            last_exc = exc
+            db.rollback()
+            msg = str(exc or "").lower()
+            if attempt >= max_attempts or "database is locked" not in msg:
+                raise
+            time.sleep(0.15 * attempt)
+        except Exception:
+            db.rollback()
+            raise
+    if last_exc is not None:
+        raise last_exc
 
 
 def _derive_scene_orchestration_phase(
@@ -8255,31 +8296,51 @@ async def _run_scene_markdown_node_per_scene(
                                 node_project_id,
                                 node_episode_id,
                             )
-                            import_scene_markdown_stage(
-                                task_db,
-                                project_id=node_project_id,
-                                episode_id=node_episode_id,
-                                script_text=scene_text,
-                                script_id=script_id,
-                                partial=True,
-                                target_scene_id=unit.scene_id,
-                            )
-                            await _mark_scene_orchestration_status(
-                                task_db,
-                                scene_id=unit.scene_id,
-                                import_status="llm_returned",
-                                parse_status="success",
-                                scene_markdown=scene_text,
-                                parse_error_code=None,
-                            )
-                            logger.info(
-                                "[场景编排] 进度表已同步，等待工作区导入 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
-                                unit.scene_id,
-                                index,
-                                total_scenes,
-                                node_project_id,
-                                node_episode_id,
-                            )
+                            try:
+                                _import_scene_markdown_stage_with_retry(
+                                    task_db,
+                                    project_id=node_project_id,
+                                    episode_id=node_episode_id,
+                                    script_text=scene_text,
+                                    script_id=script_id,
+                                    target_scene_id=unit.scene_id,
+                                )
+                                await _mark_scene_orchestration_status(
+                                    task_db,
+                                    scene_id=unit.scene_id,
+                                    import_status="success",
+                                    parse_status="success",
+                                    scene_markdown=scene_text,
+                                    parse_error_code=None,
+                                )
+                                logger.info(
+                                    "[场景编排] 进度表已同步 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                    unit.scene_id,
+                                    index,
+                                    total_scenes,
+                                    node_project_id,
+                                    node_episode_id,
+                                )
+                            except Exception as import_exc:
+                                task_db.rollback()
+                                logger.warning(
+                                    "[scene_markdown] progress import failed after successful LLM | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s error=%s",
+                                    unit.scene_id,
+                                    index,
+                                    total_scenes,
+                                    node_project_id,
+                                    node_episode_id,
+                                    str(getattr(import_exc, "detail", "") or import_exc),
+                                    exc_info=import_exc,
+                                )
+                                await _mark_scene_orchestration_status(
+                                    task_db,
+                                    scene_id=unit.scene_id,
+                                    import_status="awaiting_workspace_import",
+                                    parse_status="success",
+                                    scene_markdown=scene_text,
+                                    parse_error_code=None,
+                                )
 
                         if attempt > 1:
                             retried_scene_ids.add(str(unit.scene_id))
@@ -8297,7 +8358,7 @@ async def _run_scene_markdown_node_per_scene(
                             if node_project_id > 0 and node_episode_id > 0:
                                 progress = 5.0 + (85.0 * completed_count / max(total_scenes, 1))
                                 upsert_pipeline_node_status(
-                                    db,
+                                    task_db,
                                     project_id=node_project_id,
                                     episode_id=node_episode_id,
                                     script_id=script_id,
@@ -8306,7 +8367,7 @@ async def _run_scene_markdown_node_per_scene(
                                     progress_percent=progress,
                                     error_message=f"completed {completed_count}/{total_scenes}: {unit.scene_id}",
                                 )
-                                db.commit()
+                                task_db.commit()
 
                         return index, unit.scene_id, scene_text, result, attempts_used
                     except Exception as scene_exc:
@@ -8314,6 +8375,18 @@ async def _run_scene_markdown_node_per_scene(
                         retryable = _is_retryable_scene_orchestration_error(scene_exc)
                         if attempt >= max_attempts or not retryable:
                             error_code = _scene_orchestration_error_code(scene_exc, unit.scene_id)
+                            logger.error(
+                                "[scene_markdown] scene orchestration failed | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s attempt=%s/%s error=%s",
+                                unit.scene_id,
+                                index,
+                                total_scenes,
+                                node_project_id,
+                                node_episode_id,
+                                attempt,
+                                max_attempts,
+                                error_code,
+                                exc_info=scene_exc,
+                            )
                             try:
                                 await _mark_scene_orchestration_status(
                                     task_db,
@@ -8334,7 +8407,8 @@ async def _run_scene_markdown_node_per_scene(
                             max_attempts,
                             node_project_id,
                             node_episode_id,
-                            str(getattr(scene_exc, "detail", "") or scene_exc),
+                            _scene_orchestration_error_code(scene_exc, unit.scene_id),
+                            exc_info=scene_exc,
                         )
                         try:
                             await _mark_scene_orchestration_status(
