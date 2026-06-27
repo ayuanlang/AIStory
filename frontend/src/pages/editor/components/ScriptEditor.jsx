@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 import { getEpisodeAnalysisRun, releaseEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
+import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promptInjection';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -194,6 +195,105 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
         default:
             return '';
     }
+};
+
+const createSceneOrchestrationPanelReporter = ({ totalScenes = 1, t }) => {
+    const importedScenes = new Set();
+    const reportedPhases = new Map();
+    const resolvedTotal = Math.max(1, Number(totalScenes) || 1);
+
+    const formatOrderLabel = (sceneOrder, total) => (
+        sceneOrder && total ? ` (${sceneOrder}/${total})` : ''
+    );
+
+    const buildHighlightHint = (sceneId, phase, sceneOrder, total) => {
+        const orderLabel = formatOrderLabel(sceneOrder, total);
+        switch (phase) {
+            case 'queued':
+                return t(
+                    `「${sceneId}」已排队${orderLabel}`,
+                    `"${sceneId}" queued${orderLabel}`
+                );
+            case 'llm_submit':
+                return t(
+                    `「${sceneId}」已提交 AI 引擎${orderLabel}`,
+                    `"${sceneId}" submitted to AI engine${orderLabel}`
+                );
+            case 'llm_returned':
+                return t(
+                    `「${sceneId}」AI 已返回并校验通过${orderLabel}`,
+                    `"${sceneId}" AI response validated${orderLabel}`
+                );
+            case 'importing':
+                return t(
+                    `「${sceneId}」正在入库${orderLabel}`,
+                    `"${sceneId}" importing into workspace${orderLabel}`
+                );
+            case 'imported':
+                return t(
+                    `「${sceneId}」已入库，可在场景页查看${orderLabel}`,
+                    `"${sceneId}" imported — open Scenes tab${orderLabel}`
+                );
+            case 'failed':
+                return t(
+                    `「${sceneId}」处理失败${orderLabel}`,
+                    `"${sceneId}" failed${orderLabel}`
+                );
+            default:
+                return '';
+        }
+    };
+
+    const buildAggregateMessage = (total) => {
+        const imported = importedScenes.size;
+        const totalCount = Math.max(resolvedTotal, Number(total) || 0, imported);
+        const labels = [...importedScenes].sort().join('、');
+        if (imported >= totalCount && totalCount > 0) {
+            return t(
+                `✅ 场景拆解已完成 (${imported}/${totalCount}${labels ? `：${labels}` : ''})`,
+                `Scene breakdown completed (${imported}/${totalCount}${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})`
+            );
+        }
+        return t(
+            `场景拆解进行中 (${imported}/${totalCount} 已入库${labels ? `：${labels}` : ''})...`,
+            `Scene breakdown in progress (${imported}/${totalCount} imported${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})...`
+        );
+    };
+
+    return {
+        report({ sceneId, phase, sceneOrder, totalScenes: totalOverride, errorCode }) {
+            const stableSceneId = String(sceneId || '').trim();
+            const stablePhase = String(phase || '').trim().toLowerCase();
+            if (!stableSceneId || !stablePhase) return null;
+
+            const reported = reportedPhases.get(stableSceneId) || new Set();
+            if (reported.has(stablePhase)) return null;
+            reported.add(stablePhase);
+            reportedPhases.set(stableSceneId, reported);
+
+            const total = Math.max(resolvedTotal, Number(totalOverride) || 0, importedScenes.size);
+            if (stablePhase === 'imported') importedScenes.add(stableSceneId);
+
+            if (stablePhase === 'failed') {
+                return {
+                    phase: 'warning',
+                    message: buildSceneOrchestrationPhaseMessage(stableSceneId, stablePhase, {
+                        sceneOrder,
+                        totalScenes: total,
+                        errorCode,
+                        t,
+                    }),
+                    highlightHint: buildHighlightHint(stableSceneId, stablePhase, sceneOrder, total),
+                };
+            }
+
+            return {
+                phase: 'scene_beats',
+                message: buildAggregateMessage(total),
+                highlightHint: buildHighlightHint(stableSceneId, stablePhase, sceneOrder, total),
+            };
+        },
+    };
 };
 
 const resolveEpisodeSceneIdPrefix = (episode, scriptText = '') => {
@@ -1541,6 +1641,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
     const [analysisFlowStatus, setAnalysisFlowStatus] = useState({ phase: 'idle', message: '' });
     const [analysisFlowStatusHistory, setAnalysisFlowStatusHistory] = useState([]);
+    const sceneOrchestrationPanelReporterRef = useRef(null);
+    const publishSceneOrchestrationPanelStatus = useCallback((payload) => {
+        const reporter = sceneOrchestrationPanelReporterRef.current;
+        if (!reporter || !payload) return;
+        const status = reporter.report(payload);
+        if (!status) return;
+        setAnalysisFlowStatus(status);
+    }, []);
+    const beginSceneOrchestrationPanelTracking = useCallback((totalScenes) => {
+        sceneOrchestrationPanelReporterRef.current = createSceneOrchestrationPanelReporter({
+            totalScenes: Math.max(1, Number(totalScenes) || 1),
+            t,
+        });
+    }, [t]);
+    const endSceneOrchestrationPanelTracking = useCallback(() => {
+        sceneOrchestrationPanelReporterRef.current = null;
+    }, []);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
     const [analysisReviewIssues, setAnalysisReviewIssues] = useState([]);
     const analysisFallbackRetryRef = useRef({
@@ -1984,15 +2101,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 reuseLines.push(`- ${detailParts.join(' | ')}`);
             });
             if (reuseLines.length > 2) {
-                stage2InputParts.push(reuseLines.join('\n'));
+                stage2InputParts.push(wrapInjectionSection('可复用Subject资产', reuseLines.join('\n')));
             }
         }
 
         if (stage1VisualBackfillJson) {
-            stage2InputParts.push(`[全局风格 - 第二阶段补充约束]\n${stage1VisualBackfillJson}`);
+            stage2InputParts.push(wrapInjectionSection('全局风格', `[全局风格 - 第二阶段补充约束]\n${stage1VisualBackfillJson}`));
         }
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
-        stage2InputParts.push(`[优化后剧本 - 第二阶段权威输入]\n${adaptedScriptText || ''}`);
+        stage2InputParts.push(wrapInjectionSection('优化后剧本', `[优化后剧本 - 第二阶段权威输入]\n${adaptedScriptText || ''}`));
 
         return {
             adaptedScriptText,
@@ -2020,10 +2137,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         if (stage1VisualBackfillJson) {
-            stage2_2InputParts.push(`[全局风格 - Stage 2.2补充约束]\n${stage1VisualBackfillJson}`);
+            stage2_2InputParts.push(wrapInjectionSection('全局风格', `[全局风格 - Stage 2.2补充约束]\n${stage1VisualBackfillJson}`));
         }
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
-        stage2_2InputParts.push(`[优化后剧本 - Stage 2.2权威输入]\n${adaptedScriptText || ''}`);
+        stage2_2InputParts.push(wrapInjectionSection('优化后剧本', `[优化后剧本 - Stage 2.2权威输入]\n${adaptedScriptText || ''}`));
 
         return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
     }, [activeEpisode?.ai_scene_analysis_adaptation, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
@@ -2073,6 +2190,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const extractAdaptedScriptFromStage2_2UserInputBody = useCallback((bodyText) => {
         const text = String(bodyText || '');
+        const wrappedAdapted = unwrapInjectionSection(text, '优化后剧本');
+        if (wrappedAdapted) {
+            return wrappedAdapted.replace(/^\[[^\]]+\]\s*\n?/, '').trim();
+        }
         const markerMatch = text.match(/\[优化后剧本[^\]]*\]\s*\n([\s\S]*)$/);
         if (markerMatch) {
             return String(markerMatch[1] || '').trim();
@@ -2092,9 +2213,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             '[Stage 2-1 Subject Index - REQUIRED INPUT]',
             'The following Subject Index is authoritative for Stage 2.2.',
             'Do not rename / merge / invent entities. Keep ENV/CHAR/PROP names byte-identical.',
-            '```subject_index',
-            stableText,
-            '```',
+            wrapInjectionSection('Subject Index', stableText),
         ].join('\n');
     }, [extractPureSubjectIndexText]);
 
@@ -3894,19 +4013,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (broadcastSafetyField) metaParts.push(`Broadcast Security Level: ${broadcastSafetyField}`);
         metaParts.push('Use this project context as first-class constraints before analyzing the script.');
 
-        return metaParts.length > 1 ? metaParts.join('\n') : '';
+        return metaParts.length > 1 ? wrapInjectionSection('项目信息', metaParts.join('\n')) : '';
     }
 
     const ensureStage1ProjectContextInjected = useCallback((inputText) => {
         const scriptText = String(inputText || '').trim();
         if (!scriptText) return '';
-        if (scriptText.startsWith('Project Context (prepend and treat as high-priority constraints):')) {
+        if (scriptText.includes('[项目信息开始]') || scriptText.startsWith('Project Context (prepend and treat as high-priority constraints):')) {
             return scriptText;
         }
 
         const projectContextSection = buildStage1ProjectContextSection();
         if (!projectContextSection) return scriptText;
-        return `${projectContextSection}\n\nScript to Analyze:\n\n${scriptText}`;
+        return `${projectContextSection}\n\n${wrapInjectionSection('待分析剧本', `Script to Analyze:\n\n${scriptText}`)}`;
     }, [project?.global_info]);
 
     const runSubjectConsistencyCheck = (rawText = null, options = {}) => {
@@ -5249,6 +5368,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return String(left[0]).localeCompare(String(right[0]));
         });
         if (entries.length <= 0) return null;
+        const batchTotalScenes = entries.length;
+        if (!sceneOrchestrationPanelReporterRef.current && batchTotalScenes > 0) {
+            beginSceneOrchestrationPanelTracking(batchTotalScenes);
+        }
         if (options?.replaceExistingScenes && activeEpisode?.id) {
             try {
                 await purgeEpisodeScenes(activeEpisode.id, { clearProgress: false });
@@ -5262,16 +5385,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         for (const [sceneId, entry] of entries) {
             const importText = String(entry?.markdown || '').trim();
             if (!importText) continue;
-            onLog?.(
-                t(`[场景导入] ${sceneId} 正在导入工作区...`, `[Scene import] ${sceneId} importing into workspace...`),
-                'process'
-            );
+            const sceneOrder = entry?.scene_order ?? deriveSceneOrderFromSceneId(sceneId);
+            publishSceneOrchestrationPanelStatus({
+                sceneId,
+                phase: 'importing',
+                sceneOrder,
+                totalScenes: batchTotalScenes,
+            });
             const sceneImportReport = await doImportText(importText, 'scene', {
                 suppressAlerts: true,
                 autoSupplementSceneSubjects: false,
                 ...options,
             });
             if (!sceneImportReport) {
+                publishSceneOrchestrationPanelStatus({
+                    sceneId,
+                    phase: 'failed',
+                    sceneOrder,
+                    totalScenes: batchTotalScenes,
+                    errorCode: 'import_no_result',
+                });
                 throw new Error(t(
                     `[场景导入] ${sceneId} 导入失败：未返回有效结果。`,
                     `[Scene import] ${sceneId} failed: import returned no result.`
@@ -5279,10 +5412,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             sceneReports.push(sceneImportReport);
             lastReport = sceneImportReport;
-            onLog?.(
-                t(`[场景导入] ${sceneId} 导入完成`, `[Scene import] ${sceneId} import completed`),
-                'success'
-            );
+            publishSceneOrchestrationPanelStatus({
+                sceneId,
+                phase: 'imported',
+                sceneOrder,
+                totalScenes: batchTotalScenes,
+            });
             if (projectId && activeEpisode?.id) {
                 try {
                     await syncSceneUnitsProgress({
@@ -5304,7 +5439,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
         }
         return mergeSceneImportReports(sceneReports) || lastReport;
-    }, [activeEpisode?.id, doImportText, onLog, projectId, purgeEpisodeScenes, syncSceneUnitsProgress, t]);
+    }, [activeEpisode?.id, beginSceneOrchestrationPanelTracking, doImportText, onLog, projectId, publishSceneOrchestrationPanelStatus, purgeEpisodeScenes, syncSceneUnitsProgress, t]);
 
     const parseSceneMarkdownBySceneMap = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -6606,13 +6741,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!stableSceneId || !importText) return false;
         if (orchestrationLiveImportedScenesRef.current.has(stableSceneId)) return false;
 
-        onLog?.(
-            t(
-                `[场景编排] ${stableSceneId} LLM 已返回，正在逐场回写并导入...`,
-                `[Scene beats] ${stableSceneId} LLM returned; writing back and importing immediately...`
-            ),
-            'process'
-        );
+        publishSceneOrchestrationPanelStatus({
+            sceneId: stableSceneId,
+            phase: 'importing',
+            sceneOrder,
+            totalScenes: sceneOrchestrationPanelReporterRef.current ? undefined : 1,
+        });
 
         if (
             replaceExistingScenes
@@ -6653,15 +6787,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        onLog?.(
-            t(`[场景导入] ${stableSceneId} 正在导入工作区...`, `[Scene import] ${stableSceneId} importing into workspace...`),
-            'process'
-        );
         const sceneImportReport = await doImportText(patchEntry.markdown, 'scene', {
             suppressAlerts: true,
             autoSupplementSceneSubjects: false,
         });
         if (!isSuccessfulSceneImportReport(sceneImportReport)) {
+            publishSceneOrchestrationPanelStatus({
+                sceneId: stableSceneId,
+                phase: 'failed',
+                sceneOrder,
+                errorCode: 'workspace_import_failed',
+            });
             throw new Error(t(
                 `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No 或解析失败）。`,
                 `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No or parse failure).`
@@ -6683,10 +6819,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         orchestrationLiveImportedScenesRef.current.add(stableSceneId);
-        onLog?.(
-            t(`[场景导入] ${stableSceneId} 导入完成`, `[Scene import] ${stableSceneId} import completed`),
-            'success'
-        );
+        publishSceneOrchestrationPanelStatus({
+            sceneId: stableSceneId,
+            phase: 'imported',
+            sceneOrder,
+        });
         return sceneImportReport;
     }, [
         activeEpisode?.id,
@@ -6697,6 +6834,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         patchSceneTableRowIdentity,
         persistSceneMarkdownPatch,
         projectId,
+        publishSceneOrchestrationPanelStatus,
         purgeEpisodeScenes,
         syncSceneUnitsProgress,
         t,
@@ -7781,6 +7919,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     onLog?.(`[${label}] scene units sync warning: ${syncErr?.message || syncErr}`, 'warning');
                 }
             }
+            beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
                 message: t(
@@ -7789,74 +7928,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             });
 
-            const reportedOrchestrationPhases = new Map();
-
             const reportSceneOrchestrationPhase = ({ sceneId, phase, sceneOrder, totalScenes, errorCode }) => {
-                const stableSceneId = String(sceneId || '').trim();
-                const stablePhase = String(phase || '').trim().toLowerCase();
-                if (!stableSceneId || !stablePhase) return;
-                const reported = reportedOrchestrationPhases.get(stableSceneId) || new Set();
-                if (reported.has(stablePhase)) return;
-                reported.add(stablePhase);
-                reportedOrchestrationPhases.set(stableSceneId, reported);
-
-                const message = buildSceneOrchestrationPhaseMessage(stableSceneId, stablePhase, {
+                publishSceneOrchestrationPanelStatus({
+                    sceneId,
+                    phase,
                     sceneOrder,
-                    totalScenes,
+                    totalScenes: totalScenes || orchestrationSceneCount,
                     errorCode,
-                    t,
                 });
-                if (!message) return;
-                onLog?.(message, SCENE_ORCHESTRATION_PHASE_LOG_TYPES[stablePhase] || 'info');
-                if (stablePhase === 'queued') {
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `场景编排进行中：${sceneId} 已排队（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${sceneId} queued (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
-                        ),
-                    });
-                } else if (stablePhase === 'llm_submit') {
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `场景编排进行中：${stableSceneId} 已提交 LLM（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${stableSceneId} submitted (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
-                        ),
-                    });
-                } else if (stablePhase === 'llm_returned') {
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `场景编排进行中：${stableSceneId} LLM 已返回（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${stableSceneId} LLM returned (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
-                        ),
-                    });
-                } else if (stablePhase === 'importing') {
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `场景编排进行中：${stableSceneId} 正在导入（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${stableSceneId} importing (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
-                        ),
-                    });
-                } else if (stablePhase === 'imported') {
-                    setAnalysisFlowStatus({
-                        phase: 'scene_beats',
-                        message: t(
-                            `场景编排进行中：${stableSceneId} 已完成（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）`,
-                            `Scene beats in progress: ${stableSceneId} completed (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})`
-                        ),
-                    });
-                } else if (stablePhase === 'failed') {
-                    setAnalysisFlowStatus({
-                        phase: 'warning',
-                        message: t(
-                            `场景编排失败：${sceneId}${errorCode ? `（${errorCode}）` : ''}`,
-                            `Scene beats failed: ${sceneId}${errorCode ? ` (${errorCode})` : ''}`
-                        ),
-                    });
-                }
             };
 
             const runSequentialSceneFallback = async (reason = '') => {
@@ -7894,10 +7973,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 'warning'
                             );
                         }
-                        onLog?.(
-                            t(`[${sceneLabel}] 正在提交 LLM...`, `[${sceneLabel}] submitting to LLM...`),
-                            'process'
-                        );
+                        publishSceneOrchestrationPanelStatus({
+                            sceneId,
+                            phase: 'llm_submit',
+                            sceneOrder: unit?.sceneOrder,
+                            totalScenes: orchestrationSceneCount,
+                        });
                         const attempt = await runSingleStage2_2Attempt({
                             attemptLabel: sceneLabel,
                             attemptUserInputBody: singleSceneBody,
@@ -7907,10 +7988,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         });
                         if (attempt.stage2_2Check?.ok) {
                             sceneAttempt = attempt;
-                            onLog?.(
-                                t(`[${sceneLabel}] LLM 已返回，校验通过`, `[${sceneLabel}] LLM returned and passed validation`),
-                                'success'
-                            );
+                            publishSceneOrchestrationPanelStatus({
+                                sceneId,
+                                phase: 'llm_returned',
+                                sceneOrder: unit?.sceneOrder,
+                                totalScenes: orchestrationSceneCount,
+                            });
                             break;
                         }
                         lastError = attempt.stage2_2Check?.reason || lastError;
@@ -8045,13 +8128,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             validatedOutputs,
                             unitsToProcess
                         );
-                        onLog?.(
-                            t(
-                                `[${label}] 并行编排 LLM 全部返回（${validatedOutputs.length}/${orchestrationSceneCount} 场）`,
-                                `[${label}] Parallel orchestration LLM returned for all scenes (${validatedOutputs.length}/${orchestrationSceneCount})`
-                            ),
-                            'success'
-                        );
                         validatedOutputs.forEach((item, index) => {
                             const sceneId = String(item?.sceneId || '').trim();
                             if (!sceneId) return;
@@ -8153,6 +8229,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         analysisAttentionNotes,
         awaitAnalyzeSceneWithRecovery,
+        beginSceneOrchestrationPanelTracking,
         buildSceneMarkdownPatchFromPerSceneOutputs,
         buildStage2_2UserInputFromStage1,
         clearSceneMarkdownPatchForScenes,
@@ -8168,6 +8245,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         onLog,
         parseSceneUnitsFromScriptMarkers,
         projectId,
+        publishSceneOrchestrationPanelStatus,
         resetSceneOrchestrationProgress,
         selectedReuseSubjectAssets,
         resolveSelectedScriptAnalysisApiId,
@@ -8439,7 +8517,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .replace('Use this project context as first-class constraints before analyzing the script.', 'Use this project context as first-class constraints before generating the subjects.');
 
             if (designProjectContextSection) {
-                finalSubjectIndexText = `${designProjectContextSection}\n\n[第二阶段资产清单 - 第三阶段权威输入]\n${finalSubjectIndexText}`;
+                finalSubjectIndexText = [
+                    designProjectContextSection,
+                    wrapInjectionSection('Subject Index', finalSubjectIndexText),
+                ].join('\n\n');
             }
 
             onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
@@ -12178,13 +12259,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             liveImportedIds: liveImported,
                         });
                         if (skipBatchImport) {
-                            onLog?.(
-                                t(
-                                    `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
-                                    `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                            setAnalysisFlowStatus({
+                                phase: 'scene_beats',
+                                message: t(
+                                    `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
+                                    `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
                                 ),
-                                'success'
-                            );
+                            });
                             branchImportReport = {
                                 ok: true,
                                 changed: true,
@@ -12226,13 +12307,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         dbSceneCount: dbSceneCountAfterImport,
                         t,
                     });
-                    onLog?.(
-                        t(
-                            `[场景导入] 工作区校验通过：${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} 场已入库`,
-                            `[Scene import] Workspace verified: ${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} scene(s) in DB`
+                    setAnalysisFlowStatus({
+                        phase: 'scene_beats',
+                        message: t(
+                            `✅ 场景入库校验通过（${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} 场）`,
+                            `Scene import verified (${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} scenes in workspace)`
                         ),
-                        'success'
-                    );
+                    });
                     phaseMarks.importFinishedAt = Date.now();
                     return branchImportReport;
                 };
@@ -12463,13 +12544,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         liveImportedIds: liveImported,
                     });
                     if (skipBatchImport) {
-                        onLog?.(
-                            t(
-                                `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
-                                `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                        setAnalysisFlowStatus({
+                            phase: 'scene_beats',
+                            message: t(
+                                `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
+                                `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
                             ),
-                            'success'
-                        );
+                        });
                         importReport = {
                             ok: true,
                             changed: true,
@@ -12512,13 +12593,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     dbSceneCount: dbSceneCountAfterImport,
                     t,
                 });
-                onLog?.(
-                    t(
-                        `[场景导入] 工作区校验通过：${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} 场已入库`,
-                        `[Scene import] Workspace verified: ${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} scene(s) in DB`
+                setAnalysisFlowStatus({
+                    phase: 'scene_beats',
+                    message: t(
+                        `✅ 场景入库校验通过（${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} 场）`,
+                        `Scene import verified (${dbSceneCountAfterImport}/${expectedSceneImportCount || dbSceneCountAfterImport} scenes in workspace)`
                     ),
-                    'success'
-                );
+                });
             } catch (importErr) {
                 importWarningMessage = t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`);
                 if (onLog) onLog(`Auto-import failed: ${importErr?.message || importErr}`, 'error');
@@ -13025,13 +13106,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         liveImportedIds: liveImported,
                     });
                     if (skipBatchImport) {
-                        onLog?.(
-                            t(
-                                `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
-                                `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                        setAnalysisFlowStatus({
+                            phase: 'scene_beats',
+                            message: t(
+                                `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
+                                `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
                             ),
-                            'success'
-                        );
+                        });
                         importReport = {
                             ok: true,
                             changed: true,
@@ -13246,6 +13327,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
         analysisStopRequestedRef.current = false;
+        beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
         setAnalysisFlowStatus({
             phase: 'scene_beats',
             message: rerunMode === 'single'
@@ -13254,12 +13336,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         sceneBeatsOnlyRerunInFlightRef.current = true;
         logSelectedScriptAnalysisApi(rerunLabel);
-        onLog?.(
-            rerunMode === 'single'
-                ? `进入仅场景重排模式（单场）：${targetSceneId}`
-                : `进入仅场景重排模式（全部 ${orchestrationSceneCount} 场，同步发起后端编排）`,
-            'info'
-        );
 
         try {
             orchestrationLiveImportedScenesRef.current = new Set();
@@ -13367,7 +13443,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'scene_beats',
                 message: t('✅ 场景编排 LLM 已返回，正在第一时间回写结果...', 'Scene beats LLM returned. Writing back results immediately...'),
             });
-            onLog?.('场景拆解结果已返回，正在更新界面并立即回写。', 'info');
 
             if (stage2_2ResultObj?.meta) {
                 runtimeMeta = extractAnalysisRuntimeMeta(stage2_2ResultObj.meta);
@@ -13401,11 +13476,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     sceneMarkdownByScene: sceneMarkdownPatch,
                 });
             }
-            onLog?.(rerunMode === 'single'
-                ? `场景 ${targetSceneId} 拆解结果已回写到分集（仅该场分场景存储）。`
-                : (allScenePatchMap && Object.keys(allScenePatchMap).length > 0)
-                    ? `全部 ${Object.keys(allScenePatchMap).length} 场场景拆解结果已分别回写到分集（分场景存储）。`
-                    : '场景拆解结果已回写到分集记录（含分场景存储）。', 'success');
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
                 message: rerunMode === 'single'
@@ -13414,16 +13484,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
             if (rerunMode === 'single') {
+                publishSceneOrchestrationPanelStatus({
+                    sceneId: targetSceneId,
+                    phase: 'importing',
+                    sceneOrder: targetSceneUnits?.[0]?.sceneOrder,
+                    totalScenes: 1,
+                });
                 importReport = await doImportText(singleSceneImportText, 'scene', {
                     suppressAlerts: true,
                     autoSupplementSceneSubjects: false,
                 });
                 if (!isSuccessfulSceneImportReport(importReport)) {
+                    publishSceneOrchestrationPanelStatus({
+                        sceneId: targetSceneId,
+                        phase: 'failed',
+                        sceneOrder: targetSceneUnits?.[0]?.sceneOrder,
+                        totalScenes: 1,
+                        errorCode: 'workspace_import_failed',
+                    });
                     throw new Error(t(
                         `[场景导入] ${targetSceneId} 导入失败：场景未写入数据库。`,
                         `[Scene import] ${targetSceneId} failed: scene was not persisted to the database.`
                     ));
                 }
+                publishSceneOrchestrationPanelStatus({
+                    sceneId: targetSceneId,
+                    phase: 'imported',
+                    sceneOrder: targetSceneUnits?.[0]?.sceneOrder,
+                    totalScenes: 1,
+                });
                 if (projectId && activeEpisode?.id) {
                     try {
                         await syncSceneUnitsProgress({
@@ -13452,13 +13541,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     liveImportedIds: liveImported,
                 });
                 if (skipBatchImport) {
-                    onLog?.(
-                        t(
-                            `[场景导入] 全部 ${patchSceneIds.length} 场已在数据库校验通过，跳过批次导入。`,
-                            `[Scene import] All ${patchSceneIds.length} scene(s) verified in DB; skipping batch import.`
+                    setAnalysisFlowStatus({
+                        phase: 'scene_beats',
+                        message: t(
+                            `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
+                            `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
                         ),
-                        'success'
-                    );
+                    });
                     importReport = {
                         ok: true,
                         changed: true,
@@ -13525,7 +13614,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ? t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
                     : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`),
             });
-            onLog?.(rerunMode === 'single' ? `单场场景重排完成：${targetSceneId}` : `全部场景重排完成（${orchestrationSceneCount} 场，同步编排）`, 'success');
         } catch (error) {
             const friendlyError = localizeAnalysisFailureMessage(error?.message || String(error));
             setAnalysisFlowStatus({
@@ -13543,11 +13631,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: friendlyError,
                 runTag: 'scene_beats_only_rerun',
             });
-            onLog?.(`仅场景重排失败：${friendlyError}`, 'error');
             alert(t(`场景重排失败：${friendlyError}`, `Scene beats rerun failed: ${friendlyError}`));
         } finally {
             sceneBeatsOnlyRerunInFlightRef.current = false;
-            onLog?.('已退出仅场景重排模式。', 'info');
+            endSceneOrchestrationPanelTracking();
             clearAnalysisTaskMarker(activeEpisode?.id);
             setIsAnalyzing(false);
             setActiveAnalysisTaskId('');
@@ -13560,8 +13647,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
+        beginSceneOrchestrationPanelTracking,
         clearAnalysisTaskMarker,
         clearSceneMarkdownPatchForScenes,
+        endSceneOrchestrationPanelTracking,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
@@ -13576,6 +13665,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         persistSceneMarkdownBundle,
         persistSceneMarkdownPatch,
         projectId,
+        publishSceneOrchestrationPanelStatus,
         resolveSceneBeatsRerunCandidates,
         resetSceneOrchestrationProgress,
         runAutoImportAndSwitchToScenes,

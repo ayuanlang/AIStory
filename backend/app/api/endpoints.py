@@ -70,6 +70,7 @@ from app.core.prompts.scene_analysis_feature_skills import (
     render_scene_analysis_routed_prompt,
     resolve_scene_analysis_feature_bundle,
 )
+from app.core.prompt_injection import unwrap_injection_section, wrap_injection_section
 from app.core.prompts.shot_generation_feature_skills import (
     get_shot_generation_feature_catalog,
     render_shot_generation_routed_prompt,
@@ -7901,6 +7902,13 @@ def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_t
     adapted = str(adapted_script_text or "").strip()
     if not source.strip():
         return adapted
+    wrapped_adapted = unwrap_injection_section(source, "优化后剧本")
+    if wrapped_adapted is not None:
+        return source.replace(
+            wrap_injection_section("优化后剧本", wrapped_adapted),
+            wrap_injection_section("优化后剧本", adapted),
+            1,
+        ).strip()
     marker_match = re.search(r"(\[优化后剧本[^\]]*\]\s*\n)([\s\S]*)$", source)
     if marker_match:
         return f"{source[:marker_match.start(2)]}{adapted}".strip()
@@ -11583,6 +11591,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
             # Frontend Stage 2.2 handoff wrapper (legacy); backend injects Subject Index once from episode data.
             text = re.sub(
+                r"(?is)\[Subject Index开始\]\s*.*?\s*\[Subject Index结束\]\s*",
+                "",
+                text,
+            ).strip()
+            text = re.sub(
                 r"(?is)^\s*\[Stage\s*2[\-_]\s*1\s+Subject\s*Index[^\]]*\].*?```subject_index\s*.*?```\s*",
                 "",
                 text,
@@ -11632,6 +11645,16 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             text = str(raw_text or "")
             if not text.strip():
                 return ""
+
+            wrapped_script = unwrap_injection_section(text, "待分析剧本")
+            if wrapped_script:
+                marker = "Script to Analyze:"
+                if marker in wrapped_script:
+                    idx = wrapped_script.rfind(marker)
+                    if idx >= 0:
+                        return wrapped_script[idx + len(marker):].strip()
+                return wrapped_script.strip()
+
             marker = "Script to Analyze:"
             if marker not in text:
                 return text.strip()
@@ -11673,13 +11696,19 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 return episode_adaptation_for_scene_beats
             return ""
 
+        def _build_script_to_analyze_block(script_body: Any) -> str:
+            return wrap_injection_section(
+                "待分析剧本",
+                f"Script to Analyze:\n\n{str(script_body or '').strip()}",
+            )
+
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
                 "[Saved Subject Index Injection - Authoritative]\n"
                 "The following Subject Index is loaded from persisted sanitized episode data.\n"
                 "For this stage, treat this block as the ONLY authoritative Subject Index source.\n"
                 "Ignore any Subject Index-like prose or reasoning fragments that may appear elsewhere in the input.\n\n"
-                f"{persisted_subject_index_for_prompt}"
+                f"{wrap_injection_section('Subject Index', persisted_subject_index_for_prompt)}"
             )
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
@@ -11687,7 +11716,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text)
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
-                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
+                user_content = f"{saved_subject_index_block}\n\n{_build_script_to_analyze_block(canonical_stage_text)}"
             elif is_subject_index_consumer_stage:
                 canonical_stage_text = str(request.text or "")
                 if should_trim_before_submit:
@@ -11697,7 +11726,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 canonical_stage_text = str(request.text or "")
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
-                user_content = f"{saved_subject_index_block}\n\nScript to Analyze:\n\n{canonical_stage_text}"
+                user_content = f"{saved_subject_index_block}\n\n{_build_script_to_analyze_block(canonical_stage_text)}"
             logger.info(
                 "[analyze_scene] injected subject index into user prompt episode_id=%s saved_chars=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
                 getattr(request, "episode_id", None),
@@ -11717,7 +11746,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     request_text_for_prompt,
                     subject_index_allowed_types_for_request,
                 )
-            user_content = f"Script to Analyze:\n\n{request_text_for_prompt}"
+            user_content = _build_script_to_analyze_block(request_text_for_prompt)
 
         def _extract_reuse_assets_from_subject_index(subject_index_text: str) -> List[Dict[str, Any]]:
             assets: List[Dict[str, Any]] = []
@@ -11827,10 +11856,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
 
         if attention_notes and (not is_scene_beats_stage):
-            attention_block = (
-                "Regeneration Attention Notes (High Priority):\n"
-                "When regenerating AI Scene Analysis, you MUST prioritize and satisfy these constraints:\n"
-                f"{attention_notes}"
+            attention_block = wrap_injection_section(
+                "重生成注意力备注",
+                (
+                    "Regeneration Attention Notes (High Priority):\n"
+                    "When regenerating AI Scene Analysis, you MUST prioritize and satisfy these constraints:\n"
+                    f"{attention_notes}"
+                ),
             )
             user_content = f"{attention_block}\n\n{user_content}"
             logger.info(
@@ -11929,7 +11961,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     subject_ref = str(asset.get("subject_ref") or "").strip() or f"SUBJECT:[{asset['name']}]"
                     lines.append(f"- {subject_ref} (name={asset['name']}) {details}".strip())
 
-                reuse_block = "\n".join(lines)
+                reuse_block = wrap_injection_section("可复用Subject资产", "\n".join(lines))
                 user_content = f"{reuse_block}\n\n{user_content}"
                 logger.info(
                     "Injected reusable subject assets into prompt: count=%s tokens_est=%s",
@@ -21527,12 +21559,15 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
             lines.append(f"  - {' | '.join(bits)}")
         return "\n".join(lines)
 
-    return (
-        "[Project Existing Subject Index]\n"
+    inventory_body = (
         "Existing Entity Inventory By Category:\n"
         f"{_format_bucket('characters')}\n"
         f"{_format_bucket('props')}\n"
         f"{_format_bucket('environments')}"
+    )
+    return (
+        "[Project Existing Subject Index]\n"
+        f"{wrap_injection_section('项目既有Subject Index', inventory_body)}"
     )
 
 
@@ -22668,13 +22703,13 @@ async def regenerate_scene(
     )
 
     user_prompt = (
-        f"[Project Context]\n{project_context_block}\n\n"
+        f"{wrap_injection_section('项目信息', project_context_block)}\n\n"
         f"Source Scene Database ID: {db_scene.id}\n\n"
-        f"Current Scene (Markdown Row):\n{scene_snapshot}\n\n"
-        f"[Original Script Grounding]\n{original_script_grounding_block}\n\n"
-        f"[Current Scene Subject Seeds]\n{scene_subject_seeds_block}\n\n"
+        f"{wrap_injection_section('当前场景', f'Current Scene (Markdown Row):\\n{scene_snapshot}')}\n\n"
+        f"{wrap_injection_section('原始剧本依据', f'[Original Script Grounding]\\n{original_script_grounding_block}')}\n\n"
+        f"{wrap_injection_section('场景Subject种子', f'[Current Scene Subject Seeds]\\n{scene_subject_seeds_block}')}\n\n"
         f"{existing_subjects_block}\n\n"
-        f"[User Supplement Requirements]\n{user_requirements}\n\n"
+        f"{wrap_injection_section('用户补充要求', f'[User Supplement Requirements]\\n{user_requirements}')}\n\n"
         "Task Instructions:\n"
         "- Use Project Context + Current Scene + Original Script Grounding + Current Scene Subject Seeds + System-level Subjects Inventory together.\n"
         "- Original Script Grounding is the primary truth source for checking whether the current scene is missing characters, missing key actions, missing location anchors, or has major core scene info / visual-guidance errors.\n"
@@ -23614,7 +23649,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Continuity Priority: {continuity_priority}")
 
     project_context_lines.append("Use this project context as first-class constraints before analyzing the script.")
-    project_context_section = "\n".join(project_context_lines)
+    project_context_section = wrap_injection_section("项目信息", "\n".join(project_context_lines))
 
     metadata = {
         "title": title,
@@ -23937,7 +23972,7 @@ def _build_shot_prompts(
             len(scene_subject_keys),
             len(kept_rows),
         )
-        return "\n".join(lines).strip() + "\n", index_subject_keys
+        return wrap_injection_section("Subject Index", "\n".join(lines).strip() + "\n"), index_subject_keys
 
     env_narrative = _extract_environment_context_from_text(scene.core_scene_info).strip()
     if env_narrative:
@@ -23971,10 +24006,9 @@ def _build_shot_prompts(
 
     # Environment Context is now a separate field in the table
 
-    user_input = f"""{project_context_section}
-
-# Core Scene Info
-| Field | Value |
+    core_scene_info_block = wrap_injection_section(
+        "Core Scene Info",
+        f"""| Field | Value |
 | :--- | :--- |
 | **Scene No** | {scene.scene_no or ''} |
 | **Scene Name** | {scene.scene_name or ''} |
@@ -23982,7 +24016,12 @@ def _build_shot_prompts(
 | **Environment Context** | {env_narrative or 'N/A'} |
 | **Linked Characters** | {scene.linked_characters or ''} |
 | **Key Props** | {scene.key_props or ''} |
-| **Core Goal** | {core_goal_text} |
+| **Core Goal** | {core_goal_text} |""",
+    )
+
+    user_input = f"""{project_context_section}
+
+{core_scene_info_block}
 
 {scene_subject_index_section}
 # Instruction

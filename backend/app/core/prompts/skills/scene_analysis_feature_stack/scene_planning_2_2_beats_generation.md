@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-06-27 20:00:00 +08:00
+# Prompt Updated At: 2026-06-28 12:00:00 +08:00
 
 
 
@@ -29,7 +29,25 @@
 
 ## 硬约束
 
-- **输入**： `Subject Index`（资产实体命名唯一权威源）。当输入仅包含单个 `[SCENE_START:{scene_id}]` … `[SCENE_END:{scene_id}]` 场景块时，**仅输出该场景的一行 Scenes Table**，不要处理其他场景。
+- **输入**：`Subject Index`（资产实体命名与取用的**唯一权威源、唯一白名单**）。Stage 1 剧本提供剧情与交互语义；**凡落表的 CHAR/ENV/PROP 名称均须逐字取自 Index 行，禁止取自 Stage 1 原名、推理文本或任何 Index 外来源**。
+
+- **Subject Index 输入格式参考：
+
+  `| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
+
+  `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |`
+
+  格式示例（仅演示列结构，生成时须替换为本次输入的真实行）：
+
+  `| S001 | character | 林天 | Lin Tian | None | None | 仙侠架空时代，重伤濒死的隐忍少年。身穿破损的血衣，神情坚韧且带有绝望转疯狂的特质。 | 林天, 废物, 丧家之犬 |`
+
+- **资产取用规则（强制）**：
+  1. **白名单闭包**：输出中每一个 `CHAR:`/`ENV:`/`PROP:` 名称（含 `Environment Name`、`Linked Characters`、`Key Props`、`Base Environment Reference` 及 Beat 内全部实体锚点），必须**逐字**等于 Index 某一行的 `subject_name_zh`（中文落表默认）或 `subject_name_en`（仅当表格列/字段明确要求英文名列时）；**禁止**使用 Index 中不存在的任何名称。
+  2. **类型前缀映射**：`subject_type=character` → `CHAR:[@{subject_name_zh}]`；`environment` → `ENV:[{subject_name_zh}]`；`prop` → `PROP:[{subject_name_zh}]`；`cover_poster` 不进入 Scene/Beat 实体锚点。
+  3. **别名核销**：Stage 1 中的称呼、简称、别名（如「废物」「丧家之犬」）**仅**通过 Index 该行 `script_entity_coverage` 核销对应关系；落表一律替换为 `subject_name_zh`，**禁止**保留 Stage 1 非 Index 名。
+  4. **衍生实体**：衍生行须用完整 `subject_name_zh`（如 `林天_战损版`、`180度办公室会客区_桌后反打`）；`base_entity` / `dependency_reference` 只声明依赖链，**不得**替代落表名。
+  5. **属性只读**：`entity_attributes` 供理解与核销，**不得**从中抽取新名称写入 Scene/Beat；Index 有而 Stage 1 未出现的实体**不得**补入 Scene/Beat。
+  6. **缺口不回填**：Stage 1 已写实体在 Index 中无对应行 → 只在 `{覆盖核销}` 标 `资产索引缺口：缺 CHAR|ENV|PROP:[...]`，**禁止**自行命名填补。
 
 - **输出**：仅输出 Markdown 表格，标题固定 `Part 1: Scenes Table`；禁止代码块、解释、思考过程。
 
@@ -38,7 +56,7 @@
 - **继承范围**：剧情结构、Scene/Beat 边界（**含时间切分边界，不得因时长目的改动**）、Stage 1 全部 Scene 级字段、Beat **前置+六环节**（细则 Stage 1 §11）、对白/OS/V.O.、对白拆句判定、对白组边界、下一节拍起幅、动作链、微表情/微动作/微反应、细节特写、心理可视化、主/衍生环境、站位表达式、Beat 建置更新判定、**速度/节奏/语速（speed/tone/volume）、停顿与维持时长、闪回/转场/首节拍时间上限等一切时间约束**。
 - **边界锁定**：Scene、Beat、主环境数量与顺序继承 Stage 1；**禁止**为等效时长目的合并、拆分、增删或重排 Beat；**仅**继承 Stage 1 已写实体与交互，`Subject Index` **仅**作命名标准表达转换，**禁止**因 Index 关联/coverage 向 Scene/Beat 补充 Stage 1 未写实体；禁止新增、合并、拆分、重命名 Scene/Beat/实体。**闪回/回忆边界**：Stage 1 将闪回/回忆置于 Scene 内转场专拍/快速闪回/无情节切片时，**不得**升格为独立 Scene；Stage 1 未写独立回忆 Scene 时，**不得**自创 Scene 或回忆 ENV。
 
-- **实体命名（双源交集，Subject Index 为准）**：Stage 1 提供自然语言称呼与交互语义，**不含**资产分类。凡**同时**在 `Subject Index` 与 Stage 1 任一字段有语义出现的实体，输出**必须**转为 `CHAR:`/`ENV:`/`PROP:` 标准表达（角色 `CHAR:[@名称]`；名称逐字取自 Index `subject_name_zh`/`subject_name_en`）。Stage 1 称呼、简称、别名**仅作核销依据**，落表一律替换；**禁止**在 `{Scene实体覆盖}`、`{登场实体}`、`Environment Name`、`Linked Characters`、`Key Props`、Beat 内空间/景深层次/环境交互/关键感知焦点/结果落位、`Observer View`、`Base Environment Reference` 及任何锚点引用中保留 Stage 1 原名或非 Index 名；**禁止**自行新建、翻译、缩写、同义替换或修正标点/空格/大小写。命名冲突时以 Subject Index 为准，在 `{覆盖核销}` 标 `实体名不一致已按Subject Index校正`。
+- **实体命名（双源交集，Subject Index 为准）**：Stage 1 提供自然语言称呼与交互语义，**不含**资产分类。凡**同时**在 `Subject Index` 与 Stage 1 任一字段有语义出现的实体，输出**必须**转为 `CHAR:`/`ENV:`/`PROP:` 标准表达；**方括号内名称逐字取自 Index 对应行的 `subject_name_zh`**（角色前缀 `CHAR:[@...]`）。Stage 1 称呼、简称、别名**仅**经 `script_entity_coverage` 核销后替换为 Index 名；**禁止**在 `{Scene实体覆盖}`、`{登场实体}`、`Environment Name`、`Linked Characters`、`Key Props`、Beat 内空间/景深层次/环境交互/关键感知焦点/结果落位、`Observer View`、`Base Environment Reference` 及任何锚点引用中保留 Stage 1 原名或非 Index 名；**禁止**自行新建、翻译、缩写、同义替换或修正标点/空格/大小写。命名冲突时以 Subject Index 的 `subject_name_zh` 为准，在 `{覆盖核销}` 标 `实体名不一致已按Subject Index校正`。
 
 
 
@@ -48,7 +66,7 @@
 
 - **实体继承自检**：Stage 1 已写实体须转为 Index 标准表达并落入对应字段；Index 有而 Stage 1 未写出的实体**不得**补入 Scene/Beat，若存在仅在 `{覆盖核销}` 注明 `Index未在Stage1出现:<实体名>`。
 
-- **表格列资产约束（Subject Index 唯一源，禁止自创）**：`Part 1: Scenes Table` 中凡涉及资产名称或资产引用的列/字段——`Core Scene Info` 内全部实体锚点（含 `{Scene实体覆盖}`、`{主环境}`、`{衍生环境}`、`{登场实体}`、`{Beats}` 各 Beat 的 `ENV:`/`CHAR:`/`PROP:`、`Observer View`、空间/景深层次/环境交互/关键感知焦点/结果落位等）、`Environment Name`、`Environment Relation`（含 `VARIANT_OF:`/`NEW` 等关系词后的环境名）、`Base Environment Reference`、`Environment Delta`（若引用具名环境/实体）、`Linked Characters`、`Key Props`——**出现的每一个 CHAR/ENV/PROP 名称必须逐字存在于输入 `Subject Index`，禁止自创、翻译、缩写、同义替换、Stage 1 非 Index 原名落表或 Index 无依据的新增实体**；Index 无对应条目时**不得**自行命名填补，只在 `{覆盖核销}` 标 `资产索引缺口：缺 CHAR|ENV|PROP:[...]`。
+- **表格列资产约束（Subject Index 唯一源，禁止自创）**：`Part 1: Scenes Table` 中凡涉及资产名称或资产引用的列/字段——`Core Scene Info` 内全部实体锚点（含 `{Scene实体覆盖}`、`{主环境}`、`{衍生环境}`、`{登场实体}`、`{Beats}` 各 Beat 的 `ENV:`/`CHAR:`/`PROP:`、`Observer View`、空间/景深层次/环境交互/关键感知焦点/结果落位等）、`Environment Name`、`Environment Relation`（含 `VARIANT_OF:`/`NEW` 等关系词后的环境名）、`Base Environment Reference`、`Environment Delta`（若引用具名环境/实体）、`Linked Characters`、`Key Props`——**出现的每一个 CHAR/ENV/PROP 名称必须逐字等于 Index 某行的 `subject_name_zh`（或该列明确要求时的 `subject_name_en`）**；须可反向追溯到 `subject_no`；**禁止**自创、翻译、缩写、同义替换、Stage 1 非 Index 原名落表或 Index 无依据的新增实体；Index 无对应条目时**不得**自行命名填补，只在 `{覆盖核销}` 标 `资产索引缺口：缺 CHAR|ENV|PROP:[...]`。
 
 
 
@@ -76,7 +94,7 @@
 
 - **对白组边界与下一节拍起幅（工程映射，非镜头设计）**：每 Beat 写入 `{对白组边界}`（完结|待续|无对白）与 `{下一节拍起幅}`（近景主拍|中景关系镜|全景建置|Insert特写|Walk-and-Talk|切场|宏观场面|无下一Beat），依据 Stage 1 同场对白分配与**下一 Beat** 继承事实映射，禁止自造运镜。缺证据 → `{覆盖核销}` 标 `上游下一节拍起幅缺口`，**禁止推断填洞**。
 
-- **输出前自检**：Beat数/顺序=Stage1；决战≥10(§25)｜宏观≥6+三要素(§26)；对白/动作/时间/环境/FG-MG-BG/Equivalent Duration；**表格各列及 Core Scene Info 内全部资产名逐条核对 Subject Index，零自创**；实体命名=Index一致；缺口标`{覆盖核销}`。
+- **输出前自检**：Beat数/顺序=Stage1；决战≥10(§25)｜宏观≥6+三要素(§26)；对白/动作/时间/环境/FG-MG-BG/Equivalent Duration；**逐条核对：Core Scene Info 与表格各列中每个 CHAR/ENV/PROP 名称是否均等于 Index 某行 `subject_name_zh`（零自创、零 Stage 1 原名残留）**；实体命名=Index一致；缺口标`{覆盖核销}`。
 
 
 
@@ -122,12 +140,12 @@
 
 ### Part 1: Scenes Table
 
-> **表格列资产铁则**：下列列中凡出现的 CHAR/ENV/PROP 名称（含 `Core Scene Info` 内全部实体锚点），**必须**逐字存在于输入 `Subject Index`；**禁止**自创、翻译、缩写或 Index 无依据的新增实体；Index 缺失只在 `{覆盖核销}` 标缺口，**不回填**。
+> **表格列资产铁则**：下列列中凡出现的 CHAR/ENV/PROP 名称（含 `Core Scene Info` 内全部实体锚点），**必须**逐字等于输入 `Subject Index` 某行的 `subject_name_zh`；**禁止**自创、翻译、缩写、Stage 1 原名落表或 Index 无依据的新增实体；Index 缺失只在 `{覆盖核销}` 标缺口，**不回填**。
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 
-| EP01 | EP01_SC01 | 1 | 诊所对谈 | 8s | - **{核销源}**: 原文「林警官落座对谈」→ 继承。<br>- **{故事内核}**: 对谈触发关键记忆；冲突：防备与试探。<br>- **{细节特写规划}**: Beat 1 银打火机桌面反光，叙事功能：触发记忆。<br>- **{Scene识别}**: 时空连续；同场对谈；切分：开场首戏。<br>- **{主环境}**: ENV:[Office Front]；0度会客区、会议桌为基准、日内、FG/MG/BG 见 Beat 1。<br>- **{Scene实体覆盖}**: CHAR:[@Lin Suit]、CHAR:[@Dr. Chen]、PROP:[Silver Lighter] 已入场；衍生 ENV:[Office Reverse] 待 Beat 反打触发。<br>- **{观察视角与空间建置}**: Beat 1 自 Dr. Chen 右后侧 OTS 观察 Lin 正面；环境—视角匹配：主环境 Front。<br>- **{衍生环境}**: ENV:[Office Reverse]；45度桌后反打；触发：视线 Match 反打；空镜差异：桌后医生位视角。<br>- **{场景切换与首节拍转场}**: 无上场｜连续省略｜OT-特写入场+反打推进｜首节拍：前3秒特写打火机吸睛→建置双人桌面对谈→入戏 Lin 开口｜下场：对谈升级。<br>- **{对白拆句判定}**: 未拆句；最长台词「我没病」3 字。<br>- **{Beats}**:<br>- Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜无需过渡] [建置更新: 是] {对白组边界:无对白} {下一节拍起幅:近景主拍}<br>[Observer View: 在 ENV:[Office Front], 由 CHAR:[@Dr. Chen] 右后侧观察向 CHAR:[@Lin Suit] 正面] {景深层次: FG=无有效前景；MG=CHAR:[@Lin Suit] 桌左前倾、CHAR:[@Dr. Chen] 桌右后仰、PROP:[Silver Lighter] 桌面中央；BG=文件柜与白板}；{空间:...}；{环境交互:Lin 触发 PROP:[Silver Lighter]}；{对白与说话标注:CHAR:[@Lin Suit]开口讲话，(voice_type:低沉男声, tone:冷峻, speed:慢速, volume:低声)并伴随{对白:"我没病"}; CHAR:[@Dr. Chen]紧闭双唇（状态:倾听）} -> {结果落位: Lin MG 左前倾，Dr. Chen MG 右后仰} [状态触发: 防备建立]<br>- **{覆盖核销}**: 已按要求完整覆盖；Scene 字段 10、Beat 1、对白 1 条、实体 4；Duration依据: 对白3字/4≈1s+动作2s+建置3s+转场2s=8s（继承 Stage 1 算式）。<br>- **{登场实体}**: CHAR:[@Lin Suit], CHAR:[@Dr. Chen], ENV:[Office Front], ENV:[Office Reverse], PROP:[Silver Lighter] | 林警官...皮鞋上。 | Office Front, Office Reverse | NEW, VARIANT_OF:Office Front | None, Office Front | None, 视角反转 | Lin Suit落座 | 对谈升级 | CHAR:[@Lin Suit], CHAR:[@Dr. Chen] | PROP:[Silver Lighter] |
+| EP01 | EP01_SC01 | 1 | 诊所对谈 | 8s | - **{核销源}**: 原文「林警官落座对谈」→ 继承。<br>- **{故事内核}**: 对谈触发关键记忆；冲突：防备与试探。<br>- **{细节特写规划}**: Beat 1 银打火机桌面反光，叙事功能：触发记忆。<br>- **{Scene识别}**: 时空连续；同场对谈；切分：开场首戏。<br>- **{主环境}**: ENV:[办公室会客区]；0度会客区、会议桌为基准、日内、FG/MG/BG 见 Beat 1。<br>- **{Scene实体覆盖}**: CHAR:[@林警官]、CHAR:[@陈医生]、PROP:[银打火机] 已入场；衍生 ENV:[180度办公室会客区_桌后反打] 待 Beat 反打触发。<br>- **{观察视角与空间建置}**: Beat 1 自陈医生右后侧 OTS 观察林警官正面；环境—视角匹配：主环境办公室会客区。<br>- **{衍生环境}**: ENV:[180度办公室会客区_桌后反打]；180度桌后反打；触发：视线 Match 反打；空镜差异：桌后医生位视角。<br>- **{场景切换与首节拍转场}**: 无上场｜连续省略｜OT-特写入场+反打推进｜首节拍：前3秒特写打火机吸睛→建置双人桌面对谈→入戏林警官开口｜下场：对谈升级。<br>- **{对白拆句判定}**: 未拆句；最长台词「我没病」3 字。<br>- **{Beats}**:<br>- Beat 1: **对话**: 试探。[Beat切换说明: 开场首镜无需过渡] [建置更新: 是] {对白组边界:无对白} {下一节拍起幅:近景主拍}<br>[Observer View: 在 ENV:[办公室会客区], 由 CHAR:[@陈医生] 右后侧观察向 CHAR:[@林警官] 正面] {景深层次: FG=无有效前景；MG=CHAR:[@林警官] 桌左前倾、CHAR:[@陈医生] 桌右后仰、PROP:[银打火机] 桌面中央；BG=文件柜与白板}；{空间:...}；{环境交互:林警官触发 PROP:[银打火机]}；{对白与说话标注:CHAR:[@林警官]开口讲话，(voice_type:低沉男声, tone:冷峻, speed:慢速, volume:低声)并伴随{对白:"我没病"}; CHAR:[@陈医生]紧闭双唇（状态:倾听）} -> {结果落位: 林警官 MG 左前倾，陈医生 MG 右后仰} [状态触发: 防备建立]<br>- **{覆盖核销}**: 已按要求完整覆盖；Scene 字段 10、Beat 1、对白 1 条、实体 4；Duration依据: 对白3字/4≈1s+动作2s+建置3s+转场2s=8s（继承 Stage 1 算式）。<br>- **{登场实体}**: CHAR:[@林警官], CHAR:[@陈医生], ENV:[办公室会客区], ENV:[180度办公室会客区_桌后反打], PROP:[银打火机] | 林警官...皮鞋上。 | 办公室会客区, 180度办公室会客区_桌后反打 | NEW, VARIANT_OF:办公室会客区 | None, 办公室会客区 | None, 视角反转 | 林警官落座 | 对谈升级 | CHAR:[@林警官], CHAR:[@陈医生] | PROP:[银打火机] |
 
 
