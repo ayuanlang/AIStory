@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
@@ -429,6 +429,9 @@ const UserAdmin = () => {
     const [expiredFilesData, setExpiredFilesData] = useState(null);
     const [isExpiredFilesLoading, setIsExpiredFilesLoading] = useState(false);
     const [expiredFilesError, setExpiredFilesError] = useState('');
+    const [orphanFilesData, setOrphanFilesData] = useState(null);
+    const [isOrphanFilesLoading, setIsOrphanFilesLoading] = useState(false);
+    const [orphanFilesError, setOrphanFilesError] = useState('');
     const [promptSkills, setPromptSkills] = useState([]);
     const [isPromptSkillsLoading, setIsPromptSkillsLoading] = useState(false);
     const [selectedPromptSkillId, setSelectedPromptSkillId] = useState('');
@@ -966,6 +969,7 @@ const UserAdmin = () => {
         if (activeTab === 'storage_usage') {
             fetchStorageUsage();
             fetchExpiredFiles();
+            fetchOrphanFiles();
         }
     }, [activeTab]);
 
@@ -4449,6 +4453,21 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchOrphanFiles = async () => {
+        setIsOrphanFilesLoading(true);
+        setOrphanFilesError('');
+        try {
+            const payload = await getAdminOrphanFiles();
+            setOrphanFilesData(payload || null);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e.message || 'Failed to load orphan files';
+            setOrphanFilesError(detail);
+            setOrphanFilesData(null);
+        } finally {
+            setIsOrphanFilesLoading(false);
+        }
+    };
+
     const handleRemindExpiredFiles = async (userIds = null) => {
         try {
             const res = await remindAdminExpiredFiles(userIds);
@@ -4467,6 +4486,18 @@ const UserAdmin = () => {
             await fetchStorageUsage();
         } catch (e) {
             alert(e?.response?.data?.detail || e.message || 'Failed to delete files');
+        }
+    };
+
+    const handleDeleteOrphanFiles = async (userIds = null) => {
+        if (!window.confirm(t('确定永久删除这些未被资产/分镜引用的孤立文件？', 'Delete these unreferenced orphan files permanently?'))) return;
+        try {
+            const res = await deleteAdminOrphanFiles(userIds);
+            alert(res.message || t('文件已删除', 'Files deleted'));
+            await fetchOrphanFiles();
+            await fetchStorageUsage();
+        } catch (e) {
+            alert(e?.response?.data?.detail || e.message || t('删除失败', 'Failed to delete files'));
         }
     };
 
@@ -9410,11 +9441,11 @@ const UserAdmin = () => {
                             <div className="flex items-center justify-between gap-3">
                                 <h3 className="text-lg font-bold">{t('用户磁盘使用统计', 'Per-User Storage Usage')}</h3>
                                 <button
-                                    onClick={() => { fetchStorageUsage(); fetchExpiredFiles(); }}
-                                    disabled={isStorageUsageLoading || isExpiredFilesLoading}
+                                    onClick={() => { fetchStorageUsage(); fetchExpiredFiles(); fetchOrphanFiles(); }}
+                                    disabled={isStorageUsageLoading || isExpiredFilesLoading || isOrphanFilesLoading}
                                     className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
                                 >
-                                    <RefreshCw size={16} className={(isStorageUsageLoading || isExpiredFilesLoading) ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
+                                    <RefreshCw size={16} className={(isStorageUsageLoading || isExpiredFilesLoading || isOrphanFilesLoading) ? 'animate-spin' : ''} /> {t('刷新', 'Refresh')}
                                 </button>
                             </div>
 
@@ -9520,6 +9551,64 @@ const UserAdmin = () => {
                                         {!isExpiredFilesLoading && (!expiredFilesData?.files || expiredFilesData.files.length === 0) && (
                                             <tr>
                                                 <td colSpan={4} className="px-3 py-6 text-center text-gray-400">{t('暂无超期文件', 'No expired files')}</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <hr className="border-white/20 my-6" />
+
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 className="text-lg font-bold text-yellow-400">{t('孤立文件检测', 'Orphan File Detection')}</h3>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        {t(
+                                            '检测素材库中未被活跃资产或分镜引用的图片/视频（含已删除资产/分镜遗留文件）。',
+                                            'Detect image/video files on disk not referenced by active assets or shots (including leftovers from deleted assets/shots).'
+                                        )}
+                                    </p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        {t(`总计: ${orphanFilesData?.total_count || 0} 个文件, 占用空间: ${formatBytes(orphanFilesData?.total_size || 0)}`, `Total: ${orphanFilesData?.total_count || 0} files, Size: ${formatBytes(orphanFilesData?.total_size || 0)}`)}
+                                    </p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => handleDeleteOrphanFiles()}
+                                        disabled={isOrphanFilesLoading || !orphanFilesData?.files?.length}
+                                        className="bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded flex items-center gap-2 disabled:opacity-50"
+                                    >
+                                        <Trash2 size={16} /> {t('清除孤立文件', 'Clear Orphan Files')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {orphanFilesError ? (
+                                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">{orphanFilesError}</div>
+                            ) : null}
+
+                            <div className="overflow-x-auto border border-white/10 rounded-lg max-h-96 overflow-y-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-black/40 sticky top-0">
+                                        <tr className="text-left text-gray-300">
+                                            <th className="px-3 py-2">{t('用户名', 'User')}</th>
+                                            <th className="px-3 py-2">{t('文件路径', 'File Path')}</th>
+                                            <th className="px-3 py-2 text-right">{t('修改时间', 'Modified At')}</th>
+                                            <th className="px-3 py-2 text-right">{t('大小', 'Size')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(orphanFilesData?.files || []).map((row, idx) => (
+                                            <tr key={idx} className="border-t border-white/5">
+                                                <td className="px-3 py-2">{row.username} <span className="text-xs text-gray-500">({row.user_id})</span></td>
+                                                <td className="px-3 py-2 text-gray-300 break-all">{row.filepath}</td>
+                                                <td className="px-3 py-2 text-right whitespace-nowrap">{new Date(row.modified_at).toLocaleString()}</td>
+                                                <td className="px-3 py-2 text-right font-mono">{formatBytes(row.size || 0)}</td>
+                                            </tr>
+                                        ))}
+                                        {!isOrphanFilesLoading && (!orphanFilesData?.files || orphanFilesData.files.length === 0) && (
+                                            <tr>
+                                                <td colSpan={4} className="px-3 py-6 text-center text-gray-400">{t('暂无孤立文件', 'No orphan files')}</td>
                                             </tr>
                                         )}
                                     </tbody>

@@ -28543,6 +28543,85 @@ def delete_admin_expired_files(
                         
     return GenericMessageOut(message=f"Deleted {deleted_count} files ({deleted_size / (1024*1024):.2f} MB).")
 
+
+@router.get("/admin/storage-usage/orphan", response_model=AdminExpiredFilesOut)
+def get_admin_orphan_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can view storage usage")
+
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+    if not upload_root.exists() or not upload_root.is_dir():
+        return AdminExpiredFilesOut(files=[], total_size=0, total_count=0)
+
+    user_rows = db.query(User.id, User.username, User.email).all()
+    user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
+    referenced = _collect_admin_referenced_upload_paths(db)
+    orphan_files, total_size, total_count = _scan_admin_orphan_files(upload_root, referenced, user_map)
+    return AdminExpiredFilesOut(files=orphan_files, total_size=total_size, total_count=total_count)
+
+
+@router.post("/admin/storage-usage/orphan/delete", response_model=GenericMessageOut)
+def delete_admin_orphan_files(
+    req: AdminExpiredDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superuser can do this")
+
+    upload_root = Path(settings.UPLOAD_DIR)
+    if not upload_root.is_absolute():
+        upload_root = (Path(settings.BASE_DIR) / upload_root).resolve()
+    if not upload_root.exists() or not upload_root.is_dir():
+        return GenericMessageOut(message="No files found.")
+
+    user_rows = db.query(User.id, User.username, User.email).all()
+    user_map = {int(row.id): {"username": row.username, "email": row.email} for row in user_rows}
+    referenced = _collect_admin_referenced_upload_paths(db)
+    orphan_files, _, _ = _scan_admin_orphan_files(upload_root, referenced, user_map)
+
+    deleted_count = 0
+    deleted_size = 0
+    allowed_user_ids = set(req.user_ids or []) if req.user_ids is not None else None
+    for item in orphan_files:
+        user_id = int(item.get("user_id") or 0)
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+
+        rel_path = str(item.get("filepath") or "").strip()
+        if not rel_path:
+            continue
+
+        file_path = upload_root / rel_path
+        try:
+            resolved = file_path.resolve()
+            if os.path.commonpath([str(upload_root.resolve()), str(resolved)]) != str(upload_root.resolve()):
+                continue
+        except Exception:
+            continue
+
+        if not file_path.is_file() or file_path.is_symlink():
+            continue
+
+        try:
+            size = int(file_path.stat().st_size)
+        except Exception:
+            size = 0
+
+        try:
+            os.remove(file_path)
+            deleted_count += 1
+            deleted_size += size
+        except Exception:
+            pass
+
+    return GenericMessageOut(message=f"Deleted {deleted_count} orphan files ({deleted_size / (1024 * 1024):.2f} MB).")
+
 # --- Assets ---
 
 class AssetCreate(BaseModel):
@@ -28922,6 +29001,162 @@ def _url_reference_tokens(raw_url: Any) -> set[str]:
             tokens.add(base_name)
 
     return {str(item).strip() for item in tokens if str(item or "").strip()}
+
+
+def _resolve_upload_relative_path_from_media_url(url: Any) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+
+    upload_suffix = ""
+    if raw.startswith("/uploads/"):
+        upload_suffix = raw[len("/uploads/"):].lstrip("/")
+    else:
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            path = urllib.parse.unquote(parsed.path or "").strip()
+            if path.startswith("/uploads/"):
+                upload_suffix = path[len("/uploads/"):].lstrip("/")
+        except Exception:
+            upload_suffix = ""
+
+    if not upload_suffix:
+        return ""
+    return upload_suffix.replace("\\", "/")
+
+
+def _collect_shot_media_urls(
+    img_url: Any,
+    vid_url: Any,
+    technical_notes: Any,
+    start_frame: Any,
+    keyframes_raw: Any,
+) -> List[str]:
+    urls: List[str] = []
+    for candidate in (img_url, vid_url, start_frame, keyframes_raw):
+        raw = str(candidate or "").strip()
+        if raw:
+            urls.append(raw)
+
+    if technical_notes:
+        try:
+            notes = technical_notes
+            if isinstance(notes, str):
+                notes = json.loads(notes)
+            if isinstance(notes, dict):
+                for key in (
+                    "end_frame_url",
+                    "endFrameUrl",
+                    "last_frame_url",
+                    "start_frame_url",
+                    "startFrameUrl",
+                ):
+                    val = notes.get(key)
+                    if val:
+                        urls.append(str(val))
+
+                keyframes = notes.get("keyframes")
+                if isinstance(keyframes, list):
+                    urls.extend(str(item) for item in keyframes if item)
+                elif isinstance(keyframes, str) and keyframes.strip():
+                    urls.append(keyframes)
+
+                for list_key in ("video_ref_image_urls", "ref_image_urls", "end_ref_image_urls"):
+                    refs = notes.get(list_key)
+                    if isinstance(refs, list):
+                        urls.extend(str(item) for item in refs if item)
+        except Exception:
+            pass
+
+    return urls
+
+
+_ORPHAN_SCAN_SKIP_DIR_NAMES = {
+    "_image_jobs",
+    "_video_jobs",
+    "_generation_callbacks",
+    "_downloads",
+    ".thumbs",
+}
+_ORPHAN_MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mov", ".avi", ".webm"}
+
+
+def _collect_admin_referenced_upload_paths(db: Session) -> set[str]:
+    referenced: set[str] = set()
+
+    for (url,) in db.query(Asset.url).filter(_active_asset_clause()).all():
+        rel = _resolve_upload_relative_path_from_media_url(url)
+        if rel:
+            referenced.add(rel)
+
+    shot_rows = db.query(
+        Shot.image_url,
+        Shot.video_url,
+        Shot.technical_notes,
+        Shot.start_frame,
+        Shot.keyframes,
+    ).filter(_active_shot_clause()).all()
+    for row in shot_rows:
+        for url in _collect_shot_media_urls(*row):
+            rel = _resolve_upload_relative_path_from_media_url(url)
+            if rel:
+                referenced.add(rel)
+
+    return referenced
+
+
+def _scan_admin_orphan_files(
+    upload_root: Path,
+    referenced: set[str],
+    user_map: Dict[int, Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    orphan_files: List[Dict[str, Any]] = []
+    total_size = 0
+    total_count = 0
+
+    for child in upload_root.iterdir():
+        if not child.is_dir() or child.name in _ORPHAN_SCAN_SKIP_DIR_NAMES:
+            continue
+        try:
+            user_id = int(child.name)
+        except Exception:
+            continue
+
+        for root, dirnames, files in os.walk(child):
+            dirnames[:] = [name for name in dirnames if name not in _ORPHAN_SCAN_SKIP_DIR_NAMES]
+            for filename in files:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in _ORPHAN_MEDIA_EXTENSIONS:
+                    continue
+
+                path = Path(root) / filename
+                if path.is_symlink():
+                    continue
+                try:
+                    rel_path = str(path.relative_to(upload_root)).replace("\\", "/")
+                    stat = path.stat()
+                except Exception:
+                    continue
+
+                if rel_path in referenced:
+                    continue
+
+                info = user_map.get(user_id, {})
+                orphan_files.append(
+                    {
+                        "user_id": user_id,
+                        "username": str(info.get("username", f"user_{user_id}")),
+                        "email": info.get("email"),
+                        "filepath": rel_path,
+                        "size": int(stat.st_size),
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    }
+                )
+                total_size += int(stat.st_size)
+                total_count += 1
+
+    orphan_files.sort(key=lambda item: item["size"], reverse=True)
+    return orphan_files, total_size, total_count
 
 
 def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:

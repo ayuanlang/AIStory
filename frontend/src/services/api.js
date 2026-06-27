@@ -3130,6 +3130,16 @@ export const deleteAdminExpiredFiles = async (userIds = null) => {
     return response.data;
 };
 
+export const getAdminOrphanFiles = async () => {
+    const response = await api.get('/admin/storage-usage/orphan');
+    return response.data;
+};
+
+export const deleteAdminOrphanFiles = async (userIds = null) => {
+    const response = await api.post('/admin/storage-usage/orphan/delete', { user_ids: userIds });
+    return response.data;
+};
+
 export const getAdminMaintenanceConfig = async () => {
     const response = await api.get('/admin/maintenance-config');
     return response.data;

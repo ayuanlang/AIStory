@@ -147,6 +147,11 @@ const deriveSceneOrchestrationPhase = (unit) => {
 const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, totalScenes, errorCode, t }) => {
     const orderLabel = sceneOrder && totalScenes ? ` (${sceneOrder}/${totalScenes})` : '';
     switch (phase) {
+        case 'queued':
+            return t(
+                `[场景编排] ${sceneId}${orderLabel} 已排队，等待提交 LLM...`,
+                `[Scene beats] ${sceneId}${orderLabel} queued, waiting to submit to LLM...`
+            );
         case 'llm_submit':
             return t(
                 `[场景编排] ${sceneId}${orderLabel} 已提交 LLM，等待返回...`,
@@ -618,12 +623,20 @@ const runAnalysisPipelineIntegrityGate = async ({
     subjectIndexText,
 }) => {
     const failures = [];
+    const resolvedSubjectIndex = String(subjectIndexText || '').trim();
 
-    if (!String(subjectIndexText || '').trim()) {
+    if (!resolvedSubjectIndex) {
         failures.push(t('Subject Index 未生成或未持久化', 'Subject Index was not generated or persisted'));
     }
 
     const expected = Math.max(1, Number(expectedSceneCount) || 0);
+    onLog?.(
+        t(
+            `[Integrity Gate] 开始检查：期望 ${expected} 场入库，Subject Index ${resolvedSubjectIndex.length} 字符`,
+            `[Integrity Gate] Starting checks: expecting ${expected} scene(s) in workspace, Subject Index ${resolvedSubjectIndex.length} chars`
+        ),
+        'info'
+    );
     const dbSceneCount = await waitForEpisodeSceneCount(
         fetchScenesFn,
         episodeId,
@@ -663,18 +676,28 @@ const runAnalysisPipelineIntegrityGate = async ({
     }
 
     if (projectId && fetchEntitiesFn && String(subjectIndexText || '').trim()) {
-        const entities = await fetchEntitiesFn(projectId).catch(() => []);
-        const entityCount = Array.isArray(entities) ? entities.length : 0;
         const importedCounts = postImportSceneSubjectReport?.importedSubjectCounts || importReport?.importedSubjectCounts || {};
         const handledAssets = Number(importedCounts.character || 0)
             + Number(importedCounts.prop || 0)
             + Number(importedCounts.environment || 0)
             + Number(importedCounts.poster || 0);
-        if (subtaskReports.length > 0 && entityCount <= 0 && handledAssets <= 0) {
+        const okSubtaskCount = subtaskReports.filter(
+            (report) => String(report?.status || '').trim().toLowerCase() === 'ok'
+        ).length;
+        if (subtaskReports.length > 0 && okSubtaskCount > 0 && handledAssets <= 0) {
             failures.push(t(
-                '视觉资产生成已完成但未检测到项目实体记录',
-                'Visual asset generation finished but no project entities were found'
+                '视觉资产子任务已完成但未检测到本轮入库记录',
+                'Visual asset subtasks completed but no assets were imported in this run'
             ));
+        } else if (subtaskReports.length > 0 && okSubtaskCount <= 0 && handledAssets <= 0) {
+            const entities = await fetchEntitiesFn(projectId).catch(() => []);
+            const entityCount = Array.isArray(entities) ? entities.length : 0;
+            if (entityCount <= 0) {
+                failures.push(t(
+                    '视觉资产生成已完成但未检测到项目实体记录',
+                    'Visual asset generation finished but no project entities were found'
+                ));
+            }
         }
     }
 
@@ -696,6 +719,9 @@ const runAnalysisPipelineIntegrityGate = async ({
     );
     return { dbSceneCount, ok: true };
 };
+
+const ANALYSIS_FLOW_HISTORY_CAP = 500;
+const ANALYSIS_DETAIL_LOG_CAP = 500;
 
 const getAnalysisSessionStorageKey = (episodeId) => {
     const id = Number(episodeId || 0);
@@ -765,6 +791,7 @@ const clearAnalysisSessionProgressSnapshot = (episodeId) => {
                 dismissed: false,
                 flowStatus: { phase: 'idle', message: '' },
                 flowHistory: [],
+                detailLogs: [],
                 uiReport: null,
             },
             savedAt: Date.now(),
@@ -973,7 +1000,49 @@ const createSkippedSubjectConsistencyReport = () => ({
     skipped: true,
 });
 
-export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh' }) => {
+export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh' }) => {
+    const parentOnLogRef = useRef(parentOnLog);
+    parentOnLogRef.current = parentOnLog;
+    const analysisDetailLogsRef = useRef([]);
+    const [analysisDetailLogs, setAnalysisDetailLogs] = useState([]);
+    const analysisProgressDismissedRef = useRef(false);
+    const latestIsAnalyzingRef = useRef(false);
+    const latestAnalysisProgressUiRef = useRef({
+        flowStatus: { phase: 'idle', message: '' },
+        flowHistory: [],
+        uiReport: null,
+        detailLogs: [],
+    });
+    const captureAnalysisLogRef = useRef(() => false);
+
+    const appendAnalysisDetailLog = useCallback((message, type = 'info') => {
+        const text = String(message || '').trim();
+        if (!text) return;
+        const entry = {
+            id: `dl-${Date.now()}-${analysisDetailLogsRef.current.length}`,
+            at: Date.now(),
+            type: String(type || 'info'),
+            message: text,
+        };
+        const next = [...analysisDetailLogsRef.current, entry];
+        analysisDetailLogsRef.current = next.length > ANALYSIS_DETAIL_LOG_CAP
+            ? next.slice(-ANALYSIS_DETAIL_LOG_CAP)
+            : next;
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                detailLogs: analysisDetailLogsRef.current,
+            };
+        }
+        setAnalysisDetailLogs([...analysisDetailLogsRef.current]);
+    }, []);
+
+    const onLog = useCallback((message, type = 'info') => {
+        if (captureAnalysisLogRef.current()) {
+            appendAnalysisDetailLog(message, type);
+        }
+        parentOnLogRef.current?.(message, type);
+    }, [appendAnalysisDetailLog]);
     const functionApiConfigs = useFunctionApis('script_analysis');
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
@@ -1889,7 +1958,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 createdAt: now,
                 endedAt: null,
             });
-            return next.length > 80 ? next.slice(-80) : next;
+            return next.length > ANALYSIS_FLOW_HISTORY_CAP ? next.slice(-ANALYSIS_FLOW_HISTORY_CAP) : next;
         });
     }, [analysisFlowStatus?.phase, analysisFlowStatus?.message, analysisFlowStatus?.highlightHint]);
 
@@ -1898,8 +1967,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             flowStatus: analysisFlowStatus,
             flowHistory: analysisFlowStatusHistory,
             uiReport: analysisUiReport,
+            detailLogs: analysisDetailLogsRef.current,
         };
-    }, [analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport]);
+    }, [analysisFlowStatus, analysisFlowStatusHistory, analysisUiReport, analysisDetailLogs]);
 
     useEffect(() => {
         if (isAnalyzing) return;
@@ -4870,6 +4940,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!validation.ok) {
             throw new Error(validation.reason || `Stage 2.1 failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
         }
+        const subjectIndexLen = String(validation.subjectIndexText || text || '').trim().length;
+        onLog?.(
+            t(
+                `[Stage 2.1] LLM 已返回并通过校验（Subject Index ${subjectIndexLen} 字符）`,
+                `[Stage 2.1] LLM returned and passed validation (Subject Index ${subjectIndexLen} chars)`
+            ),
+            'success'
+        );
         return { result, text, validation };
     }, [extractAnalysisTextFromResult, onLog, t, validateStage2_1SubjectIndexOutput]);
 
@@ -6063,17 +6141,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisResumeCoordinatorRef = useRef({ running: false, episodeId: null });
     const detachedAnalysisRunEpisodeRef = useRef(null);
     const mountResumeReadyRef = useRef(false);
-    const analysisProgressDismissedRef = useRef(false);
-    const latestAnalysisProgressUiRef = useRef({
-        flowStatus: { phase: 'idle', message: '' },
-        flowHistory: [],
-        uiReport: null,
-    });
     const scriptEditorMountedRef = useRef(true);
     const forceRegenerateRef = useRef(false);
     const autoImportRunningRef = useRef(false);
-    const latestIsAnalyzingRef = useRef(false);
     const latestActiveEpisodeIdRef = useRef(null);
+
+    useEffect(() => {
+        captureAnalysisLogRef.current = () => {
+            if (analysisProgressDismissedRef.current) return false;
+            if (analysisRunInFlightRef.current) return true;
+            if (latestIsAnalyzingRef.current) return true;
+            if (phase2GenerationInFlightRef.current) return true;
+            if (analysisResumeInFlightRef.current) return true;
+            const ui = latestAnalysisProgressUiRef.current;
+            const phase = String(ui?.flowStatus?.phase || '').trim().toLowerCase();
+            if (phase && !['idle', ''].includes(phase)) return true;
+            if (Array.isArray(ui?.flowHistory) && ui.flowHistory.length > 0) return true;
+            if (ui?.uiReport && typeof ui.uiReport === 'object') return true;
+            return false;
+        };
+    });
     const lastScriptLeaveNoticeAtRef = useRef(0);
     const lastTryResumePendingAnalysisAtRef = useRef(0);
     const lastAutoSubjectsImportRef = useRef({ signature: '', result: null });
@@ -6199,6 +6286,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 dismissed: true,
                 flowStatus: { phase: 'idle', message: '' },
                 flowHistory: [],
+                detailLogs: [],
                 uiReport: null,
             }
             : {
@@ -6206,7 +6294,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 flowStatus: (ui.flowStatus && typeof ui.flowStatus === 'object')
                     ? ui.flowStatus
                     : { phase: 'idle', message: '' },
-                flowHistory: Array.isArray(ui.flowHistory) ? ui.flowHistory.slice(-80) : [],
+                flowHistory: Array.isArray(ui.flowHistory) ? ui.flowHistory.slice(-ANALYSIS_FLOW_HISTORY_CAP) : [],
+                detailLogs: Array.isArray(ui.detailLogs) ? ui.detailLogs.slice(-ANALYSIS_DETAIL_LOG_CAP) : [],
                 uiReport: slimAnalysisUiReportForSnapshot(ui.uiReport),
             };
         saveAnalysisSessionSnapshot(id, {
@@ -6239,6 +6328,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
+        analysisDetailLogsRef.current = [];
+        setAnalysisDetailLogs([]);
         setAnalysisUiReport(null);
         setAnalysisReviewIssues([]);
         if (persist && id) {
@@ -6261,10 +6352,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? progressUi.flowStatus
             : { phase: 'idle', message: '' };
         const flowHistory = Array.isArray(progressUi.flowHistory) ? progressUi.flowHistory : [];
+        const detailLogs = Array.isArray(progressUi.detailLogs) ? progressUi.detailLogs : [];
         const uiReport = (progressUi.uiReport && typeof progressUi.uiReport === 'object') ? progressUi.uiReport : null;
         if (!isRunning && !hasPersistableAnalysisProgress(flowStatus, flowHistory, uiReport)) return false;
         setAnalysisFlowStatus(flowStatus);
         setAnalysisFlowStatusHistory(flowHistory);
+        analysisDetailLogsRef.current = detailLogs.slice(-ANALYSIS_DETAIL_LOG_CAP);
+        setAnalysisDetailLogs([...analysisDetailLogsRef.current]);
         if (uiReport) {
             setAnalysisUiReport(uiReport);
             setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
@@ -6293,6 +6387,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisProgressDismissedRef.current = true;
         setAnalysisFlowStatus({ phase: 'idle', message: '' });
         setAnalysisFlowStatusHistory([]);
+        analysisDetailLogsRef.current = [];
+        setAnalysisDetailLogs([]);
         setAnalysisUiReport(null);
         setAnalysisReviewIssues([]);
         if (activeEpisode?.id) {
@@ -6311,6 +6407,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         analysisFlowStatus,
         analysisFlowStatusHistory,
+        analysisDetailLogs,
         analysisUiReport,
         hasPersistableAnalysisProgress,
         persistAnalysisSessionSnapshot,
@@ -6792,6 +6889,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     selectedReuseSubjectAssets,
                     {
                         onTaskCreated: (taskId) => {
+                            const stableTaskId = String(taskId || '').trim();
+                            if (stableTaskId) {
+                                onLog?.(
+                                    t(
+                                        `[${attemptLabel}] 异步任务已创建 task_id=${stableTaskId}`,
+                                        `[${attemptLabel}] Async task created task_id=${stableTaskId}`
+                                    ),
+                                    'info'
+                                );
+                            }
                             onTaskCreated?.(taskId);
                         },
                     },
@@ -6854,10 +6961,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? targetSceneUnits.filter((unit) => unit && String(unit.sceneId || '').trim())
             : [];
         const unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
+        if (explicitSceneUnits.length > 0 && explicitSceneUnits.length !== sceneUnits.length) {
+            onLog?.(
+                t(
+                    `[${label}] 使用显式场景列表 ${explicitSceneUnits.length} 场（从 Stage 2.2 输入解析到 ${sceneUnits.length} 场）`,
+                    `[${label}] Using explicit scene list (${explicitSceneUnits.length} scenes; parsed ${sceneUnits.length} from Stage 2.2 input)`
+                ),
+                'info'
+            );
+        }
         const isSingleExplicitScene = explicitSceneUnits.length === 1;
         const orchestrationSceneCount = isSingleExplicitScene
             ? 1
-            : Math.max(sceneUnits.length, unitsToProcess.length, 0);
+            : Math.max(unitsToProcess.length, sceneUnits.length, 0);
         const useBackendSceneOrchestration = !isSingleExplicitScene && orchestrationSceneCount > 1;
         const shouldDisableEpisodeRecovery = Boolean(
             sceneAnalysisModePayload === 'scene_beats_only'
@@ -6920,8 +7036,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         if (useBackendSceneOrchestration) {
-            const adaptedForSync = String(adaptedScriptForSplit || '').trim();
-            const orchestrationSceneIds = sceneUnits
+            const adaptedForSync = String(
+                extractAdaptedScriptFromStage2_2UserInputBody(stage2_2UserInputBody || finalStage2_2UserInput)
+                || extractStage1AdaptedScriptBody(stage1SourceText)
+                || adaptedScriptForSplit
+                || ''
+            ).trim();
+            const orchestrationSceneIds = unitsToProcess
                 .map((unit) => String(unit?.sceneId || '').trim())
                 .filter(Boolean);
             onLog?.(`[${label}] backend scene orchestration enabled: ${orchestrationSceneCount} scene(s).`, 'info');
@@ -6963,48 +7084,66 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ),
             });
 
+            const reportedOrchestrationPhases = new Map();
+
             const reportSceneOrchestrationPhase = ({ sceneId, phase, sceneOrder, totalScenes, errorCode }) => {
-                const message = buildSceneOrchestrationPhaseMessage(sceneId, phase, {
+                const stableSceneId = String(sceneId || '').trim();
+                const stablePhase = String(phase || '').trim().toLowerCase();
+                if (!stableSceneId || !stablePhase) return;
+                const reported = reportedOrchestrationPhases.get(stableSceneId) || new Set();
+                if (reported.has(stablePhase)) return;
+                reported.add(stablePhase);
+                reportedOrchestrationPhases.set(stableSceneId, reported);
+
+                const message = buildSceneOrchestrationPhaseMessage(stableSceneId, stablePhase, {
                     sceneOrder,
                     totalScenes,
                     errorCode,
                     t,
                 });
                 if (!message) return;
-                onLog?.(message, SCENE_ORCHESTRATION_PHASE_LOG_TYPES[phase] || 'info');
-                if (phase === 'llm_submit') {
+                onLog?.(message, SCENE_ORCHESTRATION_PHASE_LOG_TYPES[stablePhase] || 'info');
+                if (stablePhase === 'queued') {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `场景编排进行中：${sceneId} 已提交 LLM（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${sceneId} submitted (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
+                            `场景编排进行中：${sceneId} 已排队（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
+                            `Scene beats in progress: ${sceneId} queued (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
                         ),
                     });
-                } else if (phase === 'llm_returned') {
+                } else if (stablePhase === 'llm_submit') {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `场景编排进行中：${sceneId} LLM 已返回（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${sceneId} LLM returned (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
+                            `场景编排进行中：${stableSceneId} 已提交 LLM（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
+                            `Scene beats in progress: ${stableSceneId} submitted (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
                         ),
                     });
-                } else if (phase === 'importing') {
+                } else if (stablePhase === 'llm_returned') {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `场景编排进行中：${sceneId} 正在导入（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
-                            `Scene beats in progress: ${sceneId} importing (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
+                            `场景编排进行中：${stableSceneId} LLM 已返回（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
+                            `Scene beats in progress: ${stableSceneId} LLM returned (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
                         ),
                     });
-                } else if (phase === 'imported') {
+                } else if (stablePhase === 'importing') {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `场景编排进行中：${sceneId} 已完成（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）`,
-                            `Scene beats in progress: ${sceneId} completed (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})`
+                            `场景编排进行中：${stableSceneId} 正在导入（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）...`,
+                            `Scene beats in progress: ${stableSceneId} importing (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})...`
                         ),
                     });
-                } else if (phase === 'failed') {
+                } else if (stablePhase === 'imported') {
+                    setAnalysisFlowStatus({
+                        phase: 'scene_beats',
+                        message: t(
+                            `场景编排进行中：${stableSceneId} 已完成（${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount}）`,
+                            `Scene beats in progress: ${stableSceneId} completed (${sceneOrder || '?'}/${totalScenes || orchestrationSceneCount})`
+                        ),
+                    });
+                } else if (stablePhase === 'failed') {
                     setAnalysisFlowStatus({
                         phase: 'warning',
                         message: t(
@@ -7033,7 +7172,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const validatedOutputs = [];
                 let sequentialLastResult = null;
-                for (const unit of sceneUnits) {
+                for (const unit of unitsToProcess) {
                     const sceneId = String(unit?.sceneId || '').trim();
                     if (!sceneId) continue;
                     const sceneLabel = `${label} [${sceneId}]`;
@@ -7084,7 +7223,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 const sceneMarkdownPatchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
                     validatedOutputs,
-                    sceneUnits
+                    unitsToProcess
                 );
                 return {
                     perSceneParallel: true,
@@ -7101,10 +7240,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stopSceneOrchestrationPolling = createSceneOrchestrationProgressPoller({
                     getSnapshot: getEpisodeProgressSnapshot,
                     episodeId: Number(activeEpisode.id),
-                    sceneUnits,
+                    sceneUnits: unitsToProcess,
                     onPhase: reportSceneOrchestrationPhase,
                 });
             }
+            const orchestrationSceneLabels = unitsToProcess
+                .map((unit) => String(unit?.sceneId || '').trim())
+                .filter(Boolean);
             try {
             for (let fallbackAttempt = 0; fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
                 if (fallbackAttempt > 0) {
@@ -7120,6 +7262,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ),
                     });
                 }
+                onLog?.(
+                    t(
+                        `[${label}] 已提交 LLM 并行编排请求（${orchestrationSceneCount} 场）${orchestrationSceneLabels.length ? `：${orchestrationSceneLabels.join(', ')}` : ''}`,
+                        `[${label}] Submitted parallel scene-beats LLM request (${orchestrationSceneCount} scene(s))${orchestrationSceneLabels.length ? `: ${orchestrationSceneLabels.join(', ')}` : ''}`
+                    ),
+                    'process'
+                );
+                unitsToProcess.forEach((unit, index) => {
+                    const sceneId = String(unit?.sceneId || '').trim();
+                    if (!sceneId) return;
+                    reportSceneOrchestrationPhase({
+                        sceneId,
+                        phase: 'queued',
+                        sceneOrder: unit?.sceneOrder ?? index + 1,
+                        totalScenes: orchestrationSceneCount,
+                    });
+                });
                 let attempt;
                 try {
                     attempt = await runSingleStage2_2Attempt({
@@ -7163,8 +7322,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (!hasInvalidScene && validatedOutputs.length >= orchestrationSceneCount) {
                         const sceneMarkdownPatchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
                             validatedOutputs,
-                            sceneUnits
+                            unitsToProcess
                         );
+                        onLog?.(
+                            t(
+                                `[${label}] 并行编排 LLM 全部返回（${validatedOutputs.length}/${orchestrationSceneCount} 场）`,
+                                `[${label}] Parallel orchestration LLM returned for all scenes (${validatedOutputs.length}/${orchestrationSceneCount})`
+                            ),
+                            'success'
+                        );
+                        validatedOutputs.forEach((item, index) => {
+                            const sceneId = String(item?.sceneId || '').trim();
+                            if (!sceneId) return;
+                            reportSceneOrchestrationPhase({
+                                sceneId,
+                                phase: 'llm_returned',
+                                sceneOrder: item?.sceneOrder ?? index + 1,
+                                totalScenes: orchestrationSceneCount,
+                            });
+                        });
                         return {
                             perSceneParallel: true,
                             sceneMarkdownPatchMap,
@@ -7211,6 +7387,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
             }
 
+            onLog?.(
+                t(`[${label}] 已提交 LLM（整表模式，${orchestrationSceneCount || 1} 场）...`, `[${label}] Submitted to LLM (full-table mode, ${orchestrationSceneCount || 1} scene(s))...`),
+                'process'
+            );
             const attempt = await runSingleStage2_2Attempt({
                 attemptLabel: label,
                 attemptUserInputBody: stage2_2UserInputBody,
@@ -7219,6 +7399,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 disableEpisodeRecovery: shouldDisableEpisodeRecovery,
             });
             if (attempt.stage2_2Check?.ok) {
+                const normalizedTableText = String(attempt.stage2_2Check.normalizedText || '').trim();
+                const importCheck = validateAutoSceneTableImport(normalizedTableText);
+                const tableRowCount = importCheck?.ok
+                    ? (Array.isArray(parseMarkdownTable(importCheck.tableText || '')?.rows)
+                        ? parseMarkdownTable(importCheck.tableText || '').rows.length
+                        : 0)
+                    : 0;
+                if (orchestrationSceneCount > 1 && tableRowCount < orchestrationSceneCount) {
+                    lastError = t(
+                        `整表模式仅返回 ${tableRowCount}/${orchestrationSceneCount} 场，无法作为全部场景重排结果。`,
+                        `Full-table mode returned only ${tableRowCount}/${orchestrationSceneCount} scene(s); cannot use as all-scene rerun result.`
+                    );
+                    onLog?.(`[${label}] ${lastError}`, 'warning');
+                    continue;
+                }
+                onLog?.(
+                    t(`[${label}] LLM 已返回，校验通过`, `[${label}] LLM returned and passed validation`),
+                    'success'
+                );
                 return {
                     stage2_2Text: attempt.stage2_2Check.normalizedText,
                     stage2_2Result: attempt.stage2_2Result,
@@ -7239,6 +7438,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractAdaptedScriptFromStage2_2UserInputBody,
         extractAnalysisTextFromResult,
         extractPerSceneOutputsFromResult,
+        extractStage1AdaptedScriptBody,
         fetchPrompt,
         logStage2_2Diagnostics,
         mergeStage2_2SceneTableOutputs,
@@ -8733,7 +8933,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (now - lastScriptLeaveNoticeAtRef.current > 3000) {
                     lastScriptLeaveNoticeAtRef.current = now;
                     onLog?.(
-                        '已离开剧本页，分析任务仍在后台运行。返回剧本页后会自动恢复进度；全局日志面板仍可查看后续输出。',
+                        '已离开剧本页，分析任务仍在后台运行。返回剧本页后会自动恢复完整进度与日志。',
                         'info'
                     );
                 }
@@ -10074,10 +10274,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return true;
     }
 
+    const resetAnalysisRunProgressLogs = useCallback(() => {
+        analysisDetailLogsRef.current = [];
+        setAnalysisDetailLogs([]);
+        setAnalysisFlowStatusHistory([]);
+        setAnalysisReviewIssues([]);
+        if (latestAnalysisProgressUiRef.current) {
+            latestAnalysisProgressUiRef.current = {
+                ...latestAnalysisProgressUiRef.current,
+                flowHistory: [],
+                detailLogs: [],
+            };
+        }
+    }, []);
+
     const beginAnalysisRestartUi = useCallback((startedAt = Date.now()) => {
         analysisProgressDismissedRef.current = false;
+        resetAnalysisRunProgressLogs();
         beginAnalysisTimer(startedAt);
-        setAnalysisFlowStatusHistory([]);
         setAnalysisFlowStatus({
             phase: 'script_opt',
             message: t('正在准备重新分析，请稍候...', 'Preparing to rerun analysis...'),
@@ -10092,7 +10306,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             warning: '',
             error: '',
         });
-    }, [beginAnalysisTimer, t]);
+    }, [beginAnalysisTimer, resetAnalysisRunProgressLogs, t]);
 
     const prepareSceneAnalysisResumeState = useCallback(async () => {
         const sceneAnalysisText = String(
@@ -10357,6 +10571,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const runAnalysisPipeline = async () => {
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
+        if (!forceRegenerate) {
+            resetAnalysisRunProgressLogs();
+        }
         beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -10404,6 +10621,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
+            onLog?.(
+                t('[Stage 1] 已提交 LLM（剧本整理与可拍化）...', '[Stage 1] Submitted to LLM (script adaptation)...'),
+                'info'
+            );
             
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
@@ -10459,6 +10680,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
+            onLog?.(
+                t('[Stage 1] LLM 已返回，正在校验与持久化...', '[Stage 1] LLM returned; validating and persisting...'),
+                'success'
+            );
 
             setAnalysisFlowStatus({
                 phase: 'completed',
@@ -10900,6 +11125,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const runAnalysisPipeline = async () => {
         analysisProgressDismissedRef.current = false;
         analysisStopRequestedRef.current = false;
+        if (!forceRegenerate) {
+            resetAnalysisRunProgressLogs();
+        }
         beginAnalysisTimer(startedAt);
         setIsAnalyzing(true);
         setActiveAnalysisTaskId('');
@@ -10953,6 +11181,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('🧠 正在通读剧本并设计场景啦。根据字数和剧情可能会花几分钟时间，请喝杯水稍等~', 'LLM submitted. Waiting for response. Total wait can take up to about 10 mins.'),
             });
             phaseMarks.analyzeStartedAt = Date.now();
+            onLog?.(
+                t('[Stage 1] 已提交 LLM（剧本整理与可拍化）...', '[Stage 1] Submitted to LLM (script adaptation)...'),
+                'info'
+            );
 
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
@@ -11009,6 +11241,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             llmReturned = true;
             phaseMarks.llmReturnedAt = Date.now();
+            onLog?.(
+                t('[Stage 1] LLM 已返回，正在校验与持久化...', '[Stage 1] LLM returned; validating and persisting...'),
+                'success'
+            );
 
             if (result && result.meta) {
                 try {
@@ -11218,6 +11454,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const runSceneOrchestrationBranch = async () => {
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
                     const finalStage2_2UserInput = stage2_2UserInputBody;
+                    onLog?.(
+                        t('[Stage 2.2] 开始场景编排（镜头节拍生成）...', '[Stage 2.2] Starting scene beats orchestration...'),
+                        'info'
+                    );
                     const beatsResult = await runStage2_2WithValidationRetry({
                         label: 'Stage 2.2',
                         logPhasePrefix: 'advanced',
@@ -11553,7 +11793,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 postImportSceneSubjectReport,
                 expectedSceneCount: expectedSceneImportCount,
-                subjectIndexText: stage2SubjectIndexForAssets || globalStage2_1Text || activeEpisode?.ai_scene_analysis_subject_index || '',
+                subjectIndexText: stage2SubjectIndexForAssets || globalStage2_1Text || '',
             });
 
             const { reviewIssues } = await publishAnalysisReviewFindings({
@@ -12158,7 +12398,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
+            const adaptedScriptForRerun = extractStage1AdaptedScriptBody(stage1SourceText);
+            const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText, adaptedScriptForRerun);
             const finalStage2_2UserInput = stage2_2UserInputBody;
 
             const beatsOutcome = await runStage2_2WithValidationRetry({
@@ -12168,7 +12409,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage2_2UserInputBody,
                 stage2_1SubjectIndexText,
                 stage1SourceText,
-                targetSceneUnits,
+                targetSceneUnits: rerunMode === 'single' ? targetSceneUnits : candidates,
                 startedAt,
                 baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
                 sceneAnalysisModePayload: 'scene_beats_only',
@@ -12189,6 +12430,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let singleScenePatchMap = null;
             let singleSceneImportText = '';
             const allScenePatchMap = perSceneParallel ? sceneMarkdownPatchMap : null;
+
+            if (rerunMode === 'all') {
+                const patchSceneIds = allScenePatchMap ? Object.keys(allScenePatchMap).filter(Boolean) : [];
+                if (patchSceneIds.length >= orchestrationSceneCount) {
+                    // complete per-scene patch map
+                } else {
+                    const importCheck = validateAutoSceneTableImport(String(validatedBeatsText || '').trim());
+                    const tableRowCount = importCheck?.ok
+                        ? (Array.isArray(parseMarkdownTable(importCheck.tableText || '')?.rows)
+                            ? parseMarkdownTable(importCheck.tableText || '').rows.length
+                            : 0)
+                        : 0;
+                    if (orchestrationSceneCount > 1 && tableRowCount < orchestrationSceneCount) {
+                        throw new Error(t(
+                            `全部场景重排未获得完整的分场景 LLM 结果（${tableRowCount || patchSceneIds.length}/${orchestrationSceneCount} 场），已中止以避免写入不完整数据。`,
+                            `All-scene rerun did not receive complete per-scene LLM outputs (${tableRowCount || patchSceneIds.length}/${orchestrationSceneCount}); aborted to avoid incomplete writeback.`
+                        ));
+                    }
+                }
+            }
 
             if (rerunMode === 'single') {
                 const singleSceneCheck = validateStage2_2BeatsOutput(singleSceneOutputText, `${rerunLabel} single`);
@@ -12286,11 +12547,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
                     replaceExistingScenes: rerunMode === 'all',
                 });
-            } else if (rerunMode === 'all' && orchestrationSceneCount > 1) {
-                throw new Error(t(
-                    '全部场景重排未获得完整的分场景 LLM 结果，已中止导入以避免写入旧数据。',
-                    'All-scene rerun did not receive complete per-scene LLM outputs; import aborted to avoid stale data.'
-                ));
             } else {
                 importReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
                     switchToScenes: false,
@@ -12363,12 +12619,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         clearSceneMarkdownPatchForScenes,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
+        extractStage1AdaptedScriptBody,
         getStageOutputContent,
         importScenesFromPerScenePatchMap,
         isAnalyzing,
         localizeAnalysisFailureMessage,
         doImportText,
         onLog,
+        parseMarkdownTable,
         patchSceneTableRowIdentity,
         persistSceneMarkdownBundle,
         persistSceneMarkdownPatch,
@@ -12386,8 +12644,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing,
         setLlmRawResultContent,
         setLlmResultContent,
-        splitSceneMarkdownTableBySceneId,
         t,
+        validateAutoSceneTableImport,
         validateStage2_2BeatsOutput,
     ]);
 
@@ -14495,6 +14753,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 );
                             })}
+                        </div>
+                    )}
+
+                    {analysisDetailLogs.length > 0 && (
+                        <div className="mb-2 rounded-md border border-white/10 bg-black/15">
+                            <div className="px-2.5 py-1.5 text-[10px] font-semibold tracking-wide opacity-70 border-b border-white/10">
+                                {t('运行日志', 'Run log')} ({analysisDetailLogs.length})
+                            </div>
+                            <div className="max-h-52 overflow-y-auto px-2.5 py-2 space-y-1 font-mono text-[11px] leading-relaxed">
+                                {analysisDetailLogs.map((entry) => {
+                                    const logType = String(entry?.type || 'info').toLowerCase();
+                                    const typeClass = logType === 'error'
+                                        ? 'text-red-300/95'
+                                        : logType === 'success'
+                                            ? 'text-emerald-300/95'
+                                            : logType === 'warning'
+                                                ? 'text-amber-300/95'
+                                                : 'text-white/75';
+                                    const clock = formatHistoryClock(entry?.at);
+                                    return (
+                                        <div key={entry.id} className={`whitespace-pre-wrap break-words ${typeClass}`}>
+                                            {clock ? `[${clock}] ` : ''}{entry.message}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     )}
 
