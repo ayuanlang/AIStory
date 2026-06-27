@@ -194,11 +194,96 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
     }
 };
 
+const resolveEpisodeSceneIdPrefix = (episode, scriptText = '') => {
+    const text = String(scriptText || '');
+    for (const pattern of [
+        /\b(EP\d+)_SC\d+\b/i,
+        /\[SCENE_START:(EP\d+)_SC\d+\]/i,
+        /\|\s*(EP\d+)\s*\|\s*EP\d+_SC\d+\s*\|/i,
+    ]) {
+        const match = text.match(pattern);
+        if (match?.[1]) return String(match[1]).trim().toUpperCase();
+    }
+
+    const info = episode?.episode_info && typeof episode.episode_info === 'object'
+        ? episode.episode_info
+        : {};
+    for (const key of ['episode_script_episode_number', 'story_dna_episode_number', 'episode_number', 'index']) {
+        const n = Number(info[key]);
+        if (Number.isFinite(n) && n > 0) return `EP${String(Math.floor(n)).padStart(2, '0')}`;
+    }
+
+    const title = String(episode?.title || '');
+    for (const pattern of [/EP\s*(\d+)/i, /第\s*(\d+)\s*集/, /^(\d+)\s*[-_.]/]) {
+        const match = title.match(pattern);
+        if (match?.[1]) {
+            const n = Number(match[1]);
+            if (Number.isFinite(n) && n > 0) return `EP${String(Math.floor(n)).padStart(2, '0')}`;
+        }
+    }
+
+    const parsedEpisodeNumber = parseEpisodeNumberFromText(title);
+    if (Number.isFinite(parsedEpisodeNumber) && parsedEpisodeNumber > 0) {
+        return `EP${String(Math.floor(parsedEpisodeNumber)).padStart(2, '0')}`;
+    }
+    return 'EP01';
+};
+
+const canonicalizeSceneUnitId = (sceneId, sceneOrder, episodePrefix) => {
+    const sid = String(sceneId || '').trim();
+    const prefix = String(episodePrefix || 'EP01').trim().toUpperCase();
+    const order = Math.max(1, Number(sceneOrder) || 0);
+    if (/^[A-Za-z]+\d+_SC/i.test(sid)) return sid;
+    if (/^\d+$/.test(sid)) return `${prefix}_SC${String(Number(sid)).padStart(2, '0')}`;
+    const scMatch = sid.match(/^SC?(\d+)$/i);
+    if (scMatch) return `${prefix}_SC${String(Number(scMatch[1])).padStart(2, '0')}`;
+    const trailing = sid.match(/(\d+)\s*$/);
+    if (trailing && sid.length <= 8) return `${prefix}_SC${String(Number(trailing[1])).padStart(2, '0')}`;
+    return sid || `${prefix}_SC${String(order).padStart(2, '0')}`;
+};
+
+const applyCanonicalSceneIdsToUnits = (units, episodePrefix) => (
+    (Array.isArray(units) ? units : []).map((unit, idx) => {
+        const order = Number(unit?.sceneOrder) || idx + 1;
+        const newId = canonicalizeSceneUnitId(unit?.sceneId, order, episodePrefix);
+        if (newId === unit?.sceneId) {
+            return { ...unit, sceneOrder: order };
+        }
+        return {
+            ...unit,
+            sceneId: newId,
+            sceneOrder: order,
+            markerStartToken: `[SCENE_START:${newId}]`,
+            markerEndToken: `[SCENE_END:${newId}]`,
+        };
+    })
+);
+
+const sceneUnitIdsMatch = (leftId, rightId, sceneOrder, episodePrefix) => (
+    canonicalizeSceneUnitId(leftId, sceneOrder, episodePrefix)
+    === canonicalizeSceneUnitId(rightId, sceneOrder, episodePrefix)
+);
+
+const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
+    const ids = new Set();
+    (Array.isArray(units) ? units : []).forEach((unit, idx) => {
+        const order = Number(unit?.sceneOrder) || idx + 1;
+        const raw = String(unit?.sceneId || '').trim();
+        const canonical = canonicalizeSceneUnitId(raw, order, episodePrefix);
+        if (canonical) ids.add(canonical);
+        if (/^\d+$/.test(raw)) ids.add(raw);
+        const canonicalMatch = canonical.match(/^EP\d+_SC(\d+)$/i);
+        if (canonicalMatch) ids.add(String(Number(canonicalMatch[1])));
+    });
+    return [...ids].filter(Boolean);
+};
+
 const createSceneOrchestrationProgressPoller = ({
     getSnapshot,
     episodeId,
     sceneUnits,
     onPhase,
+    episodePrefix = 'EP01',
     intervalMs = 2000,
 }) => {
     const reportedByScene = new Map();
@@ -216,7 +301,15 @@ const createSceneOrchestrationProgressPoller = ({
             for (const unit of sceneUnits || []) {
                 const sceneId = String(unit?.sceneId || unit?.scene_id || '').trim();
                 if (!sceneId) continue;
-                const row = byId[sceneId];
+                let row = byId[sceneId];
+                if (!row) {
+                    row = rows.find((candidate) => sceneUnitIdsMatch(
+                        candidate?.scene_id,
+                        sceneId,
+                        unit?.sceneOrder ?? candidate?.scene_order,
+                        episodePrefix
+                    ));
+                }
                 if (!row) continue;
                 const phase = deriveSceneOrchestrationPhase(row);
                 const reported = reportedByScene.get(sceneId) || new Set();
@@ -6875,6 +6968,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`[${label}] scene marker parse warning: ${parseErr?.message || parseErr}`, 'warning');
             sceneUnits = [];
         }
+        const episodePrefix = resolveEpisodeSceneIdPrefix(
+            activeEpisode,
+            adaptedScriptForSplit || extractStage1AdaptedScriptBody(stage1SourceText)
+        );
+        sceneUnits = applyCanonicalSceneIdsToUnits(sceneUnits, episodePrefix);
 
         const runSingleStage2_2Attempt = async ({
             attemptLabel,
@@ -6970,7 +7068,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
 
         const explicitSceneUnits = Array.isArray(targetSceneUnits)
-            ? targetSceneUnits.filter((unit) => unit && String(unit.sceneId || '').trim())
+            ? applyCanonicalSceneIdsToUnits(
+                targetSceneUnits.filter((unit) => unit && String(unit.sceneId || '').trim()),
+                episodePrefix
+            )
             : [];
         const unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
         if (explicitSceneUnits.length > 0 && explicitSceneUnits.length !== sceneUnits.length) {
@@ -7054,9 +7155,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || adaptedScriptForSplit
                 || ''
             ).trim();
-            const orchestrationSceneIds = unitsToProcess
-                .map((unit) => String(unit?.sceneId || '').trim())
-                .filter(Boolean);
+            const orchestrationSceneIds = collectOrchestrationResetSceneIds(unitsToProcess, episodePrefix);
             onLog?.(`[${label}] backend scene orchestration enabled: ${orchestrationSceneCount} scene(s).`, 'info');
             if (projectId && activeEpisode?.id) {
                 try {
@@ -7253,6 +7352,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     getSnapshot: getEpisodeProgressSnapshot,
                     episodeId: Number(activeEpisode.id),
                     sceneUnits: unitsToProcess,
+                    episodePrefix,
                     onPhase: reportSceneOrchestrationPhase,
                 });
             }
@@ -12306,10 +12406,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return { stage1SourceText, candidates: [], error: 'missing_adapted_script' };
         }
         try {
-            const candidates = parseSceneUnitsFromScriptMarkers(adaptedScriptText).map((unit) => ({
-                ...unit,
-                displayLabel: extractSceneDisplayLabel(unit),
-            }));
+            const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
+            const candidates = applyCanonicalSceneIdsToUnits(
+                parseSceneUnitsFromScriptMarkers(adaptedScriptText).map((unit) => ({
+                    ...unit,
+                    displayLabel: extractSceneDisplayLabel(unit),
+                })),
+                episodePrefix
+            );
             return { stage1SourceText, candidates, error: candidates.length ? '' : 'no_scene_markers' };
         } catch (error) {
             return {
@@ -12318,7 +12422,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 error: error?.message || String(error || 'scene_marker_parse_error'),
             };
         }
-    }, [buildStage1RestartSourceText, extractSceneDisplayLabel, extractStage1AdaptedScriptBody, parseSceneUnitsFromScriptMarkers]);
+    }, [activeEpisode, buildStage1RestartSourceText, extractSceneDisplayLabel, extractStage1AdaptedScriptBody, parseSceneUnitsFromScriptMarkers]);
 
     const executeSceneBeatsRerun = useCallback(async ({ mode = 'all', sceneId = '' } = {}) => {
         if (!activeEpisode?.id || isAnalyzing) return;
@@ -12354,8 +12458,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const rerunMode = String(mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
         const targetSceneId = String(sceneId || '').trim();
+        const episodePrefix = resolveEpisodeSceneIdPrefix(
+            activeEpisode,
+            extractStage1AdaptedScriptBody(stage1SourceText)
+        );
         const targetSceneUnits = rerunMode === 'single'
-            ? candidates.filter((unit) => String(unit.sceneId || '').trim() === targetSceneId)
+            ? candidates.filter((unit) => sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix))
             : null;
         if (rerunMode === 'single' && !targetSceneUnits?.length) {
             alert(t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.'));
@@ -12389,9 +12497,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         );
 
         try {
-            const rerunSceneIds = rerunMode === 'single'
-                ? [targetSceneId]
-                : candidates.map((unit) => String(unit.sceneId || '').trim()).filter(Boolean);
+            const rerunSceneIds = collectOrchestrationResetSceneIds(
+                rerunMode === 'single' ? (targetSceneUnits || []) : candidates,
+                episodePrefix
+            );
             if (projectId && activeEpisode?.id && rerunSceneIds.length > 0) {
                 try {
                     await resetSceneOrchestrationProgress({

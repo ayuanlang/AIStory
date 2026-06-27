@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -12,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
 from app.models import all_models as models
+
+logger = logging.getLogger("api_logger")
 from .analyze_scene_stages import (
     STAGE_ASSETS_EXTRACTION,
     STAGE_ENTITY_DESIGN,
@@ -78,6 +81,190 @@ class ParsedSceneUnit:
     marker_start_token: str
     marker_end_token: str
     scene_markdown: str = ""
+
+
+def _parse_episode_info_dict(episode: Any) -> Dict[str, Any]:
+    raw = getattr(episode, "episode_info", None) if episode is not None else None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _infer_episode_scene_id_prefix_from_text(text: str) -> Optional[str]:
+    source = str(text or "")
+    if not source.strip():
+        return None
+    for pattern in (
+        r"\b(EP\d+)_SC\d+\b",
+        r"\[SCENE_START:(EP\d+)_SC\d+\]",
+        r"\|\s*(EP\d+)\s*\|\s*EP\d+_SC\d+\s*\|",
+    ):
+        match = re.search(pattern, source, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1)).strip().upper()
+    return None
+
+
+def resolve_episode_scene_id_prefix(
+    episode: Any = None,
+    *,
+    fallback_number: int = 1,
+    script_text: str = "",
+) -> str:
+    inferred = _infer_episode_scene_id_prefix_from_text(script_text)
+    if inferred:
+        return inferred
+
+    number: Optional[int] = None
+    info = _parse_episode_info_dict(episode)
+    for key in ("episode_script_episode_number", "story_dna_episode_number", "episode_number", "index"):
+        try:
+            candidate = int(info.get(key))
+            if candidate > 0:
+                number = candidate
+                break
+        except (TypeError, ValueError):
+            continue
+    if number is None and episode is not None:
+        title = str(getattr(episode, "title", "") or "")
+        for pattern in (r"EP\s*(\d+)", r"第\s*(\d+)\s*集", r"^(\d+)\s*[-_.]"):
+            match = re.search(pattern, title, flags=re.IGNORECASE)
+            if match:
+                try:
+                    number = int(match.group(1))
+                    break
+                except (TypeError, ValueError):
+                    continue
+    if number is None:
+        number = max(1, int(fallback_number or 1))
+    return f"EP{int(number):02d}"
+
+
+def _scene_units_hint_text(units: List[ParsedSceneUnit]) -> str:
+    parts: List[str] = []
+    for unit in units or []:
+        parts.append(str(getattr(unit, "marker_start_token", "") or ""))
+        parts.append(str(getattr(unit, "scene_text", "") or ""))
+    return "\n".join(part for part in parts if part)
+
+
+def expand_scene_ids_for_orchestration_reset(scene_ids: List[str]) -> List[str]:
+    expanded: Set[str] = set()
+    for raw in scene_ids or []:
+        sid = str(raw or "").strip()
+        if not sid:
+            continue
+        expanded.add(sid)
+        canonical_match = re.fullmatch(r"(EP\d+)_SC(\d+)", sid, flags=re.IGNORECASE)
+        if canonical_match:
+            expanded.add(str(int(canonical_match.group(2))))
+            continue
+        if re.fullmatch(r"\d+", sid):
+            order = int(sid)
+            for existing in list(expanded):
+                existing_match = re.fullmatch(r"(EP\d+)_SC(\d+)", existing, flags=re.IGNORECASE)
+                if existing_match and int(existing_match.group(2)) == order:
+                    expanded.add(existing)
+    return sorted(expanded)
+
+
+def canonicalize_scene_unit_id(scene_id: str, scene_order: int, episode_prefix: str) -> str:
+    sid = str(scene_id or "").strip()
+    prefix = str(episode_prefix or "EP01").strip().upper()
+    order = max(1, int(scene_order or 0))
+    if re.match(r"^[A-Za-z]+\d+_SC", sid, flags=re.IGNORECASE):
+        return sid
+    if re.fullmatch(r"\d+", sid):
+        return f"{prefix}_SC{int(sid):02d}"
+    match = re.fullmatch(r"SC?(\d+)", sid, flags=re.IGNORECASE)
+    if match:
+        return f"{prefix}_SC{int(match.group(1)):02d}"
+    trailing_digits = re.search(r"(\d+)\s*$", sid)
+    if trailing_digits and len(sid) <= 8:
+        return f"{prefix}_SC{int(trailing_digits.group(1)):02d}"
+    return sid or f"{prefix}_SC{order:02d}"
+
+
+def apply_canonical_scene_ids_to_units(
+    units: List[ParsedSceneUnit],
+    episode_prefix: str,
+) -> List[ParsedSceneUnit]:
+    canonicalized: List[ParsedSceneUnit] = []
+    for idx, unit in enumerate(units):
+        order = int(getattr(unit, "scene_order", 0) or 0) or (idx + 1)
+        new_id = canonicalize_scene_unit_id(unit.scene_id, order, episode_prefix)
+        if new_id != unit.scene_id:
+            logger.info(
+                "[scene_markdown] canonicalized scene_id %s -> %s (order=%s prefix=%s)",
+                unit.scene_id,
+                new_id,
+                order,
+                episode_prefix,
+            )
+            unit = replace(
+                unit,
+                scene_id=new_id,
+                scene_order=order,
+                marker_start_token=f"[SCENE_START:{new_id}]",
+                marker_end_token=f"[SCENE_END:{new_id}]",
+            )
+        canonicalized.append(unit)
+    return canonicalized
+
+
+def _finalize_scene_units_for_episode(
+    db: Session,
+    units: List[ParsedSceneUnit],
+    episode_id: int,
+    *,
+    script_text: str = "",
+) -> List[ParsedSceneUnit]:
+    if not units:
+        return units
+    episode_row = None
+    eid = int(episode_id or 0)
+    if eid > 0:
+        episode_row = db.query(models.Episode).filter(models.Episode.id == eid).first()
+    hint_text = str(script_text or "").strip() or _scene_units_hint_text(units)
+    prefix = resolve_episode_scene_id_prefix(
+        episode_row,
+        fallback_number=1,
+        script_text=hint_text,
+    )
+    return apply_canonical_scene_ids_to_units(units, prefix)
+
+
+def _reconcile_legacy_numeric_scene_rows(
+    db: Session,
+    *,
+    existing_by_scene: Dict[str, Any],
+    units: List[ParsedSceneUnit],
+) -> None:
+    canonical_ids = {str(unit.scene_id) for unit in units}
+    canonical_by_order = {
+        int(getattr(unit, "scene_order", 0) or 0): str(unit.scene_id)
+        for unit in units
+        if int(getattr(unit, "scene_order", 0) or 0) > 0
+    }
+    now_iso = now_bj_iso()
+    for scene_id, row in existing_by_scene.items():
+        if scene_id in canonical_ids:
+            continue
+        if not re.fullmatch(r"\d+", str(scene_id or "").strip()):
+            continue
+        order = int(getattr(row, "scene_order", 0) or 0)
+        canonical = canonical_by_order.get(order)
+        if canonical and canonical != scene_id:
+            row.import_status = "skipped"
+            row.parse_status = "failed"
+            row.parse_error_code = "SCENE_ID_SUPERSEDED_BY_CANONICAL"
+            row.updated_at = now_iso
 
 
 def normalize_node_status(value: Optional[str], default: str = "queued") -> str:
@@ -234,7 +421,12 @@ def resolve_scene_units_for_markdown_orchestration(
         try:
             units = parse_scene_units_from_markers(text)
             if units:
-                return units, source_name
+                return _finalize_scene_units_for_episode(
+                    db,
+                    units,
+                    episode_id,
+                    script_text=text,
+                ), source_name
         except SceneMarkerParseError as exc:
             parse_errors.append(f"{source_name}:{exc.code}")
 
@@ -245,7 +437,12 @@ def resolve_scene_units_for_markdown_orchestration(
             episode_id=int(episode_id),
         )
         if units:
-            return units, "progress_db"
+            return _finalize_scene_units_for_episode(
+                db,
+                units,
+                episode_id,
+                script_text=adapted_script_text or episode_adaptation_text,
+            ), "progress_db"
 
     return [], "|".join(parse_errors) if parse_errors else "no_scene_units"
 
@@ -681,6 +878,16 @@ def sync_scene_units_from_script_text(
         except SceneMarkerParseError:
             units = parse_scene_units_from_markers(script_text)
             parse_source = "scene_markers"
+    episode_row = None
+    eid = int(episode_id or 0)
+    if eid > 0:
+        episode_row = db.query(models.Episode).filter(models.Episode.id == eid).first()
+    episode_prefix = resolve_episode_scene_id_prefix(
+        episode_row,
+        fallback_number=1,
+        script_text=script_text,
+    )
+    units = apply_canonical_scene_ids_to_units(units, episode_prefix)
     now_iso = now_bj_iso()
     existing_rows = (
         db.query(ScriptProgressSceneUnit)
@@ -708,6 +915,12 @@ def sync_scene_units_from_script_text(
             unit=unit,
             import_status="success" if partial else None,
         )
+
+    _reconcile_legacy_numeric_scene_rows(
+        db,
+        existing_by_scene=existing_by_scene,
+        units=units,
+    )
 
     if not partial:
         for scene_id, row in existing_by_scene.items():
@@ -1202,9 +1415,12 @@ __all__ = [
     "get_script_analysis_flow_registry",
     "normalize_node_status",
     "normalize_script_analysis_flow_config",
-    "extract_adapted_script_from_beats_user_input",
+    "expand_scene_ids_for_orchestration_reset",
     "load_scene_units_from_progress_rows",
     "merge_scenes_table_markdown_outputs",
+    "canonicalize_scene_unit_id",
+    "resolve_episode_scene_id_prefix",
+    "apply_canonical_scene_ids_to_units",
     "parse_scene_units_from_markers",
     "parse_scene_units_from_scenes_table",
     "patch_episode_scene_markdown_by_scene",

@@ -84,6 +84,7 @@ from app.api.settings import get_scene_analysis_system_config, get_project_cost_
 from app.services.script_analysis_flow import (
     build_script_analysis_flow_plan,
     extract_adapted_script_from_beats_user_input,
+    expand_scene_ids_for_orchestration_reset,
     extract_scene_markdown_text_from_analyze_result,
     import_analyze_scene_stage_result,
     import_scene_markdown_stage,
@@ -8748,11 +8749,11 @@ async def reset_scene_orchestration_progress(
     if int(request.project_id) != int(episode.project_id):
         raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
 
-    requested_scene_ids = [
+    requested_scene_ids = expand_scene_ids_for_orchestration_reset([
         str(scene_id or "").strip()
         for scene_id in (request.scene_ids or [])
         if str(scene_id or "").strip()
-    ]
+    ])
     rows = (
         db.query(ScriptProgressSceneUnit)
         .filter(
@@ -12414,17 +12415,17 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 stage_ctx.stage_key,
             )
 
-        # Phase 1/2 guard: Subject Index completeness warning is only for
-        # assets extraction / scene markdown paths. script_optimization has its
-        # own Project Visual Backfill validation at flow-run level.
+        # Subject Index completeness guard applies only to Stage 2.1 assets extraction.
+        # Scene beats (Stage 2.2) outputs Scenes Table only and must not be checked for Subject Index.
         blocking_codes: List[str] = []
         blocking_subject_warnings: List[str] = []
-        source_subject_index_text = sanitize_subject_index_text(result_content)
+        source_subject_index_text = ""
         should_check_subject_index_guard = bool(
             (not is_entity_design_phase)
-            and (is_subject_index_extraction_stage or is_scene_beats_stage)
+            and is_subject_index_extraction_stage
         )
         if should_check_subject_index_guard:
+            source_subject_index_text = sanitize_subject_index_text(result_content)
             has_subject_section = bool(
                 re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
                 or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
@@ -12542,84 +12543,117 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
         # Extract subjects_json from LLM output so frontend can use pre-parsed
         # clean JSON instead of re-parsing the raw markdown with heuristic regex.
-        subjects_json = _extract_subjects_json_from_text(result_content)
-        if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
-            cleaned_for_json = sanitize_llm_markdown_output(result_content)
-            subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+        # Scene beats orchestration only validates Scenes Table output; skip Subject Index checks.
+        sc_warning_codes: List[str] = []
+        sc_warnings: List[str] = []
+        template_warning_codes: List[str] = []
+        template_warnings: List[str] = []
+        coverage_warning_codes: List[str] = []
+        coverage_warnings: List[str] = []
+        extraction_gap_warning_codes: List[str] = []
+        extraction_gap_warnings: List[str] = []
+        subject_index_reconcile_warning_codes: List[str] = []
+        subject_index_reconcile_warnings: List[str] = []
 
-        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
-        subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
-        subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
-        subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
-        subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
+        if is_scene_beats_stage:
+            subjects_json = {
+                "characters": [],
+                "props": [],
+                "environments": [],
+                "covers": [],
+                "posters": [],
+            }
+            response_payload["subjects_json"] = subjects_json
+            response_payload["subjects_json_count"] = {
+                "characters": 0,
+                "props": 0,
+                "environments": 0,
+                "covers": 0,
+                "posters": 0,
+            }
+            debug_meta["subject_post_process_skipped"] = True
+        else:
+            subjects_json = _extract_subjects_json_from_text(result_content)
+            if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
+                cleaned_for_json = sanitize_llm_markdown_output(result_content)
+                subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
 
-        response_payload["subjects_json"] = subjects_json
-        response_payload["subjects_json_count"] = {
-            "characters": len(subjects_json.get("characters") or []),
-            "props": len(subjects_json.get("props") or []),
-            "environments": len(subjects_json.get("environments") or []),
-            "covers": len(subjects_json.get("covers") or []),
-            "posters": len(subjects_json.get("posters") or []),
-        }
+            if not source_subject_index_text:
+                source_subject_index_text = sanitize_subject_index_text(result_content)
 
-        extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
-        debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
+            subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(source_subject_index_text, subjects_json)
+            subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
+            subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or {}
+            subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
+            subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
 
-        subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
-        debug_meta["subject_index_coverage"] = subject_index_coverage_meta
-        debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
+            response_payload["subjects_json"] = subjects_json
+            response_payload["subjects_json_count"] = {
+                "characters": len(subjects_json.get("characters") or []),
+                "props": len(subjects_json.get("props") or []),
+                "environments": len(subjects_json.get("environments") or []),
+                "covers": len(subjects_json.get("covers") or []),
+                "posters": len(subjects_json.get("posters") or []),
+            }
 
-        subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
-        debug_meta["subject_consistency"] = subject_consistency_meta
+            extraction_gap_meta = _detect_subjects_json_extraction_gap(result_content, subjects_json)
+            debug_meta["subjects_json_extraction_gap"] = extraction_gap_meta
 
-        prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
+            subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
+            debug_meta["subject_index_coverage"] = subject_index_coverage_meta
+            debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
 
-        prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
-        debug_meta["prompt_template_syntax"] = prompt_template_meta
+            subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
+            debug_meta["subject_consistency"] = subject_consistency_meta
 
-        diagnosis_hints: List[str] = []
-        if (extraction_gap_meta.get("missing_total") or 0) > 0:
-            diagnosis_hints.append("subjects_json_parser_selected_partial_candidate")
+            prompt_syntax_rules = ANALYSIS_PROMPT_TEMPLATE_SYNTAX_RULES
 
-        expected_by_bucket = subject_index_coverage_meta.get("expected_by_bucket") or {}
-        missing_by_bucket = subject_index_coverage_meta.get("missing_by_bucket") or {}
-        expected_props = int(expected_by_bucket.get("props") or 0)
-        missing_props_count = len(missing_by_bucket.get("props") or [])
+            prompt_template_meta = _detect_prompt_template_syntax_warnings(result_content, prompt_syntax_rules)
+            debug_meta["prompt_template_syntax"] = prompt_template_meta
 
-        if expected_props > 0 and missing_props_count > 0 and not diagnosis_hints:
-            if bool(output_char_cap_reached) or bool((integrity_meta or {}).get("truncation_detected")):
-                diagnosis_hints.append("llm_output_truncated_under_token_or_char_pressure")
-            elif str(finish_reason or "").strip().lower().replace("-", "_") in {"length", "incomplete", "max_tokens"}:
-                diagnosis_hints.append("llm_stopped_early_before_prop_sections")
-            else:
-                diagnosis_hints.append("llm_subject_bucket_collapse_or_instruction_conflict")
+            diagnosis_hints: List[str] = []
+            if (extraction_gap_meta.get("missing_total") or 0) > 0:
+                diagnosis_hints.append("subjects_json_parser_selected_partial_candidate")
 
-        if expected_props > 0 and missing_props_count == expected_props:
-            diagnosis_hints.append("all_expected_props_missing")
-        elif missing_props_count > 0:
-            diagnosis_hints.append("partial_props_missing")
+            expected_by_bucket = subject_index_coverage_meta.get("expected_by_bucket") or {}
+            missing_by_bucket = subject_index_coverage_meta.get("missing_by_bucket") or {}
+            expected_props = int(expected_by_bucket.get("props") or 0)
+            missing_props_count = len(missing_by_bucket.get("props") or [])
 
-        if diagnosis_hints:
-            debug_meta["entity_design_diagnosis_hints"] = list(dict.fromkeys(diagnosis_hints))
+            if expected_props > 0 and missing_props_count > 0 and not diagnosis_hints:
+                if bool(output_char_cap_reached) or bool((integrity_meta or {}).get("truncation_detected")):
+                    diagnosis_hints.append("llm_output_truncated_under_token_or_char_pressure")
+                elif str(finish_reason or "").strip().lower().replace("-", "_") in {"length", "incomplete", "max_tokens"}:
+                    diagnosis_hints.append("llm_stopped_early_before_prop_sections")
+                else:
+                    diagnosis_hints.append("llm_subject_bucket_collapse_or_instruction_conflict")
 
-        sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
-        sc_warnings = subject_consistency_meta.get("warnings") or []
-        template_warning_codes = prompt_template_meta.get("warning_codes") or []
-        template_warnings = prompt_template_meta.get("warnings") or []
-        coverage_warning_codes = subject_index_coverage_meta.get("warning_codes") or []
-        coverage_warnings = subject_index_coverage_meta.get("warnings") or []
-        extraction_gap_warning_codes = extraction_gap_meta.get("warning_codes") or []
-        extraction_gap_warnings = extraction_gap_meta.get("warnings") or []
-        if subject_index_reconcile_warnings:
-            response_payload["warnings"] = [
-                *list(response_payload.get("warnings") or []),
-                *list(subject_index_reconcile_warnings),
-            ]
-        if subject_index_reconcile_warning_codes:
-            response_payload["warning_codes"] = [
-                *list(response_payload.get("warning_codes") or []),
-                *list(subject_index_reconcile_warning_codes),
-            ]
+            if expected_props > 0 and missing_props_count == expected_props:
+                diagnosis_hints.append("all_expected_props_missing")
+            elif missing_props_count > 0:
+                diagnosis_hints.append("partial_props_missing")
+
+            if diagnosis_hints:
+                debug_meta["entity_design_diagnosis_hints"] = list(dict.fromkeys(diagnosis_hints))
+
+            sc_warning_codes = subject_consistency_meta.get("warning_codes") or []
+            sc_warnings = subject_consistency_meta.get("warnings") or []
+            template_warning_codes = prompt_template_meta.get("warning_codes") or []
+            template_warnings = prompt_template_meta.get("warnings") or []
+            coverage_warning_codes = subject_index_coverage_meta.get("warning_codes") or []
+            coverage_warnings = subject_index_coverage_meta.get("warnings") or []
+            extraction_gap_warning_codes = extraction_gap_meta.get("warning_codes") or []
+            extraction_gap_warnings = extraction_gap_meta.get("warnings") or []
+            if subject_index_reconcile_warnings:
+                response_payload["warnings"] = [
+                    *list(response_payload.get("warnings") or []),
+                    *list(subject_index_reconcile_warnings),
+                ]
+            if subject_index_reconcile_warning_codes:
+                response_payload["warning_codes"] = [
+                    *list(response_payload.get("warning_codes") or []),
+                    *list(subject_index_reconcile_warning_codes),
+                ]
 
         if integrity_meta.get("warnings"):
             response_payload["warnings"] = integrity_meta.get("warnings")
@@ -12768,9 +12802,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         severe_import_review_codes = {
             "ANALYSIS_JSON_INVALID",
             "ANALYSIS_STRUCTURE_INCOMPLETE",
-            "ANALYSIS_SUBJECT_INDEX_MISSING",
-            "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY",
         }
+        if not is_scene_beats_stage:
+            severe_import_review_codes.update(
+                {
+                    "ANALYSIS_SUBJECT_INDEX_MISSING",
+                    "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY",
+                }
+            )
         matched_review_codes = [code for code in severe_import_review_codes if code in review_required_codes]
         if matched_review_codes:
             review_messages: List[str] = []
