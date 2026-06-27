@@ -4548,13 +4548,85 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return [headerLine, sepLine, ...rowLines].join('\n');
     };
 
+    const expandGluedSceneTableLine = (line) => {
+        const raw = String(line || '').trim();
+        if (!raw || !raw.includes('|')) return raw ? [raw] : [];
+        if (!/\|\s*\|\s*(?::?-{3,}|EP\d+_SC|\|\s*EP\d+\s*\|)/i.test(raw)) return [raw];
+        const parts = raw.split(/\|\s*\|\s*/);
+        const normalizeLine = (chunk) => {
+            let row = String(chunk || '').trim();
+            if (!row) return '';
+            if (!row.startsWith('|')) row = `| ${row}`;
+            if (!row.endsWith('|')) row = `${row} |`;
+            return row;
+        };
+        const rows = parts.map(normalizeLine).filter(Boolean);
+        return rows.length >= 2 ? rows : [raw];
+    };
+
+    const sanitizeSceneMarkdownLlmOutput = (text) => {
+        let raw = String(text || '').replace(/\r\n/g, '\n').trim();
+        if (!raw) return '';
+
+        raw = raw.replace(/<!--\s*script_hash:[^>]+-->\s*/gi, '');
+        raw = raw.replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, '').trim();
+        raw = raw.replace(/```markdown/g, '').replace(/```md/g, '').replace(/```/g, '').trim();
+
+        const anchorPatterns = [
+            /(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table/i,
+            /part\s*1\s*:\s*scenes\s*table/i,
+            /\|\s*episode\s*id\s*\|\s*scene\s*id/i,
+        ];
+        let cutAt = -1;
+        for (const pattern of anchorPatterns) {
+            const match = raw.match(pattern);
+            if (match && match.index != null) {
+                cutAt = cutAt < 0 ? match.index : Math.min(cutAt, match.index);
+            }
+        }
+        if (cutAt >= 0) raw = raw.slice(cutAt).trimStart();
+
+        const reasoningLineRe = /^(?:嗯[，,]|好的[，,]|我需要|我将|我会|首先[，,]|现在(?:来)?|整个思考|我注意到|关于Adapted|cannot add any new content|let me|i will|i need to|thought process|reasoning|工程化|映射工作|标准化映射|Subject Index|覆盖核销中|不能自行补充|不能添加任何新内容)/i;
+        const headerInlineRe = /\|\s*episode\s*id\s*\|\s*scene\s*id/i;
+        const cleanedLines = [];
+
+        for (const rawLine of raw.split('\n')) {
+            const line = String(rawLine || '').trim();
+            if (!line) continue;
+            if (/^(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table\s*$/i.test(line)) continue;
+            if (!line.startsWith('|') && !headerInlineRe.test(line)) {
+                if (reasoningLineRe.test(line)) continue;
+                if (line.length > 40 && !headerInlineRe.test(line)) continue;
+            }
+            for (const expanded of expandGluedSceneTableLine(line)) {
+                if (expanded) cleanedLines.push(expanded);
+            }
+        }
+
+        const body = cleanedLines.join('\n').trim();
+        if (!body) return '';
+        if (headerInlineRe.test(body) && !/(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table/i.test(body)) {
+            return `### Part 1: Scenes Table\n\n${body}`;
+        }
+        return body;
+    };
+
     const extractScenesTableBlock = useCallback((text) => {
         if (!text || typeof text !== 'string') return '';
 
-        const fullText = String(text);
+        const fullText = sanitizeSceneMarkdownLlmOutput(text);
         const headingMatch = fullText.match(/###\s*Part\s*1\s*:\s*Scenes\s*Table[^\n]*/i);
         const scopedText = headingMatch ? fullText.slice(headingMatch.index) : fullText;
-        const lines = scopedText.split('\n');
+        const expandedLines = [];
+        for (const rawLine of scopedText.split('\n')) {
+            const line = String(rawLine || '').trim();
+            if (!line) continue;
+            if (line.startsWith('|') && line.includes('|')) {
+                expandedLines.push(...expandGluedSceneTableLine(line));
+            } else {
+                expandedLines.push(line);
+            }
+        }
 
         const toTableCandidate = (line) => {
             const raw = String(line || '').trim();
@@ -4573,7 +4645,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             current = [];
         };
 
-        for (const rawLine of lines) {
+        for (const rawLine of expandedLines) {
             const candidate = toTableCandidate(rawLine);
             if (candidate) {
                 current.push(candidate);

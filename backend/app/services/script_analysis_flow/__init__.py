@@ -535,8 +535,103 @@ def _find_scene_table_col_idx(normalized_headers: List[str], aliases: List[str])
     return -1
 
 
+_SCENE_TABLE_ANCHOR_RE = re.compile(
+    r"(?i)(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table",
+)
+_SCENE_TABLE_HEADER_INLINE_RE = re.compile(
+    r"(?i)\|\s*episode\s*id\s*\|\s*scene\s*id",
+)
+_SCENE_TABLE_REASONING_LINE_RE = re.compile(
+    r"(?i)^(?:嗯[，,]|好的[，,]|我需要|我将|我会|首先[，,]|现在(?:来)?|整个思考|我注意到|关于Adapted|"
+    r"cannot add any new content|let me|i will|i need to|thought process|reasoning|"
+    r"工程化|映射工作|标准化映射|Subject Index|覆盖核销中|不能自行补充|不能添加任何新内容)",
+)
+
+
+def _normalize_scene_table_line(chunk: str) -> str:
+    line = str(chunk or "").strip()
+    if not line:
+        return ""
+    if not line.startswith("|"):
+        line = f"| {line}"
+    if not line.endswith("|"):
+        line = f"{line} |"
+    return line
+
+
+def _expand_glued_scene_table_line(line: str) -> List[str]:
+    raw = str(line or "").strip()
+    if not raw or "|" not in raw:
+        return [raw] if raw else []
+    if not re.search(r"\|\s*\|\s*(?::?-{3,}|EP\d+_SC|\|\s*EP\d+\s*\|)", raw, flags=re.IGNORECASE):
+        return [raw]
+    parts = re.split(r"\|\s*\|\s*", raw)
+    rows = [_normalize_scene_table_line(part) for part in parts if str(part or "").strip()]
+    return rows if len(rows) >= 2 else [raw]
+
+
+def sanitize_scene_markdown_llm_output(text: Any) -> str:
+    """Strip chain-of-thought leakage and keep only the Scenes Table block."""
+    raw = str(text or "").replace("\r\n", "\n").strip()
+    if not raw:
+        return ""
+
+    raw = re.sub(r"<!--\s*script_hash:[^>]+-->\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+    raw = raw.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
+
+    cut_candidates: List[int] = []
+    anchor_match = _SCENE_TABLE_ANCHOR_RE.search(raw)
+    if anchor_match:
+        cut_candidates.append(anchor_match.start())
+    inline_anchor = re.search(r"(?i)part\s*1\s*:\s*scenes\s*table", raw)
+    if inline_anchor:
+        cut_candidates.append(inline_anchor.start())
+    header_match = _SCENE_TABLE_HEADER_INLINE_RE.search(raw)
+    if header_match:
+        cut_candidates.append(header_match.start())
+    if cut_candidates:
+        raw = raw[min(cut_candidates):].lstrip()
+
+    cleaned_lines: List[str] = []
+    for raw_line in raw.splitlines():
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if re.match(r"(?i)^#{0,6}\s*part\s*1\s*:\s*scenes\s*table\s*$", line):
+            continue
+        if re.match(r"(?i)^part\s*1\s*:\s*scenes\s*table\s*$", line):
+            continue
+        if not line.startswith("|") and not _SCENE_TABLE_HEADER_INLINE_RE.search(line):
+            if _SCENE_TABLE_REASONING_LINE_RE.search(line):
+                continue
+            if len(line) > 40 and not re.search(r"\|\s*episode\s*id\s*\|", line, flags=re.IGNORECASE):
+                continue
+        for expanded in _expand_glued_scene_table_line(line):
+            if expanded:
+                cleaned_lines.append(expanded)
+
+    body = "\n".join(cleaned_lines).strip()
+    if not body:
+        return ""
+    if _SCENE_TABLE_HEADER_INLINE_RE.search(body) and not _SCENE_TABLE_ANCHOR_RE.search(body):
+        return f"### Part 1: Scenes Table\n\n{body}".strip()
+    return body
+
+
 def _collect_scene_table_blocks(script_text: str) -> List[str]:
-    lines = str(script_text or "").splitlines()
+    sanitized = sanitize_scene_markdown_llm_output(script_text)
+    source = sanitized or str(script_text or "")
+    expanded_lines: List[str] = []
+    for raw_line in source.splitlines():
+        line = str(raw_line or "").strip()
+        if not line:
+            continue
+        if line.startswith("|") and "|" in line:
+            expanded_lines.extend(_expand_glued_scene_table_line(line))
+        else:
+            expanded_lines.append(line)
+
     blocks: List[List[str]] = []
     current: List[str] = []
 
@@ -545,8 +640,7 @@ def _collect_scene_table_blocks(script_text: str) -> List[str]:
             blocks.append(list(current))
         current.clear()
 
-    for raw_line in lines:
-        line = str(raw_line or "").strip()
+    for line in expanded_lines:
         if line.startswith("|") and "|" in line:
             current.append(line)
         else:
@@ -593,7 +687,7 @@ def _build_scene_text_from_table_row(
 
 
 def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUnit]:
-    text = str(script_text or "")
+    text = sanitize_scene_markdown_llm_output(script_text) or str(script_text or "")
     if not text.strip():
         raise SceneMarkerParseError("SCENES_TABLE_EMPTY", "scenes table text is empty")
 
@@ -1207,7 +1301,7 @@ def patch_single_scene_markdown_for_orchestration(
     *,
     scene_order: Optional[int] = None,
 ) -> str:
-    text = str(scene_text or "").strip()
+    text = sanitize_scene_markdown_llm_output(scene_text) or str(scene_text or "").strip()
     expected = str(expected_scene_id or "").strip()
     if not text or not expected:
         return text
@@ -1275,7 +1369,7 @@ def validate_single_scene_markdown_for_orchestration(
     *,
     scene_order: Optional[int] = None,
 ) -> Optional[str]:
-    text = str(scene_text or "").strip()
+    text = sanitize_scene_markdown_llm_output(scene_text) or str(scene_text or "").strip()
     if not text:
         return "SCENE_MARKDOWN_EMPTY"
     expected = str(expected_scene_id or "").strip()
@@ -1426,6 +1520,7 @@ __all__ = [
     "patch_episode_scene_markdown_by_scene",
     "patch_single_scene_markdown_for_orchestration",
     "resolve_scene_units_for_markdown_orchestration",
+    "sanitize_scene_markdown_llm_output",
     "wrap_scene_unit_as_script_block",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",

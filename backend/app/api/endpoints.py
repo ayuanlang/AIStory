@@ -111,6 +111,7 @@ from app.services.script_analysis_flow import (
     validate_analyze_scene_llm_finish_reason,
     validate_single_scene_markdown_for_orchestration,
     patch_single_scene_markdown_for_orchestration,
+    sanitize_scene_markdown_llm_output,
     wrap_scene_unit_as_script_block,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -8010,6 +8011,9 @@ async def _run_scene_markdown_node_per_scene(
         single_scene_instruction = (
             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
             "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+            f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
+            "禁止输出思考过程、解释、规划说明或任何非表格内容；"
+            "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
         )
         single_payload = dict(raw_payload)
         single_payload["text"] = _replace_adapted_script_in_beats_user_input(
@@ -8150,6 +8154,8 @@ async def _run_scene_markdown_node_per_scene(
                             "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
+                            "禁止输出思考过程、解释、规划说明或任何非表格内容；"
+                            "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
                         )
                         scene_payload = dict(raw_payload)
                         scene_payload["skip_episode_persist"] = True
@@ -8165,6 +8171,7 @@ async def _run_scene_markdown_node_per_scene(
                         )
                         scene_text = _extract_analysis_text_from_result(result).strip()
                         raw_scene_text = scene_text
+                        scene_text = sanitize_scene_markdown_llm_output(scene_text) or scene_text
                         scene_text = patch_single_scene_markdown_for_orchestration(
                             scene_text,
                             unit.scene_id,
