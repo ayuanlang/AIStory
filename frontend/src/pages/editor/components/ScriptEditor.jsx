@@ -1535,6 +1535,7 @@ const createSkippedSubjectConsistencyReport = () => ({
 });
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh' }) => {
+    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const parentOnLogRef = useRef(parentOnLog);
     parentOnLogRef.current = parentOnLog;
     const analysisDetailLogsRef = useRef([]);
@@ -1969,7 +1970,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!source.trim()) return '';
             // Accept optional markdown inline-code wrapping around markers.
             const startRegex = /`?\[SCENES_BLOCK_START\]`?/i;
-            const endRegex = /`?\[SCENES_BLOCK_END\]`?/i;
+            const endRegex = /`?\[SCENES_BLOCK_END\]`?/gi;
             const startMatch = startRegex.exec(source);
             if (!startMatch) return '';
             const startIdx = startMatch.index;
@@ -2301,7 +2302,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     });
     const [pendingSwitchAfterPostChecks, setPendingSwitchAfterPostChecks] = useState(false);
     const [analysisHeartbeatTick, setAnalysisHeartbeatTick] = useState(0);
-    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
 
     const formatDurationMs = useCallback((ms) => {
         const value = Number(ms || 0);
@@ -6761,19 +6761,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const importText = String(markdown || '').trim();
         if (!stableSceneId || !importText) return false;
         if (orchestrationLiveImportedScenesRef.current.has(stableSceneId)) return true;
-
-        if (activeEpisode?.id) {
-            const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
-            if (dbSceneMatchesPatchSceneId(dbScenes, stableSceneId)) {
-                orchestrationLiveImportedScenesRef.current.add(stableSceneId);
-                publishSceneOrchestrationPanelStatus({
-                    sceneId: stableSceneId,
-                    phase: 'imported',
-                    sceneOrder,
-                });
-                return true;
-            }
-        }
 
         publishSceneOrchestrationPanelStatus({
             sceneId: stableSceneId,
@@ -13633,7 +13620,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     fetchScenesFn: fetchScenes,
                     episodeId: activeEpisode?.id,
                     patchSceneIds,
-                    liveImportedIds: patchSceneIds,
+                    liveImportedIds: [...(orchestrationLiveImportedScenesRef.current || [])],
                 })) {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
@@ -13649,22 +13636,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         importedSceneRows: [],
                     };
                 } else {
-                    importReport = await ensureOrchestrationScenesInWorkspace({
-                        patchMap: allScenePatchMap,
-                        unitsBySceneId: Object.fromEntries(
-                            (rerunMode === 'single' ? (targetSceneUnits || []) : candidates)
-                                .map((unit) => [String(unit?.sceneId || '').trim(), unit])
-                                .filter(([sceneId]) => sceneId)
-                        ),
-                        source: 'restart-scene-beats-only-all-ensure',
-                        totalScenes: orchestrationSceneCount,
+                    importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
+                        replaceExistingScenes: false,
+                        skipSceneIds: [],
                     });
-                    if (!importReport) {
-                        importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
-                            replaceExistingScenes: false,
-                            skipSceneIds: [],
-                        });
-                    }
                 }
             } else {
                 importReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
