@@ -7864,6 +7864,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             ].filter(Boolean)));
             const aspectContract = buildMultiPanelAspectContract(multiPanelGridPlan, langKey);
             const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + prevEndFrameInstruction + promptInstruction + `\n\n${aspectContract}`;
+            const resolveMultiPanelResultUrl = (payload) => {
+                if (!payload || typeof payload !== 'object') return '';
+                const nested = payload?.data && typeof payload.data === 'object' ? payload.data : null;
+                const listUrl = Array.isArray(payload?.results) && payload.results.length > 0
+                    ? (payload.results[0]?.url || payload.results[0]?.result_url || payload.results[0]?.image_url || '')
+                    : '';
+                const nestedListUrl = Array.isArray(nested?.results) && nested.results.length > 0
+                    ? (nested.results[0]?.url || nested.results[0]?.result_url || nested.results[0]?.image_url || '')
+                    : '';
+                const direct = payload.url
+                    || payload.result_url
+                    || payload.image_url
+                    || payload.output_url
+                    || payload.media_url
+                    || listUrl;
+                const nestedDirect = nested?.url
+                    || nested?.result_url
+                    || nested?.image_url
+                    || nested?.output_url
+                    || nested?.media_url
+                    || nestedListUrl;
+                const extracted = extractImageJobResultUrl(payload) || extractImageJobResultUrl(nested);
+                return String(direct || nestedDirect || extracted || '').trim();
+            };
+
             let res = null;
             let appliedRequestAspectRatio = '';
             let lastAspectError = null;
@@ -7896,7 +7921,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             setPendingImageJob(targetShotId, 'start', stableJobId);
                         },
                     });
-                    if (!candidateRes || !(candidateRes.url || candidateRes.result_url || candidateRes.image_url)) {
+                    const candidateUrl = resolveMultiPanelResultUrl(candidateRes);
+                    if (!candidateRes || !candidateUrl) {
                         throw new Error('No multi-panel image URL returned');
                     }
                     res = candidateRes;
@@ -7929,7 +7955,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw lastAspectError || new Error('No multi-panel image URL returned');
             }
 
-            const finalUrl = res.url || res.result_url || res.image_url;
+            let finalUrl = resolveMultiPanelResultUrl(res);
+            if (!finalUrl) {
+                const doneJobId = String(res?.job_id || res?.id || '').trim();
+                if (doneJobId) {
+                    try {
+                        const finalStatus = await getImageGenerationJobStatus(doneJobId);
+                        finalUrl = resolveMultiPanelResultUrl(finalStatus);
+                    } catch (_) {}
+                }
+            }
+            if (!finalUrl) {
+                throw new Error('No multi-panel image URL returned');
+            }
             techNotes.multi_panel_image_url = finalUrl;
             techNotes.multi_panel_image_preset = activePresetKey;
             techNotes.multi_panel_request_aspect_ratio = appliedRequestAspectRatio || requestAspectRatio;
