@@ -111,6 +111,7 @@ import {
     rebindShotMediaAssets,
     getSceneAnalysisFlowRegistry,
     runScriptAnalysisFlowAnalyzeNode,
+    resolveScriptAnalysisSystemApiId,
     getCachedUserPreferences,
     fetchProjectSubjectInventoryPrompt,
     recomputeEpisodeCostEstimation,
@@ -1171,6 +1172,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             localStorage.setItem('func_api_script_analysis', String(fallbackId));
         }
     }, [functionApiConfigs?.script_analysis, selectedScriptAnalysisApiId]);
+
+    const resolveSelectedScriptAnalysisApiId = useCallback(
+        () => resolveScriptAnalysisSystemApiId('script_analysis', selectedScriptAnalysisApiId),
+        [selectedScriptAnalysisApiId]
+    );
+
+    useEffect(() => {
+        const handleFunctionApiChanged = (event) => {
+            if (String(event?.detail?.storageKey || '') !== 'func_api_script_analysis') return;
+            const nextId = Number(event?.detail?.value || 0) || null;
+            setSelectedScriptAnalysisApiId(nextId);
+        };
+        window.addEventListener('aistory:function-api-changed', handleFunctionApiChanged);
+        return () => window.removeEventListener('aistory:function-api-changed', handleFunctionApiChanged);
+    }, []);
+
+    const logSelectedScriptAnalysisApi = useCallback((contextLabel = 'Script analysis') => {
+        const apiId = resolveSelectedScriptAnalysisApiId();
+        if (apiId) {
+            onLog?.(
+                `[${contextLabel}] 使用剧本分析 API 选择：system_api_id=${apiId}`,
+                'info'
+            );
+        } else {
+            onLog?.(
+                `[${contextLabel}] 未选择剧本分析 API，将使用后台默认路由。`,
+                'warning'
+            );
+        }
+        return apiId;
+    }, [onLog, resolveSelectedScriptAnalysisApiId]);
+
     const navigate = useNavigate();
     const [segments, setSegments] = useState([]);
     const [showMerged, setShowMerged] = useState(false);
@@ -6945,13 +6978,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stage1SourceText = '',
         startedAt,
         baselineText = '',
-        functionName = 'script_analysis_stage_2_2_beats',
+        functionName = 'script_analysis',
         sceneAnalysisModePayload = null,
         targetSceneUnits = null,
         onTaskCreated,
     }) => {
         const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
         const finalStage2_2Prompt = stage2_2PromptRes?.content || '';
+        const scriptAnalysisApiId = resolveSelectedScriptAnalysisApiId();
+        if (scriptAnalysisApiId) {
+            onLog?.(`[${label}] 使用剧本分析 API 选择：system_api_id=${scriptAnalysisApiId}`, 'info');
+        }
         let lastError = '';
 
         const adaptedScriptForSplit = extractAdaptedScriptFromStage2_2UserInputBody(stage2_2UserInputBody || finalStage2_2UserInput);
@@ -7014,7 +7051,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                     projectId,
                     functionName,
-                    selectedScriptAnalysisApiId,
+                    scriptAnalysisApiId,
                     sceneAnalysisModePayload
                 ),
                 {
@@ -7559,7 +7596,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId,
         resetSceneOrchestrationProgress,
         selectedReuseSubjectAssets,
-        selectedScriptAnalysisApiId,
+        resolveSelectedScriptAnalysisApiId,
         setAnalysisFlowStatus,
         syncSceneUnitsProgress,
         t,
@@ -7833,11 +7870,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
 
-            const phase1SystemApiId = selectedScriptAnalysisApiId;
-            if (phase1SystemApiId) {
-                onLog?.(`[Stage 3 Asset Design] Reusing Stage 1 system_api_id=${phase1SystemApiId} for script_analysis routing.`, 'info');
+            const scriptAnalysisApiId = resolveSelectedScriptAnalysisApiId();
+            if (scriptAnalysisApiId) {
+                onLog?.(`[Stage 3 Asset Design] Using script analysis API dropdown system_api_id=${scriptAnalysisApiId}.`, 'info');
             } else {
-                onLog?.('[Stage 3 Asset Design] Stage 1 system_api_id is missing; fallback routing may select a different API.', 'warning');
+                onLog?.('[Stage 3 Asset Design] Script analysis API dropdown is empty; fallback routing may select a different API.', 'warning');
             }
 
             const phase2StartedAt = Date.now();
@@ -7954,7 +7991,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             }, 
                             projectId,
                             "script_analysis",
-                            phase1SystemApiId,
+                            scriptAnalysisApiId,
                             sceneAnalysisModeForSubtask
                         ),
                         { startedAt: phase2StartedAt, baselineText: '', resultField: 'none' } // prevent persistence internally by passing no conflict
@@ -8256,7 +8293,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
-        saveAnalysisTaskMarker, updateEpisodeAnalysisRun
+        saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,
     ]);
 
     
@@ -10737,6 +10774,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 t('[Stage 1] 已提交 LLM（剧本整理与可拍化）...', '[Stage 1] Submitted to LLM (script adaptation)...'),
                 'info'
             );
+            logSelectedScriptAnalysisApi('Stage 1');
             
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
@@ -10760,7 +10798,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                     projectId,
                     'script_analysis',
-                    selectedScriptAnalysisApiId
+                    resolveSelectedScriptAnalysisApiId()
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -11297,6 +11335,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 t('[Stage 1] 已提交 LLM（剧本整理与可拍化）...', '[Stage 1] Submitted to LLM (script adaptation)...'),
                 'info'
             );
+            logSelectedScriptAnalysisApi('Stage 1');
 
             const baselineAnalysisText = clearedBeforeRun
                 ? ''
@@ -11321,7 +11360,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                     projectId,
                     'script_analysis',
-                    selectedScriptAnalysisApiId
+                    resolveSelectedScriptAnalysisApiId()
                 ),
                 { startedAt, baselineText: baselineAnalysisText }
             );
@@ -11466,7 +11505,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             },
                             projectId,
                             'script_analysis',
-                            selectedScriptAnalysisApiId
+                            resolveSelectedScriptAnalysisApiId()
                         ),
                         { startedAt: phaseMarks.llmReturnedAt || startedAt, baselineText: baselineAnalysisText }
                     )
@@ -12107,6 +12146,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const handleRestartStage2 = async () => {
         if (!activeEpisode?.id || isAnalyzing) return;
+        logSelectedScriptAnalysisApi('Stage 2 restart');
 
         const stage1SourceText = buildStage1RestartSourceText();
         if (!stage1SourceText) {
@@ -12166,7 +12206,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         },
                         projectId,
                         'script_analysis',
-                        selectedScriptAnalysisApiId
+                        resolveSelectedScriptAnalysisApiId()
                     ),
                     { startedAt, baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim() }
                 )
@@ -12489,6 +12529,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : t(`正在同步发起全部 ${orchestrationSceneCount} 场场景编排...`, `Sync-launching all ${orchestrationSceneCount} scene beats...`),
         });
         sceneBeatsOnlyRerunInFlightRef.current = true;
+        logSelectedScriptAnalysisApi(rerunLabel);
         onLog?.(
             rerunMode === 'single'
                 ? `进入仅场景重排模式（单场）：${targetSceneId}`
@@ -12897,6 +12938,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: 'assets_gen',
             message: t('正在重跑失败子任务路由（仅失败路由）...', 'Rerunning failed asset subtask routes only...'),
         });
+        logSelectedScriptAnalysisApi('Failed subtask rerun');
 
         try {
             const rerunReport = await runPostImportSceneSubjectPipeline(null, subjectIndexText, {
@@ -13056,6 +13098,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setActiveAnalysisTaskId('');
         setIsRetryingPhase2(true);
         clearAnalysisTaskMarker(activeEpisode?.id);
+        logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
             resetAutoSubjectsImportCache();
             onLog?.(`Retrying Stage 3 asset design... targetTypes: ${options.targetEntityTypes ? options.targetEntityTypes.join(',') : 'all'}`, 'process');
@@ -14564,6 +14607,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <FunctionApiSelector
                                 functionName="script_analysis"
                                 configs={functionApiConfigs}
+                                value={selectedScriptAnalysisApiId}
                                 onChange={setSelectedScriptAnalysisApiId}
                             />
                             <button 
@@ -14773,15 +14817,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
                             <span>{t('场景拆解进度', 'AI Script Analysis Status')}</span>
                         </div>
-                        {!isAnalyzing && (
-                            <button
-                                type="button"
-                                onClick={dismissAnalysisProgressPanel}
-                                className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
-                            >
-                                {t('关闭', 'Close')}
-                            </button>
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                            <FunctionApiSelector
+                                functionName="script_analysis"
+                                configs={functionApiConfigs}
+                                label={t('剧本分析 API', 'Script Analysis API')}
+                                value={selectedScriptAnalysisApiId}
+                                onChange={setSelectedScriptAnalysisApiId}
+                                className="min-w-[220px] justify-end"
+                            />
+                            {!isAnalyzing && (
+                                <button
+                                    type="button"
+                                    onClick={dismissAnalysisProgressPanel}
+                                    className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                                >
+                                    {t('关闭', 'Close')}
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">

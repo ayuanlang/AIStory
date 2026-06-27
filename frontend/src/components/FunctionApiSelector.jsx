@@ -3,11 +3,14 @@ import { getUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
 const FUNCTION_API_CHANGE_EVENT = 'aistory:function-api-changed';
 
-const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '', onChange }) => {
+const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '', onChange, value: controlledValue }) => {
 
     const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
     const [value, setValue] = useState(Number(localStorage.getItem(storageKey)) || '');
+    const displayValue = controlledValue !== undefined && controlledValue !== null
+        ? (Number(controlledValue) || '')
+        : value;
 
     const applyValue = useCallback((nextValue, { persist = true } = {}) => {
         const normalized = Number(nextValue) || '';
@@ -30,27 +33,29 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
     }, [onChange, storageKey]);
 
     useEffect(() => {
+        if (controlledValue !== undefined && controlledValue !== null) return;
         const stored = Number(localStorage.getItem(storageKey) || 0) || '';
         setValue(stored);
-    }, [storageKey]);
+    }, [controlledValue, storageKey]);
     
     useEffect(() => {
         if (apiList.length > 0) {
-            const isValid = apiList.some(a => Number(a.system_api_id) === Number(value));
-            if (!value || !isValid) {
+            const activeValue = Number(displayValue || 0);
+            const isValid = apiList.some(a => Number(a.system_api_id) === activeValue);
+            if (!activeValue || !isValid) {
                 const primary = apiList.find(a => !a.is_fallback) || apiList[0];
                 if (primary && primary.system_api_id) {
                     applyValue(primary.system_api_id, { persist: true });
                 }
             }
         }
-    }, [apiList, value, applyValue]);
+    }, [apiList, displayValue, applyValue]);
 
     useEffect(() => {
         if (typeof onChange === 'function') {
-            onChange(Number(value) || null);
+            onChange(Number(displayValue) || null);
         }
-    }, [onChange, value]);
+    }, [displayValue, onChange]);
 
     useEffect(() => {
         const handleStorage = (event) => {
@@ -84,7 +89,7 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
             <span className="text-xs text-white/50 whitespace-nowrap">{label}</span>
 
             <select
-                value={value || ''}
+                value={displayValue || ''}
                 onChange={(e) => handleChange(Number(e.target.value))}
                 onClick={(e) => e.stopPropagation()}
                 className="w-full bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-primary/50 min-w-[120px]"

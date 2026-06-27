@@ -3342,11 +3342,21 @@ export const tuneShotPrompt = async ({ original_prompt, instruction, prompt_lang
     });
 };
 
-export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
-    let defaultApiId = systemApiId;
-    if (!defaultApiId && functionName) {
-        defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
+export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis', systemApiId = null) => {
+    const explicit = Number(systemApiId || 0);
+    if (explicit > 0) return explicit;
+    const fn = String(functionName || '').trim();
+    if (fn.startsWith('script_analysis')) {
+        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
     }
+    if (fn) {
+        return Number(localStorage.getItem(`func_api_${fn}`) || 0) || null;
+    }
+    return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+};
+
+export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
+    const defaultApiId = resolveScriptAnalysisSystemApiId(functionName, systemApiId);
     try {
         console.info('[analyzeScene][routing] submit', {
             function_name: functionName,
@@ -3438,15 +3448,15 @@ export const analyzeScene = async (scriptText, systemPrompt = null, projectMetad
 };
 
 export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
-    let defaultApiId = systemApiId;
-    if (!defaultApiId && functionName) {
-        defaultApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
-    }
+    const resolvedFunctionName = String(functionName || 'script_analysis').startsWith('script_analysis')
+        ? 'script_analysis'
+        : (functionName || 'script_analysis');
+    const defaultApiId = resolveScriptAnalysisSystemApiId(resolvedFunctionName, systemApiId);
     const analyze_payload = {
         text: scriptText,
         system_prompt: systemPrompt,
         include_negative_prompt: true,
-        function_name: functionName,
+        function_name: resolvedFunctionName,
         system_api_id: defaultApiId,
     };
     if (sceneAnalysisMode) analyze_payload.scene_analysis_mode = sceneAnalysisMode;
@@ -3476,7 +3486,7 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
             node_key: nodeKey,
             project_id: projectId || null,
             episode_id: episodeId || null,
-            function_name: functionName,
+            function_name: resolvedFunctionName,
             system_api_id: defaultApiId,
             analyze_payload,
         }, {
