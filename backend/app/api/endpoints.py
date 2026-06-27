@@ -7944,6 +7944,30 @@ def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
     return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
 
 
+def _derive_scene_orchestration_phase(
+    *,
+    import_status: Any,
+    parse_status: Any,
+) -> str:
+    import_key = str(import_status or "").strip().lower()
+    parse_key = str(parse_status or "").strip().lower()
+    if import_key in {"success"}:
+        return "imported"
+    if import_key in {"awaiting_workspace_import"}:
+        return "llm_returned"
+    if import_key in {"importing"}:
+        return "importing"
+    if import_key in {"llm_returned"}:
+        return "llm_returned"
+    if import_key in {"llm_running", "running"}:
+        return "llm_submit"
+    if import_key in {"failed"} or parse_key in {"failed"}:
+        return "failed"
+    if import_key in {"queued"}:
+        return "queued"
+    return import_key or "unknown"
+
+
 async def _run_scene_markdown_node_per_scene(
     *,
     raw_payload: Dict[str, Any],
@@ -8101,10 +8125,20 @@ async def _run_scene_markdown_node_per_scene(
                             await _mark_scene_orchestration_status(
                                 task_db,
                                 scene_id=unit.scene_id,
-                                import_status="running",
+                                import_status="llm_running",
                                 parse_status="success",
                                 parse_error_code=None,
                             )
+                        logger.info(
+                            "[场景编排] LLM 提交 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s attempt=%s/%s",
+                            unit.scene_id,
+                            index,
+                            total_scenes,
+                            node_project_id,
+                            node_episode_id,
+                            attempt,
+                            max_attempts,
+                        )
 
                         single_scene_block = wrap_scene_unit_as_script_block(unit)
                         single_scene_instruction = (
@@ -8139,6 +8173,25 @@ async def _run_scene_markdown_node_per_scene(
                                 detail=f"{validation_error}:{unit.scene_id}",
                             )
 
+                        if node_project_id > 0 and node_episode_id > 0:
+                            await _mark_scene_orchestration_status(
+                                task_db,
+                                scene_id=unit.scene_id,
+                                import_status="llm_returned",
+                                parse_status="success",
+                                scene_markdown=scene_text,
+                                parse_error_code=None,
+                            )
+                        logger.info(
+                            "[场景编排] LLM 返回 | scene_id=%s scene_order=%s/%s output_chars=%s project_id=%s episode_id=%s",
+                            unit.scene_id,
+                            index,
+                            total_scenes,
+                            len(scene_text),
+                            node_project_id,
+                            node_episode_id,
+                        )
+
                         if node_episode_id > 0:
                             episode_row = task_db.query(Episode).filter(Episode.id == int(node_episode_id)).first()
                             if episode_row is not None:
@@ -8151,6 +8204,22 @@ async def _run_scene_markdown_node_per_scene(
                                 )
 
                         if node_project_id > 0 and node_episode_id > 0:
+                            await _mark_scene_orchestration_status(
+                                task_db,
+                                scene_id=unit.scene_id,
+                                import_status="importing",
+                                parse_status="success",
+                                scene_markdown=scene_text,
+                                parse_error_code=None,
+                            )
+                            logger.info(
+                                "[场景编排] 同步进度表 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                unit.scene_id,
+                                index,
+                                total_scenes,
+                                node_project_id,
+                                node_episode_id,
+                            )
                             import_scene_markdown_stage(
                                 task_db,
                                 project_id=node_project_id,
@@ -8163,10 +8232,18 @@ async def _run_scene_markdown_node_per_scene(
                             await _mark_scene_orchestration_status(
                                 task_db,
                                 scene_id=unit.scene_id,
-                                import_status="success",
+                                import_status="llm_returned",
                                 parse_status="success",
                                 scene_markdown=scene_text,
                                 parse_error_code=None,
+                            )
+                            logger.info(
+                                "[场景编排] 进度表已同步，等待工作区导入 | scene_id=%s scene_order=%s/%s project_id=%s episode_id=%s",
+                                unit.scene_id,
+                                index,
+                                total_scenes,
+                                node_project_id,
+                                node_episode_id,
                             )
 
                         if attempt > 1:
@@ -8728,6 +8805,10 @@ async def get_episode_progress_snapshot(
                 "scene_order": row.scene_order,
                 "parse_status": row.parse_status,
                 "import_status": row.import_status,
+                "orchestration_phase": _derive_scene_orchestration_phase(
+                    import_status=row.import_status,
+                    parse_status=row.parse_status,
+                ),
                 "parse_error_code": row.parse_error_code,
                 "scene_markdown": str(getattr(row, "scene_markdown", "") or "").strip(),
                 "updated_at": row.updated_at,

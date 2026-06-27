@@ -164,12 +164,17 @@ import {
 } from '../projectOptionConfig';
 
 const MULTI_PANEL_PRESET_OPTIONS = [
+    { key: '2panel', filename: 'multi_panel_image_preset_2panel.txt', labelZh: '二画格', labelEn: '2-Panel', columns: 2, rows: 1 },
     { key: '4panel', filename: 'multi_panel_image_preset_4panel.txt', labelZh: '四画格', labelEn: '4-Panel', columns: 2, rows: 2 },
     { key: '6panel', filename: 'multi_panel_image_preset_6panel.txt', labelZh: '六画格', labelEn: '6-Panel', columns: 3, rows: 2 },
     { key: '9panel', filename: 'multi_panel_image_preset_9panel.txt', labelZh: '九画格', labelEn: '9-Panel', columns: 3, rows: 3 },
 ];
 
 const MULTI_PANEL_PRESET_FALLBACKS = {
+    '2panel': {
+        cn: '生成一张 1x2 排布、包含 2 个连续画面的多画格叙事图。两格需保持同一主体、服装、场景与镜头语言连续，展示该镜头从起始到结束的关键瞬间。画面顺序必须明确为从左到右（1→2），并在每一格上方清晰标注对应阿拉伯数字（1、2）。必须严格按照提示词给出的时序与运镜逻辑推进，不得跳时、倒序、并行错序或随意改写镜头运动方向。除这些数字外，不要添加标题、对白气泡、说明文字或无关装饰。',
+        en: 'Generate a 1x2 multi-panel narrative image with 2 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across both panels, showing the shot from opening to closing beat. The panel order must be explicit left-to-right (1->2), and place a clear Arabic numeral above each panel (1, 2). You must strictly follow the prompt\'s timeline and camera-movement logic, with no time skips, reversed order, parallel mis-ordering, or arbitrary changes to camera direction. Do not add titles, speech bubbles, captions, or unrelated decorations beyond these numeric labels.',
+    },
     '4panel': {
         cn: '生成一张 2x2 排布、包含 4 个连续画面的多画格叙事图。四格需保持同一主体、服装、场景与镜头语言连续，展示该镜头的关键动作推进。画面顺序必须明确为从左到右、从上到下（1→2→3→4），并在每一格上方清晰标注对应阿拉伯数字（1、2、3、4）。必须严格按照提示词给出的时序与运镜逻辑推进，不得跳时、倒序、并行错序或随意改写镜头运动方向。除这些数字外，不要添加标题、对白气泡、说明文字或无关装饰。',
         en: 'Generate a 2x2 multi-panel narrative image with 4 sequential panels. Keep the same subject, wardrobe, scene, and cinematic language across all panels, showing the key action progression for this shot. The panel order must be explicit in reading order (left-to-right, top-to-bottom: 1->2->3->4), and place a clear Arabic numeral above each panel (1, 2, 3, 4). You must strictly follow the prompt\'s timeline and camera-movement logic, with no time skips, reversed order, parallel mis-ordering, or arbitrary changes to camera direction. Do not add titles, speech bubbles, captions, or unrelated decorations beyond these numeric labels.',
@@ -1221,7 +1226,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }), []);
 
     const isLocalShotBatchMode = useCallback((mode) => (
-        mode === 'keyframes-local' || mode === 'joint-diptych-local'
+        mode === 'keyframes-local' || mode === 'joint-diptych-local' || mode === 'multi-panel-local'
     ), []);
 
     const getShotBatchRuntimeStorageKey = useCallback((episodeId, sceneId) => {
@@ -6619,13 +6624,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const durationValue = Number(stableShot?.duration || 0);
         const effectiveDuration = Number.isFinite(durationValue) && durationValue > 0 ? durationValue : panelCount;
         const autoPromptBase = String(basePrompt || '').trim() || (promptLanguage === 'en' ? 'Keyframe split from multi-panel preset' : '从多画格预设自动拆分的关键帧');
-        const nextList = [{
-            id: Date.now(),
-            time: '0.0s',
-            prompt: autoPromptBase,
-            url: stableCompositeUrl,
-        }];
-        const nextCnMap = promptLanguage === 'cn' ? { '0.0s': autoPromptBase } : {};
+        const uploadedPanels = [];
 
         for (let index = 0; index < panelCount; index += 1) {
             const blob = await cropGeneratedGridPanelToBlob({
@@ -6637,74 +6636,109 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 exportSize,
             });
 
-            const inferredTime = `${Math.max(0.1, Number((((index + 1) * effectiveDuration) / (panelCount + 1)).toFixed(1)))}s`;
-            const timeKey = inferredTime;
+            const isStart = index === 0;
+            const isEnd = index === panelCount - 1;
+            const frameRole = isStart ? 'start' : (isEnd ? 'end' : `keyframe_${index}`);
+            const assetType = isStart ? 'start_frame' : (isEnd ? 'end_frame' : 'keyframe');
             const autoPrompt = `${autoPromptBase} #${index + 1}`;
             const uploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
                 operation: 'multi_panel_split',
                 shotId: targetShotId,
-                frameRole: `keyframe_${timeKey}`,
+                frameRole,
                 sourceUrl: stableCompositeUrl,
             });
 
             const uploaded = await uploadAsset(
-                new File([blob], `shot_${targetShotId}_keyframe_${index + 1}_${Date.now()}.jpg`, { type: 'image/jpeg' }),
+                new File([blob], `shot_${targetShotId}_${frameRole}_${index + 1}_${Date.now()}.jpg`, { type: 'image/jpeg' }),
                 {
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: targetShotId,
-                    shot_number: `${stableShot?.shot_id}_KF_${timeKey}`,
+                    shot_number: isStart || isEnd
+                        ? stableShot?.shot_id
+                        : `${stableShot?.shot_id}_KF_${index + 1}`,
                     shot_name: stableShot?.shot_name,
-                    asset_type: 'keyframe',
+                    asset_type: assetType,
                     source_asset_url: stableCompositeUrl,
                     idempotency_key: uploadIdempotencyKey,
-                    remark: `Multi-panel split keyframe ${index + 1}`,
+                    remark: `Multi-panel split ${frameRole} ${index + 1}`,
                 }
             );
 
             const uploadedUrl = String(uploaded?.url || '').trim();
             if (!uploadedUrl) {
-                throw new Error(`Failed to upload split keyframe ${index + 1}`);
+                throw new Error(`Failed to upload split panel ${index + 1}`);
             }
 
-            nextList.push({
-                id: Date.now() + index + 1,
-                time: timeKey,
-                prompt: autoPrompt,
-                url: uploadedUrl,
-            });
-
-            if (promptLanguage === 'cn' && !nextCnMap[timeKey]) {
-                nextCnMap[timeKey] = autoPrompt;
-            }
+            uploadedPanels.push({ index, url: uploadedUrl, prompt: autoPrompt });
         }
 
+        const startUrl = String(uploadedPanels[0]?.url || '').trim();
+        const endUrl = String(uploadedPanels[panelCount - 1]?.url || '').trim();
+        const middlePanels = panelCount > 2 ? uploadedPanels.slice(1, -1) : [];
+        const nextList = middlePanels.map((panel, midIdx) => ({
+            id: Date.now() + midIdx + 1,
+            time: `${Math.max(0.1, Number((((panel.index + 1) * effectiveDuration) / (panelCount + 1)).toFixed(1)))}s`,
+            prompt: panel.prompt,
+            url: panel.url,
+        }));
+        const nextCnMap = promptLanguage === 'cn'
+            ? Object.fromEntries(nextList.map((item) => [item.time, item.prompt]))
+            : {};
+
         try {
-            await Promise.all(nextList.map((item) => new Promise((resolve) => {
-                if (!item?.url) {
-                    resolve();
-                    return;
-                }
+            await Promise.all([startUrl, endUrl, ...nextList.map((item) => item.url)].filter(Boolean).map((url) => new Promise((resolve) => {
                 const img = new Image();
                 img.onload = () => {
-                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(item.url);
+                    if (typeof rememberWarmMediaUrl === 'function') rememberWarmMediaUrl(url);
                     resolve();
                 };
                 img.onerror = resolve;
-                img.src = getFullUrl(item.url);
+                img.src = getFullUrl(url);
             })));
         } catch (_) {}
 
-        setLocalKeyframes(nextList);
-        await reconstructKeyframes(nextList, {
+        let existingTech = {};
+        try {
+            existingTech = JSON.parse(stableShot?.technical_notes || '{}');
+            if (!existingTech || typeof existingTech !== 'object') existingTech = {};
+        } catch {
+            existingTech = {};
+        }
+
+        const textParts = nextList.map((item) => `[Time: ${item.time}] ${item.prompt}`);
+        const newKeyframesText = textParts.length > 0 ? textParts.join('\n') : 'NO';
+        const imgMap = {};
+        nextList.forEach((item) => { if (item.url) imgMap[item.time] = item.url; });
+
+        const nextTech = {
+            ...existingTech,
+            end_frame_url: endUrl,
+            end_frame_reused_from_start: panelCount === 1,
+            video_gen_mode: 'start_end',
+            keyframes: nextList.map((item) => item.url).filter(Boolean),
+            keyframe_images: imgMap,
             multi_panel_image_url: stableCompositeUrl,
             multi_panel_image_preset: normalizeMultiPanelPresetKey(presetKey),
             multi_panel_last_split_source_url: stableCompositeUrl,
             keyframe_prompt_cn_map: nextCnMap,
-        });
+        };
+
+        const nextPatch = {
+            image_url: startUrl,
+            keyframes: newKeyframesText,
+            technical_notes: JSON.stringify(nextTech),
+        };
+
+        await onUpdateShot(targetShotId, nextPatch);
+        setShots((prevShots) => prevShots.map((shot) => (String(shot?.id || '') === targetShotId ? { ...shot, ...nextPatch } : shot)));
+        setEditingShot((prev) => (String(prev?.id || '') === targetShotId ? { ...prev, ...nextPatch } : prev));
+        if (String(editingShot?.id || '') === targetShotId) {
+            setLocalKeyframes(nextList);
+        }
         refreshShotAssetsMeta();
-        return nextList;
-    }, [activeEpisode?.episode_info, cropGeneratedGridPanelToBlob, editingShot, loadImageElementFromBlob, localKeyframes, project?.global_info, projectId, reconstructKeyframes, refreshShotAssetsMeta]);
+        return { startUrl, endUrl, keyframes: nextList };
+    }, [activeEpisode?.episode_info, activeEpisode?.id, cropGeneratedGridPanelToBlob, editingShot?.id, loadImageElementFromBlob, onUpdateShot, project?.global_info, projectId, refreshShotAssetsMeta]);
 
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
@@ -7675,6 +7709,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     ]);
 
     const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
+    const [batchMultiPanelPresetKey, setBatchMultiPanelPresetKey] = useState('4panel');
+    const [batchUsePrevEndFrameAsMultiPanelStart, setBatchUsePrevEndFrameAsMultiPanelStart] = useState(false);
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
     const [isGeneratingMultiPanelImage, setIsGeneratingMultiPanelImage] = useState(false);
     const [isResplittingMultiPanelImage, setIsResplittingMultiPanelImage] = useState(false);
@@ -7718,16 +7754,45 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         };
     }, [multiPanelPresetKey, resolvedPromptSubmitLang]);
 
-    const handleGenerateMultiPanelImage = async () => {
-        if (!editingShot) return; 
-        const shotSnapshot = editingShot;
-        const targetShotId = shotSnapshot.id;
-        
-        setIsGeneratingMultiPanelImage(true);
+    const loadMultiPanelPresetInstruction = useCallback(async (presetKey, langKey = 'cn') => {
+        const stableKey = normalizeMultiPanelPresetKey(presetKey);
+        const stableLang = langKey === 'en' ? 'en' : 'cn';
+        const presetOption = getMultiPanelPresetOption(stableKey);
+        const fallbackInstruction = getMultiPanelPresetFallbackInstruction(stableKey, stableLang);
+        try {
+            const payload = await fetchPrompt(presetOption.filename);
+            const content = String(payload?.content || '').trim();
+            return content || fallbackInstruction;
+        } catch (error) {
+            console.warn('Failed to load multi-panel preset from backend prompts:', error);
+            return fallbackInstruction;
+        }
+    }, []);
+
+    const generateMultiPanelPreviewForShot = useCallback(async ({
+        shotSnapshot,
+        resolvedEntities: inputEntities,
+        presetKey,
+        presetInstruction = '',
+        usePrevEndFrameStart = false,
+        priorEndFrameUrl = '',
+        silent = false,
+    }) => {
+        const stableShot = shotSnapshot || null;
+        const targetShotId = String(stableShot?.id || '').trim();
+        if (!targetShotId) {
+            throw new Error('Missing shot id for multi-panel preview generation');
+        }
+
+        const resolvedEntities = Array.isArray(inputEntities) && inputEntities.length > 0
+            ? inputEntities
+            : await awaitShotGenerationEntities();
+
+        setShotGeneratingState(targetShotId, 'start', true);
+        setShotGeneratingState(targetShotId, 'end', true);
 
         try {
-            const resolvedEntities = await awaitShotGenerationEntities();
-            const techNotes = JSON.parse(shotSnapshot.technical_notes || '{}');
+            const techNotes = JSON.parse(stableShot.technical_notes || '{}');
             const cnVideoPrompt = String(techNotes.video_prompt_cn || '').trim();
             const rawVideoPrompt = (resolvedPromptSubmitLang === 'cn'
                 ? (cnVideoPrompt || getShotVideoPromptEn(shotSnapshot) || "Video motion")
@@ -7742,22 +7807,24 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
 
             const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
-            const activePresetKey = normalizeMultiPanelPresetKey(multiPanelPresetKey);
+            const activePresetKey = normalizeMultiPanelPresetKey(presetKey);
             const presetOption = getMultiPanelPresetOption(activePresetKey);
-            const baseInstruction = String(multiPanelPresetInstruction || '').trim() || getMultiPanelPresetFallbackInstruction(activePresetKey, langKey);
+            const baseInstruction = String(presetInstruction || '').trim() || getMultiPanelPresetFallbackInstruction(activePresetKey, langKey);
             const promptInstruction = langKey === 'en'
                 ? `. ${baseInstruction.replace(/^[.。\s]+/, '')}`
                 : `。${baseInstruction.replace(/^[.。\s]+/, '')}`;
 
             let prevEndFrameRefUrl = '';
             let prevEndFrameSummary = '';
-            if (usePrevEndFrameAsMultiPanelStart) {
-                prevEndFrameRefUrl = String(findPrevShotEndFrameUrl(targetShotId) || '').trim();
+            if (usePrevEndFrameStart) {
+                prevEndFrameRefUrl = String(priorEndFrameUrl || findPrevShotEndFrameUrl(targetShotId) || '').trim();
                 if (!prevEndFrameRefUrl) {
                     throw new Error(t('上一镜不存在可用的结束帧，无法作为多画格起始分镜参考图。', 'The previous shot does not have an end frame available for the multi-panel opening panel.'));
                 }
 
-                onLog?.(t('正在读取上一镜结束帧提示词，并将其作为多画格第一格参考...', 'Reading the previous shot end-frame prompt and using it as panel-one reference...'), 'info');
+                if (!silent) {
+                    onLog?.(t('正在读取上一镜结束帧提示词，并将其作为多画格第一格参考...', 'Reading the previous shot end-frame prompt and using it as panel-one reference...'), 'info');
+                }
                 const prevEndPromptText = getPrevShotEndPromptText(targetShotId, langKey);
                 const normalizeSummary = (value) => {
                     let text = String(value || '').trim();
@@ -7773,10 +7840,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 refs = [prevEndFrameRefUrl, ...refs.filter((url) => String(url || '').trim() && String(url || '').trim() !== prevEndFrameRefUrl)];
             }
 
-            onLog?.(`Generating ${presetOption.labelEn} preset image...`, 'info');
+            if (!silent) {
+                onLog?.(`Generating ${presetOption.labelEn} preset image...`, 'info');
+            }
 
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
-            const prevEndFrameInstruction = usePrevEndFrameAsMultiPanelStart
+            const prevEndFrameInstruction = usePrevEndFrameStart
                 ? (langKey === 'en'
                     ? `\n\nUse reference image #1 as the opening storyboard panel. Panel 1 must begin from that image's same subject identity, framing, camera position, costume, environment, and lighting, then continue the action in later panels. Visual summary for reference image #1: ${prevEndFrameSummary}.`
                     : `\n\n参考图 #1 必须作为本次多画格分镜的开始分镜。第一格需从该图的主体身份、构图、机位、服装、环境与光线直接起步，再在后续分格继续推进动作。参考图 #1 视觉特征：${prevEndFrameSummary}。`)
@@ -7797,35 +7866,92 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(finalPrompt, null, resolvedEntities),
+                on_job_created: (jobId) => {
+                    const stableJobId = String(jobId || '').trim();
+                    if (!stableJobId) return;
+                    setPendingImageJob(targetShotId, 'start', stableJobId);
+                },
             });
-            
-            if (res && (res.url || res.result_url || res.image_url)) {
-                const finalUrl = res.url || res.result_url || res.image_url;
-                techNotes.multi_panel_image_url = finalUrl;
-                techNotes.multi_panel_image_preset = activePresetKey;
-                techNotes.multi_panel_start_from_prev_end = usePrevEndFrameAsMultiPanelStart;
-                if (usePrevEndFrameAsMultiPanelStart) {
-                    techNotes.multi_panel_prev_end_ref_url = prevEndFrameRefUrl;
-                    techNotes.multi_panel_prev_end_ref_summary = prevEndFrameSummary;
-                } else {
-                    delete techNotes.multi_panel_prev_end_ref_url;
-                    delete techNotes.multi_panel_prev_end_ref_summary;
-                }
-                const nextStr = JSON.stringify(techNotes);
-                await onUpdateShot(targetShotId, { technical_notes: nextStr });
-                setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, technical_notes: nextStr } : prev));
-                await applyMultiPanelImageResult({
-                    shotRecord: shotSnapshot,
-                    compositeUrl: finalUrl,
-                    presetKey: activePresetKey,
-                    basePrompt: rawVideoPrompt,
-                    promptLanguage: resolvedPromptSubmitLang,
-                });
-                showNotification(t('多画格图已自动裁剪并填入关键帧', 'Multi-panel image was auto-split and filled into keyframes'), 'success');
+
+            if (!res || !(res.url || res.result_url || res.image_url)) {
+                throw new Error('No multi-panel image URL returned');
             }
+
+            const finalUrl = res.url || res.result_url || res.image_url;
+            techNotes.multi_panel_image_url = finalUrl;
+            techNotes.multi_panel_image_preset = activePresetKey;
+            techNotes.multi_panel_start_from_prev_end = usePrevEndFrameStart;
+            if (usePrevEndFrameStart) {
+                techNotes.multi_panel_prev_end_ref_url = prevEndFrameRefUrl;
+                techNotes.multi_panel_prev_end_ref_summary = prevEndFrameSummary;
+            } else {
+                delete techNotes.multi_panel_prev_end_ref_url;
+                delete techNotes.multi_panel_prev_end_ref_summary;
+            }
+            const nextStr = JSON.stringify(techNotes);
+            await onUpdateShot(targetShotId, { technical_notes: nextStr });
+
+            const splitResult = await applyMultiPanelImageResult({
+                shotRecord: { ...stableShot, technical_notes: nextStr },
+                compositeUrl: finalUrl,
+                presetKey: activePresetKey,
+                basePrompt: rawVideoPrompt,
+                promptLanguage: resolvedPromptSubmitLang,
+            });
+
+            return {
+                shotId: targetShotId,
+                shotLabel: String(stableShot.shot_id || stableShot.shot_name || `#${targetShotId}`),
+                startUrl: splitResult?.startUrl || '',
+                endUrl: splitResult?.endUrl || '',
+            };
+        } finally {
+            clearPendingImageJob(targetShotId, 'start');
+            setShotGeneratingState(targetShotId, 'start', false);
+            setShotGeneratingState(targetShotId, 'end', false);
+        }
+    }, [
+        activeEpisode?.episode_info,
+        activeEpisode?.id,
+        applyMultiPanelImageResult,
+        awaitShotGenerationEntities,
+        buildEntityNegativePrompt,
+        clearPendingImageJob,
+        findPrevShotEndFrameUrl,
+        getGlobalContextStr,
+        getPrevShotEndPromptText,
+        getProjectPreferredAspectRatio,
+        getProjectPreferredImageSize,
+        getShotVideoPromptEn,
+        injectEntityFeatures,
+        mergeVideoImageRefs,
+        onLog,
+        onUpdateShot,
+        project?.global_info,
+        projectId,
+        resolveShotStartFrameRefs,
+        resolvedPromptSubmitLang,
+        setPendingImageJob,
+        setShotGeneratingState,
+        t,
+    ]);
+
+    const handleGenerateMultiPanelImage = async () => {
+        if (!editingShot) return;
+        setIsGeneratingMultiPanelImage(true);
+        try {
+            const resolvedEntities = await awaitShotGenerationEntities();
+            await generateMultiPanelPreviewForShot({
+                shotSnapshot: editingShot,
+                resolvedEntities,
+                presetKey: multiPanelPresetKey,
+                presetInstruction: multiPanelPresetInstruction,
+                usePrevEndFrameStart: usePrevEndFrameAsMultiPanelStart,
+            });
+            showNotification(t('多画格图已自动裁剪并填入首尾帧与关键帧', 'Multi-panel image was auto-split and filled into start/end frames and keyframes'), 'success');
         } catch (e) {
-             onLog?.(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
-             showNotification(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
+            onLog?.(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
+            showNotification(`${t('生成多画格图失败', 'Failed to generate multi-panel image')}: ${e.message}`, 'error');
         } finally {
             setIsGeneratingMultiPanelImage(false);
         }
@@ -7856,7 +7982,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 basePrompt: rawVideoPrompt,
                 promptLanguage: resolvedPromptSubmitLang,
             });
-            showNotification(t('已重新拆分并回填关键帧', 'Keyframes were re-split and refilled'), 'success');
+            showNotification(t('已重新拆分并回填首尾帧与关键帧', 'Start/end frames and keyframes were re-split and refilled'), 'success');
         } catch (error) {
             onLog?.(`${t('重新拆分失败', 'Re-split failed')}: ${error?.message || 'unknown error'}`, 'error');
             showNotification(`${t('重新拆分失败', 'Re-split failed')}: ${error?.message || 'unknown error'}`, 'error');
@@ -9265,6 +9391,215 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [SHOT_BATCH_PARALLEL_LIMIT, applyShotPatchToLocalState, awaitShotGenerationEntities, generateShotDiptychBatchItem, getShotEndFrameUrl, isPersistentLocalShotBatchStopRequested, onLog, refreshShotAssetsMeta, refreshShots, shots, syncLocalShotBatchRuntime, t]);
 
+    const runLocalMultiPanelPreviewBatch = useCallback(async () => {
+        const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
+        const targetShots = orderedShots;
+        if (targetShots.length === 0) {
+            alert(t('当前没有可批量处理的镜头。', 'No shots available for batch processing.'));
+            return;
+        }
+
+        const presetOption = getMultiPanelPresetOption(batchMultiPanelPresetKey);
+        const ok = await confirmUiMessage(
+            t(
+                `将为 ${targetShots.length} 个镜头批量生成分镜预览（${presetOption.labelZh}）。每个镜头会生成多画格图并自动拆分，首格填入起始帧、末格填入结束帧，中间格填入关键帧。系统会本地并发调度，每批最多 ${SHOT_BATCH_PARALLEL_LIMIT} 个。是否继续？`,
+                `Generate storyboard previews for ${targetShots.length} shots (${presetOption.labelEn}). Each shot will generate a multi-panel image, split it, fill the first panel into the start frame, the last panel into the end frame, and middle panels into keyframes. The local scheduler will run up to ${SHOT_BATCH_PARALLEL_LIMIT} shots per wave. Continue?`
+            )
+        );
+        if (!ok) return;
+
+        const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
+        const presetInstruction = await loadMultiPanelPresetInstruction(batchMultiPanelPresetKey, langKey);
+        const resolvedEntities = await awaitShotGenerationEntities();
+
+        const prevShotIdByShotId = new Map();
+        orderedShots.forEach((shot, index) => {
+            const stableShotId = String(shot?.id || '').trim();
+            const prevShot = index > 0 ? orderedShots[index - 1] : null;
+            prevShotIdByShotId.set(stableShotId, String(prevShot?.id || '').trim());
+        });
+
+        const endUrlMap = new Map();
+        orderedShots.forEach((shot) => {
+            const stableShotId = String(shot?.id || '').trim();
+            const existingEndUrl = String(getShotEndFrameUrl(shot) || '').trim();
+            if (existingEndUrl) endUrlMap.set(stableShotId, existingEndUrl);
+        });
+
+        shotLocalBatchStopRequestedRef.current = false;
+        const batchSessionId = `shot-multi-panel-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        shotLocalBatchSessionRef.current = batchSessionId;
+        if (shotBatchStatusTimerRef.current) {
+            clearInterval(shotBatchStatusTimerRef.current);
+            shotBatchStatusTimerRef.current = null;
+        }
+        syncLocalShotBatchRuntime(true, {
+            current: 0,
+            total: targetShots.length,
+            status: t('分镜预览批量任务准备中...', 'Preparing storyboard preview batch...'),
+            stopRequested: false,
+            currentShotLabel: '',
+            currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+            mode: 'multi-panel-local',
+        });
+        onLog?.(t('开始本地分镜预览批量任务。', 'Started local storyboard preview batch.'), 'process');
+
+        let completed = 0;
+        let success = 0;
+        let failed = 0;
+        let queue = [...targetShots];
+
+        const isReady = (shot) => {
+            if (!batchUsePrevEndFrameAsMultiPanelStart) return true;
+            const stableShotId = String(shot?.id || '').trim();
+            const prevShotId = prevShotIdByShotId.get(stableShotId);
+            if (!prevShotId) return true;
+            return Boolean(endUrlMap.get(prevShotId));
+        };
+
+        try {
+            const shouldStopShotBatch = () => (
+                shotLocalBatchSessionRef.current !== batchSessionId
+                || shotLocalBatchStopRequestedRef.current
+                || isPersistentLocalShotBatchStopRequested(selectedSceneIdRef.current)
+            );
+            const workerLimit = Math.max(1, SHOT_BATCH_PARALLEL_LIMIT);
+            const activeTasks = new Map();
+
+            const updateActiveMultiPanelStatus = () => {
+                if (activeTasks.size === 0) return;
+                const activeLabels = Array.from(activeTasks.values())
+                    .map(({ shot }) => shot?.shot_id || shot?.shot_name || shot?.id)
+                    .filter(Boolean)
+                    .join(', ');
+                syncLocalShotBatchRuntime(true, {
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: activeLabels,
+                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    mode: 'multi-panel-local',
+                });
+            };
+
+            const startNextShotTask = () => {
+                if (shouldStopShotBatch() || activeTasks.size >= workerLimit || queue.length === 0) {
+                    return false;
+                }
+                const nextShot = queue.find(isReady) || (activeTasks.size === 0 ? queue[0] : null);
+                if (!nextShot) return false;
+
+                queue = queue.filter((shot) => String(shot?.id || '').trim() !== String(nextShot?.id || '').trim());
+                const shotId = String(nextShot?.id || '');
+                const priorEndFrameUrl = endUrlMap.get(prevShotIdByShotId.get(shotId) || '') || '';
+                const wrappedPromise = generateMultiPanelPreviewForShot({
+                    shotSnapshot: nextShot,
+                    resolvedEntities,
+                    presetKey: batchMultiPanelPresetKey,
+                    presetInstruction,
+                    usePrevEndFrameStart: batchUsePrevEndFrameAsMultiPanelStart,
+                    priorEndFrameUrl,
+                    silent: true,
+                })
+                    .then((value) => ({ shotId, shot: nextShot, status: 'fulfilled', value }))
+                    .catch((reason) => ({ shotId, shot: nextShot, status: 'rejected', reason }));
+                activeTasks.set(shotId, { shot: nextShot, promise: wrappedPromise });
+                updateActiveMultiPanelStatus();
+                return true;
+            };
+
+            while (queue.length > 0 || activeTasks.size > 0) {
+                while (!shouldStopShotBatch() && activeTasks.size < workerLimit && startNextShotTask()) {}
+
+                if (activeTasks.size === 0) break;
+
+                const settledTask = await Promise.race(Array.from(activeTasks.values()).map((item) => item.promise));
+                activeTasks.delete(settledTask.shotId);
+
+                const shot = settledTask.shot;
+                completed += 1;
+                if (settledTask.status === 'fulfilled') {
+                    success += 1;
+                    const stableShotId = String(shot?.id || '').trim();
+                    if (settledTask.value?.endUrl) {
+                        endUrlMap.set(stableShotId, settledTask.value.endUrl);
+                    }
+                } else {
+                    failed += 1;
+                    onLog?.(
+                        t(
+                            `镜头批量分镜预览失败：${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                            `Shot storyboard preview batch failed: ${shot?.shot_id || shot?.shot_name || shot?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                        ),
+                        'error'
+                    );
+                }
+
+                syncLocalShotBatchRuntime(true, {
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
+                    stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
+                    currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
+                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    mode: 'multi-panel-local',
+                });
+                updateActiveMultiPanelStatus();
+            }
+
+            if (shotLocalBatchSessionRef.current !== batchSessionId || shotLocalBatchStopRequestedRef.current) {
+                onLog?.(t(`分镜预览批量任务已停止：成功 ${success}，失败 ${failed}`, `Storyboard preview batch stopped: ${success} succeeded, ${failed} failed`), 'warning');
+                syncLocalShotBatchRuntime(false, {
+                    current: completed,
+                    total: targetShots.length,
+                    status: t(`分镜预览批量已停止：成功 ${success}，失败 ${failed}`, `Storyboard preview batch stopped: ${success} succeeded, ${failed} failed`),
+                    stopRequested: true,
+                    currentShotLabel: '',
+                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    mode: 'multi-panel-local',
+                });
+                return;
+            }
+
+            onLog?.(t(`分镜预览批量完成：成功 ${success}，失败 ${failed}`, `Storyboard preview batch complete: ${success} succeeded, ${failed} failed`), failed > 0 ? 'warning' : 'success');
+            syncLocalShotBatchRuntime(false, {
+                current: completed,
+                total: targetShots.length,
+                status: t(`分镜预览批量完成：成功 ${success}，失败 ${failed}`, `Storyboard preview batch complete: ${success} succeeded, ${failed} failed`),
+                stopRequested: false,
+                currentShotLabel: '',
+                currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                mode: 'multi-panel-local',
+            });
+        } finally {
+            shotLocalBatchSessionRef.current = '';
+            shotLocalBatchStopRequestedRef.current = false;
+            if (shotBatchStatusTimerRef.current) {
+                clearInterval(shotBatchStatusTimerRef.current);
+                shotBatchStatusTimerRef.current = null;
+            }
+            refreshShots();
+            refreshShotAssetsMeta();
+        }
+    }, [
+        SHOT_BATCH_PARALLEL_LIMIT,
+        awaitShotGenerationEntities,
+        batchMultiPanelPresetKey,
+        batchUsePrevEndFrameAsMultiPanelStart,
+        generateMultiPanelPreviewForShot,
+        getShotEndFrameUrl,
+        isPersistentLocalShotBatchStopRequested,
+        loadMultiPanelPresetInstruction,
+        onLog,
+        refreshShotAssetsMeta,
+        refreshShots,
+        resolvedPromptSubmitLang,
+        shots,
+        syncLocalShotBatchRuntime,
+        t,
+    ]);
+
     const pollShotBatchStatus = useCallback(async () => {
         if (!activeEpisode?.id) return null;
         const persistentLocalRuntime = getPersistentLocalShotBatchRuntime(selectedSceneId);
@@ -9288,7 +9623,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 message: String(localProgress?.status || ''),
                 stop_requested: Boolean(localProgress?.stopRequested),
                 current_shot_label: String(localProgress?.currentShotLabel || ''),
-                current_asset_type: localMode === 'joint-diptych-local' ? 'joint_diptych' : 'start_end_sequence',
+                current_asset_type: localMode === 'joint-diptych-local'
+                    ? 'joint_diptych'
+                    : (localMode === 'multi-panel-local' ? 'storyboard_preview' : 'start_end_sequence'),
                 current_asset_label: String(localProgress?.currentAssetLabel || ''),
                 mode: localMode,
             };
@@ -9411,7 +9748,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const localMode = String(batchProgressRef.current?.mode || 'keyframes-local');
                 const stopMessage = localMode === 'joint-diptych-local'
                     ? t('已请求停止当前首尾联生批量任务。', 'Stop requested for current joint diptych batch.')
-                    : t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.');
+                    : (localMode === 'multi-panel-local'
+                        ? t('已请求停止当前分镜预览批量任务。', 'Stop requested for current storyboard preview batch.')
+                        : t('已请求停止当前关键帧批量任务。', 'Stop requested for current keyframe batch.'));
                 shotLocalBatchStopRequestedRef.current = true;
                 const nextProgress = {
                     ...(batchProgressRef.current || createShotBatchProgressState()),
@@ -9511,6 +9850,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 await runLocalJointDiptychBatch();
                 return;
             }
+            if (mode === 'multi_panel_preview') {
+                await runLocalMultiPanelPreviewBatch();
+                return;
+            }
 
             const started = await startShotMediaBatch(activeEpisode.id, {
                 mode,
@@ -9562,6 +9905,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const handleBatchGenerateJointDiptych = async () => {
         await startShotBatchByMode('joint_diptych');
+    };
+
+    const handleBatchGenerateMultiPanelPreview = async () => {
+        await startShotBatchByMode('multi_panel_preview');
     };
 
     const handleBatchGenerateVideo = async () => {
@@ -9932,6 +10279,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             {t('首尾联生', 'Joint Start/End Diptych')}
                                                         </button>
                                                         <button
+                                                            onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateMultiPanelPreview(); }}
+                                                            className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
+                                                            title={t('按当前画格预设为每个镜头生成分镜预览并拆分回填', 'Generate storyboard previews for each shot using the current panel preset, then split and fill frames')}
+                                                        >
+                                                            <Layers className="w-3 h-3 text-muted-foreground"/>
+                                                            {t('分镜预览 (批量)', 'Storyboard Preview (Batch)')}
+                                                        </button>
+                                                        <button
                                                             onClick={() => { setIsBatchMenuOpen(false); handleBatchGenerateVideo(); }}
                                                             className="w-full text-left px-3 py-2.5 text-xs hover:bg-white/10 flex items-center gap-2"
                                                             title={t('仅处理已有首尾帧且当前无视频的镜头', 'Only shots with existing start/end frames and no current video')}
@@ -9960,6 +10315,48 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             </button>
                                         )}
                             </div>
+                        </div>
+
+                        {/* Group 4b: Batch Storyboard Preview */}
+                        <div className="flex items-center gap-1 bg-black/40 border border-white/10 rounded-lg p-1">
+                            <select
+                                value={batchMultiPanelPresetKey}
+                                onChange={(e) => setBatchMultiPanelPresetKey(normalizeMultiPanelPresetKey(e.target.value))}
+                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                className="h-[30px] rounded border border-white/10 bg-black/30 px-2 text-xs text-white min-w-[88px]"
+                                title={t('批量分镜预览画格数', 'Panel count for batch storyboard preview')}
+                            >
+                                {MULTI_PANEL_PRESET_OPTIONS.map((option) => (
+                                    <option key={`batch-${option.key}`} value={option.key}>
+                                        {t(option.labelZh, option.labelEn)}
+                                    </option>
+                                ))}
+                            </select>
+                            <label
+                                className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-white/80 cursor-pointer hover:bg-white/5 rounded"
+                                title={t('选中后每个镜头会以上一镜结束帧作为首格参考', 'When enabled, each shot uses the previous shot end frame as the opening panel reference')}
+                            >
+                                <input
+                                    type="checkbox"
+                                    className="hidden"
+                                    checked={batchUsePrevEndFrameAsMultiPanelStart}
+                                    disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                    onChange={(e) => setBatchUsePrevEndFrameAsMultiPanelStart(e.target.checked)}
+                                />
+                                <div className={`flex h-3 w-3 items-center justify-center rounded-sm border ${batchUsePrevEndFrameAsMultiPanelStart ? 'border-primary bg-primary text-black' : 'border-white/30 bg-black/20 text-transparent'}`}>
+                                    <Check className="h-2.5 w-2.5" />
+                                </div>
+                                <span>{t('上镜续接', 'Chain Prev End')}</span>
+                            </label>
+                            <button
+                                onClick={handleBatchGenerateMultiPanelPreview}
+                                disabled={isBatchGenerating || isShotBatchStarting || isStoppingShotBatch}
+                                className={`px-3 py-1.5 rounded text-xs flex items-center gap-1 transition-all ${(isBatchGenerating || isShotBatchStarting) ? 'bg-amber-500/20 text-amber-200 cursor-wait' : 'bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'}`}
+                                title={t('为当前列表每个镜头批量生成分镜预览，并拆分填入首尾帧与关键帧', 'Batch-generate storyboard previews for each listed shot, split panels into start/end frames and keyframes')}
+                            >
+                                {(isBatchGenerating || isShotBatchStarting) ? <Loader2 className="w-3 h-3 animate-spin"/> : <Layers className="w-3 h-3"/>}
+                                {t('批量分镜预览', 'Batch Storyboard Preview')}
+                            </button>
                         </div>
 
                                                 {/* Group 5: Tools */}
@@ -11061,7 +11458,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 {localKeyframes.length}
                                                             </span>
                                                         </div>
-                                                        <div className="text-xs text-muted-foreground mt-1">{t('多画格图会自动拆分并直接回填到关键帧。', 'Multi-panel images are automatically split and filled back into keyframes.')}</div>
+                                                        <div className="text-xs text-muted-foreground mt-1">{t('多画格图会自动拆分并填入起始帧、结束帧与关键帧。', 'Multi-panel images are automatically split and filled into start frame, end frame, and keyframes.')}</div>
                                                     </div>
                                                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                                         <div className="rounded-lg border border-white/10 bg-black/15 p-3 space-y-2">
