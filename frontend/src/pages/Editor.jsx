@@ -2607,12 +2607,19 @@ const Editor = ({
                                     key_props: getSceneVal('key_props', ['keyprops', 'key_props', '关键道具', '道具', 'props']),
                                 };
 
-                                if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
-                                    const sceneIdVal = String(scData.scene_id || '').trim();
-                                    const derivedFromId = toSceneNumber(sceneIdVal);
-                                    if (Number.isFinite(derivedFromId) && derivedFromId > 0) {
-                                        scData.scene_no = String(derivedFromId);
-                                    } else if (sceneIdVal) {
+                                const sceneIdVal = String(scData.scene_id || '').trim();
+                                const derivedFromId = toSceneNumber(sceneIdVal);
+                                if (Number.isFinite(derivedFromId) && derivedFromId > 0) {
+                                    const priorNo = String(scData.scene_no || '').trim();
+                                    scData.scene_no = String(derivedFromId);
+                                    if (priorNo && toSceneNumber(priorNo) !== derivedFromId) {
+                                        addLog(
+                                            `Scene No corrected from ${priorNo} to ${derivedFromId} using Scene ID ${sceneIdVal}.`,
+                                            'info'
+                                        );
+                                    }
+                                } else if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
+                                    if (sceneIdVal) {
                                         scData.scene_no = sceneIdVal;
                                     } else if (scData.scene_name) {
                                         scData.scene_no = String(scData.scene_name).trim();
