@@ -1636,6 +1636,67 @@ export function buildShotDiptychPlan(aspectRatio) {
     };
 }
 
+export function buildMultiPanelGridPlan(aspectRatio, columns, rows) {
+    const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
+    const safeColumns = Math.max(1, Number(columns) || 1);
+    const safeRows = Math.max(1, Number(rows) || 1);
+
+    return {
+        columns: safeColumns,
+        rows: safeRows,
+        targetAspectRatio: buildAspectRatioString(parts.widthPart, parts.heightPart) || '16:9',
+        exactCombinedAspectRatio: buildAspectRatioString(parts.widthPart * safeColumns, parts.heightPart * safeRows),
+        ratioValue: parts.widthPart / parts.heightPart,
+    };
+}
+
+export function deriveMultiPanelCellAspectRatio(compositeAspectRatio, columns, rows) {
+    const compositeRatio = parseAspectRatioValue(compositeAspectRatio);
+    const safeColumns = Math.max(1, Number(columns) || 1);
+    const safeRows = Math.max(1, Number(rows) || 1);
+    if (compositeRatio == null) return null;
+    return compositeRatio * (safeRows / safeColumns);
+}
+
+export function selectBestMultiPanelRequestAspectRatio({ gridPlan, allowedAspectRatios }) {
+    const fallback = normalizeAspectRatioOption(gridPlan?.exactCombinedAspectRatio)
+        || normalizeAspectRatioOption(gridPlan?.targetAspectRatio)
+        || '16:9';
+    const supported = collectSupportedAspectRatioOptions(allowedAspectRatios);
+    if (supported.length === 0) return fallback;
+
+    const targetRatio = parseAspectRatioValue(gridPlan?.targetAspectRatio);
+    const idealCombinedRatio = parseAspectRatioValue(gridPlan?.exactCombinedAspectRatio);
+
+    const scoreAspect = (value) => {
+        const overallRatio = parseAspectRatioValue(value);
+        if (overallRatio == null) return Number.POSITIVE_INFINITY;
+        const derivedCellRatio = deriveMultiPanelCellAspectRatio(value, gridPlan.columns, gridPlan.rows);
+        const panelCloseness = targetRatio != null && derivedCellRatio != null
+            ? Math.abs(derivedCellRatio - targetRatio)
+            : Number.POSITIVE_INFINITY;
+        const combinedCloseness = idealCombinedRatio != null
+            ? Math.abs(overallRatio - idealCombinedRatio)
+            : Number.POSITIVE_INFINITY;
+        return (panelCloseness * 100) + combinedCloseness;
+    };
+
+    return [...supported].sort((left, right) => scoreAspect(left) - scoreAspect(right))[0] || fallback;
+}
+
+export function buildMultiPanelAspectContract(gridPlan, language = 'en') {
+    const panelAspectRatio = String(gridPlan?.targetAspectRatio || '16:9').trim();
+    const combinedAspectRatio = String(gridPlan?.exactCombinedAspectRatio || panelAspectRatio).trim();
+    const columns = Math.max(1, Number(gridPlan?.columns) || 1);
+    const rows = Math.max(1, Number(gridPlan?.rows) || 1);
+
+    if (language === 'cn') {
+        return `整图总画幅需接近 ${combinedAspectRatio}，并均分为 ${columns}x${rows} 等分网格；拆分后每一格都必须是 ${panelAspectRatio}。各格必须等宽等高、贴边作画，格间仅保留极细分隔线，不要大面积留白。`;
+    }
+
+    return `The full canvas should target ${combinedAspectRatio} and be split into an equal ${columns}x${rows} grid where every panel is ${panelAspectRatio}. All panels must be equal size, drawn edge-to-edge, with only minimal gutter spacing between cells.`;
+}
+
 export function getShotDiptychLayoutLabel(layout, language = 'en') {
     if (language === 'cn') {
         return layout === 'horizontal' ? '左右并排' : '上下并排';

@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -3842,12 +3842,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const safeColumns = Math.max(1, Number(columns));
         const safeRows = Math.max(1, Number(rows));
         const safeIndex = Math.max(0, Math.min((safeColumns * safeRows) - 1, Number(panelIndex) || 0));
-        const rowIndex = safeIndex % safeRows;
-        const columnIndex = Math.floor(safeIndex / safeRows);
+        const columnIndex = safeIndex % safeColumns;
+        const rowIndex = Math.floor(safeIndex / safeColumns);
         const cellWidth = sourceWidth / safeColumns;
         const cellHeight = sourceHeight / safeRows;
-        const trimX = Math.min(12, Math.max(0, Math.round(cellWidth * 0.01)));
-        const trimY = Math.min(12, Math.max(0, Math.round(cellHeight * 0.01)));
+        const seamTrimX = Math.max(2, Math.min(12, Math.round(cellWidth / 208)));
+        const seamTrimY = Math.max(2, Math.min(12, Math.round(cellHeight / 208)));
+        const trimX = Math.min(seamTrimX, Math.max(0, Math.round(cellWidth * 0.01)));
+        const trimY = Math.min(seamTrimY, Math.max(0, Math.round(cellHeight * 0.01)));
 
         const panelX = (columnIndex * cellWidth) + trimX;
         const panelY = (rowIndex * cellHeight) + trimY;
@@ -6739,7 +6741,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setLocalKeyframes(nextList);
         }
         refreshShotAssetsMeta();
-        return { startUrl, endUrl, keyframes: nextList };
+        return { startUrl, endUrl, keyframes: nextList, shotPatch: nextPatch };
     }, [activeEpisode?.episode_info, activeEpisode?.id, cropGeneratedGridPanelToBlob, editingShot?.id, loadImageElementFromBlob, onUpdateShot, project?.global_info, projectId, refreshShotAssetsMeta]);
 
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
@@ -7848,9 +7850,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ? `\n\nUse reference image #1 as the opening storyboard panel. Panel 1 must begin from that image's same subject identity, framing, camera position, costume, environment, and lighting, then continue the action in later panels. Visual summary for reference image #1: ${prevEndFrameSummary}.`
                     : `\n\n参考图 #1 必须作为本次多画格分镜的开始分镜。第一格需从该图的主体身份、构图、机位、服装、环境与光线直接起步，再在后续分格继续推进动作。参考图 #1 视觉特征：${prevEndFrameSummary}。`)
                 : '';
-            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + prevEndFrameInstruction + promptInstruction;
             const preferredImageSize = getProjectPreferredImageSize(project?.global_info, activeEpisode?.episode_info);
-            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
+            const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || '16:9';
+            const multiPanelGridPlan = buildMultiPanelGridPlan(
+                preferredAspectRatio,
+                presetOption.columns,
+                presetOption.rows,
+            );
+            const requestAspectRatio = selectBestMultiPanelRequestAspectRatio({
+                gridPlan: multiPanelGridPlan,
+                allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
+            });
+            const aspectContract = buildMultiPanelAspectContract(multiPanelGridPlan, langKey);
+            const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + prevEndFrameInstruction + promptInstruction + `\n\n${aspectContract}`;
 
             const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, { 
                 function_name: 'generate_shot_images',
@@ -7861,7 +7873,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 shot_name: shotSnapshot.shot_name,
                 prompt_language: resolvedPromptSubmitLang,
                 asset_type: 'start_frame',
-                ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
+                ...(requestAspectRatio ? { aspect_ratio: requestAspectRatio } : {}),
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                 negative_prompt: buildEntityNegativePrompt(finalPrompt, null, resolvedEntities),
                 on_job_created: (jobId) => {
@@ -7878,6 +7890,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const finalUrl = res.url || res.result_url || res.image_url;
             techNotes.multi_panel_image_url = finalUrl;
             techNotes.multi_panel_image_preset = activePresetKey;
+            techNotes.multi_panel_request_aspect_ratio = requestAspectRatio;
+            techNotes.multi_panel_target_aspect_ratio = multiPanelGridPlan.targetAspectRatio;
             techNotes.multi_panel_start_from_prev_end = usePrevEndFrameStart;
             if (usePrevEndFrameStart) {
                 techNotes.multi_panel_prev_end_ref_url = prevEndFrameRefUrl;
@@ -7887,7 +7901,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 delete techNotes.multi_panel_prev_end_ref_summary;
             }
             const nextStr = JSON.stringify(techNotes);
-            await onUpdateShot(targetShotId, { technical_notes: nextStr });
+
+            setShotGeneratingState(targetShotId, 'start', false);
+            setShotGeneratingState(targetShotId, 'end', false);
+            setShotGeneratingState(targetShotId, 'cropping', true);
 
             const splitResult = await applyMultiPanelImageResult({
                 shotRecord: { ...stableShot, technical_notes: nextStr },
@@ -7902,15 +7919,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 shotLabel: String(stableShot.shot_id || stableShot.shot_name || `#${targetShotId}`),
                 startUrl: splitResult?.startUrl || '',
                 endUrl: splitResult?.endUrl || '',
+                shotPatch: splitResult?.shotPatch || {},
             };
         } finally {
             clearPendingImageJob(targetShotId, 'start');
             setShotGeneratingState(targetShotId, 'start', false);
             setShotGeneratingState(targetShotId, 'end', false);
+            setShotGeneratingState(targetShotId, 'cropping', false);
         }
     }, [
         activeEpisode?.episode_info,
         activeEpisode?.id,
+        activeImageCapabilityProfile?.aspectRatios,
         applyMultiPanelImageResult,
         awaitShotGenerationEntities,
         buildEntityNegativePrompt,
@@ -9436,10 +9456,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             status: t('分镜预览批量任务准备中...', 'Preparing storyboard preview batch...'),
             stopRequested: false,
             currentShotLabel: '',
-            currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+            currentAssetLabel: t('生成+拆分', 'Generate + Split'),
             mode: 'multi-panel-local',
         });
-        onLog?.(t('开始本地分镜预览批量任务。', 'Started local storyboard preview batch.'), 'process');
+        onLog?.(t('开始本地分镜预览批量任务（生成后自动拆分回填）。', 'Started local storyboard preview batch (auto-split after generation).'), 'process');
 
         let completed = 0;
         let success = 0;
@@ -9475,7 +9495,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     status: t(`处理中：${activeLabels}`, `Processing: ${activeLabels}`),
                     stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
                     currentShotLabel: activeLabels,
-                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    currentAssetLabel: t('生成+拆分', 'Generate + Split'),
                     mode: 'multi-panel-local',
                 });
             };
@@ -9519,8 +9539,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 if (settledTask.status === 'fulfilled') {
                     success += 1;
                     const stableShotId = String(shot?.id || '').trim();
+                    const nextPatch = settledTask.value?.shotPatch || {};
+                    applyShotPatchToLocalState(shot?.id, nextPatch);
                     if (settledTask.value?.endUrl) {
                         endUrlMap.set(stableShotId, settledTask.value.endUrl);
+                    } else if (settledTask.value?.startUrl) {
+                        endUrlMap.set(stableShotId, settledTask.value.startUrl);
                     }
                 } else {
                     failed += 1;
@@ -9539,7 +9563,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     status: t(`已完成 ${completed}/${targetShots.length}`, `Completed ${completed}/${targetShots.length}`),
                     stopRequested: Boolean(shotLocalBatchStopRequestedRef.current),
                     currentShotLabel: String(shot?.shot_id || shot?.shot_name || shot?.id || ''),
-                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    currentAssetLabel: t('生成+拆分', 'Generate + Split'),
                     mode: 'multi-panel-local',
                 });
                 updateActiveMultiPanelStatus();
@@ -9553,7 +9577,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     status: t(`分镜预览批量已停止：成功 ${success}，失败 ${failed}`, `Storyboard preview batch stopped: ${success} succeeded, ${failed} failed`),
                     stopRequested: true,
                     currentShotLabel: '',
-                    currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                    currentAssetLabel: t('生成+拆分', 'Generate + Split'),
                     mode: 'multi-panel-local',
                 });
                 return;
@@ -9566,7 +9590,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 status: t(`分镜预览批量完成：成功 ${success}，失败 ${failed}`, `Storyboard preview batch complete: ${success} succeeded, ${failed} failed`),
                 stopRequested: false,
                 currentShotLabel: '',
-                currentAssetLabel: t('分镜预览', 'Storyboard Preview'),
+                currentAssetLabel: t('生成+拆分', 'Generate + Split'),
                 mode: 'multi-panel-local',
             });
         } finally {
@@ -9581,6 +9605,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [
         SHOT_BATCH_PARALLEL_LIMIT,
+        applyShotPatchToLocalState,
         awaitShotGenerationEntities,
         batchMultiPanelPresetKey,
         batchUsePrevEndFrameAsMultiPanelStart,
