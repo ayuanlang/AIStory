@@ -3669,12 +3669,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
         const effectiveVideoMode = resolveUnifiedVideoMode(tech);
+        const videoRefPromptText = buildShotVideoRefPromptText(shotSnapshot, tech);
         const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-            promptText: `${getShotVideoPromptEn(shotSnapshot) || ''}\n${String(tech.video_prompt_cn || '').trim()}`,
+            promptText: videoRefPromptText,
+            associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
         });
         const refs = Array.isArray(tech.video_ref_image_urls)
-            ? tech.video_ref_image_urls
+            ? normalizeMediaRefList(tech.video_ref_image_urls)
             : buildAutoVideoRefList(shotSnapshot, tech, effectiveVideoMode, promptEntityRefs);
 
         return normalizeImageRefList(refs);
@@ -7800,11 +7802,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const isManual = techNotes.manual_video_prompt === true;
 
             const { text: submitPrompt } = injectEntityFeatures(rawVideoPrompt, isManual, resolvedEntities);
-            let refs = mergeVideoImageRefs(
-                shotSnapshot,
-                resolveShotStartFrameRefs(shotSnapshot, rawVideoPrompt, resolvedEntities),
-                resolvedEntities,
-            );
+            let refs = resolveShotVideoImageRefs(shotSnapshot, resolvedEntities);
 
             const langKey = resolvedPromptSubmitLang === 'en' ? 'en' : 'cn';
             const activePresetKey = normalizeMultiPanelPresetKey(presetKey);
@@ -7924,12 +7922,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         getProjectPreferredImageSize,
         getShotVideoPromptEn,
         injectEntityFeatures,
-        mergeVideoImageRefs,
         onLog,
         onUpdateShot,
         project?.global_info,
         projectId,
-        resolveShotStartFrameRefs,
+        resolveShotVideoImageRefs,
         resolvedPromptSubmitLang,
         setPendingImageJob,
         setShotGeneratingState,

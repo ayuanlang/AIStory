@@ -85,6 +85,7 @@ from app.services.script_analysis_flow import (
     build_script_analysis_flow_plan,
     extract_adapted_script_from_beats_user_input,
     expand_scene_ids_for_orchestration_reset,
+    extract_scenes_table_markdown_block,
     extract_scene_markdown_text_from_analyze_result,
     import_analyze_scene_stage_result,
     import_scene_markdown_stage,
@@ -7944,8 +7945,8 @@ def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
         detail = str(getattr(exc, "detail", "") or "")
         if detail.startswith("SCENE_MARKDOWN_SCENE_ID_MISMATCH"):
             return detail if "," in detail or detail.count(":") > 1 else detail
-        if detail.startswith("SCENE_MARKDOWN_"):
-            return detail.split(":", 1)[0] if ":" in detail else detail
+        if detail.startswith("SCENE_MARKDOWN_") or detail.startswith("SCENES_TABLE_"):
+            return detail
     return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
 
 
@@ -8169,9 +8170,13 @@ async def _run_scene_markdown_node_per_scene(
                             db=task_db,
                             async_mode="0",
                         )
-                        scene_text = _extract_analysis_text_from_result(result).strip()
+                        scene_text = _extract_scene_markdown_text_from_result(result).strip()
+                        if not scene_text:
+                            scene_text = _extract_analysis_text_from_result(result).strip()
+                        if not scene_text:
+                            raise HTTPException(status_code=422, detail="SCENE_MARKDOWN_EMPTY")
                         raw_scene_text = scene_text
-                        scene_text = sanitize_scene_markdown_llm_output(scene_text) or scene_text
+                        scene_text = extract_scenes_table_markdown_block(scene_text) or sanitize_scene_markdown_llm_output(scene_text) or scene_text
                         scene_text = patch_single_scene_markdown_for_orchestration(
                             scene_text,
                             unit.scene_id,
@@ -12538,6 +12543,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             billing_service.deduct_credits(db, current_user_id, "analysis", provider, model, details)
 
         response_payload: Dict[str, Any] = {"success": True, "result": result_content, "meta": debug_meta}
+        if is_scene_beats_stage and str(result_content or "").strip():
+            extracted_beats_table = extract_scenes_table_markdown_block(result_content)
+            if extracted_beats_table:
+                result_content = extracted_beats_table
+                response_payload["result"] = result_content
+            else:
+                logger.warning(
+                    "[analyze_scene] scene_beats table extraction produced no data row | episode_id=%s output_chars=%s output_tail=%s",
+                    getattr(request, "episode_id", None),
+                    len(str(result_content or "")),
+                    str(result_content or "")[-400:],
+                )
         if not saved_to_episode:
             response_payload["warnings"] = [
                 *list(response_payload.get("warnings") or []),
@@ -14757,6 +14774,18 @@ def _active_episode_clause():
 
 def _active_scene_clause():
     return or_(Scene.is_deleted.is_(False), Scene.is_deleted.is_(None))
+
+
+def _scene_no_sort_key(scene) -> tuple:
+    scene_no = str(getattr(scene, "scene_no", None) or "").strip()
+    if not scene_no:
+        return (1, (), "", int(getattr(scene, "id", 0) or 0))
+    nums = tuple(int(m) for m in re.findall(r"\d+", scene_no))
+    return (0, nums, scene_no.lower(), int(getattr(scene, "id", 0) or 0))
+
+
+def _sort_scenes_by_scene_no(scenes: list) -> list:
+    return sorted(scenes, key=_scene_no_sort_key)
 
 
 def _active_shot_clause():
@@ -22024,7 +22053,8 @@ def read_scenes(
         )
     safe_skip = max(int(skip or 0), 0)
     safe_limit = max(1, min(int(limit or 300), 500))
-    return query.order_by(Scene.id).offset(safe_skip).limit(safe_limit).all()
+    rows = _sort_scenes_by_scene_no(query.all())
+    return rows[safe_skip:safe_skip + safe_limit]
 
 @router.post("/episodes/{episode_id}/scenes", response_model=SceneOut)
 def create_scene(
@@ -24553,7 +24583,7 @@ def _start_scene_ai_shots_batch_for_episode(
     scenes_query = db.query(Scene).filter(Scene.episode_id == episode_id, _active_scene_clause())
     if requested_scene_ids:
         scenes_query = scenes_query.filter(Scene.id.in_(requested_scene_ids))
-    target_scenes = scenes_query.order_by(Scene.id.asc()).all()
+    target_scenes = _sort_scenes_by_scene_no(scenes_query.all())
     scene_ids = [int(s.id) for s in target_scenes]
     if not scene_ids:
         raise HTTPException(status_code=400, detail="No saved scenes found for batch")

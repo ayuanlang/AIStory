@@ -1553,21 +1553,21 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         return `draft:${scene?.scene_no || ''}|${scene?.scene_name || ''}|${scene?.environment_name || ''}|${scene?.original_script_text || ''}`;
     };
 
-    const getSceneUpdatedAtMs = (scene) => {
-        const candidate = scene?.updated_at || scene?.updatedAt || scene?.modified_at || scene?.modifiedAt || scene?.created_at || scene?.createdAt;
-        if (!candidate) return 0;
-        const parsed = Date.parse(candidate);
-        return Number.isFinite(parsed) ? parsed : 0;
-    };
-
     const getSceneOrderKey = (scene) => {
         const scenePart = String(scene?.scene_no || scene?.scene_id || scene?.id || '').trim();
         return scenePart;
     };
 
     const filteredScenes = useMemo(() => {
-        const base = [...(scenes || [])];
-        return base;
+        return [...(scenes || [])].sort((a, b) => {
+            const cmp = getSceneOrderKey(a).localeCompare(
+                getSceneOrderKey(b),
+                undefined,
+                { numeric: true, sensitivity: 'base' }
+            );
+            if (cmp !== 0) return cmp;
+            return Number(a?.id || 0) - Number(b?.id || 0);
+        });
     }, [scenes]);
 
     useEffect(() => {

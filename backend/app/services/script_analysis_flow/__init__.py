@@ -609,11 +609,29 @@ def _preprocess_scene_markdown_llm_raw(text: Any) -> str:
     return raw.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
 
 
-def extract_scenes_table_markdown_block(text: Any) -> str:
-    """Locate and extract the contiguous Scenes Table markdown block from LLM output."""
+def _is_scene_table_data_line(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text.startswith("|"):
+        return False
+    if _is_scene_table_separator_line(text):
+        return False
+    if _SCENE_TABLE_HEADER_INLINE_RE.search(text):
+        return False
+    return bool(
+        _SCENE_TABLE_DATA_ROW_RE.search(text)
+        or re.search(r"\|\s*EP\d+\s*\|", text, flags=re.IGNORECASE)
+    )
+
+
+def _table_lines_have_data_row(table_lines: List[str]) -> bool:
+    return any(_is_scene_table_data_line(line) for line in (table_lines or []))
+
+
+def _extract_scene_table_lines(text: Any) -> List[str]:
+    """Return header/separator/data markdown table lines extracted from LLM output."""
     raw = _preprocess_scene_markdown_llm_raw(text)
     if not raw:
-        return ""
+        return []
 
     pos = _find_scenes_table_header_pos(raw)
     if pos < 0:
@@ -624,9 +642,9 @@ def extract_scenes_table_markdown_block(text: Any) -> str:
             if pos >= 0:
                 raw = tail[pos:].lstrip()
             else:
-                return ""
+                return []
         else:
-            return ""
+            return []
     else:
         raw = raw[pos:].lstrip()
 
@@ -645,11 +663,19 @@ def extract_scenes_table_markdown_block(text: Any) -> str:
             line = line[header_match.start():].strip()
 
         if not line.startswith("|"):
+            if (
+                table_lines
+                and len(table_lines) >= 2
+                and not _is_scene_table_separator_line(table_lines[-1])
+            ):
+                table_lines[-1] = f"{table_lines[-1]} {line}".strip()
+                continue
             if table_lines:
                 break
             continue
 
         expanded_rows = _expand_glued_scene_table_line(line)
+        stopped = False
         for row in expanded_rows:
             row_text = str(row or "").strip()
             if not row_text.startswith("|"):
@@ -660,18 +686,23 @@ def extract_scenes_table_markdown_block(text: Any) -> str:
                 and not _is_scene_table_separator_line(row_text)
                 and len(table_lines) >= 2
             ):
+                stopped = True
                 break
             table_lines.append(row_text)
-        else:
-            continue
-        break
+        if stopped:
+            break
 
-    if len(table_lines) < 2:
+    if len(table_lines) < 2 or not _table_lines_have_data_row(table_lines):
+        return []
+    return table_lines
+
+
+def extract_scenes_table_markdown_block(text: Any) -> str:
+    """Locate and extract the contiguous Scenes Table markdown block from LLM output."""
+    table_lines = _extract_scene_table_lines(text)
+    if not table_lines:
         return ""
-
     body = "\n".join(table_lines).strip()
-    if not body:
-        return ""
     return f"### Part 1: Scenes Table\n\n{body}".strip()
 
 
@@ -681,6 +712,10 @@ def sanitize_scene_markdown_llm_output(text: Any) -> str:
 
 
 def _collect_scene_table_blocks(script_text: str) -> List[str]:
+    table_lines = _extract_scene_table_lines(script_text)
+    if table_lines:
+        return ["\n".join(table_lines).strip()]
+
     sanitized = sanitize_scene_markdown_llm_output(script_text)
     source = sanitized or str(script_text or "")
     expanded_lines: List[str] = []
@@ -690,6 +725,8 @@ def _collect_scene_table_blocks(script_text: str) -> List[str]:
             continue
         if line.startswith("|") and "|" in line:
             expanded_lines.extend(_expand_glued_scene_table_line(line))
+        elif expanded_lines and not line.startswith("|"):
+            expanded_lines[-1] = f"{expanded_lines[-1]} {line}".strip()
         else:
             expanded_lines.append(line)
 
@@ -697,7 +734,7 @@ def _collect_scene_table_blocks(script_text: str) -> List[str]:
     current: List[str] = []
 
     def flush() -> None:
-        if len(current) >= 2:
+        if len(current) >= 2 and _table_lines_have_data_row(current):
             blocks.append(list(current))
         current.clear()
 
@@ -1439,7 +1476,10 @@ def validate_single_scene_markdown_for_orchestration(
     try:
         units = parse_scene_units_from_scenes_table(text)
     except SceneMarkerParseError as exc:
-        return str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
+        code = str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
+        if code.startswith("SCENES_TABLE_"):
+            return f"SCENE_MARKDOWN_PARSE_FAILED:{code}"
+        return code
     if not units:
         return "SCENE_MARKDOWN_NO_SCENE_ROW"
     matched = any(
@@ -1530,6 +1570,37 @@ def patch_episode_scene_markdown_by_scene(
                     entry["scene_name"] = str(scene_name).strip()
                 by_scene_map[sid] = entry
                 by_scene_slot["content"] = json.dumps(by_scene_map, ensure_ascii=False, indent=2)
+
+                ordered_markdowns = [
+                    str((item or {}).get("markdown") or "").strip()
+                    for _, item in sorted(
+                        by_scene_map.items(),
+                        key=lambda pair: int((pair[1] or {}).get("scene_order") or 0)
+                        if isinstance(pair[1], dict)
+                        else 0,
+                    )
+                    if isinstance(item, dict) and str((item or {}).get("markdown") or "").strip()
+                ]
+                merged_scene_markdown = merge_scenes_table_markdown_outputs(ordered_markdowns)
+                if merged_scene_markdown:
+                    episode.ai_scene_analysis_scene_markdown = merged_scene_markdown
+                    raw_text_slot = outputs.setdefault(
+                        "raw_text",
+                        {
+                            "key": "raw_text",
+                            "kind": "markdown",
+                            "title": "场景分析原始输出",
+                            "content": "",
+                        },
+                    )
+                    raw_text_slot["content"] = merged_scene_markdown
+                    logger.info(
+                        "[scene_markdown.patch] episode_id=%s scene_id=%s field=ai_scene_analysis_scene_markdown merged_chars=%s scene_count=%s",
+                        episode_id_int,
+                        sid,
+                        len(merged_scene_markdown),
+                        len(by_scene_map),
+                    )
                 episode.ai_stage_outputs = json.dumps(stage_outputs, ensure_ascii=False, indent=2)
                 db.commit()
                 try:
