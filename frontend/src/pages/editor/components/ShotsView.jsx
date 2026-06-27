@@ -3500,11 +3500,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         let updates;
         if (shotPromptDisplayLang === 'cn') {
             tech.video_prompt_cn = nextPrompt;
-            updates = { technical_notes: JSON.stringify(tech) };
+            if (tech.start_frame_cn || tech.keyframes_cn || tech.end_frame_cn || tech.shot_prompt_cn) {
+                tech.shot_prompt_cn = [
+                    `起始帧：${String(tech.start_frame_cn || '').trim()}`,
+                    `视频：${nextPrompt}`,
+                    `关键帧：${String(tech.keyframes_cn || '').trim()}`,
+                    `收尾帧：${String(tech.end_frame_cn || '').trim()}`,
+                ].join('<br>');
+            }
+            updates = {
+                technical_notes: JSON.stringify(tech),
+                prompt_preview_cn: nextPrompt,
+            };
         } else {
             updates = {
                 ...buildVideoPromptEnUpdates(nextPrompt),
                 technical_notes: JSON.stringify(tech),
+                prompt_preview_en: nextPrompt,
             };
         }
 

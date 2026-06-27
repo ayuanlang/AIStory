@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Sparkles, X } from 'lucide-react';
 import { tuneShotPrompt } from '../../../services/api';
+import { resolveTuneShotPromptFromResponse } from '../../../lib/promptUtils';
 
 export default function TunePromptAgentModal({
     isOpen,
@@ -44,7 +45,7 @@ export default function TunePromptAgentModal({
                 instruction: trimmedInstruction,
                 prompt_lang: promptLang,
             });
-            const refined = String(res?.refined_prompt || '').trim();
+            const refined = resolveTuneShotPromptFromResponse(res);
             if (!refined) {
                 throw new Error(t('未返回有效提示词', 'No valid refined prompt returned'));
             }

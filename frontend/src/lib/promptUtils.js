@@ -111,3 +111,61 @@ export const processPrompt = (prompt, episodeInfo, entities) => {
 
     return finalPrompt;
 };
+
+export const SHOT_PROMPT_OUTPUT_DELIMITER = '----------------*****--------------';
+export const REFINED_PROMPT_START = '<<<REFINED_PROMPT_START>>>';
+export const REFINED_PROMPT_END = '<<<REFINED_PROMPT_END>>>';
+
+export const extractRefinedShotPrompt = (rawContent) => {
+    let text = String(rawContent ?? '').trim();
+    if (!text) return '';
+
+    const delimiterIdx = text.indexOf(SHOT_PROMPT_OUTPUT_DELIMITER);
+    if (delimiterIdx >= 0) {
+        text = text.slice(delimiterIdx + SHOT_PROMPT_OUTPUT_DELIMITER.length).trim();
+    }
+
+    const startIdx = text.indexOf(REFINED_PROMPT_START);
+    const endIdx = text.indexOf(REFINED_PROMPT_END);
+    if (startIdx >= 0 && endIdx > startIdx) {
+        const extracted = text.slice(startIdx + REFINED_PROMPT_START.length, endIdx).trim();
+        if (extracted) return extracted;
+    }
+
+    text = text.replace(/^```(?:markdown|md|text)?\s*/i, '').trim();
+    text = text.replace(/\s*```$/i, '').trim();
+    return text;
+};
+
+export const resolveTuneShotPromptResponse = (response) => {
+    if (!response) return '';
+    if (typeof response === 'string') return response;
+    if (typeof response !== 'object') return '';
+
+    const direct = response.refined_prompt ?? response.refinedPrompt;
+    if (direct !== undefined && direct !== null && String(direct).trim()) {
+        return String(direct);
+    }
+
+    const nested = response.result;
+    if (nested && typeof nested === 'object') {
+        const nestedPrompt = nested.refined_prompt ?? nested.refinedPrompt;
+        if (nestedPrompt !== undefined && nestedPrompt !== null && String(nestedPrompt).trim()) {
+            return String(nestedPrompt);
+        }
+    }
+    if (typeof nested === 'string' && nested.trim()) {
+        return nested;
+    }
+
+    if (typeof response.content === 'string' && response.content.trim()) {
+        return response.content;
+    }
+
+    return '';
+};
+
+export const resolveTuneShotPromptFromResponse = (response) => {
+    const raw = resolveTuneShotPromptResponse(response);
+    return extractRefinedShotPrompt(raw);
+};

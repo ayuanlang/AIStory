@@ -417,6 +417,18 @@ const resolveLiveImportedSceneIdsToSkip = async ({
     return liveIds.filter((patchSceneId) => dbSceneMatchesPatchSceneId(dbScenes, patchSceneId));
 };
 
+const filterPatchMapToMissingScenes = (patchMap, dbScenes) => {
+    const missing = {};
+    Object.entries(patchMap || {}).forEach(([sceneId, entry]) => {
+        const stableSceneId = String(sceneId || '').trim();
+        if (!stableSceneId) return;
+        if (!dbSceneMatchesPatchSceneId(dbScenes, stableSceneId)) {
+            missing[stableSceneId] = entry;
+        }
+    });
+    return missing;
+};
+
 const sceneUnitIdsMatch = (leftId, rightId, sceneOrder, episodePrefix) => (
     canonicalizeSceneUnitId(leftId, sceneOrder, episodePrefix)
     === canonicalizeSceneUnitId(rightId, sceneOrder, episodePrefix)
@@ -5269,7 +5281,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : deriveSceneOrderFromSceneId(resolvedSceneId)
         );
         if (resolvedSceneId && sceneIdIdx >= 0) row[sceneIdIdx] = resolvedSceneId;
-        if (resolvedSceneOrder != null && sceneNoIdx >= 0) row[sceneNoIdx] = String(resolvedSceneOrder);
+        if (resolvedSceneOrder != null && sceneNoIdx >= 0) {
+            row[sceneNoIdx] = String(resolvedSceneOrder);
+        } else if (resolvedSceneOrder != null && sceneIdIdx >= 0) {
+            const headers = [...parsed.headers];
+            const nextRow = [...row];
+            headers.push('Scene No');
+            nextRow.push(String(resolvedSceneOrder));
+            return `### Part 1: Scenes Table\n\n${buildMarkdownTable(headers, [nextRow])}`.trim();
+        }
 
         return `### Part 1: Scenes Table\n\n${buildMarkdownTable(parsed.headers, [row])}`.trim();
     }, [buildMarkdownTable, extractScenesTableBlock, parseMarkdownTable]);
@@ -5301,12 +5321,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const sceneNo = sceneNoIdx >= 0 ? String(row[sceneNoIdx] || '').trim() : '';
             const sceneName = sceneNameIdx >= 0 ? String(row[sceneNameIdx] || '').trim() : '';
             const stableSceneId = sceneId || sceneNo || `SCENE_${index + 1}`;
+            const resolvedOrder = deriveSceneOrderFromSceneId(stableSceneId) ?? (index + 1);
             const singleTable = buildMarkdownTable(parsed.headers, [row]);
             byScene[stableSceneId] = {
                 scene_id: stableSceneId,
-                scene_order: index + 1,
+                scene_order: resolvedOrder,
                 scene_name: sceneName,
-                scene_no: sceneNo,
+                scene_no: sceneNo || String(resolvedOrder),
                 markdown: `### Part 1: Scenes Table\n\n#### ${sceneName || stableSceneId}\n\n${singleTable}`.trim(),
                 updated_at: new Date().toISOString(),
             };
@@ -6739,7 +6760,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableSceneId = String(sceneId || '').trim();
         const importText = String(markdown || '').trim();
         if (!stableSceneId || !importText) return false;
-        if (orchestrationLiveImportedScenesRef.current.has(stableSceneId)) return false;
+        if (orchestrationLiveImportedScenesRef.current.has(stableSceneId)) return true;
+
+        if (activeEpisode?.id) {
+            const dbScenes = await fetchScenes(activeEpisode.id).catch(() => []);
+            if (dbSceneMatchesPatchSceneId(dbScenes, stableSceneId)) {
+                orchestrationLiveImportedScenesRef.current.add(stableSceneId);
+                publishSceneOrchestrationPanelStatus({
+                    sceneId: stableSceneId,
+                    phase: 'imported',
+                    sceneOrder,
+                });
+                return true;
+            }
+        }
 
         publishSceneOrchestrationPanelStatus({
             sceneId: stableSceneId,
@@ -6829,6 +6863,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         buildSceneMarkdownPatchFromPerSceneOutputs,
         doImportText,
+        fetchScenes,
         onLog,
         onRefreshEpisodes,
         patchSceneTableRowIdentity,
@@ -6839,6 +6874,51 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         syncSceneUnitsProgress,
         t,
     ]);
+
+    const ensureOrchestrationScenesInWorkspace = useCallback(async ({
+        patchMap,
+        unitsBySceneId = {},
+        source = 'orchestration-ensure-import',
+        totalScenes,
+    } = {}) => {
+        const entries = Object.entries(patchMap || {})
+            .filter(([sceneId]) => String(sceneId || '').trim())
+            .sort((left, right) => {
+                const leftOrder = Number(left?.[1]?.scene_order) || deriveSceneOrderFromSceneId(left[0]) || 0;
+                const rightOrder = Number(right?.[1]?.scene_order) || deriveSceneOrderFromSceneId(right[0]) || 0;
+                if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+                return String(left[0]).localeCompare(String(right[0]));
+            });
+        if (!entries.length || !activeEpisode?.id) return null;
+
+        let lastReport = null;
+        for (const [sceneId, entry] of entries) {
+            const stableSceneId = String(sceneId || '').trim();
+            const sceneOrder = entry?.scene_order ?? unitsBySceneId[stableSceneId]?.sceneOrder ?? deriveSceneOrderFromSceneId(stableSceneId);
+            const importText = String(entry?.markdown || '').trim();
+            if (!importText) continue;
+
+            publishSceneOrchestrationPanelStatus({
+                sceneId: stableSceneId,
+                phase: 'llm_returned',
+                sceneOrder,
+                totalScenes,
+            });
+
+            const report = await importSingleSceneDuringOrchestration({
+                sceneId: stableSceneId,
+                sceneOrder,
+                markdown: importText,
+                unit: unitsBySceneId[stableSceneId],
+                replaceExistingScenes: false,
+                source,
+            });
+            if (report && typeof report === 'object') {
+                lastReport = report;
+            }
+        }
+        return lastReport;
+    }, [activeEpisode?.id, importSingleSceneDuringOrchestration, publishSceneOrchestrationPanelStatus]);
 
     const persistSubjectIndexEdit = useCallback(async (newVal) => {
         const normalizedValue = extractPureSubjectIndexText(String(newVal || '').trim());
@@ -8007,6 +8087,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         sceneOrder: unit?.sceneOrder,
                         markdown: sceneAttempt.stage2_2Check.normalizedText,
                     });
+                    await importSingleSceneDuringOrchestration({
+                        sceneId,
+                        sceneOrder: unit?.sceneOrder,
+                        markdown: sceneAttempt.stage2_2Check.normalizedText,
+                        unit,
+                        replaceExistingScenes: false,
+                        source: `${logPhasePrefix}-sequential-import`,
+                    });
                 }
 
                 const sceneMarkdownPatchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
@@ -8042,7 +8130,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             sceneOrder,
                             markdown,
                             unit: unitsBySceneId[String(sceneId || '').trim()],
-                            replaceExistingScenes: true,
+                            replaceExistingScenes: false,
                             source: `${logPhasePrefix}-orchestration-live-import`,
                         });
                     },
@@ -8128,15 +8216,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             validatedOutputs,
                             unitsToProcess
                         );
-                        validatedOutputs.forEach((item, index) => {
-                            const sceneId = String(item?.sceneId || '').trim();
-                            if (!sceneId) return;
-                            reportSceneOrchestrationPhase({
-                                sceneId,
-                                phase: 'llm_returned',
-                                sceneOrder: item?.sceneOrder ?? index + 1,
-                                totalScenes: orchestrationSceneCount,
-                            });
+                        stopSceneOrchestrationPolling?.();
+                        stopSceneOrchestrationPolling = null;
+                        await ensureOrchestrationScenesInWorkspace({
+                            patchMap: sceneMarkdownPatchMap,
+                            unitsBySceneId,
+                            source: `${logPhasePrefix}-sync-orchestration-import`,
+                            totalScenes: orchestrationSceneCount,
                         });
                         return {
                             perSceneParallel: true,
@@ -8233,6 +8319,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildSceneMarkdownPatchFromPerSceneOutputs,
         buildStage2_2UserInputFromStage1,
         clearSceneMarkdownPatchForScenes,
+        ensureOrchestrationScenesInWorkspace,
         extractAdaptedScriptFromStage2_2UserInputBody,
         extractAnalysisTextFromResult,
         extractPerSceneOutputsFromResult,
@@ -13527,25 +13614,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                 }
             } else if (allScenePatchMap && Object.keys(allScenePatchMap).length > 0) {
-                const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
-                const skipSceneIds = await resolveLiveImportedSceneIdsToSkip({
-                    fetchScenesFn: fetchScenes,
-                    episodeId: activeEpisode?.id,
-                    liveImportedIds: liveImported,
-                });
                 const patchSceneIds = Object.keys(allScenePatchMap).filter(Boolean);
-                const skipBatchImport = await canSkipBatchSceneImport({
+                await waitForEpisodeSceneCount(
+                    fetchScenes,
+                    activeEpisode?.id,
+                    orchestrationSceneCount,
+                    { retries: 20, delayMs: 400 },
+                );
+                let dbScenes = await fetchScenes(activeEpisode?.id).catch(() => []);
+                const missingPatch = filterPatchMapToMissingScenes(allScenePatchMap, dbScenes);
+                const missingIds = Object.keys(missingPatch).filter(Boolean);
+                if (missingIds.length > 0) {
+                    importReport = await importScenesFromPerScenePatchMap(missingPatch, {
+                        replaceExistingScenes: false,
+                        skipSceneIds: [],
+                    });
+                } else if (await canSkipBatchSceneImport({
                     fetchScenesFn: fetchScenes,
                     episodeId: activeEpisode?.id,
                     patchSceneIds,
-                    liveImportedIds: liveImported,
-                });
-                if (skipBatchImport) {
+                    liveImportedIds: patchSceneIds,
+                })) {
                     setAnalysisFlowStatus({
                         phase: 'scene_beats',
                         message: t(
-                            `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
-                            `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
+                            `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过。`,
+                            `All ${patchSceneIds.length} scene(s) verified in workspace.`
                         ),
                     });
                     importReport = {
@@ -13555,10 +13649,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         importedSceneRows: [],
                     };
                 } else {
-                    importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
-                        replaceExistingScenes: liveImported.length <= 0 && rerunMode === 'all',
-                        skipSceneIds,
+                    importReport = await ensureOrchestrationScenesInWorkspace({
+                        patchMap: allScenePatchMap,
+                        unitsBySceneId: Object.fromEntries(
+                            (rerunMode === 'single' ? (targetSceneUnits || []) : candidates)
+                                .map((unit) => [String(unit?.sceneId || '').trim(), unit])
+                                .filter(([sceneId]) => sceneId)
+                        ),
+                        source: 'restart-scene-beats-only-all-ensure',
+                        totalScenes: orchestrationSceneCount,
                     });
+                    if (!importReport) {
+                        importReport = await importScenesFromPerScenePatchMap(allScenePatchMap, {
+                            replaceExistingScenes: false,
+                            skipSceneIds: [],
+                        });
+                    }
                 }
             } else {
                 importReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
@@ -13651,6 +13757,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         clearAnalysisTaskMarker,
         clearSceneMarkdownPatchForScenes,
         endSceneOrchestrationPanelTracking,
+        ensureOrchestrationScenesInWorkspace,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
