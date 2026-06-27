@@ -282,6 +282,29 @@ const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
 
 const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
 const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
+const BLOCK_MARKER_LINE_PATTERN = /^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$/gim;
+const SCENE_MARKER_LINE_PATTERN = /^\s*`?\[SCENE_(?:START|END):[^\]]+\]`?\s*$/gim;
+const MIN_SCENE_UNIT_BODY_CHARS = 50;
+
+const stripBlockLevelMarkersFromSceneText = (text) => (
+    String(text || '')
+        .replace(BLOCK_MARKER_LINE_PATTERN, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+);
+
+const normalizeSceneUnitBodyForMeasure = (text) => (
+    stripBlockLevelMarkersFromSceneText(text)
+        .replace(SCENE_MARKER_LINE_PATTERN, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+);
+
+const sceneUnitBodyCharCount = (text) => normalizeSceneUnitBodyForMeasure(text).length;
+
+const isViableSceneUnitBody = (text, minChars = MIN_SCENE_UNIT_BODY_CHARS) => (
+    sceneUnitBodyCharCount(text) >= Math.max(1, Number(minChars) || MIN_SCENE_UNIT_BODY_CHARS)
+);
 
 const normalizeSceneMarkerScriptText = (scriptText) => {
     const text = String(scriptText || '').replace(/\r\n/g, '\n');
@@ -298,8 +321,10 @@ const resolveSceneBlockText = (scriptText) => {
     const startMatch = /`?\[SCENES_BLOCK_START\]`?/i.exec(normalized);
     if (!startMatch) return normalized.trim();
     const afterStart = normalized.slice(startMatch.index + startMatch[0].length);
-    const endMatch = /`?\[SCENES_BLOCK_END\]`?/i.exec(afterStart);
-    const blockText = (endMatch ? afterStart.slice(0, endMatch.index) : afterStart).trim();
+    const endMatches = [...afterStart.matchAll(/`?\[SCENES_BLOCK_END\]`?/gi)];
+    const blockText = (endMatches.length > 0
+        ? afterStart.slice(0, endMatches[endMatches.length - 1].index)
+        : afterStart).trim();
     return blockText || normalized.trim();
 };
 
@@ -357,7 +382,7 @@ const dedupeSegmentSceneIds = (segments) => {
     const deduped = [];
     segments.forEach(([sceneId, sceneText], idx) => {
         const body = String(sceneText || '').trim();
-        if (!body) return;
+        if (!body || !isViableSceneUnitBody(body)) return;
         let resolvedId = String(sceneId || '').trim() || String(idx + 1);
         if (seen.has(resolvedId)) resolvedId = String(idx + 1);
         seen.add(resolvedId);
@@ -370,7 +395,7 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
     const markers = collectSceneBoundaryMarkers(blockText);
     if (!markers.length) {
         const body = String(blockText || '').trim();
-        return body ? [['1', body]] : [];
+        return body && isViableSceneUnitBody(body) ? [['1', body]] : [];
     }
 
     const segments = [];
@@ -378,7 +403,7 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
     let activeStartId = '';
 
     markers.forEach((marker) => {
-        const chunk = blockText.slice(contentCursor, marker.pos).trim();
+        const chunk = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor, marker.pos));
         if (marker.kind === 'end') {
             if (chunk) segments.push([marker.sceneId, chunk]);
             activeStartId = '';
@@ -397,7 +422,7 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
         contentCursor = marker.endPos;
     });
 
-    const trailing = blockText.slice(contentCursor).trim();
+    const trailing = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor));
     if (trailing) {
         segments.push([inferTrailingSceneId(activeStartId, segments, markers), trailing]);
     }
@@ -407,7 +432,7 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
 const buildSingleSceneUnitFromText = (scriptText) => {
     const normalized = normalizeSceneMarkerScriptText(scriptText);
     const body = resolveSceneBlockText(normalized).trim() || normalized.trim();
-    if (!body) return null;
+    if (!body || !isViableSceneUnitBody(body)) return null;
     return {
         sceneId: '1',
         sceneOrder: 1,
@@ -1768,11 +1793,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!startMatch) return '';
             const startIdx = startMatch.index;
             const afterStart = source.slice(startIdx + startMatch[0].length);
-            const endMatch = endRegex.exec(afterStart);
-            if (!endMatch) {
+            const endMatches = [...afterStart.matchAll(endRegex)];
+            if (!endMatches.length) {
                 return source.slice(startIdx).trim();
             }
-            const endIdxAbs = startIdx + startMatch[0].length + endMatch.index + endMatch[0].length;
+            const lastEnd = endMatches[endMatches.length - 1];
+            const endIdxAbs = startIdx + startMatch[0].length + lastEnd.index + lastEnd[0].length;
             return source.slice(startIdx, endIdxAbs).trim();
         };
 
@@ -1957,13 +1983,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const wrapSceneUnitAsScriptBlock = useCallback((unit) => {
         if (!unit) return '';
+        const sceneId = String(unit?.sceneId || '').trim();
+        let sceneText = stripBlockLevelMarkersFromSceneText(unit?.sceneText || '');
+        let markerStartToken = String(unit?.markerStartToken || '').trim();
+        let markerEndToken = String(unit?.markerEndToken || '').trim();
+        if (!markerStartToken && sceneId) markerStartToken = `[SCENE_START:${sceneId}]`;
+        if (!markerEndToken && sceneId) markerEndToken = `[SCENE_END:${sceneId}]`;
+        if (/^scenes?_table$/i.test(markerStartToken) && sceneId) markerStartToken = `[SCENE_START:${sceneId}]`;
+        if (/^scenes?_table$/i.test(markerEndToken) && sceneId) markerEndToken = `[SCENE_END:${sceneId}]`;
+        if (!sceneText) {
+            sceneText = String(unit?.sceneMarkdown || unit?.scene_markdown || '').trim();
+        }
         return [
             SCENES_BLOCK_START_TOKEN,
-            unit.markerStartToken,
-            unit.sceneText,
-            unit.markerEndToken,
+            markerStartToken,
+            sceneText,
+            markerEndToken,
             SCENES_BLOCK_END_TOKEN,
-        ].join('\n');
+        ].filter((part) => String(part || '').trim()).join('\n');
     }, []);
 
     const extractSceneDisplayLabel = useCallback((unit) => {

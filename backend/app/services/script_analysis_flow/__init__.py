@@ -63,6 +63,15 @@ SCENES_BLOCK_START_PATTERN = re.compile(r"`?\[SCENES_BLOCK_START\]`?", re.IGNORE
 SCENES_BLOCK_END_PATTERN = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
 SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START:([^\]\s]+)\]`?", re.IGNORECASE)
 SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END:([^\]\s]+)\]`?", re.IGNORECASE)
+BLOCK_MARKER_LINE_PATTERN = re.compile(
+    r"^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SCENE_MARKER_LINE_PATTERN = re.compile(
+    r"^\s*`?\[SCENE_(?:START|END):[^\]]+\]`?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+MIN_SCENE_UNIT_BODY_CHARS = 50
 
 ISSUE_SEVERITY_VALUES = {"INFO", "WARNING", "BLOCKER"}
 
@@ -296,6 +305,25 @@ class _SceneBoundaryMarker:
     scene_id: str
 
 
+def _strip_block_level_markers_from_scene_text(text: str) -> str:
+    cleaned = BLOCK_MARKER_LINE_PATTERN.sub("", str(text or ""))
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _normalize_scene_unit_body_for_measure(text: str) -> str:
+    body = _strip_block_level_markers_from_scene_text(text)
+    body = SCENE_MARKER_LINE_PATTERN.sub("", body)
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def _scene_unit_body_char_count(text: str) -> int:
+    return len(_normalize_scene_unit_body_for_measure(text))
+
+
+def _is_viable_scene_unit_body(text: str, min_chars: int = MIN_SCENE_UNIT_BODY_CHARS) -> bool:
+    return _scene_unit_body_char_count(text) >= max(1, int(min_chars or MIN_SCENE_UNIT_BODY_CHARS))
+
+
 def _resolve_scene_block_text(text: str) -> str:
     normalized = _normalize_scene_marker_script_text(text)
     if not normalized.strip():
@@ -304,8 +332,11 @@ def _resolve_scene_block_text(text: str) -> str:
     if not start_match:
         return normalized.strip()
     after_start = normalized[start_match.end():]
-    end_match = SCENES_BLOCK_END_PATTERN.search(after_start)
-    block_text = after_start[: end_match.start()] if end_match else after_start
+    end_matches = list(SCENES_BLOCK_END_PATTERN.finditer(after_start))
+    if end_matches:
+        block_text = after_start[: end_matches[-1].start()]
+    else:
+        block_text = after_start
     block_text = block_text.strip()
     return block_text if block_text else normalized.strip()
 
@@ -375,6 +406,16 @@ def _dedupe_segment_scene_ids(segments: List[tuple[str, str]]) -> List[tuple[str
         body = str(scene_text or "").strip()
         if not body:
             continue
+        body_chars = _scene_unit_body_char_count(body)
+        if not _is_viable_scene_unit_body(body):
+            logger.info(
+                "[scene_markdown] skipped scene segment with insufficient body | scene_id=%s body_chars=%s min=%s preview=%s",
+                scene_id,
+                body_chars,
+                MIN_SCENE_UNIT_BODY_CHARS,
+                _normalize_scene_unit_body_for_measure(body)[:80],
+            )
+            continue
         resolved_id = str(scene_id or "").strip() or str(order)
         if resolved_id in seen:
             resolved_id = str(order)
@@ -387,14 +428,16 @@ def _segment_scenes_by_boundary_markers(block_text: str) -> List[tuple[str, str]
     markers = _collect_scene_boundary_markers(block_text)
     if not markers:
         body = block_text.strip()
-        return [("1", body)] if body else []
+        if body and _is_viable_scene_unit_body(body):
+            return [("1", body)]
+        return []
 
     segments: List[tuple[str, str]] = []
     content_cursor = 0
     active_start_id: Optional[str] = None
 
     for marker in markers:
-        chunk = block_text[content_cursor : marker.pos].strip()
+        chunk = _strip_block_level_markers_from_scene_text(block_text[content_cursor : marker.pos])
         if marker.kind == "end":
             if chunk:
                 segments.append((marker.scene_id, chunk))
@@ -410,7 +453,7 @@ def _segment_scenes_by_boundary_markers(block_text: str) -> List[tuple[str, str]
             active_start_id = marker.scene_id
         content_cursor = marker.end_pos
 
-    trailing = block_text[content_cursor:].strip()
+    trailing = _strip_block_level_markers_from_scene_text(block_text[content_cursor:])
     if trailing:
         trail_id = _infer_trailing_scene_id(active_start_id, segments, markers)
         segments.append((trail_id, trailing))
@@ -421,7 +464,7 @@ def _segment_scenes_by_boundary_markers(block_text: str) -> List[tuple[str, str]
 def _build_single_scene_unit_from_text(script_text: str) -> Optional[ParsedSceneUnit]:
     normalized = _normalize_scene_marker_script_text(script_text)
     body = _resolve_scene_block_text(normalized).strip() or normalized.strip()
-    if not body:
+    if not body or not _is_viable_scene_unit_body(body):
         return None
     return ParsedSceneUnit(
         scene_id="1",
@@ -1012,15 +1055,31 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
 
 
 def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
-    return "\n".join(
-        [
-            SCENES_BLOCK_START_TOKEN,
-            unit.marker_start_token,
-            unit.scene_text,
-            unit.marker_end_token,
-            SCENES_BLOCK_END_TOKEN,
-        ]
-    ).strip()
+    scene_text = _strip_block_level_markers_from_scene_text(getattr(unit, "scene_text", "") or "")
+    marker_start = str(getattr(unit, "marker_start_token", "") or "").strip()
+    marker_end = str(getattr(unit, "marker_end_token", "") or "").strip()
+    scene_id = str(getattr(unit, "scene_id", "") or "").strip()
+    if not marker_start and scene_id:
+        marker_start = f"[SCENE_START:{scene_id}]"
+    if not marker_end and scene_id:
+        marker_end = f"[SCENE_END:{scene_id}]"
+    if marker_start in {"scenes_table", "scenes_table".lower()}:
+        marker_start = f"[SCENE_START:{scene_id}]" if scene_id else ""
+    if marker_end in {"scenes_table", "scenes_table".lower()}:
+        marker_end = f"[SCENE_END:{scene_id}]" if scene_id else ""
+    if not scene_text:
+        scene_markdown = str(getattr(unit, "scene_markdown", "") or "").strip()
+        if scene_markdown:
+            scene_text = scene_markdown
+    parts = [SCENES_BLOCK_START_TOKEN]
+    if marker_start:
+        parts.append(marker_start)
+    if scene_text:
+        parts.append(scene_text)
+    if marker_end:
+        parts.append(marker_end)
+    parts.append(SCENES_BLOCK_END_TOKEN)
+    return "\n".join(part for part in parts if str(part or "").strip()).strip()
 
 
 def extract_adapted_script_from_beats_user_input(user_text: str) -> str:

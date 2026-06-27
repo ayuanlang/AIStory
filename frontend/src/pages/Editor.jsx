@@ -254,6 +254,7 @@ const Editor = ({
     const [projectBillingStats, setProjectBillingStats] = useState({ user_cost: 0, total_cost: 0 });
     const [refreshKey, setRefreshKey] = useState(0);
     const [entitiesRefreshKey, setEntitiesRefreshKey] = useState(0);
+    const [scenesRefreshKey, setScenesRefreshKey] = useState(0);
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
     const [assetRerunRequest, setAssetRerunRequest] = useState(null);
@@ -2941,6 +2942,7 @@ const Editor = ({
                 ) {
                     changesMade = true;
                     reloadRequired = true;
+                    setScenesRefreshKey((prev) => prev + 1);
                 } else if (sceneLines.length > 0 && pendingSceneRows.length <= 0) {
                     addLog('Scene table parsed but no importable scene rows were found (check Scene No / Scene ID columns).', 'warning');
                 }
@@ -4029,7 +4031,7 @@ const Editor = ({
                                             </div>
                                         )}
                                     >
-                                        <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                                        <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}-${scenesRefreshKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
                                             if (sceneId) {
                                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
                                             }
