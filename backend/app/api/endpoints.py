@@ -109,6 +109,7 @@ from app.services.script_analysis_flow import (
     upsert_pipeline_node_status,
     validate_analyze_scene_llm_finish_reason,
     validate_single_scene_markdown_for_orchestration,
+    patch_single_scene_markdown_for_orchestration,
     wrap_scene_unit_as_script_block,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -7939,6 +7940,8 @@ def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
 def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
     if isinstance(exc, HTTPException):
         detail = str(getattr(exc, "detail", "") or "")
+        if detail.startswith("SCENE_MARKDOWN_SCENE_ID_MISMATCH"):
+            return detail if "," in detail or detail.count(":") > 1 else detail
         if detail.startswith("SCENE_MARKDOWN_"):
             return detail.split(":", 1)[0] if ":" in detail else detail
     return f"SCENE_MARKDOWN_ORCHESTRATION_FAILED:{scene_id}"
@@ -8144,6 +8147,8 @@ async def _run_scene_markdown_node_per_scene(
                         single_scene_instruction = (
                             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
                             "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+                            f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
+                            "不得仅填场次序号或其他别名。"
                         )
                         scene_payload = dict(raw_payload)
                         scene_payload["skip_episode_persist"] = True
@@ -8158,7 +8163,24 @@ async def _run_scene_markdown_node_per_scene(
                             async_mode="0",
                         )
                         scene_text = _extract_analysis_text_from_result(result).strip()
-                        validation_error = validate_single_scene_markdown_for_orchestration(scene_text, unit.scene_id)
+                        raw_scene_text = scene_text
+                        scene_text = patch_single_scene_markdown_for_orchestration(
+                            scene_text,
+                            unit.scene_id,
+                            scene_order=index,
+                        )
+                        if scene_text != raw_scene_text:
+                            logger.info(
+                                "[scene_markdown] patched scene table identity | scene_id=%s scene_order=%s/%s",
+                                unit.scene_id,
+                                index,
+                                total_scenes,
+                            )
+                        validation_error = validate_single_scene_markdown_for_orchestration(
+                            scene_text,
+                            unit.scene_id,
+                            scene_order=index,
+                        )
                         if validation_error:
                             logger.warning(
                                 "[scene_markdown] validation failed | scene_id=%s scene_order=%s error=%s output_chars=%s output_preview=%s",
@@ -8170,7 +8192,7 @@ async def _run_scene_markdown_node_per_scene(
                             )
                             raise HTTPException(
                                 status_code=422,
-                                detail=f"{validation_error}:{unit.scene_id}",
+                                detail=validation_error,
                             )
 
                         if node_project_id > 0 and node_episode_id > 0:

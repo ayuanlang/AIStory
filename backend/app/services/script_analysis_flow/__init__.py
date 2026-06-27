@@ -961,7 +961,107 @@ def _get_episode_scene_markdown_patch_lock(episode_id: int) -> threading.Lock:
         return lock
 
 
-def validate_single_scene_markdown_for_orchestration(scene_text: Any, expected_scene_id: str) -> Optional[str]:
+def _extract_episode_id_from_scene_id(scene_id: str) -> str:
+    text = str(scene_id or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^([A-Za-z]+\d+)[_\-]", text)
+    return str(match.group(1) if match else "").strip()
+
+
+def _scene_markdown_ids_match(expected: str, returned: str, scene_order: Optional[int] = None) -> bool:
+    exp = str(expected or "").strip()
+    ret = str(returned or "").strip()
+    if not exp or not ret:
+        return False
+    if exp.lower() == ret.lower():
+        return True
+    exp_norm = re.sub(r"[\s_\-./]+", "", exp.lower())
+    ret_norm = re.sub(r"[\s_\-./]+", "", ret.lower())
+    if exp_norm == ret_norm or exp_norm.endswith(ret_norm) or ret_norm.endswith(exp_norm):
+        return True
+    if scene_order is not None:
+        order_text = str(scene_order).strip()
+        if ret == order_text or ret_norm == order_text:
+            if exp_norm.endswith(f"sc{order_text}") or exp_norm.endswith(order_text):
+                return True
+    return False
+
+
+def patch_single_scene_markdown_for_orchestration(
+    scene_text: Any,
+    expected_scene_id: str,
+    *,
+    scene_order: Optional[int] = None,
+) -> str:
+    text = str(scene_text or "").strip()
+    expected = str(expected_scene_id or "").strip()
+    if not text or not expected:
+        return text
+
+    blocks = _collect_scene_table_blocks(text)
+    if not blocks:
+        return text
+
+    episode_id = _extract_episode_id_from_scene_id(expected)
+
+    for block in blocks:
+        lines = [line.strip() for line in str(block or "").splitlines() if str(line or "").strip()]
+        if len(lines) < 2:
+            continue
+
+        headers = _split_scene_table_cells(lines[0])
+        if not headers:
+            continue
+        normalized_headers = [_normalize_scene_table_header(header) for header in headers]
+        scene_id_idx = _find_scene_table_col_idx(normalized_headers, ["sceneid", "场景id"])
+        scene_no_idx = _find_scene_table_col_idx(normalized_headers, ["sceneno", "场次序号", "场次"])
+        scene_name_idx = _find_scene_table_col_idx(normalized_headers, ["scenename", "场景名", "场景名称"])
+        episode_id_idx = _find_scene_table_col_idx(normalized_headers, ["episodeid", "剧集id", "分集id"])
+
+        candidate_rows: List[List[str]] = []
+        for line in lines[1:]:
+            if _is_scene_table_separator_line(line):
+                continue
+            cells = _reconcile_scene_table_row_cells(_split_scene_table_cells(line), headers)
+            if not _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx):
+                continue
+            candidate_rows.append(list(cells))
+
+        if not candidate_rows:
+            continue
+
+        selected_row = candidate_rows[0]
+        for cells in candidate_rows:
+            row_scene_id = _scene_table_cell_value(cells, scene_id_idx)
+            row_scene_no = _scene_table_cell_value(cells, scene_no_idx)
+            if _scene_markdown_ids_match(expected, row_scene_id, scene_order):
+                selected_row = cells
+                break
+            if scene_order is not None and str(row_scene_no).strip() == str(scene_order).strip():
+                selected_row = cells
+                break
+
+        row = list(selected_row)
+        while len(row) < len(headers):
+            row.append("")
+        if scene_id_idx >= 0:
+            row[scene_id_idx] = expected
+        if scene_order is not None and scene_no_idx >= 0:
+            row[scene_no_idx] = str(scene_order)
+        if episode_id and episode_id_idx >= 0:
+            row[episode_id_idx] = episode_id
+        return _build_scene_markdown_from_table_row(headers, row)
+
+    return text
+
+
+def validate_single_scene_markdown_for_orchestration(
+    scene_text: Any,
+    expected_scene_id: str,
+    *,
+    scene_order: Optional[int] = None,
+) -> Optional[str]:
     text = str(scene_text or "").strip()
     if not text:
         return "SCENE_MARKDOWN_EMPTY"
@@ -974,10 +1074,18 @@ def validate_single_scene_markdown_for_orchestration(scene_text: Any, expected_s
         return str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
     if not units:
         return "SCENE_MARKDOWN_NO_SCENE_ROW"
-    expected_lower = expected.lower()
-    matched = any(str(unit.scene_id or "").strip().lower() == expected_lower for unit in units)
+    matched = any(
+        _scene_markdown_ids_match(expected, str(unit.scene_id or "").strip(), scene_order)
+        for unit in units
+    )
     if not matched:
-        return f"SCENE_MARKDOWN_SCENE_ID_MISMATCH:{expected}"
+        returned_ids = ", ".join(
+            dict.fromkeys(str(unit.scene_id or "").strip() for unit in units if str(unit.scene_id or "").strip())
+        )
+        suffix = f":expected={expected}"
+        if returned_ids:
+            suffix = f"{suffix},got={returned_ids}"
+        return f"SCENE_MARKDOWN_SCENE_ID_MISMATCH{suffix}"
     return None
 
 
@@ -1100,6 +1208,7 @@ __all__ = [
     "parse_scene_units_from_markers",
     "parse_scene_units_from_scenes_table",
     "patch_episode_scene_markdown_by_scene",
+    "patch_single_scene_markdown_for_orchestration",
     "resolve_scene_units_for_markdown_orchestration",
     "wrap_scene_unit_as_script_block",
     "extract_scene_markdown_text_from_analyze_result",

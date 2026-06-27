@@ -172,11 +172,23 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
                 `[场景编排] ${sceneId}${orderLabel} 导入完成`,
                 `[Scene beats] ${sceneId}${orderLabel} import completed`
             );
-        case 'failed':
+        case 'failed': {
+            let detail = String(errorCode || '').trim();
+            if (detail.startsWith('SCENE_MARKDOWN_SCENE_ID_MISMATCH')) {
+                const expectedMatch = detail.match(/expected=([^,]+)/i);
+                const gotMatch = detail.match(/got=([^,]+)/i);
+                const expectedId = expectedMatch?.[1] || sceneId;
+                const gotId = gotMatch?.[1] || '';
+                return t(
+                    `[场景编排] ${sceneId}${orderLabel} 失败：返回 Scene ID 与期望不一致（期望 ${expectedId}${gotId ? `，实际 ${gotId}` : ''}）`,
+                    `[Scene beats] ${sceneId}${orderLabel} failed: returned Scene ID mismatch (expected ${expectedId}${gotId ? `, got ${gotId}` : ''})`
+                );
+            }
             return t(
-                `[场景编排] ${sceneId}${orderLabel} 失败${errorCode ? `：${errorCode}` : ''}`,
-                `[Scene beats] ${sceneId}${orderLabel} failed${errorCode ? `: ${errorCode}` : ''}`
+                `[场景编排] ${sceneId}${orderLabel} 失败${detail ? `：${detail}` : ''}`,
+                `[Scene beats] ${sceneId}${orderLabel} failed${detail ? `: ${detail}` : ''}`
             );
+        }
         default:
             return '';
     }
@@ -6993,7 +7005,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
             const singleSceneBody = [
-                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。`,
+                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${unit.sceneId}\`，不得仅填场次序号或其他别名。`,
                 buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
             ].join('\n\n');
             const singleFinalInput = singleSceneBody;
@@ -7178,7 +7190,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneLabel = `${label} [${sceneId}]`;
                     const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
                     const singleSceneBody = [
-                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。`,
+                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${sceneId}\`，不得仅填场次序号或其他别名。`,
                         buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
                     ].join('\n\n');
                     let sceneAttempt = null;
