@@ -4564,107 +4564,116 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return rows.length >= 2 ? rows : [raw];
     };
 
-    const sanitizeSceneMarkdownLlmOutput = (text) => {
+    const isSceneTableSeparatorLine = (line) => {
+        const text = String(line || '').trim();
+        if (!text) return false;
+        return /\|\s*:?-{3,}:?/.test(text) || /^[\s|:\-]*$/.test(text);
+    };
+
+    const looksLikeScenesTableAt = (text, pos) => {
+        const chunk = String(text || '').slice(pos);
+        const lines = chunk.split('\n').map((ln) => String(ln || '').trim()).filter(Boolean);
+        if (lines.length < 2) return false;
+        let first = lines[0];
+        const headerInlineRe = /\|\s*episode\s*id\s*\|\s*scene\s*id/i;
+        const headerMatch = first.match(headerInlineRe);
+        if (headerMatch && headerMatch.index != null) {
+            first = first.slice(headerMatch.index).trim();
+        }
+        if (!headerInlineRe.test(first)) return false;
+        const second = lines[1];
+        if (isSceneTableSeparatorLine(second)) return true;
+        if (second.startsWith('|') && /\|\s*EP\d+\s*\|\s*EP\d+_SC\d+/i.test(second)) return true;
+        if (second.startsWith('|') && /\|\s*EP\d+\s*\|/i.test(second)) return true;
+        return false;
+    };
+
+    const findScenesTableHeaderPos = (text) => {
+        const raw = String(text || '');
+        const headerInlineRe = /\|\s*episode\s*id\s*\|\s*scene\s*id/gi;
+        const candidates = [];
+        let match;
+        while ((match = headerInlineRe.exec(raw)) !== null) {
+            candidates.push(match.index);
+        }
+        if (candidates.length <= 0) return -1;
+        for (let i = candidates.length - 1; i >= 0; i -= 1) {
+            if (looksLikeScenesTableAt(raw, candidates[i])) return candidates[i];
+        }
+        return candidates[candidates.length - 1];
+    };
+
+    const preprocessSceneMarkdownLlmRaw = (text) => {
         let raw = String(text || '').replace(/\r\n/g, '\n').trim();
         if (!raw) return '';
-
         raw = raw.replace(/<!--\s*script_hash:[^>]+-->\s*/gi, '');
         raw = raw.replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, '').trim();
-        raw = raw.replace(/```markdown/g, '').replace(/```md/g, '').replace(/```/g, '').trim();
+        return raw.replace(/```markdown/g, '').replace(/```md/g, '').replace(/```/g, '').trim();
+    };
 
-        const anchorPatterns = [
-            /(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table/i,
-            /part\s*1\s*:\s*scenes\s*table/i,
-            /\|\s*episode\s*id\s*\|\s*scene\s*id/i,
-        ];
-        let cutAt = -1;
-        for (const pattern of anchorPatterns) {
-            const match = raw.match(pattern);
-            if (match && match.index != null) {
-                cutAt = cutAt < 0 ? match.index : Math.min(cutAt, match.index);
-            }
-        }
-        if (cutAt >= 0) raw = raw.slice(cutAt).trimStart();
+    const extractScenesTableMarkdownBlock = (text) => {
+        let raw = preprocessSceneMarkdownLlmRaw(text);
+        if (!raw) return '';
 
-        const reasoningLineRe = /^(?:嗯[，,]|好的[，,]|我需要|我将|我会|首先[，,]|现在(?:来)?|整个思考|我注意到|关于Adapted|cannot add any new content|let me|i will|i need to|thought process|reasoning|工程化|映射工作|标准化映射|Subject Index|覆盖核销中|不能自行补充|不能添加任何新内容)/i;
         const headerInlineRe = /\|\s*episode\s*id\s*\|\s*scene\s*id/i;
-        const cleanedLines = [];
+        let pos = findScenesTableHeaderPos(raw);
+        if (pos < 0) {
+            const anchorMatch = raw.match(/(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table/i);
+            if (!anchorMatch || anchorMatch.index == null) return '';
+            const tail = raw.slice(anchorMatch.index + anchorMatch[0].length);
+            pos = findScenesTableHeaderPos(tail);
+            if (pos < 0) return '';
+            raw = tail.slice(pos).trimStart();
+        } else {
+            raw = raw.slice(pos).trimStart();
+        }
 
+        const tableLines = [];
         for (const rawLine of raw.split('\n')) {
             const line = String(rawLine || '').trim();
-            if (!line) continue;
-            if (/^(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table\s*$/i.test(line)) continue;
-            if (!line.startsWith('|') && !headerInlineRe.test(line)) {
-                if (reasoningLineRe.test(line)) continue;
-                if (line.length > 40 && !headerInlineRe.test(line)) continue;
+            if (!line) {
+                if (tableLines.length > 0) break;
+                continue;
             }
-            for (const expanded of expandGluedSceneTableLine(line)) {
-                if (expanded) cleanedLines.push(expanded);
+
+            let rowLine = line;
+            if (tableLines.length <= 0) {
+                const headerMatch = rowLine.match(headerInlineRe);
+                if (!headerMatch || headerMatch.index == null) continue;
+                rowLine = rowLine.slice(headerMatch.index).trim();
             }
+
+            if (!rowLine.startsWith('|')) {
+                if (tableLines.length > 0) break;
+                continue;
+            }
+
+            const expandedRows = expandGluedSceneTableLine(rowLine);
+            let stopped = false;
+            for (const row of expandedRows) {
+                const rowText = String(row || '').trim();
+                if (!rowText.startsWith('|')) continue;
+                if (
+                    tableLines.length > 0
+                    && headerInlineRe.test(rowText)
+                    && !isSceneTableSeparatorLine(rowText)
+                    && tableLines.length >= 2
+                ) {
+                    stopped = true;
+                    break;
+                }
+                tableLines.push(rowText);
+            }
+            if (stopped) break;
         }
 
-        const body = cleanedLines.join('\n').trim();
-        if (!body) return '';
-        if (headerInlineRe.test(body) && !/(?:^|\n)\s*(?:#{1,6}\s*)?part\s*1\s*:\s*scenes\s*table/i.test(body)) {
-            return `### Part 1: Scenes Table\n\n${body}`;
-        }
-        return body;
+        if (tableLines.length < 2) return '';
+        return tableLines.join('\n').trim();
     };
 
     const extractScenesTableBlock = useCallback((text) => {
         if (!text || typeof text !== 'string') return '';
-
-        const fullText = sanitizeSceneMarkdownLlmOutput(text);
-        const headingMatch = fullText.match(/###\s*Part\s*1\s*:\s*Scenes\s*Table[^\n]*/i);
-        const scopedText = headingMatch ? fullText.slice(headingMatch.index) : fullText;
-        const expandedLines = [];
-        for (const rawLine of scopedText.split('\n')) {
-            const line = String(rawLine || '').trim();
-            if (!line) continue;
-            if (line.startsWith('|') && line.includes('|')) {
-                expandedLines.push(...expandGluedSceneTableLine(line));
-            } else {
-                expandedLines.push(line);
-            }
-        }
-
-        const toTableCandidate = (line) => {
-            const raw = String(line || '').trim();
-            if (!raw) return '';
-            if (raw.startsWith('|') && raw.includes('|')) return raw;
-            const firstPipeIdx = raw.indexOf('|');
-            if (firstPipeIdx < 0) return '';
-            const sliced = raw.slice(firstPipeIdx).trim();
-            return sliced.startsWith('|') && sliced.includes('|') ? sliced : '';
-        };
-
-        const blocks = [];
-        let current = [];
-        const flush = () => {
-            if (current.length >= 2) blocks.push(current.join('\n').trim());
-            current = [];
-        };
-
-        for (const rawLine of expandedLines) {
-            const candidate = toTableCandidate(rawLine);
-            if (candidate) {
-                current.push(candidate);
-            } else {
-                flush();
-            }
-        }
-        flush();
-
-        if (blocks.length <= 0) return '';
-
-        const hasSceneIdHeader = (blockText) => {
-            const firstLine = String(blockText || '').split('\n')[0] || '';
-            const normalized = firstLine.toLowerCase().replace(/[\s_.\-]/g, '');
-            return normalized.includes('sceneid') || normalized.includes('场景id');
-        };
-
-        const preferred = blocks.find(hasSceneIdHeader);
-        return String(preferred || blocks[0] || '').trim();
+        return extractScenesTableMarkdownBlock(text);
     }, []);
 
     const normalizeLlmMarkdownTable = useCallback((text) => {

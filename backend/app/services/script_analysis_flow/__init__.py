@@ -541,10 +541,8 @@ _SCENE_TABLE_ANCHOR_RE = re.compile(
 _SCENE_TABLE_HEADER_INLINE_RE = re.compile(
     r"(?i)\|\s*episode\s*id\s*\|\s*scene\s*id",
 )
-_SCENE_TABLE_REASONING_LINE_RE = re.compile(
-    r"(?i)^(?:嗯[，,]|好的[，,]|我需要|我将|我会|首先[，,]|现在(?:来)?|整个思考|我注意到|关于Adapted|"
-    r"cannot add any new content|let me|i will|i need to|thought process|reasoning|"
-    r"工程化|映射工作|标准化映射|Subject Index|覆盖核销中|不能自行补充|不能添加任何新内容)",
+_SCENE_TABLE_DATA_ROW_RE = re.compile(
+    r"(?i)\|\s*EP\d+\s*\|\s*EP\d+_SC\d+",
 )
 
 
@@ -570,53 +568,116 @@ def _expand_glued_scene_table_line(line: str) -> List[str]:
     return rows if len(rows) >= 2 else [raw]
 
 
-def sanitize_scene_markdown_llm_output(text: Any) -> str:
-    """Strip chain-of-thought leakage and keep only the Scenes Table block."""
+def _looks_like_scenes_table_at(text: str, pos: int) -> bool:
+    chunk = str(text or "")[pos:]
+    lines = [ln.strip() for ln in chunk.splitlines() if str(ln or "").strip()]
+    if len(lines) < 2:
+        return False
+    first = lines[0]
+    if _SCENE_TABLE_HEADER_INLINE_RE.search(first):
+        hm = _SCENE_TABLE_HEADER_INLINE_RE.search(first)
+        first = first[hm.start():].strip() if hm else first
+    if not _SCENE_TABLE_HEADER_INLINE_RE.search(first):
+        return False
+    second = lines[1]
+    if _is_scene_table_separator_line(second):
+        return True
+    if second.startswith("|") and (
+        _SCENE_TABLE_DATA_ROW_RE.search(second)
+        or re.search(r"\|\s*EP\d+\s*\|", second, flags=re.IGNORECASE)
+    ):
+        return True
+    return False
+
+
+def _find_scenes_table_header_pos(text: str) -> int:
+    candidates = [match.start() for match in _SCENE_TABLE_HEADER_INLINE_RE.finditer(str(text or ""))]
+    if not candidates:
+        return -1
+    for pos in reversed(candidates):
+        if _looks_like_scenes_table_at(text, pos):
+            return pos
+    return candidates[-1]
+
+
+def _preprocess_scene_markdown_llm_raw(text: Any) -> str:
     raw = str(text or "").replace("\r\n", "\n").strip()
     if not raw:
         return ""
-
     raw = re.sub(r"<!--\s*script_hash:[^>]+-->\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
-    raw = raw.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
+    return raw.replace("```markdown", "").replace("```md", "").replace("```", "").strip()
 
-    cut_candidates: List[int] = []
-    anchor_match = _SCENE_TABLE_ANCHOR_RE.search(raw)
-    if anchor_match:
-        cut_candidates.append(anchor_match.start())
-    inline_anchor = re.search(r"(?i)part\s*1\s*:\s*scenes\s*table", raw)
-    if inline_anchor:
-        cut_candidates.append(inline_anchor.start())
-    header_match = _SCENE_TABLE_HEADER_INLINE_RE.search(raw)
-    if header_match:
-        cut_candidates.append(header_match.start())
-    if cut_candidates:
-        raw = raw[min(cut_candidates):].lstrip()
 
-    cleaned_lines: List[str] = []
+def extract_scenes_table_markdown_block(text: Any) -> str:
+    """Locate and extract the contiguous Scenes Table markdown block from LLM output."""
+    raw = _preprocess_scene_markdown_llm_raw(text)
+    if not raw:
+        return ""
+
+    pos = _find_scenes_table_header_pos(raw)
+    if pos < 0:
+        anchor_match = _SCENE_TABLE_ANCHOR_RE.search(raw)
+        if anchor_match:
+            tail = raw[anchor_match.end():]
+            pos = _find_scenes_table_header_pos(tail)
+            if pos >= 0:
+                raw = tail[pos:].lstrip()
+            else:
+                return ""
+        else:
+            return ""
+    else:
+        raw = raw[pos:].lstrip()
+
+    table_lines: List[str] = []
     for raw_line in raw.splitlines():
         line = str(raw_line or "").strip()
         if not line:
+            if table_lines:
+                break
             continue
-        if re.match(r"(?i)^#{0,6}\s*part\s*1\s*:\s*scenes\s*table\s*$", line):
-            continue
-        if re.match(r"(?i)^part\s*1\s*:\s*scenes\s*table\s*$", line):
-            continue
-        if not line.startswith("|") and not _SCENE_TABLE_HEADER_INLINE_RE.search(line):
-            if _SCENE_TABLE_REASONING_LINE_RE.search(line):
-                continue
-            if len(line) > 40 and not re.search(r"\|\s*episode\s*id\s*\|", line, flags=re.IGNORECASE):
-                continue
-        for expanded in _expand_glued_scene_table_line(line):
-            if expanded:
-                cleaned_lines.append(expanded)
 
-    body = "\n".join(cleaned_lines).strip()
+        if not table_lines:
+            header_match = _SCENE_TABLE_HEADER_INLINE_RE.search(line)
+            if not header_match:
+                continue
+            line = line[header_match.start():].strip()
+
+        if not line.startswith("|"):
+            if table_lines:
+                break
+            continue
+
+        expanded_rows = _expand_glued_scene_table_line(line)
+        for row in expanded_rows:
+            row_text = str(row or "").strip()
+            if not row_text.startswith("|"):
+                continue
+            if (
+                table_lines
+                and _SCENE_TABLE_HEADER_INLINE_RE.search(row_text)
+                and not _is_scene_table_separator_line(row_text)
+                and len(table_lines) >= 2
+            ):
+                break
+            table_lines.append(row_text)
+        else:
+            continue
+        break
+
+    if len(table_lines) < 2:
+        return ""
+
+    body = "\n".join(table_lines).strip()
     if not body:
         return ""
-    if _SCENE_TABLE_HEADER_INLINE_RE.search(body) and not _SCENE_TABLE_ANCHOR_RE.search(body):
-        return f"### Part 1: Scenes Table\n\n{body}".strip()
-    return body
+    return f"### Part 1: Scenes Table\n\n{body}".strip()
+
+
+def sanitize_scene_markdown_llm_output(text: Any) -> str:
+    """Strip chain-of-thought leakage and keep only the Scenes Table block."""
+    return extract_scenes_table_markdown_block(text)
 
 
 def _collect_scene_table_blocks(script_text: str) -> List[str]:
@@ -1520,6 +1581,7 @@ __all__ = [
     "patch_episode_scene_markdown_by_scene",
     "patch_single_scene_markdown_for_orchestration",
     "resolve_scene_units_for_markdown_orchestration",
+    "extract_scenes_table_markdown_block",
     "sanitize_scene_markdown_llm_output",
     "wrap_scene_unit_as_script_block",
     "extract_scene_markdown_text_from_analyze_result",
