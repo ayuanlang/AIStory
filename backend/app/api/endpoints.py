@@ -41372,11 +41372,15 @@ def _collect_prompt_entity_ref_images_relaxed(prompt: str, entity_lookup: Dict[s
 
 def _normalize_video_ref_mode(value: Any) -> str:
     mode = str(value or "").strip().lower()
+    if not mode or mode == "auto":
+        return ""
     refs_aliases = {"entity_refs", "entity-refs", "refs_video", "refs-video", "reference", "reference_image", "reference_images"}
     if mode in refs_aliases:
         return "entity_refs"
     if mode in {"keyframes_entity_refs", "keyframe_entity_refs", "keyframes-entity-refs", "keyframe-entity-refs"}:
         return "keyframes_entity_refs"
+    if mode in {"entity_refs_start_end", "entity-refs-start-end", "ref_start_end", "ref+start_end"}:
+        return "entity_refs_start_end"
     if mode in {"start", "start_only", "start-only", "only_start", "only-start"}:
         return "start"
     if mode in {"start_end", "start-end", "start+end", "both", "both_ends"}:
@@ -41384,6 +41388,28 @@ def _normalize_video_ref_mode(value: Any) -> str:
     if mode in {"end", "end_only", "end-only", "only_end", "only-end"}:
         return "end"
     return ""
+
+
+DEFAULT_SHOT_VIDEO_MODE = "entity_refs"
+
+
+def _resolve_shot_video_mode(payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return DEFAULT_SHOT_VIDEO_MODE
+
+    unified = _normalize_video_ref_mode(payload.get("video_mode_unified"))
+    if unified:
+        return unified
+
+    ref_submit = str(payload.get("video_ref_submit_mode") or "").strip().lower()
+    if ref_submit in {"entity_refs", "refs_video"}:
+        return "entity_refs"
+
+    legacy_gen = _normalize_video_ref_mode(payload.get("video_gen_mode"))
+    if legacy_gen and ref_submit == "auto":
+        return legacy_gen
+
+    return DEFAULT_SHOT_VIDEO_MODE
 
 
 def _dedupe_media_ref_urls(values: Optional[List[str]]) -> List[str]:
@@ -42069,11 +42095,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         )
         video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
-        def _resolve_video_mode(payload: Dict[str, Any]) -> str:
-            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "entity_refs"
-            return _normalize_video_ref_mode(raw_mode) or "entity_refs"
-
-        video_mode = _resolve_video_mode(tech)
+        video_mode = _resolve_shot_video_mode(tech)
         refs: List[str] = []
         explicit_last_frame_url = end_frame_url or None
         video_prompt_candidates: List[str] = [
@@ -42089,7 +42111,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         else:
             shot_mode = str(video_mode or "").strip().lower()
             if not shot_mode:
-                shot_mode = "start_end" if end_frame_url else "start"
+                shot_mode = DEFAULT_SHOT_VIDEO_MODE
 
             if shot_mode == "end":
                 if end_frame_url:
@@ -42836,11 +42858,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         )
                         video_prompt = _inject_shot_prompt_anchors(video_prompt_raw, entity_lookup, global_style, video_ref_index_map)
 
-                        def _resolve_video_mode(payload: Dict[str, Any]) -> str:
-                            raw_mode = payload.get("video_mode_unified") or payload.get("video_ref_submit_mode") or payload.get("video_gen_mode") or "entity_refs"
-                            return _normalize_video_ref_mode(raw_mode) or "entity_refs"
-
-                        video_mode = _resolve_video_mode(tech)
+                        video_mode = _resolve_shot_video_mode(tech)
                         refs: List[str] = []
                         explicit_last_frame_url = end_frame_url or None
                         video_prompt_candidates: List[str] = [
@@ -42856,8 +42874,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         else:
                             shot_mode = str(video_mode or "").strip().lower()
                             if not shot_mode:
-                                end_prompt_len = len(str(shot.end_frame or "").strip())
-                                shot_mode = "start_end" if end_frame_url and end_prompt_len >= 3 else "start"
+                                shot_mode = DEFAULT_SHOT_VIDEO_MODE
 
                             if shot_mode == "end":
                                 if end_frame_url:

@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
 } from '../editorHelpers';
 
 import { 
@@ -2717,7 +2717,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     tech = {};
                 }
                 tech.end_frame_url = nextUrl;
-                tech.video_gen_mode = 'start_end';
                 const newData = { technical_notes: JSON.stringify(tech) };
                 await onUpdateShot(editingShot.id, newData);
                 setEditingShot((prev) => (prev ? { ...prev, ...newData } : prev));
@@ -4120,7 +4119,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 techNotes = {};
             }
             techNotes.end_frame_url = endUrl;
-            techNotes.video_gen_mode = 'start_end';
             techNotes.end_frame_reused_from_start = false;
             techNotes.joint_diptych_last_composite_url = stableCompositeUrl;
 
@@ -5075,7 +5073,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             tech = {};
                                         }
                                         tech.end_frame_url = resultUrl;
-                                        tech.video_gen_mode = 'start_end';
                                         const nextData = { technical_notes: JSON.stringify(tech) };
                                         await onUpdateShot(stableShotId, nextData);
                                         setEditingShot((prev) => {
@@ -6719,7 +6716,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             ...existingTech,
             end_frame_url: endUrl,
             end_frame_reused_from_start: panelCount === 1,
-            video_gen_mode: 'start_end',
             keyframes: nextList.map((item) => item.url).filter(Boolean),
             keyframe_images: imgMap,
             multi_panel_image_url: stableCompositeUrl,
@@ -7255,7 +7251,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(res.url);
                     clearPendingImageJob(targetShotId, 'end');
                     tech.end_frame_url = res.url;
-                    tech.video_gen_mode = 'start_end'; // Auto-switch to Start+End
                     const newData = { technical_notes: JSON.stringify(tech), end_frame: rawPrompt };
                     await onUpdateShot(targetShotId, newData);
                     setEditingShot(prev => (prev && prev.id === targetShotId ? { ...prev, ...newData } : prev));
@@ -7861,36 +7856,84 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 gridPlan: multiPanelGridPlan,
                 allowedAspectRatios: activeImageCapabilityProfile?.aspectRatios,
             });
+            const exactCombinedAspectRatio = normalizeAspectRatioOption(multiPanelGridPlan?.exactCombinedAspectRatio);
+            const requestAspectCandidates = Array.from(new Set([
+                exactCombinedAspectRatio,
+                requestAspectRatio,
+                normalizeAspectRatioOption(preferredAspectRatio),
+            ].filter(Boolean)));
             const aspectContract = buildMultiPanelAspectContract(multiPanelGridPlan, langKey);
             const finalPrompt = (isManual ? submitPrompt : (submitPrompt + globalCtx)) + prevEndFrameInstruction + promptInstruction + `\n\n${aspectContract}`;
-
-            const res = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, { 
-                function_name: 'generate_shot_images',
-                project_id: projectId,
-                episode_id: activeEpisode?.id,
-                shot_id: targetShotId,
-                shot_number: shotSnapshot.shot_id,
-                shot_name: shotSnapshot.shot_name,
-                prompt_language: resolvedPromptSubmitLang,
-                asset_type: 'start_frame',
-                ...(requestAspectRatio ? { aspect_ratio: requestAspectRatio } : {}),
-                ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(finalPrompt, null, resolvedEntities),
-                on_job_created: (jobId) => {
-                    const stableJobId = String(jobId || '').trim();
-                    if (!stableJobId) return;
-                    setPendingImageJob(targetShotId, 'start', stableJobId);
-                },
-            });
-
-            if (!res || !(res.url || res.result_url || res.image_url)) {
-                throw new Error('No multi-panel image URL returned');
+            let res = null;
+            let appliedRequestAspectRatio = '';
+            let lastAspectError = null;
+            for (const aspectCandidate of requestAspectCandidates) {
+                try {
+                    if (!silent && requestAspectCandidates.length > 1) {
+                        onLog?.(
+                            t(
+                                `多画格尝试生成比例：${aspectCandidate}`,
+                                `Trying multi-panel aspect ratio: ${aspectCandidate}`
+                            ),
+                            'info'
+                        );
+                    }
+                    const candidateRes = await generateImage(finalPrompt, null, refs.length > 0 ? refs : null, {
+                        function_name: 'generate_shot_images',
+                        project_id: projectId,
+                        episode_id: activeEpisode?.id,
+                        shot_id: targetShotId,
+                        shot_number: shotSnapshot.shot_id,
+                        shot_name: shotSnapshot.shot_name,
+                        prompt_language: resolvedPromptSubmitLang,
+                        asset_type: 'start_frame',
+                        ...(aspectCandidate ? { aspect_ratio: aspectCandidate } : {}),
+                        ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
+                        negative_prompt: buildEntityNegativePrompt(finalPrompt, null, resolvedEntities),
+                        on_job_created: (jobId) => {
+                            const stableJobId = String(jobId || '').trim();
+                            if (!stableJobId) return;
+                            setPendingImageJob(targetShotId, 'start', stableJobId);
+                        },
+                    });
+                    if (!candidateRes || !(candidateRes.url || candidateRes.result_url || candidateRes.image_url)) {
+                        throw new Error('No multi-panel image URL returned');
+                    }
+                    res = candidateRes;
+                    appliedRequestAspectRatio = aspectCandidate;
+                    break;
+                } catch (error) {
+                    lastAspectError = error;
+                    const detail = String(
+                        error?.response?.data?.detail
+                        || error?.response?.data?.message
+                        || error?.message
+                        || ''
+                    ).toLowerCase();
+                    const isAspectRejected = /aspect|ratio|unsupported|invalid|not support|比例|画幅/.test(detail);
+                    if (!isAspectRejected || aspectCandidate === requestAspectCandidates[requestAspectCandidates.length - 1]) {
+                        throw error;
+                    }
+                    if (!silent) {
+                        onLog?.(
+                            t(
+                                `多画格比例 ${aspectCandidate} 不可用，自动回退下一候选。`,
+                                `Multi-panel aspect ratio ${aspectCandidate} unavailable, falling back to next candidate.`
+                            ),
+                            'warning'
+                        );
+                    }
+                }
+            }
+            if (!res) {
+                throw lastAspectError || new Error('No multi-panel image URL returned');
             }
 
             const finalUrl = res.url || res.result_url || res.image_url;
             techNotes.multi_panel_image_url = finalUrl;
             techNotes.multi_panel_image_preset = activePresetKey;
-            techNotes.multi_panel_request_aspect_ratio = requestAspectRatio;
+            techNotes.multi_panel_request_aspect_ratio = appliedRequestAspectRatio || requestAspectRatio;
+            techNotes.multi_panel_request_aspect_candidates = requestAspectCandidates;
             techNotes.multi_panel_target_aspect_ratio = multiPanelGridPlan.targetAspectRatio;
             techNotes.multi_panel_start_from_prev_end = usePrevEndFrameStart;
             if (usePrevEndFrameStart) {
@@ -8010,7 +8053,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const handleGenerateVideo = async (promptOverride = null) => {
         if (!editingShot) return;
-        const shotSnapshot = editingShot;
+        let shotSnapshot = editingShot;
         const targetShotId = shotSnapshot.id;
         const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
         const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
@@ -8039,7 +8082,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         onLog?.('Generating Video...', 'info');
         try {
-            const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+            let tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+            const hadUnifiedMode = Boolean(String(tech?.video_mode_unified || '').trim());
+            ensureShotDefaultVideoMode(tech);
+            if (!hadUnifiedMode) {
+                const updatedTechNotes = JSON.stringify(tech);
+                await onUpdateShot(targetShotId, { technical_notes: updatedTechNotes });
+                shotSnapshot = { ...shotSnapshot, technical_notes: updatedTechNotes };
+                setEditingShot((prev) => (prev && prev.id === targetShotId
+                    ? { ...prev, technical_notes: updatedTechNotes }
+                    : prev));
+            }
+
             const keyframes = tech.keyframes || [];
 
             const normalizedEndPrompt = String(shotSnapshot.end_frame || '').trim().toUpperCase();
@@ -8966,7 +9020,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     endUrl = startUrl;
                     techNotes.end_frame_url = endUrl;
                     techNotes.end_frame_reused_from_start = true;
-                    techNotes.video_gen_mode = 'start_end';
                 } else {
                     const isManualEnd = techNotes.manual_end_frame === true;
                     const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
@@ -9001,7 +9054,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     endUrl = String(endResult.url || '').trim();
                     techNotes.end_frame_url = endUrl;
                     techNotes.end_frame_reused_from_start = false;
-                    techNotes.video_gen_mode = 'start_end';
                 }
             }
 
@@ -11191,9 +11243,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     className="bg-black/40 border border-white/20 text-[10px] rounded px-1 py-0.5 text-white/70 outline-none hover:bg-white/5"
                                                     title={t('最终视频生成模式', 'Final Video Generation Mode')}
                                                 >
+                                                    <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                     <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                     <option value="start">{t('仅起始', 'Start Only')}</option>
-                                                    <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                     <option value="keyframes_entity_refs">{t('关键帧+实体参考', 'Keyframes+Entity Refs')}</option>
                                                     <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                 </select>
@@ -12768,9 +12820,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         }}
                                                                         className="bg-black/40 border border-white/20 text-[10px] rounded px-2 py-1 text-white/80 outline-none hover:bg-white/5"
                                                                     >
+                                                                        <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                                         <option value="start_end">{t('起始+结束', 'Start+End')}</option>
                                                                         <option value="start">{t('仅起始', 'Start Only')}</option>
-                                                                        <option value="entity_refs">{t('实体参考图模式', 'Entity Refs Mode')}</option>
                                                                         <option value="keyframes_entity_refs">{t('关键帧+实体参考', 'Keyframes+Entity Refs')}</option>
                                                                         <option value="entity_refs_start_end">{t('参考图+首尾帧', 'Ref+StartEnd')}</option>
                                                                     </select>

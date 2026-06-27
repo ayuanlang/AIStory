@@ -995,16 +995,43 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
     );
 };
 
+export const DEFAULT_SHOT_VIDEO_MODE = 'entity_refs';
+
+const normalizeVideoModeToken = (rawMode) => {
+    const raw = String(rawMode || '').trim().toLowerCase();
+    if (!raw || raw === 'auto') return '';
+    if (raw === 'refs_video' || raw === 'entity_refs') return 'entity_refs';
+    if (raw === 'entity_refs_start_end') return 'entity_refs_start_end';
+    if (raw === 'keyframes_entity_refs' || raw === 'keyframe_entity_refs') return 'keyframes_entity_refs';
+    return raw;
+};
+
 export const resolveUnifiedVideoMode = (techObj = {}) => {
-    const rawMode = String(techObj?.video_mode_unified || techObj?.video_ref_submit_mode || techObj?.video_gen_mode || 'entity_refs').trim().toLowerCase();
-    if (rawMode === 'refs_video' || rawMode === 'entity_refs') return 'entity_refs';
-    if (rawMode === 'entity_refs_start_end') return 'entity_refs_start_end';
-    if (rawMode === 'keyframes_entity_refs' || rawMode === 'keyframe_entity_refs') return 'keyframes_entity_refs';
-    return rawMode || 'entity_refs';
+    const unified = normalizeVideoModeToken(techObj?.video_mode_unified);
+    if (unified) return unified;
+
+    const refSubmit = String(techObj?.video_ref_submit_mode || '').trim().toLowerCase();
+    if (refSubmit === 'entity_refs' || refSubmit === 'refs_video') return 'entity_refs';
+
+    const legacyGen = normalizeVideoModeToken(techObj?.video_gen_mode);
+    if (legacyGen && refSubmit === 'auto') return legacyGen;
+
+    return DEFAULT_SHOT_VIDEO_MODE;
+};
+
+export const ensureShotDefaultVideoMode = (techObj = {}) => {
+    if (!techObj || typeof techObj !== 'object') return techObj;
+    if (!String(techObj.video_mode_unified || '').trim()) {
+        techObj.video_mode_unified = DEFAULT_SHOT_VIDEO_MODE;
+        if (!String(techObj.video_ref_submit_mode || '').trim()) {
+            techObj.video_ref_submit_mode = 'entity_refs';
+        }
+    }
+    return techObj;
 };
 
 export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode = null, entityRefUrls = []) => {
-    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || 'entity_refs').trim().toLowerCase();
+    const mode = String(explicitMode || resolveUnifiedVideoMode(techObj) || DEFAULT_SHOT_VIDEO_MODE).trim().toLowerCase();
     const refs = [];
     const startRef = String(shotLike?.image_url || '').trim();
     const endRef = String(techObj?.end_frame_url || '').trim();
@@ -1691,10 +1718,10 @@ export function buildMultiPanelAspectContract(gridPlan, language = 'en') {
     const rows = Math.max(1, Number(gridPlan?.rows) || 1);
 
     if (language === 'cn') {
-        return `整图总画幅需接近 ${combinedAspectRatio}，并均分为 ${columns}x${rows} 等分网格；拆分后每一格都必须是 ${panelAspectRatio}。各格必须等宽等高、贴边作画，格间仅保留极细分隔线，不要大面积留白。`;
+        return `整图总画幅需接近 ${combinedAspectRatio}，并严格均分为 ${columns} 列 x ${rows} 行网格（禁止交换为 ${rows} 列 x ${columns} 行）；拆分后每一格都必须是 ${panelAspectRatio}。各格必须等宽等高、贴边作画，格间仅保留极细分隔线，不要大面积留白。`;
     }
 
-    return `The full canvas should target ${combinedAspectRatio} and be split into an equal ${columns}x${rows} grid where every panel is ${panelAspectRatio}. All panels must be equal size, drawn edge-to-edge, with only minimal gutter spacing between cells.`;
+    return `The full canvas should target ${combinedAspectRatio} and be split into exactly ${columns} columns x ${rows} rows (do not swap into ${rows}x${columns}), where every panel is ${panelAspectRatio}. All panels must be equal size, drawn edge-to-edge, with only minimal gutter spacing between cells.`;
 }
 
 export function getShotDiptychLayoutLabel(layout, language = 'en') {
