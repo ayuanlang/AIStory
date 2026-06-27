@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-06-25 12:00:00 +08:00
+# Prompt Updated At: 2026-06-27 20:00:00 +08:00
 
 
 
@@ -48,6 +48,8 @@
 
 - **实体继承自检**：Stage 1 已写实体须转为 Index 标准表达并落入对应字段；Index 有而 Stage 1 未写出的实体**不得**补入 Scene/Beat，若存在仅在 `{覆盖核销}` 注明 `Index未在Stage1出现:<实体名>`。
 
+- **表格列资产约束（Subject Index 唯一源，禁止自创）**：`Part 1: Scenes Table` 中凡涉及资产名称或资产引用的列/字段——`Core Scene Info` 内全部实体锚点（含 `{Scene实体覆盖}`、`{主环境}`、`{衍生环境}`、`{登场实体}`、`{Beats}` 各 Beat 的 `ENV:`/`CHAR:`/`PROP:`、`Observer View`、空间/景深层次/环境交互/关键感知焦点/结果落位等）、`Environment Name`、`Environment Relation`（含 `VARIANT_OF:`/`NEW` 等关系词后的环境名）、`Base Environment Reference`、`Environment Delta`（若引用具名环境/实体）、`Linked Characters`、`Key Props`——**出现的每一个 CHAR/ENV/PROP 名称必须逐字存在于输入 `Subject Index`，禁止自创、翻译、缩写、同义替换、Stage 1 非 Index 原名落表或 Index 无依据的新增实体**；Index 无对应条目时**不得**自行命名填补，只在 `{覆盖核销}` 标 `资产索引缺口：缺 CHAR|ENV|PROP:[...]`。
+
 
 
 ## 映射规则
@@ -74,7 +76,7 @@
 
 - **对白组边界与下一节拍起幅（工程映射，非镜头设计）**：每 Beat 写入 `{对白组边界}`（完结|待续|无对白）与 `{下一节拍起幅}`（近景主拍|中景关系镜|全景建置|Insert特写|Walk-and-Talk|切场|宏观场面|无下一Beat），依据 Stage 1 同场对白分配与**下一 Beat** 继承事实映射，禁止自造运镜。缺证据 → `{覆盖核销}` 标 `上游下一节拍起幅缺口`，**禁止推断填洞**。
 
-- **输出前自检**：Beat数/顺序=Stage1；决战≥10(§25)｜宏观≥6+三要素(§26)；对白/动作/时间/环境/FG-MG-BG/Equivalent Duration；实体命名=Index一致；缺口标`{覆盖核销}`。
+- **输出前自检**：Beat数/顺序=Stage1；决战≥10(§25)｜宏观≥6+三要素(§26)；对白/动作/时间/环境/FG-MG-BG/Equivalent Duration；**表格各列及 Core Scene Info 内全部资产名逐条核对 Subject Index，零自创**；实体命名=Index一致；缺口标`{覆盖核销}`。
 
 
 
@@ -112,7 +114,7 @@
 
 - **{覆盖核销}**：写 `已按要求完整覆盖 Stage 1 与 Subject Index` 并简述 Scene 字段数、Beat 数、对白条数、实体数；或列上游/Index 缺口、未落地实体及原因。禁止标「已覆盖」却实际遗漏。
 
-- **{登场实体}** / **{Environment Name}** / **{Linked Characters}** / **{Key Props}**：从 Stage 1 已写实体抽取；名称逐字取自 Index；**禁止**补充 Stage 1 未写实体；Stage 1 已写道具须在 Beat 空间/环境交互/关键感知焦点/结果落位有继承落位。
+- **{登场实体}** / **表格列 `Environment Name` / `Environment Relation` / `Base Environment Reference` / `Environment Delta` / `Linked Characters` / `Key Props`**：从 Stage 1 已写实体抽取；名称**仅**逐字取自 `Subject Index`（见上「表格列资产约束」）；**禁止**补充 Stage 1 未写实体、**禁止**自创 Index 中不存在的资产名；Stage 1 已写道具须在 Beat 空间/环境交互/关键感知焦点/结果落位有继承落位。
 
 - **Adapted Script Text**：抽取 Stage 1 `Adapted Script` 头尾片段；禁止 `同上`；禁止回退 Stage 1 之前的原始剧本。
 
@@ -120,7 +122,7 @@
 
 ### Part 1: Scenes Table
 
-
+> **表格列资产铁则**：下列列中凡出现的 CHAR/ENV/PROP 名称（含 `Core Scene Info` 内全部实体锚点），**必须**逐字存在于输入 `Subject Index`；**禁止**自创、翻译、缩写或 Index 无依据的新增实体；Index 缺失只在 `{覆盖核销}` 标缺口，**不回填**。
 
 | Episode ID | Scene ID | Scene No. | Scene Name | Equivalent Duration | Core Scene Info | Adapted Script Text | Environment Name | Environment Relation | Base Environment Reference | Environment Delta | Entry State | Exit State | Linked Characters | Key Props |
 

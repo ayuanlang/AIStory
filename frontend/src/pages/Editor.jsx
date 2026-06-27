@@ -175,18 +175,19 @@ import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYS
 
 
 import { ImportModal } from './editor/components/ImportModal';
-import { SceneManager } from './editor/components/SceneManager';
 
 // Lazy loaded heavy components
 const ProjectOverview = React.lazy(() => import('./editor/components/ProjectOverview').then(m => ({ default: m.ProjectOverview })));
 const EpisodeInfo = React.lazy(() => import('./editor/components/EpisodeInfo').then(m => ({ default: m.EpisodeInfo })));
 const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor').then(m => ({ default: m.ScriptEditor })));
 const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
+const SceneManager = React.lazy(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
 const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
 const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
+const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator']);
 
 const buildProjectReturnSnapshot = ({
     projectId,
@@ -224,11 +225,13 @@ const Editor = ({
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const pendingInitialEpisodeIdRef = useRef(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState(
-        (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab) 
-          || initialProject?.global_info?.workflow_stage 
-          || 'overview'
+    const resolveInitialEditorTab = () => (
+        (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab)
+        || initialProject?.global_info?.workflow_stage
+        || 'overview'
     );
+    const [activeTab, setActiveTab] = useState(resolveInitialEditorTab);
+    const [visitedTabs, setVisitedTabs] = useState(() => new Set([resolveInitialEditorTab()]));
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
     const [trashModalOpen, setTrashModalOpen] = useState(false);
@@ -653,17 +656,17 @@ const Editor = ({
                 
                 if (isStale) return;
                 setActiveTab(startTab);
+                setVisitedTabs((prev) => {
+                    if (prev.has(startTab)) return prev;
+                    const next = new Set(prev);
+                    next.add(startTab);
+                    return next;
+                });
 
-                const loadedEpisodes = await loadEpisodesForEditor(p);
-                if (isStale) return;
-                if (loadedEpisodes.length > 0) {
-                    setActiveEpisodeId((prev) => {
-                        if (prev != null && loadedEpisodes.some((ep) => String(ep.id) === String(prev))) {
-                            return prev;
-                        }
-                        return pickMaxEpisodeId(loadedEpisodes);
-                    });
-                }
+                // Load episode list in background — do not block first paint.
+                void loadEpisodesForEditor(p).catch((episodeErr) => {
+                    console.error('Failed to load episodes during init', episodeErr);
+                });
 
             } catch (err) {
                 console.error("Initialization error:", err);
@@ -701,6 +704,15 @@ const Editor = ({
         hasAppliedInitialShotFocusRef.current = true;
         setShotsFocusRequest({ sceneId: String(initialEditingShotSceneId), nonce: Date.now() });
     }, [initialActiveTab, initialEditingShotSceneId]);
+
+    useEffect(() => {
+        setVisitedTabs((prev) => {
+            if (prev.has(activeTab)) return prev;
+            const next = new Set(prev);
+            next.add(activeTab);
+            return next;
+        });
+    }, [activeTab]);
 
     const handleUpdateScript = async (epId, content) => {
         try {
@@ -3555,19 +3567,26 @@ const Editor = ({
         return t('未标记', 'Unscoped');
     }, [t]);
 
-    // Lazy load full episode data if missing
+    // Lazy load full episode payload only when a tab that needs script/analysis fields is active.
     useEffect(() => {
         if (!activeEpisodeId) return;
+        if (!EPISODE_FULL_LOAD_TABS.has(activeTab)) return;
         const ep = episodes.find(e => String(e.id) === String(activeEpisodeId));
         if (!ep) return;
-        if (!ep._fullLoaded) {
-            fetchEpisode(activeEpisodeId).then(fullEp => {
-                setEpisodes(prev => sortEpisodesForEditor(prev.map(e => String(e.id) === String(activeEpisodeId) ? { ...fullEp, _fullLoaded: true } : e)));
-            }).catch(err => {
-                console.error("Failed to fetch full episode", err);
-            });
-        }
-    }, [activeEpisodeId, episodes, sortEpisodesForEditor]);
+        if (ep._fullLoaded) return;
+        let cancelled = false;
+        fetchEpisode(activeEpisodeId).then((fullEp) => {
+            if (cancelled) return;
+            setEpisodes((prev) => sortEpisodesForEditor(
+                prev.map((e) => String(e.id) === String(activeEpisodeId) ? { ...fullEp, _fullLoaded: true } : e)
+            ));
+        }).catch((err) => {
+            console.error('Failed to fetch full episode', err);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [activeEpisodeId, activeTab, episodes, sortEpisodesForEditor]);
 
     const activeEpisode = episodes.find(e => String(e.id) === String(activeEpisodeId)) || null;
     const activeEpisodeIndex = activeEpisode ? episodes.findIndex((episode) => String(episode.id) === String(activeEpisode.id)) : -1;
@@ -3592,6 +3611,10 @@ const Editor = ({
     { id: 'montage', label: '剪辑', icon: Video }
 ];
     const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
+    const shouldRenderScriptTab = activeTab === 'script' || visitedTabs.has('script') || Boolean(assetRerunRequest);
+    const shouldRenderSubjectsTab = activeTab === 'subjects' || visitedTabs.has('subjects');
+    const shouldRenderScenesTab = activeTab === 'scenes' || visitedTabs.has('scenes');
+    const shouldRenderShotsTab = activeTab === 'shots' || visitedTabs.has('shots');
 
     const trackMenuAction = (menuKey, menuLabel, actionFn) => {
         const page = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -3979,38 +4002,50 @@ const Editor = ({
                                     }}
                                 />
                             )}
-                            <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
-                                <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />
-                            </div>
-                            {activeTab === 'subjects' && <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />}
-                            {activeTab === 'scenes' && (
-                                <ErrorBoundary
-                                    fallbackRender={({ resetErrorBoundary }) => (
-                                        <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
-                                            <AlertTriangle className="h-8 w-8 text-yellow-400" />
-                                            <div className="text-sm text-white/80">{t('场景页加载失败', 'Failed to load Scenes tab')}</div>
-                                            <button
-                                                type="button"
-                                                className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
-                                                onClick={resetErrorBoundary}
-                                            >
-                                                {t('重试', 'Retry')}
-                                            </button>
-                                        </div>
-                                    )}
-                                >
-                                    <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
-                                        if (sceneId) {
-                                            setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
-                                        }
-                                        setActiveTab('shots');
-                                    }} onSwitchToScriptAssetRerun={(patch) => {
-                                        setAssetRerunRequest({ ...(patch && typeof patch === 'object' ? patch : {}), nonce: Date.now() });
-                                        setActiveTab('script');
-                                    }} uiLang={uiLang} />
-                                </ErrorBoundary>
+                            {shouldRenderScriptTab && (
+                                <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
+                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />
+                                </div>
                             )}
-                            {activeTab === 'shots' && <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />}
+                            {shouldRenderSubjectsTab && (
+                                <div className={activeTab === 'subjects' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'subjects'}>
+                                    <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />
+                                </div>
+                            )}
+                            {shouldRenderScenesTab && (
+                                <div className={activeTab === 'scenes' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'scenes'}>
+                                    <ErrorBoundary
+                                        fallbackRender={({ resetErrorBoundary }) => (
+                                            <div className="flex flex-col items-center justify-center h-[50vh] gap-3 p-6 text-center">
+                                                <AlertTriangle className="h-8 w-8 text-yellow-400" />
+                                                <div className="text-sm text-white/80">{t('场景页加载失败', 'Failed to load Scenes tab')}</div>
+                                                <button
+                                                    type="button"
+                                                    className="px-3 py-1.5 rounded-lg bg-white/10 text-sm hover:bg-white/20"
+                                                    onClick={resetErrorBoundary}
+                                                >
+                                                    {t('重试', 'Retry')}
+                                                </button>
+                                            </div>
+                                        )}
+                                    >
+                                        <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                                            if (sceneId) {
+                                                setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
+                                            }
+                                            setActiveTab('shots');
+                                        }} onSwitchToScriptAssetRerun={(patch) => {
+                                            setAssetRerunRequest({ ...(patch && typeof patch === 'object' ? patch : {}), nonce: Date.now() });
+                                            setActiveTab('script');
+                                        }} uiLang={uiLang} />
+                                    </ErrorBoundary>
+                                </div>
+                            )}
+                            {shouldRenderShotsTab && (
+                                <div className={activeTab === 'shots' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'shots'}>
+                                    <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />
+                                </div>
+                            )}
                             {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
                                 </>
                             )}

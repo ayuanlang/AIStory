@@ -279,6 +279,168 @@ const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
     return [...ids].filter(Boolean);
 };
 
+const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
+const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
+
+const normalizeSceneMarkerScriptText = (scriptText) => {
+    const text = String(scriptText || '').replace(/\r\n/g, '\n');
+    if (!text.trim()) return '';
+    return text.replace(
+        /`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END):[^\]]+)\])`+/gi,
+        '$1'
+    );
+};
+
+const resolveSceneBlockText = (scriptText) => {
+    const normalized = normalizeSceneMarkerScriptText(scriptText);
+    if (!normalized.trim()) return '';
+    const startMatch = /`?\[SCENES_BLOCK_START\]`?/i.exec(normalized);
+    if (!startMatch) return normalized.trim();
+    const afterStart = normalized.slice(startMatch.index + startMatch[0].length);
+    const endMatch = /`?\[SCENES_BLOCK_END\]`?/i.exec(afterStart);
+    const blockText = (endMatch ? afterStart.slice(0, endMatch.index) : afterStart).trim();
+    return blockText || normalized.trim();
+};
+
+const collectSceneBoundaryMarkers = (blockText) => {
+    const markers = [];
+    const startPattern = /`?\[SCENE_START:([^\]\s]+)\]`?/gi;
+    const endPattern = /`?\[SCENE_END:([^\]\s]+)\]`?/gi;
+    let match;
+    while ((match = startPattern.exec(blockText)) !== null) {
+        const sceneId = String(match[1] || '').trim();
+        if (sceneId) markers.push({ pos: match.index, endPos: match.index + match[0].length, kind: 'start', sceneId });
+    }
+    while ((match = endPattern.exec(blockText)) !== null) {
+        const sceneId = String(match[1] || '').trim();
+        if (sceneId) markers.push({ pos: match.index, endPos: match.index + match[0].length, kind: 'end', sceneId });
+    }
+    markers.sort((a, b) => (a.pos - b.pos) || (a.kind === 'end' ? -1 : 1));
+    return markers;
+};
+
+const decrementCanonicalSceneId = (sceneId) => {
+    const match = String(sceneId || '').trim().match(/^(EP\d+)_SC(\d+)$/i);
+    if (!match) return '';
+    const order = Number(match[2]);
+    if (!Number.isFinite(order) || order <= 1) return '';
+    return `${String(match[1]).toUpperCase()}_SC${String(order - 1).padStart(2, '0')}`;
+};
+
+const incrementCanonicalSceneId = (sceneId) => {
+    const match = String(sceneId || '').trim().match(/^(EP\d+)_SC(\d+)$/i);
+    if (!match) return '';
+    return `${String(match[1]).toUpperCase()}_SC${String(Number(match[2]) + 1).padStart(2, '0')}`;
+};
+
+const inferPreludeSceneId = (startMarker, segmentCount) => (
+    decrementCanonicalSceneId(startMarker?.sceneId) || String(segmentCount + 1)
+);
+
+const inferTrailingSceneId = (activeStartId, segments, markers) => {
+    if (activeStartId) return activeStartId;
+    const lastMarker = markers[markers.length - 1];
+    if (lastMarker?.kind === 'end') {
+        const incremented = incrementCanonicalSceneId(lastMarker.sceneId);
+        if (incremented) return incremented;
+    }
+    if (segments.length > 0) {
+        const incremented = incrementCanonicalSceneId(segments[segments.length - 1][0]);
+        if (incremented) return incremented;
+    }
+    return String(segments.length + 1);
+};
+
+const dedupeSegmentSceneIds = (segments) => {
+    const seen = new Set();
+    const deduped = [];
+    segments.forEach(([sceneId, sceneText], idx) => {
+        const body = String(sceneText || '').trim();
+        if (!body) return;
+        let resolvedId = String(sceneId || '').trim() || String(idx + 1);
+        if (seen.has(resolvedId)) resolvedId = String(idx + 1);
+        seen.add(resolvedId);
+        deduped.push([resolvedId, body]);
+    });
+    return deduped;
+};
+
+const segmentScenesByBoundaryMarkers = (blockText) => {
+    const markers = collectSceneBoundaryMarkers(blockText);
+    if (!markers.length) {
+        const body = String(blockText || '').trim();
+        return body ? [['1', body]] : [];
+    }
+
+    const segments = [];
+    let contentCursor = 0;
+    let activeStartId = '';
+
+    markers.forEach((marker) => {
+        const chunk = blockText.slice(contentCursor, marker.pos).trim();
+        if (marker.kind === 'end') {
+            if (chunk) segments.push([marker.sceneId, chunk]);
+            activeStartId = '';
+        } else {
+            if (chunk) {
+                if (activeStartId) {
+                    segments.push([activeStartId, chunk]);
+                } else if (!segments.length) {
+                    segments.push([inferPreludeSceneId(marker, segments.length), chunk]);
+                } else {
+                    segments.push([marker.sceneId, chunk]);
+                }
+            }
+            activeStartId = marker.sceneId;
+        }
+        contentCursor = marker.endPos;
+    });
+
+    const trailing = blockText.slice(contentCursor).trim();
+    if (trailing) {
+        segments.push([inferTrailingSceneId(activeStartId, segments, markers), trailing]);
+    }
+    return segments;
+};
+
+const buildSingleSceneUnitFromText = (scriptText) => {
+    const normalized = normalizeSceneMarkerScriptText(scriptText);
+    const body = resolveSceneBlockText(normalized).trim() || normalized.trim();
+    if (!body) return null;
+    return {
+        sceneId: '1',
+        sceneOrder: 1,
+        sceneText: body,
+        markerStartToken: '[SCENE_START:1]',
+        markerEndToken: '[SCENE_END:1]',
+    };
+};
+
+const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
+    const normalized = normalizeSceneMarkerScriptText(scriptText);
+    if (!normalized.trim()) return [];
+
+    const blockText = resolveSceneBlockText(normalized);
+    if (!blockText.trim()) {
+        const fallbackUnit = buildSingleSceneUnitFromText(normalized);
+        return fallbackUnit ? [fallbackUnit] : [];
+    }
+
+    const segments = dedupeSegmentSceneIds(segmentScenesByBoundaryMarkers(blockText));
+    if (!segments.length) {
+        const fallbackUnit = buildSingleSceneUnitFromText(normalized);
+        return fallbackUnit ? [fallbackUnit] : [];
+    }
+
+    return segments.map(([sceneId, sceneText], idx) => ({
+        sceneId,
+        sceneOrder: idx + 1,
+        sceneText,
+        markerStartToken: `[SCENE_START:${sceneId}]`,
+        markerEndToken: `[SCENE_END:${sceneId}]`,
+    }));
+};
+
 const createSceneOrchestrationProgressPoller = ({
     getSnapshot,
     episodeId,
@@ -1787,72 +1949,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
     }, [activeEpisode?.ai_scene_analysis_adaptation, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
 
-    const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
-    const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
-
-    const parseSceneUnitsFromScriptMarkers = useCallback((scriptText) => {
-        const text = String(scriptText || '').replace(/\r\n/g, '\n');
-        if (!text.trim()) return [];
-
-        const startRegex = /`?\[SCENES_BLOCK_START\]`?/i;
-        const endRegex = /`?\[SCENES_BLOCK_END\]`?/i;
-        const startMatch = startRegex.exec(text);
-        if (!startMatch) return [];
-
-        const afterStart = text.slice(startMatch.index + startMatch[0].length);
-        const endMatch = endRegex.exec(afterStart);
-        if (!endMatch) return [];
-
-        const blockText = afterStart.slice(0, endMatch.index);
-        if (!String(blockText || '').trim()) return [];
-
-        const sceneStartPattern = /\[SCENE_START:([^\]\s]+)\]/g;
-        const sceneEndPattern = /\[SCENE_END:([^\]\s]+)\]/;
-        const units = [];
-        const seenSceneIds = new Set();
-        let cursor = 0;
-
-        while (true) {
-            sceneStartPattern.lastIndex = cursor;
-            const startUnitMatch = sceneStartPattern.exec(blockText);
-            if (!startUnitMatch) break;
-
-            const sceneId = String(startUnitMatch[1] || '').trim();
-            if (!sceneId) {
-                throw new Error('Scene marker parse error: empty scene_id in SCENE_START');
-            }
-            if (seenSceneIds.has(sceneId)) {
-                throw new Error(`Scene marker parse error: duplicate scene_id ${sceneId}`);
-            }
-            seenSceneIds.add(sceneId);
-
-            const afterStartMarker = blockText.slice(startUnitMatch.index + startUnitMatch[0].length);
-            const endUnitMatch = sceneEndPattern.exec(afterStartMarker);
-            if (!endUnitMatch) {
-                throw new Error(`Scene marker parse error: missing SCENE_END for ${sceneId}`);
-            }
-            const endSceneId = String(endUnitMatch[1] || '').trim();
-            if (endSceneId !== sceneId) {
-                throw new Error(`Scene marker parse error: SCENE_START/END mismatch (${sceneId} vs ${endSceneId})`);
-            }
-
-            const sceneBody = afterStartMarker.slice(0, endUnitMatch.index).trim();
-            units.push({
-                sceneId,
-                sceneOrder: units.length + 1,
-                sceneText: sceneBody,
-                markerStartToken: startUnitMatch[0],
-                markerEndToken: endUnitMatch[0],
-            });
-            cursor = startUnitMatch.index + startUnitMatch[0].length + endUnitMatch.index + endUnitMatch[0].length;
-        }
-
-        const trailing = blockText.slice(cursor).trim();
-        if (trailing && /\[SCENE_(?:START|END):/i.test(trailing)) {
-            throw new Error('Scene marker parse error: unmatched trailing content after scene markers');
-        }
-        return units;
-    }, []);
+    const parseSceneUnitsFromScriptMarkers = useCallback(
+        (scriptText) => parseSceneUnitsFromScriptMarkersText(scriptText),
+        []
+    );
 
     const wrapSceneUnitAsScriptBlock = useCallback((unit) => {
         if (!unit) return '';
@@ -7356,6 +7456,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } catch (parseErr) {
             onLog?.(`[${label}] scene marker parse warning: ${parseErr?.message || parseErr}`, 'warning');
             sceneUnits = [];
+        }
+        if (!sceneUnits.length) {
+            const fallbackUnit = buildSingleSceneUnitFromText(adaptedScriptForSplit);
+            if (fallbackUnit) {
+                onLog?.(`[${label}] no scene markers detected; treating entire adapted script as one scene.`, 'info');
+                sceneUnits = [fallbackUnit];
+            }
         }
         const episodePrefix = resolveEpisodeSceneIdPrefix(
             activeEpisode,
@@ -12948,8 +13055,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 })),
                 episodePrefix
             );
-            return { stage1SourceText, candidates, error: candidates.length ? '' : 'no_scene_markers' };
+            return { stage1SourceText, candidates, error: '' };
         } catch (error) {
+            const fallbackUnit = buildSingleSceneUnitFromText(adaptedScriptText);
+            if (fallbackUnit) {
+                const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
+                const candidates = applyCanonicalSceneIdsToUnits(
+                    [{
+                        ...fallbackUnit,
+                        displayLabel: extractSceneDisplayLabel(fallbackUnit),
+                    }],
+                    episodePrefix
+                );
+                return { stage1SourceText, candidates, error: '' };
+            }
             return {
                 stage1SourceText,
                 candidates: [],

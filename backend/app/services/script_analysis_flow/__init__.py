@@ -288,18 +288,148 @@ def _normalize_scene_marker_script_text(script_text: str) -> str:
     return text
 
 
-def _find_scenes_block_span(text: str) -> tuple[int, int, int, int]:
+@dataclass
+class _SceneBoundaryMarker:
+    pos: int
+    end_pos: int
+    kind: str
+    scene_id: str
+
+
+def _resolve_scene_block_text(text: str) -> str:
     normalized = _normalize_scene_marker_script_text(text)
+    if not normalized.strip():
+        return ""
     start_match = SCENES_BLOCK_START_PATTERN.search(normalized)
     if not start_match:
-        raise SceneMarkerParseError("SCENE_MARKER_BLOCK_MISSING", "scene block markers missing or invalid order")
+        return normalized.strip()
     after_start = normalized[start_match.end():]
     end_match = SCENES_BLOCK_END_PATTERN.search(after_start)
-    if not end_match:
-        raise SceneMarkerParseError("SCENE_MARKER_BLOCK_MISSING", "scene block end marker missing")
-    block_start = start_match.end()
-    block_end = start_match.end() + end_match.start()
-    return start_match.start(), start_match.end(), block_end, start_match.end() + end_match.end()
+    block_text = after_start[: end_match.start()] if end_match else after_start
+    block_text = block_text.strip()
+    return block_text if block_text else normalized.strip()
+
+
+def _collect_scene_boundary_markers(block_text: str) -> List[_SceneBoundaryMarker]:
+    markers: List[_SceneBoundaryMarker] = []
+    for match in SCENE_START_PATTERN.finditer(block_text):
+        scene_id = str(match.group(1) or "").strip()
+        if scene_id:
+            markers.append(_SceneBoundaryMarker(match.start(), match.end(), "start", scene_id))
+    for match in SCENE_END_PATTERN.finditer(block_text):
+        scene_id = str(match.group(1) or "").strip()
+        if scene_id:
+            markers.append(_SceneBoundaryMarker(match.start(), match.end(), "end", scene_id))
+    markers.sort(key=lambda item: (item.pos, 0 if item.kind == "end" else 1))
+    return markers
+
+
+def _decrement_canonical_scene_id(scene_id: str) -> Optional[str]:
+    match = re.fullmatch(r"(EP\d+)_SC(\d+)", scene_id, flags=re.IGNORECASE)
+    if not match:
+        return None
+    order = int(match.group(2))
+    if order <= 1:
+        return None
+    return f"{match.group(1).upper()}_SC{order - 1:02d}"
+
+
+def _increment_canonical_scene_id(scene_id: str) -> Optional[str]:
+    match = re.fullmatch(r"(EP\d+)_SC(\d+)", scene_id, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return f"{match.group(1).upper()}_SC{int(match.group(2)) + 1:02d}"
+
+
+def _infer_prelude_scene_id(start_marker: _SceneBoundaryMarker, segment_count: int) -> str:
+    decremented = _decrement_canonical_scene_id(start_marker.scene_id)
+    if decremented:
+        return decremented
+    return str(segment_count + 1)
+
+
+def _infer_trailing_scene_id(
+    active_start_id: Optional[str],
+    segments: List[tuple[str, str]],
+    markers: List[_SceneBoundaryMarker],
+) -> str:
+    if active_start_id:
+        return active_start_id
+    if markers:
+        last_marker = markers[-1]
+        if last_marker.kind == "end":
+            incremented = _increment_canonical_scene_id(last_marker.scene_id)
+            if incremented:
+                return incremented
+    if segments:
+        incremented = _increment_canonical_scene_id(segments[-1][0])
+        if incremented:
+            return incremented
+    return str(len(segments) + 1)
+
+
+def _dedupe_segment_scene_ids(segments: List[tuple[str, str]]) -> List[tuple[str, str]]:
+    seen: Set[str] = set()
+    deduped: List[tuple[str, str]] = []
+    for order, (scene_id, scene_text) in enumerate(segments, 1):
+        body = str(scene_text or "").strip()
+        if not body:
+            continue
+        resolved_id = str(scene_id or "").strip() or str(order)
+        if resolved_id in seen:
+            resolved_id = str(order)
+        seen.add(resolved_id)
+        deduped.append((resolved_id, body))
+    return deduped
+
+
+def _segment_scenes_by_boundary_markers(block_text: str) -> List[tuple[str, str]]:
+    markers = _collect_scene_boundary_markers(block_text)
+    if not markers:
+        body = block_text.strip()
+        return [("1", body)] if body else []
+
+    segments: List[tuple[str, str]] = []
+    content_cursor = 0
+    active_start_id: Optional[str] = None
+
+    for marker in markers:
+        chunk = block_text[content_cursor : marker.pos].strip()
+        if marker.kind == "end":
+            if chunk:
+                segments.append((marker.scene_id, chunk))
+            active_start_id = None
+        else:
+            if chunk:
+                if active_start_id:
+                    segments.append((active_start_id, chunk))
+                elif not segments:
+                    segments.append((_infer_prelude_scene_id(marker, len(segments)), chunk))
+                else:
+                    segments.append((marker.scene_id, chunk))
+            active_start_id = marker.scene_id
+        content_cursor = marker.end_pos
+
+    trailing = block_text[content_cursor:].strip()
+    if trailing:
+        trail_id = _infer_trailing_scene_id(active_start_id, segments, markers)
+        segments.append((trail_id, trailing))
+
+    return segments
+
+
+def _build_single_scene_unit_from_text(script_text: str) -> Optional[ParsedSceneUnit]:
+    normalized = _normalize_scene_marker_script_text(script_text)
+    body = _resolve_scene_block_text(normalized).strip() or normalized.strip()
+    if not body:
+        return None
+    return ParsedSceneUnit(
+        scene_id="1",
+        scene_order=1,
+        scene_text=body,
+        marker_start_token="[SCENE_START:1]",
+        marker_end_token="[SCENE_END:1]",
+    )
 
 
 def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
@@ -307,58 +437,31 @@ def parse_scene_units_from_markers(script_text: str) -> List[ParsedSceneUnit]:
     if not text.strip():
         raise SceneMarkerParseError("SCENE_MARKER_BLOCK_MISSING", "script text is empty")
 
-    _, block_content_start, block_content_end, _ = _find_scenes_block_span(text)
-    block_text = text[block_content_start:block_content_end]
+    block_text = _resolve_scene_block_text(text)
     if not block_text.strip():
-        raise SceneMarkerParseError("SCENE_MARKER_EMPTY_BLOCK", "scene block is empty")
+        fallback_unit = _build_single_scene_unit_from_text(text)
+        if fallback_unit is None:
+            raise SceneMarkerParseError("SCENE_MARKER_EMPTY_BLOCK", "scene block is empty")
+        return [fallback_unit]
 
-    cursor = 0
-    seen_scene_ids: Set[str] = set()
+    segments = _dedupe_segment_scene_ids(_segment_scenes_by_boundary_markers(block_text))
+    if not segments:
+        fallback_unit = _build_single_scene_unit_from_text(text)
+        if fallback_unit is None:
+            raise SceneMarkerParseError("SCENE_MARKER_NO_SCENES", "no scene content found")
+        return [fallback_unit]
+
     parsed: List[ParsedSceneUnit] = []
-
-    while True:
-        start_match = SCENE_START_PATTERN.search(block_text, cursor)
-        if not start_match:
-            break
-
-        scene_id = str(start_match.group(1) or "").strip()
-        if not scene_id:
-            raise SceneMarkerParseError("SCENE_MARKER_PAIR_MISMATCH", "scene start marker has empty scene_id")
-        if scene_id in seen_scene_ids:
-            raise SceneMarkerParseError("SCENE_MARKER_DUPLICATE_SCENE_ID", f"duplicate scene_id: {scene_id}")
-        seen_scene_ids.add(scene_id)
-
-        end_match = SCENE_END_PATTERN.search(block_text, start_match.end())
-        if not end_match:
-            raise SceneMarkerParseError("SCENE_MARKER_PAIR_MISMATCH", f"missing scene end marker for {scene_id}")
-        end_scene_id = str(end_match.group(1) or "").strip()
-        if end_scene_id != scene_id:
-            raise SceneMarkerParseError(
-                "SCENE_MARKER_PAIR_MISMATCH",
-                f"scene marker mismatch: start={scene_id}, end={end_scene_id}",
-            )
-
-        scene_text = block_text[start_match.end():end_match.start()].strip()
+    for order, (scene_id, scene_text) in enumerate(segments, 1):
         parsed.append(
             ParsedSceneUnit(
                 scene_id=scene_id,
-                scene_order=len(parsed) + 1,
+                scene_order=order,
                 scene_text=scene_text,
-                marker_start_token=start_match.group(0),
-                marker_end_token=end_match.group(0),
+                marker_start_token=f"[SCENE_START:{scene_id}]",
+                marker_end_token=f"[SCENE_END:{scene_id}]",
             )
         )
-        cursor = end_match.end()
-
-    if not parsed:
-        raise SceneMarkerParseError("SCENE_MARKER_NO_SCENES", "no scenes found between scene block markers")
-
-    trailing = block_text[cursor:].strip()
-    if trailing:
-        if SCENE_START_PATTERN.search(trailing) or SCENE_END_PATTERN.search(trailing):
-            raise SceneMarkerParseError("SCENE_MARKER_TRAILING_CONTENT", "unmatched trailing content after scene markers")
-        # Allow non-marker prose between the last scene end and block end.
-
     return parsed
 
 
@@ -429,6 +532,14 @@ def resolve_scene_units_for_markdown_orchestration(
                 ), source_name
         except SceneMarkerParseError as exc:
             parse_errors.append(f"{source_name}:{exc.code}")
+            fallback_unit = _build_single_scene_unit_from_text(source_text)
+            if fallback_unit is not None:
+                return _finalize_scene_units_for_episode(
+                    db,
+                    [fallback_unit],
+                    episode_id,
+                    script_text=text,
+                ), f"{source_name}_single_scene_fallback"
 
     if int(project_id) > 0 and int(episode_id) > 0:
         units = load_scene_units_from_progress_rows(
@@ -443,6 +554,19 @@ def resolve_scene_units_for_markdown_orchestration(
                 episode_id,
                 script_text=adapted_script_text or episode_adaptation_text,
             ), "progress_db"
+
+    for source_name, source_text in candidate_sources:
+        text = str(source_text or "").strip()
+        if not text:
+            continue
+        fallback_unit = _build_single_scene_unit_from_text(text)
+        if fallback_unit is not None:
+            return _finalize_scene_units_for_episode(
+                db,
+                [fallback_unit],
+                episode_id,
+                script_text=text,
+            ), f"{source_name}_single_scene_fallback"
 
     return [], "|".join(parse_errors) if parse_errors else "no_scene_units"
 

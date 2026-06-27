@@ -615,13 +615,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return Array.isArray(entities) ? entities : [];
     }, [activeEpisode?.id, activeEpisode?.project_id, entities, entityListLoading, loadEntities, projectId]);
 
-    useEffect(() => {
-        loadEntities();
-    }, [loadEntities]);
-
-
     // Note: Provider selection functionality removed (defaults to Backend Active Settings)
-    // Code for local state imageProvider/videoProvider removed.
 
 
     // AI Prompt Preview Modal State
@@ -5690,18 +5684,53 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [projectId, activeEpisode?.id, onLog, refreshShots]);
 
     useEffect(() => {
-        if(activeEpisode?.id) {
-            fetchScenes(activeEpisode.id).then((data) => {
-                setScenes(data);
-                // If previously 'all' but couldn't load due to empty scenes, this will re-trigger refreshShots via useEffect[selectedSceneId, refreshShots]
-                // because refreshShots depends on 'scenes' if selectedSceneId is 'all'
-            }).catch(e => console.error(e));
-        }
-    }, [activeEpisode]);
+        if (!activeEpisode?.id) return;
+        const episodeId = activeEpisode.id;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const data = await fetchScenes(episodeId);
+                if (!cancelled) setScenes(data);
+            } catch (e) {
+                console.error(e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeEpisode?.id]);
 
     useEffect(() => {
         refreshShots();
     }, [refreshShots]);
+
+    useEffect(() => {
+        if (!activeEpisode?.id) return;
+        const resolvedProjectId = projectId || activeEpisode?.project_id;
+        if (!resolvedProjectId) return;
+
+        let cancelled = false;
+        const scheduleLoad = () => {
+            if (cancelled) return;
+            void loadEntities();
+        };
+
+        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+            const idleId = window.requestIdleCallback(scheduleLoad, { timeout: 1500 });
+            return () => {
+                cancelled = true;
+                window.cancelIdleCallback(idleId);
+            };
+        }
+
+        const timerId = window.setTimeout(scheduleLoad, 0);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [activeEpisode?.id, activeEpisode?.project_id, loadEntities, projectId]);
 
     useEffect(() => {
         if (!hasActiveGeneration || !activeEpisode?.id) return;

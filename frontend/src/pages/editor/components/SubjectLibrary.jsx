@@ -2817,8 +2817,28 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [entities, entityListLoading, loadEntities, projectId]);
 
     useEffect(() => {
-        loadEntities();
-    }, [loadEntities]);
+        if (!projectId) return;
+
+        let cancelled = false;
+        const scheduleLoad = () => {
+            if (cancelled) return;
+            void loadEntities();
+        };
+
+        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+            const idleId = window.requestIdleCallback(scheduleLoad, { timeout: 1500 });
+            return () => {
+                cancelled = true;
+                window.cancelIdleCallback(idleId);
+            };
+        }
+
+        const timerId = window.setTimeout(scheduleLoad, 0);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [loadEntities, projectId]);
 
     useEffect(() => {
         setEntityEpisodeScope(currentEpisode?.id ? 'current' : 'all');

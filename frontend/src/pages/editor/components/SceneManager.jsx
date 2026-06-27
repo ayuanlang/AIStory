@@ -2281,24 +2281,24 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
 
     // Fetch Entities (Environment) for image matching
     useEffect(() => {
-        const episodeId = activeEpisode?.id;
-        const sceneContent = activeEpisode?.scene_content;
-
         const loadScenes = async () => {
              if (activeEpisode?.id) {
                  setSceneListLoading(true);
-                 try {
-                     const quickPreview = parseScenesFromText(activeEpisode?.scene_content);
-                     setScenes(quickPreview);
-                 } catch (parseErr) {
-                     console.error('[SceneManager] Failed to parse scene preview', parseErr);
-                     setScenes([]);
+                 const inlineSceneContent = String(activeEpisode?.scene_content || '').trim();
+                 if (inlineSceneContent) {
+                     try {
+                         const quickPreview = parseScenesFromText(inlineSceneContent);
+                         setScenes(quickPreview);
+                     } catch (parseErr) {
+                         console.error('[SceneManager] Failed to parse scene preview', parseErr);
+                         setScenes([]);
+                     }
                  }
                  try {
                      const dbScenes = await fetchScenes(activeEpisode.id);
                      if (dbScenes && dbScenes.length > 0) {
                          // Check for incomplete data (Schema Update Backfill)
-                         const inContent = activeEpisode.scene_content;
+                         const inContent = inlineSceneContent;
                          if (inContent && dbScenes.some(s => !s.linked_characters && !s.key_props)) {
                              const parsed = parseScenesFromText(inContent);
                              if (parsed.length > 0) {
@@ -2329,11 +2329,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                          })));
                      } else {
                          // Only parse if DB is empty
-                         setScenes(parseScenesFromText(activeEpisode?.scene_content));
+                         setScenes(inlineSceneContent ? parseScenesFromText(inlineSceneContent) : []);
                      }
                  } catch(e) {
                      console.error("Failed to load scenes from DB", e);
-                     const parsedFallback = parseScenesFromText(activeEpisode?.scene_content);
+                     const parsedFallback = inlineSceneContent ? parseScenesFromText(inlineSceneContent) : [];
                      setScenes(parsedFallback);
                  } finally {
                      setSceneListLoading(false);
@@ -2343,8 +2343,18 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
              }
         };
 
-        if (projectId) fetchEntities(projectId).then(setEntities).catch(console.error);
-        loadScenes();
+        // Load scenes first; defer entity fetch so it doesn't compete for network bandwidth.
+        loadScenes().then(() => {
+            if (!projectId) return;
+            const scheduleEntities = () => {
+                void fetchEntities(projectId).then(setEntities).catch(console.error);
+            };
+            if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+                window.requestIdleCallback(scheduleEntities, { timeout: 2000 });
+            } else {
+                window.setTimeout(scheduleEntities, 0);
+            }
+        });
     }, [activeEpisode?.id, activeEpisode?.scene_content, projectId]);
 
     // Load cost data from project's cost_estimation snapshot
