@@ -826,6 +826,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [activeSources, setActiveSources] = useState({ Image: 'unset', Video: 'unset' });
     const [activeImageCapabilityProfile, setActiveImageCapabilityProfile] = useState(null);
     const [localKeyframes, setLocalKeyframes] = useState([]);
+    const [localPrevShotFrames, setLocalPrevShotFrames] = useState([]);
     const [videoKeyframeExtractCount, setVideoKeyframeExtractCount] = useState('4');
     const [isExtractingVideoKeyframes, setIsExtractingVideoKeyframes] = useState(false);
     const generationStateStorageKey = useMemo(() => {
@@ -3679,8 +3680,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const videoRefPromptText = buildShotVideoRefPromptText(shotSnapshot, tech);
         const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
             promptText: videoRefPromptText,
-            associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
+            includeAssociatedEntities: false,
         });
         const refs = Array.isArray(tech.video_ref_image_urls)
             ? normalizeMediaRefList(tech.video_ref_image_urls)
@@ -4591,59 +4592,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             techObj.video_mode_unified = mode;
             if (mode === 'entity_refs') {
                 techObj.video_ref_submit_mode = 'entity_refs';
-                
-                // Clear original auto/manual images and replace with Associated Entities images
-                const cleanName = (s) => String(s || '').replace(/[\[\]【】"''“”‘’]/g, '').replace(/^(CHAR|ENV|PROP|VEFX|SFX)\s*:\s*/i, '').replace(/^@+/, '').trim();
-                const normalizeForMatch = (s) => cleanName(s).replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-                const rawNames = (editingShot.associated_entities || '').split(/[,，]/);
-                const names = rawNames.map(cleanName).filter(Boolean);
-                const normalizedNames = names.map(normalizeForMatch).filter(Boolean);
-                
-                const matches = entities.filter(e => normalizedNames.some(n => {
-                    const cn = normalizeForMatch(e.name || '');
-                    let en = normalizeForMatch(e.name_en || '');
-                    if (!en && e.description) {
-                        const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                        if (enMatch && enMatch[1]) {
-                            const complexEn = enMatch[1].trim();
-                            en = normalizeForMatch(complexEn.split(/(?:\s+role:|\s+archetype:|\s+appearance:|\n|,)/)[0]); 
-                        }
-                    }
-                    if (cn === n || en === n) return true;
-                    if (cn && (cn.includes(n) || n.includes(cn))) return true;
-                    if (en && (en.includes(n) || n.includes(en))) return true;
-                    return false;
-                }));
+                const videoRefPromptText = buildShotVideoRefPromptText(editingShot, techObj);
+                const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+                    promptText: videoRefPromptText,
+                    entityPool: entities,
+                    includeAssociatedEntities: false,
+                });
+                techObj.video_ref_image_urls = normalizeMediaRefList(promptEntityRefs);
 
-                let envMatches = [];
-                const currentScene = scenes.find(s => s.id == editingShot.scene_id);
-                if (currentScene) {
-                    const rawLoc = cleanName((currentScene.location || currentScene.environment_name || '').replace(/[\[\]]/g, ''));
-                    const rawLocNorm = normalizeForMatch(rawLoc);
-                    if (rawLocNorm) {
-                        const envs = entities.filter(e => {
-                            const cn = normalizeForMatch(e.name || '');
-                            let en = normalizeForMatch(e.name_en || '');
-                            if (!en && e.description) {
-                                const enMatch = e.description.match(/Name \(EN\):\s*([^\n\r]+)/i);
-                                if (enMatch && enMatch[1]) en = normalizeForMatch(enMatch[1].trim().split(/(?:\s+role:|\n|,)/)[0]); 
-                            }
-                            if (cn && (cn.includes(rawLocNorm) || rawLocNorm.includes(cn))) return true;
-                            if (en && (en.includes(rawLocNorm) || rawLocNorm.includes(en))) return true;
-                            return false;
-                        });
-                        envMatches = envs.filter(env => !matches.find(m => m.id === env.id));
-                    }
-                }
-
-                const allMatches = [...matches, ...envMatches];
-                const entityImages = allMatches.map(e => e.image_url).filter(Boolean);
-                techObj.video_ref_image_urls = Array.from(new Set(entityImages));
-                
+                const matchedEntities = collectMatchedEntitiesFromPrompt({
+                    promptText: videoRefPromptText,
+                    entityPool: entities,
+                    includeAssociatedEntities: false,
+                });
                 const eMap = {};
-                allMatches.forEach(e => {
-                    if (e.id && e.image_url) {
-                        eMap[String(e.id)] = String(e.image_url);
+                matchedEntities.forEach((entity) => {
+                    if (entity?.id && entity?.image_url) {
+                        eMap[String(entity.id)] = String(entity.image_url);
                     }
                 });
                 techObj.entity_url_map = eMap;
@@ -4652,8 +4617,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 techObj.video_gen_mode = mode;
                 techObj.video_ref_submit_mode = 'auto';
                 const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-                    promptText: `${getShotVideoPromptEn(editingShot) || ''}\n${String(techObj.video_prompt_cn || '').trim()}`,
+                    promptText: buildShotVideoRefPromptText(editingShot, techObj),
                     entityPool: entities,
+                    includeAssociatedEntities: false,
                 });
                 techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
                 
@@ -6582,6 +6548,65 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         
     }, [editingShot?.id, editingShot?.keyframes, editingShot?.technical_notes]);
 
+    useEffect(() => {
+        if (!editingShot) return;
+
+        const tech = JSON.parse(editingShot.technical_notes || '{}');
+        const legacyUrls = Array.isArray(tech.prev_shot_frames) ? tech.prev_shot_frames : [];
+        const mappedImages = (tech.prev_shot_frame_images && typeof tech.prev_shot_frame_images === 'object')
+            ? tech.prev_shot_frame_images
+            : {};
+
+        let parsed = [];
+        const mappedTimes = Object.keys(mappedImages).sort((a, b) => {
+            const aNum = Number.parseFloat(String(a).replace(/s$/i, ''));
+            const bNum = Number.parseFloat(String(b).replace(/s$/i, ''));
+            if (Number.isFinite(aNum) && Number.isFinite(bNum)) return aNum - bNum;
+            return String(a).localeCompare(String(b));
+        });
+
+        if (mappedTimes.length > 0) {
+            parsed = mappedTimes.map((time, idx) => ({
+                id: idx,
+                time,
+                prompt: `Prev-shot extract #${idx + 1}`,
+                url: mappedImages[time],
+            }));
+        } else if (legacyUrls.length > 0) {
+            parsed = legacyUrls.map((url, idx) => ({
+                id: idx,
+                time: `F${idx + 1}`,
+                prompt: `Prev-shot extract #${idx + 1}`,
+                url,
+            }));
+        }
+
+        setLocalPrevShotFrames(parsed);
+    }, [editingShot?.id, editingShot?.technical_notes]);
+
+    const reconstructPrevShotFrames = async (currentList, newTechOverride = null) => {
+        const tech = JSON.parse(editingShot.technical_notes || '{}');
+
+        tech.prev_shot_frames = currentList.map((item) => item.url).filter(Boolean);
+
+        const imgMap = {};
+        currentList.forEach((item) => {
+            if (item.url) imgMap[item.time] = item.url;
+        });
+        tech.prev_shot_frame_images = imgMap;
+
+        if (newTechOverride) {
+            Object.assign(tech, newTechOverride);
+        }
+
+        const newData = {
+            technical_notes: JSON.stringify(tech),
+        };
+
+        await onUpdateShot(editingShot.id, newData);
+        setEditingShot((prev) => (prev && String(prev.id) === String(editingShot.id) ? { ...prev, technical_notes: newData.technical_notes } : prev));
+    };
+
     const handleUpdateKeyframePrompt = (idx, newText) => {
         const updated = [...localKeyframes];
         updated[idx].prompt = newText;
@@ -7501,30 +7526,38 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, []);
 
-    const handleExtractKeyframesFromVideo = useCallback(async () => {
+    const handleExtractPrevShotFramesFromVideo = useCallback(async () => {
         if (!editingShot?.id) return;
 
         const shotId = String(editingShot.id || '').trim();
-        const videoUrlRaw = String(editingShot.video_url || '').trim();
+        const prevShot = findPrevContinuationShot(shotId);
+        if (!prevShot) {
+            const errorMsg = t('未找到上一分镜，无法截取上镜帧。', 'Previous shot not found, cannot extract prev-shot frames.');
+            onLog?.(errorMsg, 'error');
+            showNotification(errorMsg, 'error');
+            return;
+        }
+
+        const videoUrlRaw = String(prevShot.video_url || '').trim();
         if (!videoUrlRaw) {
-            const warningMsg = t('当前镜头没有已生成视频，无法截取关键帧。', 'No generated video found for this shot, cannot extract keyframes.');
-            onLog?.(warningMsg, 'warning');
-            showNotification(warningMsg, 'warning');
+            const errorMsg = t('上一分镜没有已生成视频，无法截取上镜帧。', 'Previous shot has no generated video, cannot extract prev-shot frames.');
+            onLog?.(errorMsg, 'error');
+            showNotification(errorMsg, 'error');
             return;
         }
 
         const frameCount = Number.parseInt(String(videoKeyframeExtractCount || '').trim(), 10);
         if (!Number.isFinite(frameCount) || frameCount < 2) {
-            const warningMsg = t('截取帧数最少为 2。', 'Frame count must be at least 2.');
-            onLog?.(warningMsg, 'warning');
-            showNotification(warningMsg, 'warning');
+            const errorMsg = t('截取帧数最少为 2。', 'Frame count must be at least 2.');
+            onLog?.(errorMsg, 'error');
+            showNotification(errorMsg, 'error');
             return;
         }
 
-        if (localKeyframes.length > 0) {
+        if (localPrevShotFrames.length > 0) {
             const shouldReplace = await confirmUiMessage(t(
-                `将用视频截取结果覆盖当前 ${localKeyframes.length} 条关键帧，是否继续？`,
-                `This will replace current ${localKeyframes.length} keyframes with extracted video frames. Continue?`
+                `将用视频截取结果覆盖当前 ${localPrevShotFrames.length} 条上镜帧，是否继续？`,
+                `This will replace current ${localPrevShotFrames.length} prev-shot frames with extracted video frames. Continue?`
             ));
             if (!shouldReplace) return;
         }
@@ -7550,119 +7583,27 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const captured = await captureFramesFromVideoAtTimes(videoUrlRaw, sampledTimes);
             const capturedFrames = Array.isArray(captured.frames) ? captured.frames : [];
             if (capturedFrames.length < 2) {
-                throw new Error(t('关键帧截取结果不足 2 帧', 'Extracted keyframes are fewer than 2'));
+                throw new Error(t('上镜帧截取结果不足 2 帧', 'Extracted prev-shot frames are fewer than 2'));
             }
-
-            const startFrameItem = capturedFrames[0];
-            const endFrameItem = capturedFrames[capturedFrames.length - 1];
-            const keyframeSourceItems = capturedFrames.slice(1);
-            if (!startFrameItem?.blob || !endFrameItem?.blob || keyframeSourceItems.length === 0) {
-                throw new Error(t('关键帧截取结果不足，无法回填起始帧', 'Extraction result is insufficient to fill the start frame'));
-            }
-
-            const existingTech = getEditingShotTech();
-            const nextCnMap = {
-                ...((existingTech && typeof existingTech.keyframe_prompt_cn_map === 'object') ? existingTech.keyframe_prompt_cn_map : {}),
-            };
-
-            const startFrameTimeLabel = `${Math.max(0, Number(Number(startFrameItem?.time || 0).toFixed(2)))}s`;
-            const startFrameFile = new File(
-                [startFrameItem.blob],
-                `shot_${shotId}_video_start_frame_${Date.now()}.jpg`,
-                { type: 'image/jpeg' }
-            );
-            const startFrameUploadKey = buildShotFrameAssetUploadIdempotencyKey({
-                operation: 'video_keyframe_extract_start',
-                shotId,
-                frameRole: `start_frame_${startFrameTimeLabel}`,
-                sourceUrl: videoUrlRaw,
-            });
-            const startFrameUploaded = await uploadAsset(startFrameFile, {
-                project_id: projectId,
-                episode_id: activeEpisode?.id,
-                shot_id: shotId,
-                shot_number: editingShot.shot_id,
-                shot_name: editingShot.shot_name,
-                asset_type: 'start_frame',
-                source_asset_url: videoUrlRaw,
-                idempotency_key: startFrameUploadKey,
-                remark: 'Video extracted start frame',
-            });
-            if (startFrameUploaded?.id) {
-                try {
-                    await markAssetAsCurrentProjectAsset(startFrameUploaded.id);
-                } catch (error) {
-                    console.error('Failed to mark extracted start frame as project asset:', error);
-                }
-            }
-            const startFrameUrl = String(startFrameUploaded?.url || '').trim();
-            if (!startFrameUrl) {
-                throw new Error(t('起始帧上传后没有返回 URL', 'Uploaded start frame did not return a URL'));
-            }
-
-            const endFrameTimeLabel = `${Math.max(0, Number(Number(endFrameItem?.time || 0).toFixed(2)))}s`;
-            const endFrameFile = new File(
-                [endFrameItem.blob],
-                `shot_${shotId}_video_end_frame_${Date.now()}.jpg`,
-                { type: 'image/jpeg' }
-            );
-            const endFrameUploadKey = buildShotFrameAssetUploadIdempotencyKey({
-                operation: 'video_keyframe_extract_end',
-                shotId,
-                frameRole: `end_frame_${endFrameTimeLabel}`,
-                sourceUrl: videoUrlRaw,
-            });
-            const endFrameUploaded = await uploadAsset(endFrameFile, {
-                project_id: projectId,
-                episode_id: activeEpisode?.id,
-                shot_id: shotId,
-                shot_number: editingShot.shot_id,
-                shot_name: editingShot.shot_name,
-                asset_type: 'end_frame',
-                source_asset_url: videoUrlRaw,
-                idempotency_key: endFrameUploadKey,
-                remark: 'Video extracted end frame',
-            });
-            if (endFrameUploaded?.id) {
-                try {
-                    await markAssetAsCurrentProjectAsset(endFrameUploaded.id);
-                } catch (error) {
-                    console.error('Failed to mark extracted end frame as project asset:', error);
-                }
-            }
-            const endFrameUrl = String(endFrameUploaded?.url || '').trim();
-            if (!endFrameUrl) {
-                throw new Error(t('结束帧上传后没有返回 URL', 'Uploaded end frame did not return a URL'));
-            }
-
-            setEditingShot((prev) => (prev && String(prev.id) === shotId ? { ...prev, image_url: startFrameUrl } : prev));
-            setShots((prevShots) => prevShots.map((shot) => (String(shot?.id || '') === shotId ? { ...shot, image_url: startFrameUrl } : shot)));
 
             const nextList = [];
-            nextList.push({
-                id: Date.now(),
-                time: startFrameTimeLabel,
-                prompt: `${t('视频截取起始帧', 'Video extracted start frame')} #1`,
-                url: startFrameUrl,
-            });
-            for (let index = 0; index < keyframeSourceItems.length; index += 1) {
-                const item = keyframeSourceItems[index];
-                const currentTime = Number(item?.time || 0);
+            for (let index = 0; index < capturedFrames.length; index += 1) {
+                const item = capturedFrames[index];
                 const frameBlob = item?.blob;
                 if (!frameBlob) continue;
 
-                const timeLabel = `${Math.max(0, Number(currentTime.toFixed(2)))}s`;
-                const promptLabel = `${t('视频截取关键帧', 'Video extracted keyframe')} #${index + 1}`;
+                const timeLabel = `${Math.max(0, Number(Number(item?.time || 0).toFixed(2)))}s`;
+                const promptLabel = `${t('上一镜视频截取', 'Prev-shot video extract')} #${index + 1}`;
                 const uploadIdempotencyKey = buildShotFrameAssetUploadIdempotencyKey({
-                    operation: 'video_keyframe_extract',
+                    operation: 'prev_shot_frame_extract',
                     shotId,
-                    frameRole: `keyframe_${timeLabel}`,
+                    frameRole: `prev_shot_frame_${timeLabel}`,
                     sourceUrl: videoUrlRaw,
                 });
 
                 const frameFile = new File(
                     [frameBlob],
-                    `shot_${shotId}_video_keyframe_${index + 1}_${Date.now()}.jpg`,
+                    `shot_${shotId}_prev_shot_frame_${index + 1}_${Date.now()}.jpg`,
                     { type: 'image/jpeg' }
                 );
 
@@ -7670,25 +7611,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     project_id: projectId,
                     episode_id: activeEpisode?.id,
                     shot_id: shotId,
-                    shot_number: `${editingShot.shot_id}_KF_${timeLabel}`,
+                    shot_number: `${editingShot.shot_id}_PSF_${index + 1}`,
                     shot_name: editingShot.shot_name,
-                    asset_type: 'keyframe',
+                    asset_type: 'prev_shot_frame',
                     source_asset_url: videoUrlRaw,
                     idempotency_key: uploadIdempotencyKey,
-                    remark: `Video extracted keyframe ${index + 1}`,
+                    remark: `Prev-shot video extracted frame ${index + 1}`,
                 });
 
                 if (uploaded?.id) {
                     try {
                         await markAssetAsCurrentProjectAsset(uploaded.id);
                     } catch (error) {
-                        console.error('Failed to mark extracted keyframe as project asset:', error);
+                        console.error('Failed to mark extracted prev-shot frame as project asset:', error);
                     }
                 }
 
                 const uploadedUrl = String(uploaded?.url || '').trim();
                 if (!uploadedUrl) {
-                    throw new Error(`uploaded keyframe ${index + 1} has no url`);
+                    throw new Error(`uploaded prev-shot frame ${index + 1} has no url`);
                 }
 
                 nextList.push({
@@ -7697,10 +7638,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     prompt: promptLabel,
                     url: uploadedUrl,
                 });
-
-                if (!nextCnMap[timeLabel]) {
-                    nextCnMap[timeLabel] = promptLabel;
-                }
 
                 try {
                     await new Promise((resolve) => {
@@ -7715,21 +7652,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 } catch (_) {}
             }
 
-            setLocalKeyframes(nextList);
-            await reconstructKeyframes(nextList, { keyframe_prompt_cn_map: nextCnMap, end_frame_url: endFrameUrl });
-            await persistEditingShotUpdates({ image_url: startFrameUrl, start_frame: editingShot.start_frame || startFrameUrl });
+            if (nextList.length < 2) {
+                throw new Error(t('上镜帧截取结果不足 2 帧', 'Extracted prev-shot frames are fewer than 2'));
+            }
+
+            const prevShotLabel = String(prevShot.shot_id || prevShot.shot_name || '').trim();
+            await reconstructPrevShotFrames(nextList, {
+                prev_shot_frame_meta: {
+                    source_video_url: videoUrlRaw,
+                    source_shot_id: String(prevShot.id || '').trim(),
+                    source_shot_label: prevShotLabel,
+                },
+            });
+            setLocalPrevShotFrames(nextList);
             refreshShotAssetsMeta();
 
             const successMsg = t(
-                `已从视频均匀截取 ${capturedFrames.length} 帧（含首尾帧），并将首帧回填到起始帧、末帧回填到结束帧，同时回填到关键帧。`,
-                `Extracted ${capturedFrames.length} evenly spaced frames (including first and last), filled the first frame into the start frame, the last frame into the end frame, and also into keyframes.`
+                `已从上一分镜${prevShotLabel ? `（${prevShotLabel}）` : ''}视频均匀截取 ${nextList.length} 帧并保存为上镜帧。`,
+                `Extracted ${nextList.length} evenly spaced frames from the previous shot${prevShotLabel ? ` (${prevShotLabel})` : ''} and saved them as prev-shot frames.`
             );
             onLog?.(successMsg, 'success');
             showNotification(successMsg, 'success');
         } catch (e) {
             const detail = getReadableErrorDetail(e);
-            onLog?.(`${t('视频截取关键帧失败', 'Failed to extract keyframes from video')}: ${detail}`, 'error');
-            showNotification(`${t('视频截取关键帧失败', 'Failed to extract keyframes from video')}: ${detail}`, 'error');
+            onLog?.(`${t('上镜帧截取失败', 'Failed to extract prev-shot frames')}: ${detail}`, 'error');
+            showNotification(`${t('上镜帧截取失败', 'Failed to extract prev-shot frames')}: ${detail}`, 'error');
         } finally {
             setIsExtractingVideoKeyframes(false);
         }
@@ -7738,13 +7685,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         captureFramesFromVideoAtTimes,
         confirmUiMessage,
         editingShot,
-        getEditingShotTech,
+        findPrevContinuationShot,
         getReadableErrorDetail,
-        localKeyframes.length,
+        localPrevShotFrames.length,
         onLog,
         projectId,
-        persistEditingShotUpdates,
-        reconstructKeyframes,
         refreshShotAssetsMeta,
         t,
         videoKeyframeExtractCount,
@@ -8198,8 +8143,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const videoRefPromptText = buildShotVideoRefPromptText(shotSnapshot, tech);
             const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
                 promptText: videoRefPromptText,
-                associatedEntities: shotSnapshot?.associated_entities || '',
                 entityPool: resolvedEntities,
+                includeAssociatedEntities: false,
             });
             const uniqueRefs = Array.isArray(tech.video_ref_image_urls)
                 ? normalizeMediaRefList(tech.video_ref_image_urls)
@@ -8209,8 +8154,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const missingEntityRefSlots = getMissingShotVideoEntityRefSlots(
                     buildShotVideoEntityRefSlots({
                         promptText: videoRefPromptText,
-                        associatedEntities: shotSnapshot?.associated_entities || '',
                         entityPool: resolvedEntities,
+                        includeAssociatedEntities: false,
                     })
                 );
                 if (missingEntityRefSlots.length > 0) {
@@ -11668,7 +11613,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)}
                                             storageKey="video_ref_image_urls"
-                                            strictPromptOnly={resolveVideoModeFromTech(JSON.parse(editingShot.technical_notes || '{}')) !== 'entity_refs'}
+                                            strictPromptOnly
                                         />
                                         </div>
                                     </div>
@@ -11687,6 +11632,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         const multiPanelStartsFromPrevEnd = tech.multi_panel_start_from_prev_end === true;
                                         const multiPanelPrevEndRefUrl = String(tech.multi_panel_prev_end_ref_url || '').trim();
                                         const multiPanelPrevEndRefSummary = String(tech.multi_panel_prev_end_ref_summary || '').trim();
+                                        const prevShotFrameMeta = (tech.prev_shot_frame_meta && typeof tech.prev_shot_frame_meta === 'object')
+                                            ? tech.prev_shot_frame_meta
+                                            : {};
+                                        const prevShotFrameSourceLabel = String(prevShotFrameMeta.source_shot_label || '').trim();
 
                                         return (
                                             <>
@@ -11789,16 +11738,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         value={videoKeyframeExtractCount}
                                                                         onChange={(e) => setVideoKeyframeExtractCount(e.target.value)}
                                                                         className="w-16 h-7 rounded border border-white/10 bg-black/40 px-2 text-xs text-white outline-none focus:border-sky-400/60"
-                                                                        title={t('按输入帧数均匀截取视频关键帧（至少 2）', 'Extract evenly spaced keyframes by frame count (minimum 2)')}
+                                                                        title={t('按输入帧数从上一分镜视频均匀截取（至少 2）', 'Extract evenly spaced frames from the previous shot video by frame count (minimum 2)')}
                                                                     />
                                                                     <button
                                                                         type="button"
-                                                                        onClick={handleExtractKeyframesFromVideo}
+                                                                        onClick={handleExtractPrevShotFramesFromVideo}
                                                                         disabled={isExtractingVideoKeyframes}
-                                                                        title={t('按视频时长均匀截取关键帧，包含首尾帧', 'Extract evenly spaced keyframes across duration, including first and last frames')}
+                                                                        title={t('从上一分镜视频均匀截取上镜帧（含首尾帧），不影响关键帧', 'Extract evenly spaced prev-shot frames from the previous shot video (including first and last), without modifying keyframes')}
                                                                         className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${isExtractingVideoKeyframes ? 'bg-sky-500/10 text-sky-200/50 cursor-wait' : 'bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'}`}
                                                                     >
-                                                                        {isExtractingVideoKeyframes ? t('截取中...', 'Extracting...') : t('视频截取关键帧', 'Extract Keyframes')}
+                                                                        {isExtractingVideoKeyframes ? t('截取中...', 'Extracting...') : t('截取上镜帧', 'Extract Prev-Shot Frames')}
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -11836,6 +11785,72 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         ) : null}
                                                     </div>
                                                 ) : null}
+                                                <div className="space-y-2">
+                                                    <div className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-2">
+                                                        {t('上镜帧', 'Prev-Shot Frames')}
+                                                        <span className="bg-sky-400/15 text-sky-100 px-1.5 rounded-full text-[9px]">
+                                                            {localPrevShotFrames.length}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground">
+                                                        {t('从上一分镜视频截取的参考帧，单独保存，不会回填到关键帧。', 'Reference frames extracted from the previous shot video, stored separately and not written into keyframes.')}
+                                                        {prevShotFrameSourceLabel ? (
+                                                            <span className="ml-1 text-white/55">
+                                                                {t('来源：', 'Source: ')}{prevShotFrameSourceLabel}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                    <div className="flex gap-4 overflow-x-auto pb-2 min-h-[140px] snap-x">
+                                                        {localPrevShotFrames.length === 0 && (
+                                                            <div className="text-xs text-muted-foreground italic p-2 w-full text-center border-dashed border border-white/10 rounded">
+                                                                {t('暂无上镜帧。使用上方「截取上镜帧」从上一分镜视频提取。', 'No prev-shot frames yet. Use "Extract Prev-Shot Frames" above to extract from the previous shot video.')}
+                                                            </div>
+                                                        )}
+                                                        {localPrevShotFrames.map((frame, idx) => (
+                                                            <div key={`psf-${idx}-${frame.time}`} className="relative w-[220px] flex-shrink-0 bg-sky-500/5 rounded border border-sky-400/15 p-2 space-y-2 snap-center group">
+                                                                <div className="flex justify-between items-center text-[10px]">
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className="text-sky-200/80 font-bold">T=</span>
+                                                                        <span className="text-white/85">{frame.time}</span>
+                                                                    </div>
+                                                                    <div className="flex gap-1">
+                                                                        {frame.url ? (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => window.open(getFullUrl(frame.url), '_blank', 'noopener,noreferrer')}
+                                                                                className="px-1.5 py-0.5 bg-white/10 hover:bg-white/20 text-white rounded"
+                                                                            >
+                                                                                {t('查看', 'View')}
+                                                                            </button>
+                                                                        ) : null}
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={async () => {
+                                                                                const updated = [...localPrevShotFrames];
+                                                                                updated.splice(idx, 1);
+                                                                                setLocalPrevShotFrames(updated);
+                                                                                await reconstructPrevShotFrames(updated);
+                                                                            }}
+                                                                            className="p-1 hover:bg-red-500/20 text-muted-foreground hover:text-red-500 rounded transition-colors"
+                                                                        >
+                                                                            <Trash2 className="w-3 h-3" />
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                                <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border border-white/10 relative overflow-hidden flex items-center justify-center`}>
+                                                                    {frame.url ? (
+                                                                        <SafeImage src={frame.url} className="max-w-full max-h-full object-contain" />
+                                                                    ) : (
+                                                                        <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                                                                            <ImageIcon className="w-6 h-6" />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="text-[10px] text-white/60 truncate">{frame.prompt}</div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
                                                 {multiPanelUrl ? (
                                                     <div className="rounded-lg border border-white/10 bg-black/15 px-3 py-2">
                                                         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
@@ -13031,7 +13046,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)} storageKey="video_ref_image_urls" strictPromptOnly={!resolveVideoModeFromTech(tech).includes('entity_refs')} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)} storageKey="video_ref_image_urls" strictPromptOnly />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>

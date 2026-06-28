@@ -38647,15 +38647,11 @@ async def _run_generate_video(
                 prompt_candidates.extend([
                     str(shot_for_ref.video_content or "").strip(),
                     str(shot_for_ref.prompt or "").strip(),
-                    str(shot_for_ref.start_frame or "").strip(),
-                    str(shot_for_ref.end_frame or "").strip(),
                 ])
                 shot_tech = _parse_shot_tech(shot_for_ref)
                 if isinstance(shot_tech, dict):
                     prompt_candidates.extend([
                         str(shot_tech.get("video_prompt_cn") or "").strip(),
-                        str(shot_tech.get("start_frame_cn") or "").strip(),
-                        str(shot_tech.get("end_frame_cn") or "").strip(),
                     ])
 
             existing_start_refs: List[str] = []
@@ -41826,10 +41822,6 @@ def _merge_entity_refs_for_video_mode(
         return current_refs, []
 
     auto_entity_refs: List[str] = []
-    
-    if associated_entities:
-        auto_entity_refs.extend(_collect_associated_entities_refs(associated_entities, entity_lookup))
-        
     auto_entity_refs.extend(_collect_video_prompt_entity_refs(prompt_candidates, entity_lookup))
     auto_entity_refs = _dedupe_media_ref_urls(auto_entity_refs)
 
@@ -42344,11 +42336,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         explicit_last_frame_url = end_frame_url or None
         video_prompt_candidates: List[str] = [
             str(video_prompt_raw or "").strip(),
-            str(shot.start_frame or "").strip(),
-            str(shot.end_frame or "").strip(),
             str(tech.get("video_prompt_cn") or "").strip(),
-            str(tech.get("start_frame_cn") or "").strip(),
-            str(tech.get("end_frame_cn") or "").strip(),
         ]
         if isinstance(tech.get("video_ref_image_urls"), list):
             refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])
@@ -43107,11 +43095,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         explicit_last_frame_url = end_frame_url or None
                         video_prompt_candidates: List[str] = [
                             str(video_prompt_raw or "").strip(),
-                            str(shot.start_frame or "").strip(),
-                            str(shot.end_frame or "").strip(),
                             str(tech.get("video_prompt_cn") or "").strip(),
-                            str(tech.get("start_frame_cn") or "").strip(),
-                            str(tech.get("end_frame_cn") or "").strip(),
                         ]
                         if isinstance(tech.get("video_ref_image_urls"), list):
                             refs.extend([str(x).strip() for x in tech.get("video_ref_image_urls") or [] if str(x).strip()])

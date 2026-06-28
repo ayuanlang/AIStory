@@ -203,18 +203,14 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         promptText,
         associatedEntities: shot?.associated_entities || '',
         entityPool: entities,
-        includeAssociatedEntities: !strictPromptOnly,
+        includeAssociatedEntities: isVideoRefManager ? false : !strictPromptOnly,
     });
 
-    const getVideoPromptEntityRefs = () => {
-        if (!strictPromptOnly && isVideoRefManager) {
-            return getEntityMatches().map(e => e.image_url).filter(Boolean);
-        }
-        return collectMatchedEntityImageUrlsFromPrompt({
-            promptText,
-            entityPool: entities,
-        });
-    };
+    const getVideoPromptEntityRefs = () => collectMatchedEntityImageUrlsFromPrompt({
+        promptText,
+        entityPool: entities,
+        includeAssociatedEntities: false,
+    });
 
     useEffect(() => {
         if (useSequenceLogic || !isVideoRefManager || isVideoManualOverride) return;
@@ -472,9 +468,8 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         ? buildShotVideoRefDisplayItems({
             activeRefs,
             promptText,
-            associatedEntities: shot?.associated_entities || '',
             entityPool: entities,
-            includeAssociatedEntities: !strictPromptOnly,
+            includeAssociatedEntities: false,
             includeEntityPlaceholders: true,
         })
         : activeRefs.map((url, idx) => ({

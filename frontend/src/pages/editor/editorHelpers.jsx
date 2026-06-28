@@ -569,8 +569,6 @@ export const buildShotVideoRefPromptText = (shot = {}, techObj = {}) => {
     const parts = [
         String(shot?.video_content || shot?.prompt || '').trim(),
         String(tech?.video_prompt_cn || '').trim(),
-        String(shot?.start_frame || '').trim(),
-        String(shot?.end_frame || '').trim(),
     ];
     return parts.filter(Boolean).join('\n');
 };
