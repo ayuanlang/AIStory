@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-06-14 02:21:19 +08:00
+# Prompt Updated At: 2026-06-28 18:45:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -69,15 +69,39 @@
 - **Clean Plate**：角色设定图只写当前角色可见实体；去除不可见专名、人称代词和非本角色主体。
 - **字段回写**：`generation_prompt_cn` 必须吸收 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等字段并转化为可见画面词；`generation_prompt_en` 固定为空字符串。`name` 仅作 JSON 字段，名称含可见物理信息时只吸收可见语义。
 - **项目风格种子回写（强制）**：`description_cn` 与 `generation_prompt_cn` 必须显式吸收 `entity_attributes.project_base_positioning` 与 `entity_attributes.project_global_style`，并落成可执行视觉语义（如妆造方向、材质层级、光照基调、镜头气质）；禁止仅写抽象口号。若上游缺失任一字段，必须在 `dependency_strategy.logic` 标注 `上游待补（回流 Stage 2）：缺少 project_base_positioning/project_global_style`。
+- **选角/造型参考溯源（description_cn 强制，主要角色）**：主要角色的 `description_cn` 末尾须以「选角参考：」段落列出 1-3 部影视/动画/游戏作品或真实演员气质对照（写清作品名或演员名），并说明借用了哪些**可转译**的具体视觉细节——如骨相类型、妆发结构、服装廓形、材质层级、镜头气质；禁止只写“高级/明星感/电影脸”。参考仅用于设计推导与审美溯源，**不得**原样写入 `generation_prompt_cn`/`generation_prompt_en`/`negative_prompt_en`，须转译为项目专属的可执行五官、肤质、服饰与光照描述后再写入生图提示词。
 - **光学顺序**：主光来源/方向/照亮面 -> 补光/反光/环境光 -> 轮廓分离 -> 肤质/服饰材质与色彩响应。禁止泛写“电影感光影”。
 - **三点布光**：明确 Key Light、Fill Light、Backlight；主光优先塑形脸部、肩颈和全身比例。
 - **色彩层次**：主色、辅色、点缀色、过渡色绑定服饰材质、肤色、光源、距离层；禁单色平铺。
 - **中文 prompt**：`generation_prompt_cn` 使用连贯自然中文短段；最低覆盖固定机位、全身含鞋、视角顺序、光照、镜头基线、稳定锚点、服装一致性、差异化轮廓、白底要求。
+- **生图提示词无记忆性（强制，基准/衍生角色均适用）**：`generation_prompt_cn` 将**单独**发给**无上下文记忆**的生图大模型；模型**看不到**同条 JSON 内的 `description_cn`、`appearance_cn`、`clothing`、`dependency_strategy.logic`、§2.1 模板节号或上游 Subject Index。所有择型、对照、变体推导须在写 `generation_prompt_cn` 前于 `description_cn` / `dependency_strategy.logic` 内完成，再**转译**为可画指令；`generation_prompt_cn` **只写画面最终结果**，禁止写入推导过程或「因此/对照/映射/继承/同上/见 appearance_cn/见 clothing/按 §2.1F」类说明句。
+- **`description_cn` vs `generation_prompt_cn` 双字段分工（强制）**：
+
+| 维度 | `description_cn`（**设计推导层**） | `generation_prompt_cn`（**无记忆生图可执行指令层**） |
+| :--- | :--- | :--- |
+| **读者** | 审核者、选角/造型统筹、下游策划 | 生图大模型（无记忆、无 JSON 上下文） |
+| **可写内容** | 身份/叙事功能分析、§2.1E 相貌组合择型依据、选角参考、Key/Fill/Backlight 设计 rationale、变体相对基准的 Delta 推导、反同质化决策 | 四视图画布规格、身份+年龄+性别可见语义、五官骨相、肤质、发型、体态比例、全套服饰鞋履配饰、静态姿态、三点布光、白底与面板排布 |
+| **禁止内容** | 无（推导专用层） | `相貌组合：`、`§2.1A–§2.1F`、`dependency_strategy`、`visual_dependencies`、`见 appearance_cn`、`见 clothing`、`继承基准角色`、`延续上一状态`、`同上` 等工程字段、节号引用或抽象继承词 |
+| **与同条 JSON 其他字段关系** | 可与 `appearance_cn`/`clothing` 分工：`description_cn` 写设计 rationale 与选角参考；`appearance_cn`/`clothing` 写结构化可见数据 | 须把 `appearance_cn`/`clothing`/`action_characteristics` 中的**可见细节逐项转写进 prompt 正文**，不得假设模型已读过同条 JSON 其他字段 |
+| **信息流转** | 先在此层完成择型、审美与变体推导 | 将推导与结构化字段**逐项转译**为具象可视描述；不得假设模型已读过 `description_cn` |
+
+- **转译自检（提交前强制）**：若把 `generation_prompt_cn` 单独复制给不了解项目的第三方，对方应能**直接据此生成四视图设定图**而无需阅读 `description_cn`、`appearance_cn` 或 `clothing`；若仍依赖「相貌组合名/节号/继承基准/见某字段」才能理解，则转译未完成，须重写 `generation_prompt_cn`。
+- **基准角色 `generation_prompt_cn` 写法**：开篇直接写画布规格（16:9 四视图、白底、面板比例）+ 项目风格 + 身份年龄性别 + 五官/肤质/发型/体态 + 全套服饰鞋履 + 静态姿态 + 三点布光；**禁止**写「按 §2.1D 6 槽位」「相貌组合：儒雅精英型」等推导术语——须转译为具体五官与肤质词（如「长椭圆脸、整齐浓睫毛、高直鼻梁、收束下颌、T 区毛孔可读的自然暖白肤质」）。
+- **衍生角色参考图语义（强制理解）**：下游生图时，会将 `visual_dependencies` 所指向的**基准角色（或紧邻上一完整状态）已生成四视图**作为参考图随附传入；`generation_prompt_cn` 中的「参考图」即指该随附图像。prompt 须同时完成：**(A) 告诉模型有一张同身份基准图须对齐**；**(B) 用文本把须对齐的身份锚点与须改变的造型 Delta 都写全**——因模型仍可能弱读参考图，文本不可偷懒。
+- **衍生角色 `generation_prompt_cn` 三段式（强制）**：
+
+  **§A 参考图声明（首句，必填）**——按衍生类型择一：
+  - **造型/服饰/状态衍生**（`{基准角色名}_{衍生标识}`，如战损/换装/觉醒/礼服）：`参考图为基准角色「{基准角色名}」四视图基准图。须保持面部骨相、发型结构、肤色个体标记、头身比与体态等身份锚点一致，仅叠加/替换以下可见变化：{逐条列举}。`
+  - **紧邻链式状态衍生**（回挂上一完整状态而非远端基准）：`参考图为紧邻上一完整状态「{依赖角色名}」四视图基准图。与参考图同一面部身份与机位规格不变，仅叠加/替换以下可见变化：{逐条列举}。`
+
+  **§B 与参考图一致项（必填，具象清单）**——逐项写出须与参考图严格相同的身份锚点（脸型/骨相、眼型睫毛、鼻梁鼻尖、唇形下颌、肤色肤质个体标记、发型分线与长度、头身比、不可变配饰等）；禁止只写「与参考图一致」而不列条目。
+
+  **§C 本状态 Delta（必填，四视图可执行）**——写当前状态可见变化（战损位置、服饰破损/换装明细、妆发变化、疲态/神采、新增法器/配饰等）+ 四视图面板规格 + 光照；**禁止**写「相对基准战损」「empty_view_delta」等推导词。
 - 必含 `{Viewpoint Anchor}` 与 `{Viewing Direction}` 语义；机位/镜头感需给焦距或等效基线。
 - 清晰度：四面板边缘清楚、纹理可读、清晰度一致；禁止某一格虚软。
 - 排除引擎参数与控制符：`--ar`, `--v`, `--stylize`, `::`, `<lora:...>` 等。
 - **单状态只读**：同一 Subject 只呈现一个造型/状态；需多状态但上游仅一条时回流 Stage 2。
-- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向**剧情时序上紧邻的上一完整形象**（读取上游 `dependency_reference` / `base_entity`，禁止跳链直挂远端基础版），命名须与 Subject Index `base_entity` 可追溯（`{基准角色名}_{衍生标识}`）。被依赖基准为战损/破损态时，须在 `generation_prompt_cn` 逐项回补并强调受损部位、服饰破损、疲惫痕迹等可见细节；修复/痊愈态须写明恢复重建细节。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `CHAR:[@...]`）。
+- **变体继承**：基准实体 `dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体 `type=Type A/Type B` 并指向**剧情时序上紧邻的上一完整形象**（读取上游 `dependency_reference` / `base_entity`，禁止跳链直挂远端基础版），命名须与 Subject Index `base_entity` 可追溯（`{基准角色名}_{衍生标识}`）。`visual_dependencies` 禁填 `S001/E001` 等编号，必须用逐字符一致的实体名引用（如 `CHAR:[@...]`）。**变体推导只写入 `description_cn` / `dependency_strategy.logic`**；`generation_prompt_cn` 须按 §1.3 **三段式**（参考图声明 → 一致项具象清单 → 状态 Delta）撰写，禁止把 `description_cn` 中的择型/对照段落原样粘贴。**被依赖基准为战损/破损态时**，`description_cn` 写相对基准的 Delta 推导；`generation_prompt_cn` §B 须具象列身份锚点，§C 须逐项强调受损部位、服饰破损、疲惫痕迹等可见细节；**修复/痊愈态** §C 须写明恢复重建细节，禁止跳跃式抹除破坏痕迹。
 - `negative_prompt_en` 必须短而个体化；真人优先过滤假人感、平滑感、CGI、滤镜脸、塑胶感、二次元比例、裁脚、面板错误。
 - 合规边界：描述安全、可播出、温和；禁止血腥、断肢、内脏、严重伤痕、肉体变异、强不适污物、涉暴/涉黄/猎奇词。战损只写轻微擦痕、衣服破损、灰头土脸、疲惫神态等非图形化状态。
 
@@ -217,7 +241,8 @@
 - **即贴模板（appearance_cn）**：  
   `{{年龄与身份}}，{{脸型下颌}}，{{眼型睫毛}}，{{鼻梁鼻尖}}，{{唇形眉形}}，{{肤质发型}}，整体气质为{{气质锚点}}。`
 - **即贴模板（generation_prompt_cn）**：  
-  `重点表现{{气质锚点}}：{{脸型下颌}}、{{眼型睫毛}}、{{鼻梁鼻尖}}、{{唇形眉形}}在近景保持稳定一致，配合{{肤质发型}}形成唯一视觉身份证。`
+  `电影级写实四视图，16:9 横向纯白画布。重点表现{{气质锚点}}：{{脸型下颌}}、{{眼型睫毛}}、{{鼻梁鼻尖}}、{{唇形眉形}}在近景保持稳定一致，配合{{肤质发型}}；穿{{服饰鞋履摘要}}。第一宫面部特写 35%，正/侧/背全身 65%，鞋履完整可见，同一横排。`
+  **注意**：即贴模板只供内部转写；输出 `generation_prompt_cn` 须填完整具象词，不得保留 `{{}}` 占位符或节号。
 - **女主示例（可直接复制）**：  
   `28岁调查记者，窄长鹅蛋脸与清晰下颌折角，中大内双与根根分明长睫毛，挺直高鼻梁与小而收鼻尖，偏薄唇与自然平直眉，真实冷白肤质（面颊细密毛孔、左颊浅痣、眼下轻微纹理、薄透裸妆）与齐肩黑发右侧挽耳及鬓角碎发，整体气质为冷静克制。`
 - **男主示例（可直接复制）**：  
@@ -250,21 +275,38 @@
   - `发际线与鬓角有少量碎发，发旋处头发贴合头皮，避免假发式厚重发块。`
   - `真人演员面部组织：眉骨—眼窝—颧弓转折自然，下颌线有真实骨骼感而非 CG 锐化。`
 - **与相貌模板联动**：§2.1A–§2.1D 择型完成后，**必须**追加 §2.1F 至少 4 类体征；写法顺序建议：`{{相貌组合五官}} + {{肤质真人感 2–3 项}} + {{发型结构}} + {{体态比例}}`。
-- **generation_prompt_cn 回写**：四视图 prompt 的第一宫面部特写段须含「真人实拍/电影级写实」语义 + 至少 2 项 §2.1F 皮肤或组织词；与骨相词并列，禁止只在 negative 里排除假人感。
+- **generation_prompt_cn 回写**：四视图 prompt 的第一宫面部特写段须含「真人实拍/电影级写实」语义 + 至少 2 项 §2.1F 皮肤或组织词的**具象转写**（如「面颊与鼻翼细密毛孔、T 区自然光泽」）；与骨相词并列，禁止只在 negative 里排除假人感，**禁止**在 prompt 中写「§2.1F 已落地」等节号引用。
 - **negative_prompt_en 个体化**：真人写实类在通用过滤基础上，可追加 `beauty filter, airbrushed skin, porcelain doll, wax figure, uncanny valley, doll-like eyes` 等，但不得替代正向真人感描述。
 - **禁止项（写实类）**：玻璃肌、零毛孔、蜡像光泽、塑胶皮肤、网红滤镜脸、过度磨皮、棚拍广告模特感、3D 渲染高光、二次元比例、全员 identical 冷白皮。
 
 ### 2.2 Character Prompt Template
 - **信息顺序**：身份定位与功能 -> 主光源与光影结构 -> 全面外貌（融合 2.1 比例） -> 服装与鞋履 -> 动作特征 -> 构图机位/补充光色。
-- `description_cn`：纳入输入 `entity_attributes`，并补 Key Light / Fill Light 的应用。
+- **`description_cn`（设计推导层）**：纳入输入 `entity_attributes`；写身份/叙事功能、§2.1E 择型依据、Key/Fill/Backlight 设计 rationale、变体 Delta 推导（衍生角色）；末尾主要角色须含「选角参考：」段落。可引用节号与组合型名称。
+- **`appearance_cn` / `clothing`（结构化可见数据层）**：相貌与服饰写成镜头可见细节；写实类须按 §2.1F 写入真人感肤质与面部组织词；主要女性角色的肤色肤质必须写入；`clothing` 第一句固定播出安全等级。**不得**假设生图模型会读取这两字段——其内容须**完整转写**进 `generation_prompt_cn`。
+- **`generation_prompt_cn`（无记忆生图可执行指令层）**：按 §1.3 基准/衍生写法；须自洽包含四视图画布、全部可见五官肤质发型体态、全套服饰鞋履配饰、静态姿态、三点布光；**禁止**引用同条 JSON 其他字段或节号。衍生角色须按 §1.3 三段式开篇。
 - `archetype`：填写输入 Action Characteristics 原文。
-- `gender/role`：转化为画面语义，如职业装束、仪态、眼神状态。
-- `appearance_cn/clothing`：相貌与服饰写成镜头可见细节并进入 Prompt；写实类须按 §2.1F 写入真人感肤质与面部组织词；主要女性角色的肤色肤质必须同步写入 `appearance_cn` 与 `generation_prompt_cn`，未明确时按白色基准落地；`clothing` 第一句固定播出安全等级。
-- `action_characteristics`：只保留静态姿态表现，剔除心理动作。
+- `gender/role`：在 `generation_prompt_cn` 中转化为画面语义，如职业装束、仪态、眼神状态；禁止只写字段名。
+- `action_characteristics`：只保留静态姿态表现，剔除心理动作；须转写入 `generation_prompt_cn`。
 - **默认表情**：自然中性表情 `neutral, relaxed face`；仅上游明确要求时覆盖。
 - **默认姿态**：静态站姿 `standing pose`；仅上游明确指定坐/蹲/躺/动作时覆盖。
 - **构图机审**：`full-body framing`、`shoes fully visible`，人物从头到脚完整入镜；全局合规已生效，Prompt 内部不复读敏感过滤词。
 - **锚点只读**：`anchor_description` 使用“身份 + 相貌/轮廓 + 核心服饰识别点”的 2-3 个坚实特征；下游逐字符继承，禁瞬时表情/暂态光影。
+
+**双字段对照示例（同一战损衍生角色）**
+
+| 字段 | 示例片段 |
+| :--- | :--- |
+| `description_cn`（设计推导层） | `战损衍生，回挂基准角色林月。相对基准：左臂机能夹克撕裂约 15cm、右膝短裤磨破露肤、面颊灰尘与轻擦痕、发尾凌乱。择型不变（冷艳骨相型）。Key Light 仍从左前上 45 度，Fill 略压暗以强化疲态。选角参考：《碟中谍》— 战损后仍保持骨相识别度的写实疲态。` |
+| `generation_prompt_cn`（可执行指令层） | `参考图为基准角色「林月」四视图基准图。须保持窄长鹅蛋脸、深琥珀内双眼、根根分明长睫毛、高直鼻梁、左颊浅痣、齐肩黑发右侧挽耳、178cm 头身比 1:9.3 等身份锚点一致，仅叠加：左臂机能夹克 15cm 撕裂露内衬、右膝侧开叉短裤磨破、面颊灰尘与左颧轻擦痕、发尾凌乱。电影级写实四视图，16:9 横向纯白画布……` |
+
+**`generation_prompt_cn` 正反示例（基准/衍生角色）**
+
+| 类型 | ❌ 禁止（推导层残留 / 无记忆模型不可执行） | ✅ 正确（可执行四视图指令） |
+| :--- | :--- | :--- |
+| 基准角色 | `相貌组合：冷艳骨相型，按 §2.1F 落地，见 appearance_cn 与 clothing` | `28岁东亚女性调查记者，窄长鹅蛋脸、深琥珀内双眼、根根分明长睫毛……穿深海军蓝 V 领缎面吊带、修身截短机能夹克……16:9 四视图白底同一横排` |
+| 基准角色 | `继承 project_global_style，同上描述` | `项目全局风格为冷暖对比、克制压迫、真实材质细节。左前上 45 度主光塑形脸部肩颈并保留肤质纹理……` |
+| 衍生角色 | `Type A 衍生，visual_dependencies=林月，延续战损态` | `参考图为基准角色「林月」四视图基准图。须保持窄长鹅蛋脸、左颊浅痣、齐肩黑发等身份锚点一致，仅叠加：夹克左臂 15cm 撕裂、面颊灰尘……` |
+| 衍生角色 | `相对基准 Delta：战损，见 dependency_strategy` | `与参考图一致：深海军蓝机能夹克基色、钛灰腕表、及膝哑光黑皮靴；本状态变化：夹克左袖撕裂、右膝磨破、发尾凌乱、眼下淡青加重` |
 
 ## 六、输出模板（严格）
 - 唯一输出物：一个 JSON 代码块，仅含 `characters`。
@@ -278,7 +320,7 @@
 - 输出前逐条核对输入类型与输出数组；总数正确但归类错误仍失败。
 - 字段按类型分离；`characters[]` 才允许 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等角色字段。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`generation_prompt_en` 保留但输出 `""`。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 `project_base_positioning`、`project_global_style` 的可视化落点，同时说明 Key Light / Fill Light 的方位、亮度、色温对比；`description_cn` 主要角色末尾须含「选角参考：」段落；`generation_prompt_en` 保留但输出 `""`。**衍生角色**的 `description_cn` 须含相对基准的 Delta 推导；`generation_prompt_cn` 须含参考图声明且**不得**含节号/组合型名/「见某字段」等推导术语（§1.3）。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -290,7 +332,7 @@
       "name": "林月",
       "name_en": "Lin Yue",
       "base_name_en": "Lin Yue",
-      "description_cn": "调查记者，28岁。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫。窄长鹅蛋脸、中大内双眼、根根分明的长睫毛、挺直高鼻梁与小而收的鼻尖、偏薄唇形、清晰下颌折角、白色基准下的真实冷白肤质（面颊与鼻翼细密毛孔、T 区自然光泽、左颊浅痣、眼下轻微纹理与薄透裸妆）、右侧耳后收拢的齐肩黑色短发、高挑长腿比例构成稳定辨识点。Key Light 从左前上方 45 度塑形眉骨、鼻梁、肩颈，保留肤质纹理可读；Fill Light 从右前方冷调托起暗部。",
+      "description_cn": "调查记者，28岁。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫。相貌组合：冷艳骨相型（依据：女主/调查记者/情感悬疑核心女性）。窄长鹅蛋脸、中大内双眼、根根分明的长睫毛、挺直高鼻梁与小而收的鼻尖、偏薄唇形、清晰下颌折角、白色基准下的真实冷白肤质（面颊与鼻翼细密毛孔、T 区自然光泽、左颊浅痣、眼下轻微纹理与薄透裸妆）、右侧耳后收拢的齐肩黑色短发、高挑长腿比例构成稳定辨识点。Key Light 从左前上方 45 度塑形眉骨、鼻梁、肩颈，保留肤质纹理可读；Fill Light 从右前方冷调托起暗部。选角参考：《龙纹身的女孩》— 冷感骨相与真实肤质纹理的 investigative 气质；《社交网络》— 机能极简叠穿的上镜记者造型。",
       "gender": "F",
       "role": "Investigative Reporter",
       "archetype": "习惯有0.5秒的停滞停顿等动作特征原文",
@@ -305,6 +347,30 @@
       "dependency_strategy": {
         "type": "Original",
         "logic": "Original project character. 相貌组合：冷艳骨相型；依据：女主/调查记者/情感悬疑核心女性。真人感：§2.1F A/B/C/D/E 已落地（毛孔、肤色层次、左颊浅痣、面部组织、裸妆碎发）。"
+      }
+    },
+    {
+      "subject_no": "S002",
+      "name": "林月_战损态",
+      "name_en": "Lin Yue Battle Damaged",
+      "base_name_en": "Lin Yue",
+      "description_cn": "林月战损衍生。回挂基准角色林月，相对基准 Delta：左臂机能夹克撕裂约 15cm、右膝短裤磨破露肤、面颊灰尘与左颧轻擦痕、发尾凌乱、眼下淡青加重；面部骨相与择型（冷艳骨相型）不变。Key Light 仍从左前上 45 度，整体 Fill 略压暗以强化疲态。选角参考：《碟中谍：幽灵协议》— 战损后仍保持骨相与服装识别度的写实疲态。",
+      "gender": "F",
+      "role": "Investigative Reporter",
+      "archetype": "习惯有0.5秒的停滞停顿等动作特征原文",
+      "appearance_cn": "28岁东亚女性，身高178cm，头身比1:9.3，下半身视觉占比约63%。窄长鹅蛋脸、深琥珀色中大内双眼、略上挑眼尾、根根分明的长睫毛、自然平直眉、挺直高鼻梁、小而收的鼻尖、偏薄唇形、清晰下颌折角。真实冷白肤质：面颊与鼻翼细密毛孔，T 区光泽略降，左颊浅痣仍在，左颧轻擦痕与面颊灰尘，眼下淡青阴影加重，薄透裸妆被汗渍扰动。黑色齐肩短发，右侧挽耳后，发尾凌乱，鬓角碎发沾尘。",
+      "clothing": "播出安全等级：成人。深海军蓝 V 领缎面吊带上衣，窄黑包边；修身截短轻机能夹克左臂撕裂约 15cm 露内衬、微落肩、压胶袖口；高腰侧开叉黑色短裤右膝磨破露肤、侧缝压线；及膝哑光黑色平底皮靴沾灰。固定配饰：钛灰腕表、小银环、深灰窄肩相机包。时尚对标：Techwear 战损、深海军蓝/黑/钛灰。",
+      "action_characteristics": "重心下沉且稳定，肩背微塌，观察事物前有0.5秒停顿。",
+      "generation_prompt_cn": "参考图为基准角色「林月」四视图基准图。须保持窄长鹅蛋脸、深琥珀内双眼、根根分明长睫毛、高直鼻梁、左颊浅痣、178cm 头身比 1:9.3、齐肩黑发右侧挽耳等身份锚点一致，仅叠加：左臂机能夹克 15cm 撕裂露内衬、右膝侧开叉短裤磨破露肤、面颊灰尘与左颧轻擦痕、发尾凌乱、眼下淡青加重。电影级写实真人角色四视图，16:9 横向纯白画布，真人实拍选角照质感。项目基础定位为情感悬疑，项目全局风格为冷暖对比、克制压迫、真实材质细节。与参考图一致：深海军蓝 V 领缎面吊带、钛灰腕表、小银环、窄肩相机包、及膝哑光黑皮靴。穿撕裂机能夹克、磨破高腰黑短裤。第一宫面部特写占 35% 且纵向居中，特写段可读皮肤纹理与擦痕；正面/侧面/背面全身共享 65%，鞋子完整可见。四格同一横排，禁止第二排、换行、错层、2x2。平视机位、静态站姿、肩背微塌。左前上 45 度主光略压暗塑形脸部肩颈，右前冷调弱补光，细背轮廓光分离黑发与深色夹克。四面板清晰度一致、纹理可读、纯白连续背景。",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "beauty-filter skin, airbrushed skin, porcelain doll, plastic face, CGI look, wrong face identity, clean pristine outfit, cropped shoes, wrong panel order",
+      "anchor_description": "female investigative reporter battle damaged, narrow oval face, torn techwear jacket, scuffed knee shorts",
+      "visual_dependencies": [
+        "CHAR:[@林月]"
+      ],
+      "dependency_strategy": {
+        "type": "Type A",
+        "logic": "Battle-damaged derived state: inherits Lin Yue identity anchors; Delta = torn jacket, scuffed shorts, dust, fatigue marks."
       }
     }
   ]
