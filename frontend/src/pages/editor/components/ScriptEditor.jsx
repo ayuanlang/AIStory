@@ -2133,13 +2133,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     // 专门用于 Stage 2.2 (Beats Generation) 的 userInput 构建 - 避免混淆 "第一步" vs "第二步"
     const buildStage2_2UserInputFromStage1 = useCallback((stage1Text, adaptedScriptOverride = null) => {
+        // Align with Stage 2.1: derive adapted script from the passed Stage 1 source text
+        // (workspace / current run), not stale episode.ai_scene_analysis_adaptation.
         const adaptedScriptText = adaptedScriptOverride != null
             ? String(adaptedScriptOverride || '').trim()
-            : String(
-                activeEpisode?.ai_scene_analysis_adaptation
-                || extractStage1AdaptedScriptBody(stage1Text)
-                || ''
-            ).trim();
+            : String(extractStage1AdaptedScriptBody(stage1Text) || '').trim();
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
             '请执行第二阶段的第二步：视听推演与节拍拆解（Beat Generation & Scene Breakdown）。基于上游提取的"资产清单"和"优化后剧本"，生成标准化的《Scenes Table》——包含每一个可视场景的环境、角色、道具布局与动作节拍序列。',
@@ -2157,7 +2155,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         stage2_2InputParts.push(wrapInjectionSection('优化后剧本', `[优化后剧本 - Stage 2.2权威输入]\n${adaptedScriptText || ''}`));
 
         return stage2_2InputParts.filter(part => String(part || '').trim()).join('\n\n');
-    }, [activeEpisode?.ai_scene_analysis_adaptation, extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
+    }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
 
     const parseSceneUnitsFromScriptMarkers = useCallback(
         (scriptText) => parseSceneUnitsFromScriptMarkersText(scriptText),
