@@ -15,6 +15,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 import { getEpisodeAnalysisRun, releaseEpisodeAnalysisRun, trackEpisodeAnalysisRun, updateEpisodeAnalysisRun } from '../../../lib/analysisRunRegistry';
 import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promptInjection';
+import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex
@@ -2821,41 +2822,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 return JSON.parse(s);
             } catch {
-                return null;
+                const repaired = repairJSON(s);
+                return (repaired && typeof repaired === 'object' && !Array.isArray(repaired)) ? repaired : null;
             }
         };
 
-        const trimmed = text.trim();
-
-        // Case 1: whole response is JSON
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            const obj = tryParse(trimmed);
-            if (obj !== null) return JSON.stringify(obj, null, 2);
-        }
-
-        // Case 2: fenced code block ```json ... ```
-        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
-        let match;
-        while ((match = fenceRe.exec(text)) !== null) {
-            const candidate = (match[1] || '').trim();
-            if (!candidate) continue;
-            const obj = tryParse(candidate);
-            if (obj !== null) return JSON.stringify(obj, null, 2);
-        }
-
-        // Case 3: heuristic substring between outermost braces/brackets
-        const braceStart = trimmed.indexOf('{');
-        const braceEnd = trimmed.lastIndexOf('}');
-        if (braceStart !== -1 && braceEnd > braceStart) {
-            const candidate = trimmed.slice(braceStart, braceEnd + 1);
-            const obj = tryParse(candidate);
-            if (obj !== null) return JSON.stringify(obj, null, 2);
-        }
-
-        const bracketStart = trimmed.indexOf('[');
-        const bracketEnd = trimmed.lastIndexOf(']');
-        if (bracketStart !== -1 && bracketEnd > bracketStart) {
-            const candidate = trimmed.slice(bracketStart, bracketEnd + 1);
+        for (const candidate of collectLlmJsonTextCandidates(text)) {
             const obj = tryParse(candidate);
             if (obj !== null) return JSON.stringify(obj, null, 2);
         }
@@ -2888,18 +2860,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         };
 
-        const trimmed = text.trim();
-
-        // Whole text JSON
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            tryPush(trimmed);
-        }
-
-        // Fenced blocks (prefer these)
-        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
-        let match;
-        while ((match = fenceRe.exec(text)) !== null) {
-            tryPush(match[1]);
+        for (const candidate of collectLlmJsonTextCandidates(text)) {
+            tryPush(candidate);
         }
 
         // If we didn't get anything, do a simple brace-scan for objects.
@@ -2928,6 +2890,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         startIndex = -1;
                     }
                 }
+            }
+        }
+
+        if (objs.length === 0) {
+            for (const candidate of collectLlmJsonTextCandidates(sanitizeLlmTextForJsonImport(text))) {
+                tryPush(candidate);
             }
         }
 
@@ -3058,58 +3026,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return null;
     };
 
-    const countSubjectsPayloadItems = useCallback((payload) => {
-        if (!payload || typeof payload !== 'object') return 0;
-        return ['characters', 'props', 'environments', 'posters', 'covers'].reduce((sum, key) => (
-            sum + (Array.isArray(payload[key]) ? payload[key].length : 0)
-        ), 0);
-    }, []);
-
-    const normalizePosterBucketsInSubjectsPayload = useCallback((payload) => {
-        if (!payload || typeof payload !== 'object') return payload;
-        const posters = Array.isArray(payload.posters) ? payload.posters : [];
-        const covers = Array.isArray(payload.covers) ? payload.covers : [];
-        if (!posters.length && !covers.length) return payload;
-
-        const seen = new Set();
-        const merged = [];
-        for (const item of [...posters, ...covers]) {
-            if (!item || typeof item !== 'object') continue;
-            const dedupeKey = [
-                String(item.subject_no || '').trim().toLowerCase(),
-                String(item.name || item.subject_name_exact || '').trim().toLowerCase(),
-                String(item.name_en || '').trim().toLowerCase(),
-            ].join('|');
-            if (seen.has(dedupeKey)) continue;
-            seen.add(dedupeKey);
-            merged.push(item);
-        }
-        if (!merged.length) return payload;
-        return {
-            ...payload,
-            posters: merged,
-            covers: merged,
-        };
-    }, []);
-
-    const resolveSubjectsJsonFromAnalyzeResult = useCallback((result, analysisText) => {
-        const backendJson = (result?.subjects_json && typeof result.subjects_json === 'object')
-            ? result.subjects_json
-            : null;
-        const textJson = String(analysisText || '').trim()
-            ? (getAnalysisEntitiesPayloadFromJsonText(analysisText) || null)
-            : null;
-
-        const normalizedBackend = normalizePosterBucketsInSubjectsPayload(backendJson);
-        const normalizedText = normalizePosterBucketsInSubjectsPayload(textJson);
-        const backendCount = countSubjectsPayloadItems(normalizedBackend);
-        const textCount = countSubjectsPayloadItems(normalizedText);
-
-        if (backendCount > 0) return normalizedBackend;
-        if (textCount > 0) return normalizedText;
-        return normalizedBackend || normalizedText || {};
-    }, [countSubjectsPayloadItems, getAnalysisEntitiesPayloadFromJsonText, normalizePosterBucketsInSubjectsPayload]);
-
     const repairJSON = (jsonStr) => {
         try {
             return JSON.parse(jsonStr);
@@ -3202,6 +3118,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const getMergedEntitiesPayloadFromText = (inputText) => {
         const text = String(inputText || '');
+        const sanitizedText = sanitizeLlmTextForJsonImport(text);
         const emptyPayload = { characters: [], props: [], environments: [] };
 
         const getEntitiesPayloadFromSubjectIndexTableLocal = (sourceText) => {
@@ -3293,6 +3210,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             sources.push('entities_json');
         }
 
+        if (sanitizedText && sanitizedText !== text.trim()) {
+            const sanitizedPayload = getAnalysisEntitiesPayloadFromJsonText(sanitizedText);
+            if (hasAny(sanitizedPayload)) {
+                merged = mergePayload(merged, sanitizedPayload);
+                sources.push('entities_json_sanitized');
+            }
+        }
+
         const fragmentPayload = {
             characters: extractNamedJsonArrayFromRawText(text, 'characters'),
             props: extractNamedJsonArrayFromRawText(text, 'props'),
@@ -3301,6 +3226,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (hasAny(fragmentPayload)) {
             merged = mergePayload(merged, fragmentPayload);
             sources.push('json_key_fragments');
+        }
+
+        if (sanitizedText && sanitizedText !== text.trim()) {
+            const sanitizedFragmentPayload = {
+                characters: extractNamedJsonArrayFromRawText(sanitizedText, 'characters'),
+                props: extractNamedJsonArrayFromRawText(sanitizedText, 'props'),
+                environments: extractNamedJsonArrayFromRawText(sanitizedText, 'environments'),
+            };
+            if (hasAny(sanitizedFragmentPayload)) {
+                merged = mergePayload(merged, sanitizedFragmentPayload);
+                sources.push('json_key_fragments_sanitized');
+            }
         }
 
         const subjectIndexPayload = getEntitiesPayloadFromSubjectIndexTableLocal(text);
@@ -3315,6 +3252,60 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             source: sources.join('+') || 'unknown',
         };
     };
+
+    const countSubjectsPayloadItems = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return 0;
+        return ['characters', 'props', 'environments', 'posters', 'covers'].reduce((sum, key) => (
+            sum + (Array.isArray(payload[key]) ? payload[key].length : 0)
+        ), 0);
+    }, []);
+
+    const normalizePosterBucketsInSubjectsPayload = useCallback((payload) => {
+        if (!payload || typeof payload !== 'object') return payload;
+        const posters = Array.isArray(payload.posters) ? payload.posters : [];
+        const covers = Array.isArray(payload.covers) ? payload.covers : [];
+        if (!posters.length && !covers.length) return payload;
+
+        const seen = new Set();
+        const merged = [];
+        for (const item of [...posters, ...covers]) {
+            if (!item || typeof item !== 'object') continue;
+            const dedupeKey = [
+                String(item.subject_no || '').trim().toLowerCase(),
+                String(item.name || item.subject_name_exact || '').trim().toLowerCase(),
+                String(item.name_en || '').trim().toLowerCase(),
+            ].join('|');
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            merged.push(item);
+        }
+        if (!merged.length) return payload;
+        return {
+            ...payload,
+            posters: merged,
+            covers: merged,
+        };
+    }, []);
+
+    const resolveSubjectsJsonFromAnalyzeResult = useCallback((result, analysisText) => {
+        const backendJson = (result?.subjects_json && typeof result.subjects_json === 'object')
+            ? result.subjects_json
+            : null;
+        const rawText = String(analysisText || '').trim();
+        const mergedPayload = rawText ? getMergedEntitiesPayloadFromText(rawText) : null;
+        const textJson = mergedPayload?.payload
+            || (rawText ? (getAnalysisEntitiesPayloadFromJsonText(rawText) || null) : null)
+            || (rawText ? (getAnalysisEntitiesPayloadFromJsonText(sanitizeLlmTextForJsonImport(rawText)) || null) : null);
+
+        const normalizedBackend = normalizePosterBucketsInSubjectsPayload(backendJson);
+        const normalizedText = normalizePosterBucketsInSubjectsPayload(textJson);
+        const backendCount = countSubjectsPayloadItems(normalizedBackend);
+        const textCount = countSubjectsPayloadItems(normalizedText);
+
+        if (backendCount > 0) return normalizedBackend;
+        if (textCount > 0) return normalizedText;
+        return normalizedBackend || normalizedText || {};
+    }, [countSubjectsPayloadItems, getAnalysisEntitiesPayloadFromJsonText, normalizePosterBucketsInSubjectsPayload]);
 
     const llmEntitiesPayload = useMemo(() => {
         const sourceText = llmRawResultContent || llmResultContent;
@@ -4138,7 +4129,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
 
     const handleImportEntities = async () => {
-        const payload = getAnalysisEntitiesPayloadFromJsonText(llmRawResultContent || llmResultContent);
+        const sourceText = llmRawResultContent || llmResultContent;
+        const payload = getMergedEntitiesPayloadFromText(sourceText)?.payload
+            || getAnalysisEntitiesPayloadFromJsonText(sourceText)
+            || getAnalysisEntitiesPayloadFromJsonText(sanitizeLlmTextForJsonImport(sourceText));
         if (!payload) {
             if (onLog) onLog('No entities JSON (characters/props/environments) found.', 'warning');
             alert(t('未检测到可导入的实体 JSON（characters/props/environments）。', 'No importable entities JSON found (characters/props/environments).'));
@@ -4468,7 +4462,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const importOptions = (options && typeof options.importOptions === 'object') ? options.importOptions : {};
         const subjectsJson = (options?.subjectsJson && typeof options.subjectsJson === 'object')
             ? normalizePosterBucketsInSubjectsPayload(options.subjectsJson)
-            : normalizePosterBucketsInSubjectsPayload(getAnalysisEntitiesPayloadFromJsonText(text));
+            : normalizePosterBucketsInSubjectsPayload(
+                getMergedEntitiesPayloadFromText(text)?.payload
+                || getAnalysisEntitiesPayloadFromJsonText(text)
+                || getAnalysisEntitiesPayloadFromJsonText(sanitizeLlmTextForJsonImport(text))
+            );
         const importReason = String(options?.reason || 'auto-subjects-import').trim() || 'auto-subjects-import';
         const signature = buildSubjectsImportSignature(subjectsJson);
 

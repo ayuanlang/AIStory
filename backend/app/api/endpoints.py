@@ -12705,8 +12705,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         else:
             subjects_json = _extract_subjects_json_from_text(result_content)
             if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
-                cleaned_for_json = sanitize_llm_markdown_output(result_content)
-                subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+                for cleaned_for_json in _collect_llm_json_text_candidates(result_content):
+                    subjects_json = _extract_subjects_json_from_text(cleaned_for_json)
+                    if any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
+                        break
 
             if not source_subject_index_text:
                 source_subject_index_text = sanitize_subject_index_text(result_content)
@@ -21736,6 +21738,115 @@ def _normalize_subject_entity_type(raw_type: Any) -> str:
     return "character"
 
 
+def _collect_llm_json_text_candidates(raw_text: str) -> List[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+    candidates: List[str] = []
+    seen: set = set()
+
+    def _push(value: str) -> None:
+        candidate = str(value or "").strip()
+        if not candidate or candidate in seen:
+            return
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for match in fence_re.finditer(text):
+        _push(match.group(1))
+
+    open_fence_re = re.compile(r"```(?:json)?\s*([\s\S]*)$", re.IGNORECASE)
+    open_match = open_fence_re.search(text)
+    if open_match:
+        _push(open_match.group(1))
+
+    if text.startswith("{") or text.startswith("["):
+        _push(text)
+
+    entity_key_re = re.compile(r'"(?:characters|props|environments|covers|posters)"\s*:\s*[\[{]', re.IGNORECASE)
+    key_match = entity_key_re.search(text)
+    if key_match:
+        obj_start = text.rfind("{", 0, key_match.start())
+        if obj_start >= 0:
+            depth = 0
+            in_str = False
+            escape = False
+            for i in range(obj_start, len(text)):
+                ch = text[i]
+                if in_str:
+                    if escape:
+                        escape = False
+                        continue
+                    if ch == "\\":
+                        escape = True
+                        continue
+                    if ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        _push(text[obj_start:i + 1])
+                        break
+
+    reasoning_prefix_re = re.compile(
+        r"^\s*(?:i will|let me|let's|analysis|reasoning|thought process|"
+        r"分析|思路|推理|下面|我将|我认为|接下来|我先|我会|现在|首先)\b",
+        flags=re.IGNORECASE,
+    )
+    lines = text.splitlines()
+    while lines and not str(lines[0] or "").strip():
+        lines.pop(0)
+    while lines and reasoning_prefix_re.match(str(lines[0] or "")):
+        first_line = str(lines[0] or "").strip()
+        if first_line.startswith("{") or first_line.startswith("[") or first_line.startswith("```") or entity_key_re.search(first_line):
+            break
+        lines.pop(0)
+    trimmed_reasoning = "\n".join(lines).strip()
+    if trimmed_reasoning and trimmed_reasoning != text:
+        if trimmed_reasoning.startswith("{") or trimmed_reasoning.startswith("["):
+            _push(trimmed_reasoning)
+        key_match = entity_key_re.search(trimmed_reasoning)
+        if key_match:
+            obj_start = trimmed_reasoning.rfind("{", 0, key_match.start())
+            if obj_start >= 0:
+                depth = 0
+                in_str = False
+                escape = False
+                for i in range(obj_start, len(trimmed_reasoning)):
+                    ch = trimmed_reasoning[i]
+                    if in_str:
+                        if escape:
+                            escape = False
+                            continue
+                        if ch == "\\":
+                            escape = True
+                            continue
+                        if ch == '"':
+                            in_str = False
+                        continue
+                    if ch == '"':
+                        in_str = True
+                        continue
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            _push(trimmed_reasoning[obj_start:i + 1])
+                            break
+
+    return candidates
+
+
 def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
     payload: Dict[str, List[Dict[str, Any]]] = {
         "characters": [], "covers": [],
@@ -21748,6 +21859,9 @@ def _extract_subjects_json_from_text(raw_text: str) -> Dict[str, Any]:
         return payload
 
     candidates: List[str] = []
+    for candidate in _collect_llm_json_text_candidates(text):
+        candidates.append(candidate)
+
     fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
     for m in fence_re.finditer(text):
         candidate = str(m.group(1) or "").strip()

@@ -21,6 +21,7 @@ import {
     getSceneTableFallbackIndices,
     normalizeSceneTableHeaderKey,
 } from '../lib/sceneTableParser';
+import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../lib/llmJsonExtract';
 
 import {
     getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel,     buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, preloadOssActiveUrlSignatures
@@ -882,13 +883,12 @@ const Editor = ({
             }
         };
 
-        const fenceJsonRe = /```json\s*([\s\S]*?)```/gi;
-        let match;
-        while ((match = fenceJsonRe.exec(raw)) !== null) {
-            pushCandidate(match[1]);
+        for (const candidateText of collectLlmJsonTextCandidates(raw)) {
+            pushCandidate(candidateText);
         }
 
         const fenceRe = /```\s*([\s\S]*?)```/gi;
+        let match;
         while ((match = fenceRe.exec(raw)) !== null) {
             const block = String(match[1] || '').trim();
             if (block.startsWith('{') || block.startsWith('[')) {
@@ -896,12 +896,11 @@ const Editor = ({
             }
         }
 
-        const trimmed = raw.trim();
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            pushCandidate(trimmed);
+        for (const obj of extractJSONBlocks(raw)) {
+            pushCandidate(obj);
         }
 
-        for (const obj of extractJSONBlocks(raw)) {
+        for (const obj of extractJSONBlocks(sanitizeLlmTextForJsonImport(raw))) {
             pushCandidate(obj);
         }
 
@@ -1557,11 +1556,20 @@ const Editor = ({
 
         let merged = { ...emptyPayload };
         const sources = [];
+        const sanitizedText = sanitizeLlmTextForJsonImport(text);
 
         const parsedPayload = getEntitiesPayloadFromJsonText(text);
         if (hasAny(parsedPayload)) {
             merged = mergePayload(merged, parsedPayload);
             sources.push('entities_json');
+        }
+
+        if (sanitizedText && sanitizedText !== text.trim()) {
+            const sanitizedPayload = getEntitiesPayloadFromJsonText(sanitizedText);
+            if (hasAny(sanitizedPayload)) {
+                merged = mergePayload(merged, sanitizedPayload);
+                sources.push('entities_json_sanitized');
+            }
         }
 
         const fragmentPayload = {
@@ -1573,6 +1581,19 @@ const Editor = ({
         if (hasAny(fragmentPayload)) {
             merged = mergePayload(merged, fragmentPayload);
             sources.push('json_key_fragments');
+        }
+
+        if (sanitizedText && sanitizedText !== text.trim()) {
+            const sanitizedFragmentPayload = {
+                characters: extractNamedJsonArrayFromRawText(sanitizedText, 'characters'),
+                props: extractNamedJsonArrayFromRawText(sanitizedText, 'props'),
+                environments: extractNamedJsonArrayFromRawText(sanitizedText, 'environments'),
+                posters: extractNamedJsonArrayFromRawText(sanitizedText, 'posters'),
+            };
+            if (hasAny(sanitizedFragmentPayload)) {
+                merged = mergePayload(merged, sanitizedFragmentPayload);
+                sources.push('json_key_fragments_sanitized');
+            }
         }
 
         // Feature change: By removing the `getEntitiesPayloadFromSubjectIndexTable` fallback, 
