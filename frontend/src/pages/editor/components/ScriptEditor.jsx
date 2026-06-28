@@ -2290,6 +2290,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         subjectEdits: {},
         editingSubjectKey: '',
     });
+    const [isSavingPhase2RerunSubjectIndex, setIsSavingPhase2RerunSubjectIndex] = useState(false);
     const [sceneBeatsRerunModal, setSceneBeatsRerunModal] = useState({
         open: false,
         mode: 'all',
@@ -14468,14 +14469,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return buildMarkdownTable(headers, [row]);
     }, [buildMarkdownTable]);
 
-    const phase2RerunDisplayEntries = useMemo(() => {
-        const deletedMap = (phase2RerunModal?.deletedSubjectKeys && typeof phase2RerunModal.deletedSubjectKeys === 'object')
-            ? phase2RerunModal.deletedSubjectKeys
+    const buildPhase2RerunDisplayEntries = useCallback((subjectEntries, subjectEdits, deletedSubjectKeys) => {
+        const deletedMap = (deletedSubjectKeys && typeof deletedSubjectKeys === 'object')
+            ? deletedSubjectKeys
             : {};
-        const editsMap = (phase2RerunModal?.subjectEdits && typeof phase2RerunModal.subjectEdits === 'object')
-            ? phase2RerunModal.subjectEdits
+        const editsMap = (subjectEdits && typeof subjectEdits === 'object')
+            ? subjectEdits
             : {};
-        return (phase2RerunSubjectEntries || []).reduce((acc, originalEntry) => {
+        return (subjectEntries || []).reduce((acc, originalEntry) => {
             if (!originalEntry?.key) return acc;
             if (deletedMap[originalEntry.key]) return acc;
 
@@ -14483,7 +14484,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const nextFields = (patch.fields && typeof patch.fields === 'object')
                 ? patch.fields
                 : ((originalEntry.fields && typeof originalEntry.fields === 'object') ? originalEntry.fields : {});
-            const nextFieldOrder = Array.isArray(patch.fieldOrder) ? patch.fieldOrder : (Array.isArray(originalEntry.fieldOrder) ? originalEntry.fieldOrder : []);
             const nextType = String(getSubjectFieldValueByAliases(nextFields, ['subject_type', 'type', '类型', '类别']) || originalEntry.type || '').trim();
             const nextSubjectNo = String(getSubjectFieldValueByAliases(nextFields, ['subject_no', 'id', '编号']) || originalEntry.subjectNo || '').trim();
             const nextName = String(
@@ -14525,9 +14525,56 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildSingleSubjectIndexTextForRerun,
         getSubjectFieldValueByAliases,
         mapSubjectIndexTypeToRerunTarget,
+    ]);
+
+    const phase2RerunDisplayEntries = useMemo(
+        () => buildPhase2RerunDisplayEntries(
+            phase2RerunSubjectEntries,
+            phase2RerunModal?.subjectEdits,
+            phase2RerunModal?.deletedSubjectKeys,
+        ),
+        [
+            buildPhase2RerunDisplayEntries,
+            phase2RerunModal?.deletedSubjectKeys,
+            phase2RerunModal?.subjectEdits,
+            phase2RerunSubjectEntries,
+        ],
+    );
+
+    const persistPhase2RerunSubjectIndexChanges = useCallback(async (overrides = {}) => {
+        const subjectEdits = overrides.subjectEdits !== undefined
+            ? overrides.subjectEdits
+            : phase2RerunModal?.subjectEdits;
+        const deletedSubjectKeys = overrides.deletedSubjectKeys !== undefined
+            ? overrides.deletedSubjectKeys
+            : phase2RerunModal?.deletedSubjectKeys;
+        const displayEntries = buildPhase2RerunDisplayEntries(
+            phase2RerunSubjectEntries,
+            subjectEdits,
+            deletedSubjectKeys,
+        );
+        const editedText = buildFullSubjectIndexTextFromEntries(displayEntries);
+        if (!editedText) {
+            throw new Error(t('无法生成 Subject Index 内容。', 'Unable to build Subject Index content.'));
+        }
+        await persistSubjectIndexEdit(editedText);
+        if (overrides.clearDrafts !== false) {
+            setPhase2RerunModal((prev) => ({
+                ...prev,
+                subjectEdits: {},
+                deletedSubjectKeys: {},
+                editingSubjectKey: '',
+            }));
+        }
+        return editedText;
+    }, [
+        buildFullSubjectIndexTextFromEntries,
+        buildPhase2RerunDisplayEntries,
+        persistSubjectIndexEdit,
         phase2RerunModal?.deletedSubjectKeys,
         phase2RerunModal?.subjectEdits,
         phase2RerunSubjectEntries,
+        t,
     ]);
 
     const filteredPhase2RerunSubjectEntries = useMemo(() => {
@@ -14618,27 +14665,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         t,
     ]);
 
-    const handleDeletePhase2RerunEntry = useCallback((entry) => {
+    const handleDeletePhase2RerunEntry = useCallback(async (entry) => {
         if (!entry?.key) return;
         if (!window.confirm(t(`确定从本次重跑列表中移除「${entry.name || entry.subjectNo || '该实体'}」吗？`, `Remove "${entry.name || entry.subjectNo || 'this entity'}" from this rerun selection?`))) {
             return;
         }
-        setPhase2RerunModal((prev) => {
-            const nextDeleted = {
-                ...((prev.deletedSubjectKeys && typeof prev.deletedSubjectKeys === 'object') ? prev.deletedSubjectKeys : {}),
-                [entry.key]: true,
-            };
-            const nextEdits = { ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}) };
-            delete nextEdits[entry.key];
-            return {
-                ...prev,
-                deletedSubjectKeys: nextDeleted,
+        const nextDeleted = {
+            ...((phase2RerunModal.deletedSubjectKeys && typeof phase2RerunModal.deletedSubjectKeys === 'object') ? phase2RerunModal.deletedSubjectKeys : {}),
+            [entry.key]: true,
+        };
+        const nextEdits = { ...((phase2RerunModal.subjectEdits && typeof phase2RerunModal.subjectEdits === 'object') ? phase2RerunModal.subjectEdits : {}) };
+        delete nextEdits[entry.key];
+        setPhase2RerunModal((prev) => ({
+            ...prev,
+            deletedSubjectKeys: nextDeleted,
+            subjectEdits: nextEdits,
+            editingSubjectKey: prev.editingSubjectKey === entry.key ? '' : prev.editingSubjectKey,
+            subjectKey: prev.subjectKey === entry.key ? '' : prev.subjectKey,
+        }));
+
+        setIsSavingPhase2RerunSubjectIndex(true);
+        try {
+            await persistPhase2RerunSubjectIndexChanges({
                 subjectEdits: nextEdits,
-                editingSubjectKey: prev.editingSubjectKey === entry.key ? '' : prev.editingSubjectKey,
-                subjectKey: prev.subjectKey === entry.key ? '' : prev.subjectKey,
-            };
-        });
-    }, [t]);
+                deletedSubjectKeys: nextDeleted,
+                clearDrafts: true,
+            });
+            onLog?.(t('Subject Index 修改已保存。', 'Subject Index changes saved.'), 'success');
+        } catch (error) {
+            console.error('Failed to persist Subject Index deletion from asset rerun modal:', error);
+            onLog?.(t(`保存 Subject Index 修改失败：${error?.message || error}`, `Failed to save Subject Index changes: ${error?.message || error}`), 'error');
+            alert(t('保存失败，请重试。', 'Save failed. Please try again.'));
+        } finally {
+            setIsSavingPhase2RerunSubjectIndex(false);
+        }
+    }, [onLog, persistPhase2RerunSubjectIndexChanges, phase2RerunModal.deletedSubjectKeys, phase2RerunModal.subjectEdits, t]);
 
     const beginEditPhase2RerunEntry = useCallback((entry) => {
         if (!entry?.key) return;
@@ -14687,7 +14748,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
     }, []);
 
-    const savePhase2RerunEntryEdit = useCallback((entryKey) => {
+    const savePhase2RerunEntryEdit = useCallback(async (entryKey) => {
         if (!entryKey) return;
         const draft = phase2RerunModal?.subjectEdits?.[entryKey] || {};
         const fields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
@@ -14703,7 +14764,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         setPhase2RerunModal((prev) => ({ ...prev, editingSubjectKey: '' }));
-    }, [getSubjectFieldValueByAliases, mapSubjectIndexTypeToRerunTarget, phase2RerunModal?.subjectEdits, t]);
+
+        setIsSavingPhase2RerunSubjectIndex(true);
+        try {
+            await persistPhase2RerunSubjectIndexChanges({ clearDrafts: true });
+            onLog?.(t('Subject Index 修改已保存。', 'Subject Index changes saved.'), 'success');
+        } catch (error) {
+            console.error('Failed to persist Subject Index edit from asset rerun modal:', error);
+            onLog?.(t(`保存 Subject Index 修改失败：${error?.message || error}`, `Failed to save Subject Index changes: ${error?.message || error}`), 'error');
+            alert(t('保存失败，请重试。', 'Save failed. Please try again.'));
+        } finally {
+            setIsSavingPhase2RerunSubjectIndex(false);
+        }
+    }, [getSubjectFieldValueByAliases, mapSubjectIndexTypeToRerunTarget, onLog, persistPhase2RerunSubjectIndexChanges, phase2RerunModal?.subjectEdits, t]);
 
     useEffect(() => {
         if (!phase2RerunModal.open) return;
@@ -14777,10 +14850,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if ((hasEdits || hasDeletions) && resolvedEditedText) {
             try {
-                setSubjectIndexText(extractPureSubjectIndexText(resolvedEditedText));
-                await persistLlmResultContent(resolvedEditedText, 'ai_scene_analysis_subject_index', { source: 'asset-rerun-subject-index-edit' });
+                await persistSubjectIndexEdit(resolvedEditedText);
             } catch (error) {
                 console.warn('Failed to persist edited Subject Index before asset rerun:', error);
+                onLog?.(t(`保存 Subject Index 修改失败：${error?.message || error}`, `Failed to save Subject Index changes: ${error?.message || error}`), 'warning');
             }
         }
 
@@ -14788,10 +14861,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         assetRerunCategoryOptions,
         buildFullSubjectIndexTextFromEntries,
-        extractPureSubjectIndexText,
         filteredPhase2RerunSubjectEntries,
         handleRetryPhase2,
-        persistLlmResultContent,
+        onLog,
+        persistSubjectIndexEdit,
         phase2RerunDisplayEntries,
         phase2RerunModal.category,
         phase2RerunModal.deletedSubjectKeys,
@@ -16471,9 +16544,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => savePhase2RerunEntryEdit(item.key)}
-                                                                    className="px-2.5 py-1 text-[11px] rounded border border-emerald-400/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold"
+                                                                    disabled={isSavingPhase2RerunSubjectIndex}
+                                                                    className={`px-2.5 py-1 text-[11px] rounded border font-semibold ${isSavingPhase2RerunSubjectIndex ? 'border-emerald-400/15 bg-emerald-500/10 text-emerald-100/50 cursor-not-allowed' : 'border-emerald-400/30 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100'}`}
                                                                 >
-                                                                    {t('保存', 'Save')}
+                                                                    {isSavingPhase2RerunSubjectIndex ? t('保存中...', 'Saving...') : t('保存', 'Save')}
                                                                 </button>
                                                             </div>
                                                         </div>
