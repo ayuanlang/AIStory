@@ -33319,6 +33319,19 @@ def _map_resolution_to_allowed(requested: Any, allowed_values: Any) -> Optional[
     return allowed[0]
 
 
+def _resolve_video_submit_image_urls(req: Any) -> List[str]:
+    if isinstance(getattr(req, "image_urls", None), list):
+        urls = [str(x).strip() for x in req.image_urls if str(x).strip()]
+        if urls:
+            return urls
+    ref_value = getattr(req, "ref_image_url", None)
+    if isinstance(ref_value, list):
+        return [str(x).strip() for x in ref_value if str(x).strip()]
+    if isinstance(ref_value, str) and ref_value.strip():
+        return [ref_value.strip()]
+    return []
+
+
 def _limit_media_ref_input(value: Any, limit: Optional[int]) -> Any:
     if limit is None:
         return value
@@ -38591,7 +38604,14 @@ async def _run_generate_video(
             "max_keyframes",
             "keyframe_limit",
         )
-        if image_ref_limit is not None:
+        submit_image_urls = _resolve_video_submit_image_urls(req)
+        uses_submit_image_urls = bool(submit_image_urls)
+        if uses_submit_image_urls:
+            if image_ref_limit is not None:
+                submit_image_urls = _limit_string_list_input(submit_image_urls, image_ref_limit)
+            req.image_urls = submit_image_urls
+            req.ref_image_url = None
+        elif image_ref_limit is not None:
             req.ref_image_url = _limit_media_ref_input(req.ref_image_url, image_ref_limit)
         if isinstance(req.ref_video_urls, list) and video_ref_limit is not None:
             req.ref_video_urls = _limit_media_ref_input(req.ref_video_urls, video_ref_limit)
@@ -38622,10 +38642,10 @@ async def _run_generate_video(
             resolved_video_model or None,
         )
         is_reference_image_mode = bool(normalized_ref_mode in {"entity_refs", "keyframes_entity_refs"})
-        has_explicit_visual_refs = False
-        if isinstance(req.ref_image_url, list):
+        has_explicit_visual_refs = uses_submit_image_urls
+        if not has_explicit_visual_refs and isinstance(req.ref_image_url, list):
             has_explicit_visual_refs = any(str(x).strip() for x in req.ref_image_url)
-        elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
+        elif not has_explicit_visual_refs and isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
             has_explicit_visual_refs = True
         elif isinstance(req.ref_video_urls, list) and any(str(x).strip() for x in req.ref_video_urls):
             has_explicit_visual_refs = True
@@ -38635,7 +38655,7 @@ async def _run_generate_video(
             req.keyframes = effective_keyframes
 
         auto_entity_refs: List[str] = []
-        if is_reference_image_mode and resolved_project_id:
+        if is_reference_image_mode and resolved_project_id and not uses_submit_image_urls:
             entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
             prompt_candidates: List[str] = [prompt_text]
             shot_for_ref: Optional[Shot] = None
@@ -38665,11 +38685,13 @@ async def _run_generate_video(
                 ref_mode=normalized_ref_mode,
                 prompt_candidates=prompt_candidates,
                 entity_lookup=entity_lookup,
-                manual_override=bool(shot_tech.get("video_ref_image_urls_manual")) and has_explicit_visual_refs,
+                manual_override=has_explicit_visual_refs,
                 associated_entities=shot_for_ref.associated_entities if shot_for_ref else None,
             )
             if merged_refs:
                 req.ref_image_url = merged_refs
+            if image_ref_limit is not None:
+                req.ref_image_url = _limit_media_ref_input(req.ref_image_url, image_ref_limit)
 
             if auto_entity_refs:
                 logger.info(
@@ -38719,7 +38741,9 @@ async def _run_generate_video(
                         )
 
         flat_refs: List[str] = []
-        if isinstance(req.ref_image_url, list):
+        if uses_submit_image_urls:
+            flat_refs.extend(submit_image_urls)
+        elif isinstance(req.ref_image_url, list):
             flat_refs.extend([str(x).strip() for x in req.ref_image_url if str(x).strip()])
         elif isinstance(req.ref_image_url, str) and req.ref_image_url.strip():
             flat_refs.append(req.ref_image_url.strip())
@@ -38737,7 +38761,7 @@ async def _run_generate_video(
             req.shot_id,
             req.shot_number,
             normalized_ref_mode or "<empty>",
-            len(req.ref_image_url) if isinstance(req.ref_image_url, list) else (1 if str(req.ref_image_url or "").strip() else 0),
+            len(submit_image_urls) if uses_submit_image_urls else (len(req.ref_image_url) if isinstance(req.ref_image_url, list) else (1 if str(req.ref_image_url or "").strip() else 0)),
             bool(str(req.last_frame_url or "").strip()),
             len(effective_keyframes or []) if isinstance(effective_keyframes, list) else 0,
             len(flat_refs),
@@ -38755,7 +38779,7 @@ async def _run_generate_video(
         prompt_text = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
-            req.ref_image_url,
+            req.image_urls if uses_submit_image_urls else req.ref_image_url,
             req.last_frame_url,
             effective_keyframes,
             req.ref_video_urls,
@@ -38775,7 +38799,7 @@ async def _run_generate_video(
                     patched_item["prompt"] = _append_video_api_ref_mapping(
                         item_prompt,
                         flat_refs,
-                        req.ref_image_url,
+                        req.image_urls if uses_submit_image_urls else req.ref_image_url,
                         req.last_frame_url,
                         effective_keyframes,
                         req.ref_video_urls,
@@ -38916,7 +38940,7 @@ async def _run_generate_video(
             prompt=prompt_text,
             negative_prompt=effective_negative_prompt,
             llm_config=runtime_llm_config,
-            reference_image_url=req.ref_image_url,
+            reference_image_url=None if uses_submit_image_urls else req.ref_image_url,
             reference_video_urls=req.ref_video_urls,
             last_frame_url=req.last_frame_url,
             duration=req.duration,
@@ -42364,7 +42388,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             ref_mode=video_mode,
             prompt_candidates=video_prompt_candidates,
             entity_lookup=entity_lookup,
-            manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+            manual_override=isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls")),
             associated_entities=shot.associated_entities,
         )
 
@@ -43123,7 +43147,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             ref_mode=video_mode,
                             prompt_candidates=video_prompt_candidates,
                             entity_lookup=entity_lookup,
-                            manual_override=bool(tech.get("video_ref_image_urls_manual")) and isinstance(tech.get("video_ref_image_urls"), list),
+                            manual_override=isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls")),
                             associated_entities=shot.associated_entities,
                         )
 

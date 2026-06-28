@@ -994,6 +994,30 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 };
 
 export const DEFAULT_SHOT_VIDEO_MODE = 'entity_refs';
+export const DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT = 9;
+
+export const limitVideoReferenceSlots = (imageRefs = [], videoRefs = [], maxTotal = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT) => {
+    const maxSlots = Math.max(1, Number(maxTotal) || DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT);
+    const images = normalizeMediaRefList(Array.isArray(imageRefs) ? imageRefs : []);
+    const videos = normalizeMediaRefList(Array.isArray(videoRefs) ? videoRefs : []);
+    const combined = [...images, ...videos];
+    if (combined.length <= maxSlots) {
+        return { imageRefs: images, videoRefs: videos, truncated: 0 };
+    }
+
+    const keptImages = [];
+    const keptVideos = [];
+    combined.slice(0, maxSlots).forEach((url) => {
+        if (videos.includes(url)) keptVideos.push(url);
+        else keptImages.push(url);
+    });
+
+    return {
+        imageRefs: keptImages,
+        videoRefs: keptVideos,
+        truncated: combined.length - maxSlots,
+    };
+};
 
 const normalizeVideoModeToken = (rawMode) => {
     const raw = String(rawMode || '').trim().toLowerCase();

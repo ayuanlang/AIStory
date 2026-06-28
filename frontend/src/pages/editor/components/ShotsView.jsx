@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, shotVideoEligibleForAutoOssPersistRetry, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS, resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, shotVideoEligibleForAutoOssPersistRetry, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist, parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, limitVideoReferenceSlots
 } from '../editorHelpers';
 
 import { 
@@ -8255,50 +8255,52 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 ]
                 : resolvedUniqueRefs;
 
-            let apiRefImageUrl = null;
-            let apiRefVideoUrls = null;
-            let apiLastFrameUrl;
-            const { imageRefs, videoRefs } = splitReferenceMediaUrls(prioritizedResolvedRefs);
-            apiRefImageUrl = null;
-            apiRefVideoUrls = videoRefs.length > 0 ? videoRefs : null;
-            apiLastFrameUrl = null;
+            const splitRefs = splitReferenceMediaUrls(prioritizedResolvedRefs);
+            const limitedRefs = limitVideoReferenceSlots(
+                splitRefs.imageRefs,
+                splitRefs.videoRefs,
+                DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT,
+            );
+            if (limitedRefs.truncated > 0) {
+                onLog?.(t(
+                    `参考图/视频共 ${splitRefs.imageRefs.length + splitRefs.videoRefs.length} 个，已按 KIE 上限 ${DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT} 截断 ${limitedRefs.truncated} 个后再提交。`,
+                    `Total refs ${splitRefs.imageRefs.length + splitRefs.videoRefs.length} exceed KIE limit ${DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT}; truncated ${limitedRefs.truncated} before submit.`
+                ), 'warning');
+            }
+            const imageRefs = limitedRefs.imageRefs;
+            const videoRefs = limitedRefs.videoRefs;
+            let apiLastFrameUrl = null;
+            let apiSubmitImageUrls = normalizeMediaRefList(await Promise.all(imageRefs.map(resolveBlobUrlIfAny)));
+            const apiRefVideoUrls = videoRefs.length > 0
+                ? normalizeMediaRefList(await Promise.all(videoRefs.map(resolveBlobUrlIfAny)))
+                : null;
 
-            const isManualVideoMode = Array.isArray(tech.video_ref_image_urls) && tech.video_ref_image_urls.length > 0;
-            if (effectiveVideoMode === 'keyframes_entity_refs') {
-                apiRefImageUrl = imageRefs.length > 0 ? imageRefs[0] : null;
-            } else if (isManualVideoMode) {
-                apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
-            } else {
+            if (effectiveVideoMode === 'start_end' || effectiveVideoMode === 'end') {
                 const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
                 const endRefUrl = String(tech.end_frame_url || '').trim();
-                
-                // For 'start_end', strictly separate them as single refs
-                if (effectiveVideoMode === 'start_end' || effectiveVideoMode === 'end') {
-                    if (currentStartFrameUrl && effectiveVideoMode === 'start_end') {
-                        apiRefImageUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
-                    }
-                    if (endRefUrl) {
-                        apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
-                    }
-                } 
-                // For 'entity_refs' or 'entity_refs_start_end', we either send them as refs or inject prompt.
-                else {
-                    // Since backend parses imageRefs[0] as first frame for image-to-video, 
-                    // we must ensure 'ref_image_url' (apiRefImageUrl) is strictly the start frame if it's 'entity_refs_start_end'.
-                    if (effectiveVideoMode === 'entity_refs_start_end' && currentStartFrameUrl) {
-                        apiRefImageUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
-                        if (endRefUrl) {
-                            apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
-                        }
-                    } else if (effectiveVideoMode === 'entity_refs') {
-                        apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
-                    } else {
-                        apiRefImageUrl = imageRefs.length > 0 ? imageRefs : null;
+                if (currentStartFrameUrl && effectiveVideoMode === 'start_end') {
+                    const resolvedStart = await resolveBlobUrlIfAny(currentStartFrameUrl);
+                    if (resolvedStart) {
+                        apiSubmitImageUrls = normalizeMediaRefList([resolvedStart, ...apiSubmitImageUrls.filter((url) => url !== resolvedStart)]);
                     }
                 }
-                
-                // Keep compatibility: if apiRefImageUrl is somehow null but we have imageRefs, we pass them down
-                // IF we don't accidentally override the first frame.
+                if (endRefUrl) {
+                    apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
+                }
+            } else if (effectiveVideoMode === 'entity_refs_start_end') {
+                const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
+                const endRefUrl = String(tech.end_frame_url || '').trim();
+                if (currentStartFrameUrl) {
+                    const resolvedStart = await resolveBlobUrlIfAny(currentStartFrameUrl);
+                    if (resolvedStart && !apiSubmitImageUrls.includes(resolvedStart)) {
+                        apiSubmitImageUrls = normalizeMediaRefList([resolvedStart, ...apiSubmitImageUrls]);
+                    }
+                }
+                if (endRefUrl) {
+                    apiLastFrameUrl = await resolveBlobUrlIfAny(endRefUrl);
+                }
+            } else if (effectiveVideoMode === 'keyframes_entity_refs' && apiSubmitImageUrls.length > 1) {
+                apiSubmitImageUrls = apiSubmitImageUrls.slice(0, 1);
             }
             
             // Duration Logic: Seedance2 auto duration uses -1; otherwise use shot table duration.
@@ -8314,8 +8316,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const resolvedStartUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
                 const resolvedEndUrl = await resolveBlobUrlIfAny(endRefUrl);
                 
-                const startIdx = prioritizedResolvedRefs.indexOf(resolvedStartUrl) + 1;
-                const endIdx = prioritizedResolvedRefs.indexOf(resolvedEndUrl) + 1;
+                const startIdx = apiSubmitImageUrls.indexOf(resolvedStartUrl) + 1;
+                const endIdx = apiSubmitImageUrls.indexOf(resolvedEndUrl) + 1;
 
                 if (startIdx > 0 && endIdx > 0) {
                     finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt + `, 参考@Image${endIdx} 作为最后一帧`;
@@ -8327,16 +8329,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             onLog?.(
-                `Video API payload mode=${effectiveVideoMode}, visible_refs=${prioritizedResolvedRefs.length}, ref=${Array.isArray(apiRefImageUrl) ? `list(${apiRefImageUrl.length})` : (apiRefImageUrl ? 'single' : 'none')}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                `Video API payload mode=${effectiveVideoMode}, visible_refs=${prioritizedResolvedRefs.length}, image_urls=${apiSubmitImageUrls.length}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
                 'info'
             );
 
             let videoTaskPromise = null;
             try {
-                const isEntityRefsRelated = effectiveVideoMode.includes('entity_refs');
-                const image_urls = isEntityRefsRelated && promptEntityRefs?.length ? promptEntityRefs : undefined;
-
-                videoTaskPromise = generateVideo(finalPrompt, null, apiRefImageUrl, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
+                videoTaskPromise = generateVideo(finalPrompt, null, null, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
@@ -8346,7 +8345,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ref_mode: effectiveVideoMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
-                    image_urls: image_urls, // Distinguish clearly here
+                    image_urls: apiSubmitImageUrls.length > 0 ? apiSubmitImageUrls : undefined,
                     entity_url_map: tech.entity_url_map || undefined,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
@@ -11614,6 +11613,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)}
                                             storageKey="video_ref_image_urls"
                                             strictPromptOnly
+                                            maxSubmitRefSlots={DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT}
                                         />
                                         </div>
                                     </div>
@@ -13046,7 +13046,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         variant: 'secondary'
                                                                     })}
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)} storageKey="video_ref_image_urls" strictPromptOnly />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={`${getShotVideoPromptEn(editingShot) || ''}\n${(() => { try { return String(JSON.parse(editingShot.technical_notes || '{}')?.video_prompt_cn || ''); } catch (e) { return ''; } })()}`} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'video_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} additionalAutoRefs={resolvePrevContinuationVideoRefs(editingShot?.id)} storageKey="video_ref_image_urls" strictPromptOnly maxSubmitRefSlots={DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT} />
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
                                                         </div>

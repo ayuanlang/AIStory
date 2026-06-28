@@ -12560,7 +12560,12 @@ class MediaGenerationService:
                     payload_input["video_list"] = normalized_video_list
 
         resolved_refs: List[str] = []
-        if ref_image:
+        configured_image_urls = tool_conf.get("image_urls")
+        if isinstance(configured_image_urls, list):
+            configured_list = [str(item).strip() for item in configured_image_urls if str(item).strip()]
+            if configured_list:
+                resolved_refs.extend(configured_list)
+        if not resolved_refs and ref_image:
             ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
             for ref in ref_list:
                 ref_text = str(ref or "").strip()
@@ -12604,6 +12609,21 @@ class MediaGenerationService:
             # Use resolved public URLs (for example OSS URLs) directly in KIE payloads.
             # Avoid KIE pre-upload as requested and keep references untouched.
             resolved_refs = [str(item or "").strip() for item in resolved_refs if str(item or "").strip()]
+            if gen_type == "video":
+                video_ref_limit = self._get_runtime_capability_int(
+                    {"config": tool_conf},
+                    "reference_image_limit",
+                    "max_reference_images",
+                    "max_image_refs",
+                ) or 9
+                if len(resolved_refs) > video_ref_limit:
+                    logger.warning(
+                        "KIE video image refs truncated | model=%s provided=%s kept=%s",
+                        model,
+                        len(resolved_refs),
+                        video_ref_limit,
+                    )
+                    resolved_refs = resolved_refs[:video_ref_limit]
 
         is_sora2_i2v_model = bool(gen_type == "video" and str(model_lower or "").strip().startswith("sora-2") and "image-to-video" in str(model_lower or "").strip())
 
@@ -12799,6 +12819,28 @@ class MediaGenerationService:
                         continue
                     valid_videos.append(resolved_video_ref)
                 valid_videos = [x for x in dict.fromkeys(valid_videos) if x]
+                seedance_slot_limit = self._get_runtime_capability_int(
+                    {"config": tool_conf},
+                    "reference_image_limit",
+                    "max_reference_images",
+                    "max_image_refs",
+                ) or 9
+                combined_ref_count = len(seedance_refs) + len(valid_videos)
+                if combined_ref_count > seedance_slot_limit:
+                    overflow = combined_ref_count - seedance_slot_limit
+                    while overflow > 0 and valid_videos:
+                        valid_videos.pop()
+                        overflow -= 1
+                    while overflow > 0 and seedance_refs:
+                        seedance_refs.pop()
+                        overflow -= 1
+                    logger.warning(
+                        "KIE Seedance reference slots truncated | model=%s kept_images=%s kept_videos=%s limit=%s",
+                        model,
+                        len(seedance_refs),
+                        len(valid_videos),
+                        seedance_slot_limit,
+                    )
                 if invalid_videos:
                     return {
                         "error": "KIE submission validation failed",
@@ -13270,8 +13312,8 @@ class MediaGenerationService:
             kling_image_urls: List[str] = []
             if isinstance(configured_image_urls, list):
                 kling_image_urls = [str(item).strip() for item in configured_image_urls if str(item).strip()]
-            if not kling_image_urls:
-                kling_image_urls = list(resolved_refs)
+            elif resolved_refs:
+                kling_image_urls = [str(item).strip() for item in resolved_refs if str(item).strip()]
                 last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
                 if last_frame_resolved:
                     last_frame_text = str(last_frame_resolved).strip()
