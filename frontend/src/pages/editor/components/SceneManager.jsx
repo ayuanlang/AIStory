@@ -47,7 +47,7 @@ const resolveAiShotsStagingRows = (rawText, serverContent = [], warnings = []) =
 };
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext,     buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext,     buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT
 } from '../editorHelpers';
 
 import { 
@@ -215,7 +215,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     useEffect(() => {
         if (useSequenceLogic || !isVideoRefManager || isVideoManualOverride) return;
 
-        const seededRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
+        const seededRefs = resolveShotVideoActiveRefs({
+            shotLike: shot,
+            techObj: tech,
+            entityPool: entities,
+            promptText,
+            includeAdditionalAutoRefs: false,
+        });
         const existingRefs = normalizeMediaRefList(tech[storageKey]);
         if (areMediaRefListsEqual(existingRefs, seededRefs)) return;
 
@@ -242,13 +248,14 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         // but image url same means same image. Let's uniq by URL to avoid UI keys issues
         activeRefs = [...new Set(activeRefs)];
     } else if (isVideoRefManager) {
-        // WYSIWYG: submit/render should use the exact refs currently stored for video mode.
-        // Auto-build is only a fallback when no stored list exists yet.
-        if (Array.isArray(tech[storageKey])) {
-            activeRefs = normalizeMediaRefList(tech[storageKey]);
-        } else {
-            activeRefs = buildAutoVideoRefList(shot, tech, resolvedVideoMode, getVideoPromptEntityRefs());
-        }
+        activeRefs = resolveShotVideoActiveRefs({
+            shotLike: shot,
+            techObj: tech,
+            entityPool: entities,
+            promptText,
+            additionalAutoRefs,
+            includeAdditionalAutoRefs: true,
+        });
     } else {
         // Standard entity/manual ref logic
         const isManualMode = tech[storageKey] && Array.isArray(tech[storageKey]);
@@ -312,45 +319,14 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 });
             }
         }
-        
-        // 3. Special Logic for Video Refs: Only visual assets
-        if (storageKey === 'video_ref_image_urls') {
-             // For video, we largely ignore user manual list if it contradicts the generated assets flow?
-             // Actually, if user customized it, we should respect it?
-             // But the code previously cleared it in Auto mode.
-             // Let's keep logic simple: If Video Mode, we assume strict structural refs.
-             // But if user manually added strict refs, we keep them?
-             // Reverting to previous strict logic for video mode seems safer to avoid "entity pollution".
-                 if (!tech[storageKey] && !isLockedManual) {
-                activeRefs = [];
-                if (shot.image_url) activeRefs.push(shot.image_url);
-                if (tech.keyframes && Array.isArray(tech.keyframes)) activeRefs.push(...tech.keyframes);
-                if (tech.end_frame_url) activeRefs.push(tech.end_frame_url);
-                 } else if (!isLockedManual && isManualMode && shot.image_url && !activeRefs.includes(shot.image_url)) {
-                // Ensure Start Frame is visible even in Manual Mode if user didn't explicitly remove it? 
-                // Wait - logic above says inject into Auto Only. 
-                // If Manual Mode, we trust the list.
-                // However user says: "Refs (End)引用首帧时不能实时更新，但Refs (Video)可以"
-                // This means when shot.image_url changes, it doesn't show up in Refs(End) if it was already in Manual Mode or Auto Mode didn't catch it?
-                
-                // If in Auto Mode, the `shot.image_url` is added via Rule #2.
-                // If in Manual Mode, `activeRefs` comes from `tech[storageKey]`.
-                // If `shot.image_url` changes, `tech[storageKey]` is STALE.
-                
-                // We must Inject/Update Start Frame in Manual Mode too if it's missing or different?
-                // But we don't know if user DELETED it.
-                // Compromise: If Start Frame exists, we PREPEND it visually if likely candidates match, 
-                // OR we just rely on the fact that if it's "Start Frame", it should always be there for End Gen context.
-             }
-        }
         // Deduplicate
         activeRefs = [...new Set(activeRefs)];
     }
     
     // --- GLOBAL INJECTION FOR ALL MODES (E.g. Prev Shot Video, Global Context) ---
-    // Respect manual video ref overrides and explicit deletions.
+    // Video refs already merged inside resolveShotVideoActiveRefs; keep for other managers.
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
-    const shouldInjectAdditionalAutoRefs = !(isVideoRefManager && isVideoManualOverride);
+    const shouldInjectAdditionalAutoRefs = !isVideoRefManager && !(isVideoRefManager && isVideoManualOverride);
     if (shouldInjectAdditionalAutoRefs && additionalAutoRefs && additionalAutoRefs.length > 0) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
             const ref = additionalAutoRefs[i];

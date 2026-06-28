@@ -88,7 +88,11 @@ class ZlhubMixin:
                 aspect_ratio,
             )
 
-        raw_image_refs = ref_image if isinstance(ref_image, list) else [ref_image]
+        raw_image_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config,
+        )
         resolved_image_refs: List[str] = []
         for item in raw_image_refs:
             text = str(item or "").strip()
@@ -113,7 +117,7 @@ class ZlhubMixin:
             resolved_last_frame = str(resolved_last_frame or "").strip() or None
 
         reference_video_urls = self._resolve_public_media_urls(
-            tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
+            self._collect_video_reference_video_urls(tool_conf, extra_sources=config)
         )
         reference_audio_urls = self._resolve_public_media_urls(
             tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or []

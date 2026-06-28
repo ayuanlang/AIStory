@@ -1091,6 +1091,99 @@ export const buildAutoVideoRefList = (shotLike = {}, techObj = {}, explicitMode 
     return normalizeMediaRefList(refs);
 };
 
+export const isVideoMediaRefUrl = (url) => {
+    const rawUrl = String(url || '').trim();
+    if (!rawUrl) return false;
+    let pathname = rawUrl;
+    try {
+        pathname = new URL(rawUrl, window.location.origin).pathname || rawUrl;
+    } catch {
+        pathname = rawUrl.split('?')[0].split('#')[0];
+    }
+    return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(String(pathname || '').toLowerCase());
+};
+
+export const splitVideoReferenceMediaUrls = (urls = []) => {
+    const imageRefs = [];
+    const videoRefs = [];
+    normalizeMediaRefList(urls).forEach((rawUrl) => {
+        if (isVideoMediaRefUrl(rawUrl)) {
+            videoRefs.push(rawUrl);
+        } else {
+            imageRefs.push(rawUrl);
+        }
+    });
+    return { imageRefs, videoRefs };
+};
+
+/** Same ref list as the shot editor "Refs (Video)" panel (WYSIWYG source of truth). */
+export const resolveShotVideoActiveRefs = ({
+    shotLike = {},
+    techObj = {},
+    entityPool = [],
+    promptText = null,
+    additionalAutoRefs = [],
+    includeAdditionalAutoRefs = true,
+} = {}) => {
+    const tech = techObj && typeof techObj === 'object' ? techObj : {};
+    const resolvedVideoMode = resolveUnifiedVideoMode(tech);
+    const effectivePromptText = promptText ?? buildShotVideoRefPromptText(shotLike, tech);
+    const promptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
+        promptText: effectivePromptText,
+        entityPool,
+        includeAssociatedEntities: false,
+    });
+
+    let activeRefs = Array.isArray(tech.video_ref_image_urls)
+        ? normalizeMediaRefList(tech.video_ref_image_urls)
+        : buildAutoVideoRefList(shotLike, tech, resolvedVideoMode, promptEntityRefs);
+
+    const isManualOverride = tech.video_ref_image_urls_manual === true;
+    const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
+    const shouldInjectAdditionalAutoRefs = Boolean(includeAdditionalAutoRefs && !isManualOverride);
+    if (shouldInjectAdditionalAutoRefs && Array.isArray(additionalAutoRefs)) {
+        for (let i = additionalAutoRefs.length - 1; i >= 0; i -= 1) {
+            const ref = String(additionalAutoRefs[i] || '').trim();
+            if (!ref || deletedRefSet.has(ref) || activeRefs.includes(ref)) continue;
+            activeRefs.unshift(ref);
+        }
+    }
+
+    return normalizeMediaRefList(activeRefs);
+};
+
+/** Map editor-visible refs to video API fields without re-injecting hidden frames. */
+export const buildShotVideoSubmitRefsFromActiveRefs = ({
+    activeRefs = [],
+    shotLike = {},
+    techObj = {},
+    slotLimit = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT,
+} = {}) => {
+    const mode = resolveUnifiedVideoMode(techObj);
+    const displayedRefs = normalizeMediaRefList(activeRefs);
+    const { imageRefs, videoRefs } = splitVideoReferenceMediaUrls(displayedRefs);
+    const limited = limitVideoReferenceSlots(imageRefs, videoRefs, slotLimit);
+
+    let imageUrls = [...limited.imageRefs];
+    let refVideoUrls = [...limited.videoRefs];
+    let lastFrameUrl = null;
+
+    const endRef = String(techObj?.end_frame_url || '').trim();
+    if ((mode === 'start_end' || mode === 'entity_refs_start_end' || mode === 'end') && endRef && displayedRefs.includes(endRef)) {
+        lastFrameUrl = endRef;
+        imageUrls = imageUrls.filter((url) => url !== endRef);
+    }
+
+    return {
+        mode,
+        displayedRefs,
+        imageUrls: normalizeMediaRefList(imageUrls),
+        refVideoUrls: normalizeMediaRefList(refVideoUrls),
+        lastFrameUrl,
+        truncated: limited.truncated,
+    };
+};
+
 export const resolveShotVideoPosterUrl = (shotLike = {}) => {
     let techObj = {};
     try {

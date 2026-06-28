@@ -588,17 +588,18 @@ class MediaGenerationService:
         if not ak or not sk or not dp_token:
             return {"error": "ark-seedance provider requires api_key format: AK:SK:EP_TOKEN"}
             
-        ref_image = reference_image_url
-        extra_ref_images: List[Any] = []
-        if isinstance(ref_image, list):
-            cleaned_refs = [item for item in ref_image if str(item or "").strip()]
-            ref_image = cleaned_refs[0] if cleaned_refs else None
-            extra_ref_images = cleaned_refs[1:] if len(cleaned_refs) > 1 else []
+        image_ref_candidates = self._collect_video_reference_image_urls(
+            reference_image_url,
+            tool_conf,
+            extra_sources=config,
+        )
+        ref_image = image_ref_candidates[0] if image_ref_candidates else None
+        extra_ref_images = image_ref_candidates[1:] if len(image_ref_candidates) > 1 else []
 
-        reference_video_urls_raw = tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
-        reference_video_urls_list: List[str] = []
-        if isinstance(reference_video_urls_raw, list):
-            reference_video_urls_list = [str(item).strip() for item in reference_video_urls_raw if str(item).strip()]
+        reference_video_urls_list = self._collect_video_reference_video_urls(
+            tool_conf,
+            extra_sources=config,
+        )
 
         if not ref_image and not reference_video_urls_list:
             return {"error": "seedance 2.0 requires at least one image or video reference"}
@@ -3752,6 +3753,126 @@ class MediaGenerationService:
             return value
         return text if limit >= 1 else None
 
+    _VIDEO_REFERENCE_IMAGE_OPTION_KEYS = (
+        "image_urls",
+        "imageUrls",
+        "reference_image_urls",
+        "referenceImageUrls",
+        "filesUrl",
+        "files_url",
+        "fileUrl",
+        "file_url",
+        "input_urls",
+    )
+    _VIDEO_REFERENCE_VIDEO_OPTION_KEYS = (
+        "reference_video_urls",
+        "ref_video_urls",
+        "referenceVideoUrls",
+        "refVideoUrls",
+    )
+
+    def _append_unique_reference_values(self, refs: List[str], seen: set, value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                self._append_unique_reference_values(refs, seen, item)
+            return
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            refs.append(text)
+
+    def _collect_video_reference_image_urls(
+        self,
+        ref_image: Optional[Union[str, List[str]]] = None,
+        tool_conf: Optional[Dict[str, Any]] = None,
+        *,
+        extra_sources: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        include_last_frame: bool = False,
+        last_frame_url: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[str]:
+        """Collect ordered, de-duplicated video reference image URLs.
+
+        Frontend video submit usually passes refs via provider_options.image_urls while
+        reference_image_url is cleared; direct API callers may still use ref_image_url.
+        """
+        refs: List[str] = []
+        seen: set = set()
+        self._append_unique_reference_values(refs, seen, ref_image)
+
+        source_dicts: List[Dict[str, Any]] = []
+        if isinstance(tool_conf, dict):
+            source_dicts.append(self._safe_json_dict(tool_conf))
+        if isinstance(extra_sources, dict):
+            source_dicts.append(self._safe_json_dict(extra_sources))
+        elif isinstance(extra_sources, list):
+            for item in extra_sources:
+                if isinstance(item, dict):
+                    source_dicts.append(self._safe_json_dict(item))
+
+        for source in source_dicts:
+            for key in self._VIDEO_REFERENCE_IMAGE_OPTION_KEYS:
+                if key in source:
+                    self._append_unique_reference_values(refs, seen, source.get(key))
+
+        if include_last_frame:
+            self._append_unique_reference_values(refs, seen, last_frame_url)
+
+        limited = self._limit_reference_input(refs, limit)
+        if isinstance(limited, list):
+            return limited
+        if isinstance(limited, str) and limited.strip():
+            return [limited.strip()]
+        return []
+
+    def _normalize_video_reference_image_input(
+        self,
+        refs: Optional[Union[str, List[str]]],
+    ) -> Optional[Union[str, List[str]]]:
+        if isinstance(refs, list):
+            cleaned = [str(item).strip() for item in refs if str(item).strip()]
+        elif str(refs or "").strip():
+            cleaned = [str(refs).strip()]
+        else:
+            cleaned = []
+        if not cleaned:
+            return None
+        if len(cleaned) == 1:
+            return cleaned[0]
+        return cleaned
+
+    def _collect_video_reference_video_urls(
+        self,
+        tool_conf: Optional[Dict[str, Any]] = None,
+        *,
+        extra_sources: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        limit: Optional[int] = None,
+    ) -> List[str]:
+        refs: List[str] = []
+        seen: set = set()
+
+        source_dicts: List[Dict[str, Any]] = []
+        if isinstance(tool_conf, dict):
+            source_dicts.append(self._safe_json_dict(tool_conf))
+        if isinstance(extra_sources, dict):
+            source_dicts.append(self._safe_json_dict(extra_sources))
+        elif isinstance(extra_sources, list):
+            for item in extra_sources:
+                if isinstance(item, dict):
+                    source_dicts.append(self._safe_json_dict(item))
+
+        for source in source_dicts:
+            for key in self._VIDEO_REFERENCE_VIDEO_OPTION_KEYS:
+                if key in source:
+                    self._append_unique_reference_values(refs, seen, source.get(key))
+
+        limited = self._limit_reference_input(refs, limit)
+        if isinstance(limited, list):
+            return limited
+        if isinstance(limited, str) and limited.strip():
+            return [limited.strip()]
+        return []
+
     def _apply_runtime_capability_constraints(
         self,
         *,
@@ -4172,6 +4293,16 @@ class MediaGenerationService:
             effective_reference_image_url = constrained_inputs.get("reference_image_url")
             effective_last_frame_url = constrained_inputs.get("last_frame_url")
             effective_keyframes = constrained_inputs.get("keyframes")
+
+            if str(category or "").strip() == "Video":
+                merged_video_image_refs = self._collect_video_reference_image_urls(
+                    effective_reference_image_url,
+                    (active_config.get("config") or {}),
+                    extra_sources=active_config,
+                )
+                effective_reference_image_url = self._normalize_video_reference_image_input(
+                    merged_video_image_refs
+                )
 
             normalized_inputs = self._apply_runtime_enum_constraints(
                 runtime_config=active_config,
@@ -7122,30 +7253,15 @@ class MediaGenerationService:
         callback_enabled = bool(callback_url and callback_url != "-1")
         pure_callback_mode = bool(str(cfg.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"})
 
-        raw_refs: List[str] = []
-        if isinstance(ref_image, list):
-            raw_refs.extend([str(item).strip() for item in ref_image if str(item).strip()])
-        else:
-            one = str(ref_image or "").strip()
-            if one:
-                raw_refs.append(one)
-
-        for extra_key in ("image_urls", "reference_image_urls", "referenceImageUrls"):
-            extra_refs = config.get(extra_key)
-            if isinstance(extra_refs, list):
-                raw_refs.extend([str(item).strip() for item in extra_refs if str(item).strip()])
-
-        last_ref = str(last_frame_url or "").strip()
-        if last_ref:
-            raw_refs.append(last_ref)
-
-        # Keep order stable while removing duplicates.
-        unique_refs: List[str] = []
-        seen = set()
-        for item in raw_refs:
-            if item and item not in seen:
-                seen.add(item)
-                unique_refs.append(item)
+        raw_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            cfg,
+            extra_sources=config,
+            include_last_frame=True,
+            last_frame_url=last_frame_url,
+            limit=9,
+        )
+        unique_refs = raw_refs
 
         if not unique_refs:
             return {"error": "HappyHorse requires 1-9 reference images"}
@@ -9766,7 +9882,11 @@ class MediaGenerationService:
                 aspect_ratio,
             )
 
-        raw_image_refs = ref_image if isinstance(ref_image, list) else [ref_image]
+        raw_image_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config,
+        )
         resolved_image_refs: List[str] = []
         for item in raw_image_refs:
             text = str(item or "").strip()
@@ -9791,7 +9911,7 @@ class MediaGenerationService:
             resolved_last_frame = str(resolved_last_frame or "").strip() or None
 
         reference_video_urls = self._resolve_public_media_urls(
-            tool_conf.get("reference_video_urls") or tool_conf.get("ref_video_urls") or []
+            self._collect_video_reference_video_urls(tool_conf, extra_sources=config)
         )
         reference_audio_urls = self._resolve_public_media_urls(
             tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or []
@@ -12559,51 +12679,33 @@ class MediaGenerationService:
                 if normalized_video_list:
                     payload_input["video_list"] = normalized_video_list
 
+        raw_image_refs = self._collect_video_reference_image_urls(
+            ref_image,
+            tool_conf,
+            extra_sources=config,
+        )
         resolved_refs: List[str] = []
-        configured_image_urls = tool_conf.get("image_urls")
-        if isinstance(configured_image_urls, list):
-            configured_list = [str(item).strip() for item in configured_image_urls if str(item).strip()]
-            if configured_list:
-                resolved_refs.extend(configured_list)
-        if not resolved_refs and ref_image:
-            ref_list = ref_image if isinstance(ref_image, list) else [ref_image]
-            for ref in ref_list:
-                ref_text = str(ref or "").strip()
-                if ref_text.startswith("asset://"):
-                    logger.warning("KIE ignored Ark private asset URI reference | ref=%s", ref_text[:80])
-                    continue
-                if use_veo_api:
-                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
-                else:
-                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, force_data_uri_for_local=True, prefer_public_upload_url=True)
-                if resolved:
-                    resolved_refs.append(resolved)
-
-        # Fallback: some callers pass reference images through provider_options only.
-        if not resolved_refs:
-            option_refs = (
-                tool_conf.get("filesUrl")
-                or tool_conf.get("files_url")
-                or tool_conf.get("fileUrl")
-                or tool_conf.get("file_url")
-                or tool_conf.get("input_urls")
-                or tool_conf.get("image_urls")
-                or tool_conf.get("imageUrls")
-                or []
-            )
-            if isinstance(option_refs, str):
-                option_refs = [option_refs]
-            for ref in option_refs if isinstance(option_refs, list) else []:
-                ref_text = str(ref or "").strip()
-                if ref_text.startswith("asset://"):
-                    logger.warning("KIE ignored Ark private asset URI option reference | ref=%s", ref_text[:80])
-                    continue
-                if use_veo_api:
-                    resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
-                else:
-                    resolved = await asyncio.to_thread(self._resolve_ref_for_api, ref, force_data_uri_for_local=True, prefer_public_upload_url=True)
-                if resolved:
-                    resolved_refs.append(resolved)
+        for ref in raw_image_refs:
+            ref_text = str(ref or "").strip()
+            if not ref_text:
+                continue
+            if ref_text.startswith("asset://"):
+                logger.warning("KIE ignored Ark private asset URI reference | ref=%s", ref_text[:80])
+                continue
+            if ref_text.lower().startswith(("http://", "https://")):
+                resolved_refs.append(ref_text)
+                continue
+            if use_veo_api:
+                resolved = await asyncio.to_thread(self._process_veo_image, ref, normalized_ar or "16:9")
+            else:
+                resolved = await asyncio.to_thread(
+                    self._resolve_ref_for_api,
+                    ref,
+                    force_data_uri_for_local=True,
+                    prefer_public_upload_url=True,
+                )
+            if resolved:
+                resolved_refs.append(str(resolved).strip())
 
         if resolved_refs:
             # Use resolved public URLs (for example OSS URLs) directly in KIE payloads.
@@ -13308,17 +13410,18 @@ class MediaGenerationService:
             if normalized_ar in {"16:9", "9:16", "1:1"}:
                 kling_input["aspect_ratio"] = normalized_ar
 
-            configured_image_urls = tool_conf.get("image_urls")
-            kling_image_urls: List[str] = []
-            if isinstance(configured_image_urls, list):
-                kling_image_urls = [str(item).strip() for item in configured_image_urls if str(item).strip()]
-            elif resolved_refs:
-                kling_image_urls = [str(item).strip() for item in resolved_refs if str(item).strip()]
-                last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
-                if last_frame_resolved:
-                    last_frame_text = str(last_frame_resolved).strip()
-                    if last_frame_text and last_frame_text not in kling_image_urls:
-                        kling_image_urls.append(last_frame_text)
+            kling_image_urls: List[str] = list(resolved_refs)
+            if not kling_image_urls:
+                kling_image_urls = self._collect_video_reference_image_urls(
+                    None,
+                    tool_conf,
+                    extra_sources=config,
+                )
+            last_frame_resolved = payload_input.get("last_frame_url") or payload_input.get("lastFrameUrl")
+            if last_frame_resolved:
+                last_frame_text = str(last_frame_resolved).strip()
+                if last_frame_text and last_frame_text not in kling_image_urls:
+                    kling_image_urls.append(last_frame_text)
 
             # Mutually exclusive: If reference_video_urls is set in tool_conf, clear images
             # User request: Keep reference images even when video is submitted.
