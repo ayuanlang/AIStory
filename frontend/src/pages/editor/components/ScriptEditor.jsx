@@ -11271,11 +11271,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             decision = 'phase2';
         }
 
+        const needsSceneOrchestration = Boolean(hasSubjectIndex && (!hasSceneMarkdown || dbSceneCount <= 0));
+        const needsAssetDesign = Boolean(hasSubjectIndex && !hasCompleteSubjectsJson);
+
         let resumeNotice = '';
         if (decision === 'phase2') {
-            resumeNotice = hasSubjectsJson
-                ? t('检测到已有 subjects JSON 不完整，将直接重新执行资产设计阶段。', 'Detected incomplete existing subjects JSON. Stage 3 asset design will be rerun directly.')
-                : t('未检测到完整的 subjects JSON，将直接重新执行资产设计阶段。', 'No complete subjects JSON was found. Stage 3 asset design will be rerun directly.');
+            if (needsSceneOrchestration && needsAssetDesign) {
+                resumeNotice = t(
+                    '检测到资产清单已就绪，将并发执行场景编排与资产生成（角色/道具/环境）。',
+                    'Asset index is ready; scene orchestration and asset design (characters/props/environments) will run in parallel.'
+                );
+            } else if (needsSceneOrchestration) {
+                resumeNotice = t(
+                    '检测到资产清单已就绪但场景编排未完成，将重新执行场景编排。',
+                    'Asset index is ready but scene orchestration is incomplete; scene beats will be rerun.'
+                );
+            } else if (needsAssetDesign) {
+                resumeNotice = hasSubjectsJson
+                    ? t('检测到已有 subjects JSON 不完整，将直接重新执行资产设计阶段。', 'Detected incomplete existing subjects JSON. Stage 3 asset design will be rerun directly.')
+                    : t('未检测到完整的 subjects JSON，将直接重新执行资产设计阶段。', 'No complete subjects JSON was found. Stage 3 asset design will be rerun directly.');
+            }
         } else if (decision === 'completed') {
             resumeNotice = t('检测到完整的场景分析结果、资产清单与 subjects JSON，本次启动将直接复用现有结果。', 'Detected complete scene analysis results, asset index, and subjects JSON. This run will reuse the existing results directly.');
         }
@@ -11293,6 +11308,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             resumeNotice,
             sceneAnalysisText,
             resolvedSubjectIndexText,
+            hasSceneMarkdown,
+            hasCompleteSubjectsJson,
+            dbSceneCount,
+            needsSceneOrchestration,
+            needsAssetDesign,
         };
     }, [
         activeEpisode?.ai_entity_design_result,
@@ -11376,26 +11396,197 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
 
         setAnalysisFlowStatus({
-            phase: 'completed',
-            message: '🚀 检测到资产清单已完整，直接进入资产设计...',
+            phase: resumeState?.needsSceneOrchestration ? 'scene_beats' : 'completed',
+            message: resumeState?.needsSceneOrchestration
+                ? t('🚀 资产清单已就绪，正在并发执行场景编排与资产生成...', 'Asset index ready; running scene orchestration and asset design in parallel...')
+                : '🚀 检测到资产清单已完整，直接进入资产设计...',
         });
 
         try {
-            const mockImportReport = { importedSceneRows: [] };
-            const dummyAnalyzedText = String(resumeState?.sceneAnalysisText || resolvedSubjectIndexText || '');
-            const postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText);
+            const needsSceneOrchestration = Boolean(resumeState?.needsSceneOrchestration);
+            const needsAssetDesign = resumeState?.needsAssetDesign !== false;
+            const stage1SourceText = String(
+                activeEpisode?.ai_scene_analysis_adaptation
+                || activeEpisode?.ai_scene_analysis_result
+                || ''
+            ).trim();
 
-            const finalImportReport = {
-                ...mockImportReport,
-                sceneSubjectPostImportReport: postImportSceneSubjectReport,
-                dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
-                dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
-                importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+            const runAssetDesignResumeBranch = async () => {
+                const mockImportReport = { importedSceneRows: [] };
+                const dummyAnalyzedText = String(resumeState?.sceneAnalysisText || resolvedSubjectIndexText || '');
+                return runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText, {
+                    explicitSubjectIndexText: resolvedSubjectIndexText,
+                    parallelWithScenes: needsSceneOrchestration,
+                });
             };
+
+            const runSceneOrchestrationResumeBranch = async () => {
+                if (!String(stage1SourceText || '').trim()) {
+                    throw new Error(t(
+                        '缺少第一阶段产物，无法从资产清单继续场景编排。',
+                        'Stage 1 outputs are missing; cannot continue scene orchestration from the asset index.'
+                    ));
+                }
+                const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
+                const beatsResult = await runStage2_2WithValidationRetry({
+                    label: 'Stage 2.2 resume',
+                    logPhasePrefix: 'resume',
+                    finalStage2_2UserInput: stage2_2UserInputBody,
+                    stage2_2UserInputBody,
+                    stage2_1SubjectIndexText: resolvedSubjectIndexText,
+                    stage1SourceText,
+                    startedAt,
+                    baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
+                    onTaskCreated: (taskId) => {
+                        setActiveAnalysisTaskId(String(taskId || '').trim());
+                        saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
+                    },
+                });
+
+                const {
+                    stage2_2Text,
+                    perSceneParallel = false,
+                    sceneMarkdownPatchMap = null,
+                } = beatsResult || {};
+
+                let restartScenePatchMap = null;
+                let validatedBeatsText = '';
+                if (perSceneParallel && sceneMarkdownPatchMap && Object.keys(sceneMarkdownPatchMap).length > 0) {
+                    restartScenePatchMap = sceneMarkdownPatchMap;
+                    await persistSceneMarkdownPatch(sceneMarkdownPatchMap, {
+                        source: 'resume-phase2-per-scene',
+                        stage1RawText: stage1SourceText,
+                        stage2_1Text: resolvedSubjectIndexText,
+                        replaceSceneMarkdownByScene: true,
+                    });
+                } else {
+                    const stage2_2Check = validateStage2_2BeatsOutput(stage2_2Text || '', 'Stage 2.2 resume');
+                    if (!stage2_2Check.ok) {
+                        throw new Error(stage2_2Check.reason || 'Stage 2.2 resume validation failed.');
+                    }
+                    validatedBeatsText = stage2_2Check.normalizedText;
+                    setLlmRawResultContent(validatedBeatsText);
+                    setLlmResultContent(normalizeLlmMarkdownTable(validatedBeatsText));
+                    lastLoadedAnalysisRef.current = validatedBeatsText;
+                    await persistSceneMarkdownBundle(validatedBeatsText, {
+                        source: 'resume-phase2',
+                        stage1RawText: stage1SourceText,
+                        stage2RawText: [resolvedSubjectIndexText, validatedBeatsText].filter(Boolean).join('\n\n'),
+                        stage2_1Text: resolvedSubjectIndexText,
+                    });
+                }
+
+                let branchImportReport = null;
+                if (restartScenePatchMap) {
+                    const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
+                    const skipSceneIds = await resolveLiveImportedSceneIdsToSkip({
+                        fetchScenesFn: fetchScenes,
+                        episodeId: activeEpisode?.id,
+                        liveImportedIds: liveImported,
+                    });
+                    const patchSceneIds = Object.keys(restartScenePatchMap).filter(Boolean);
+                    const skipBatchImport = await canSkipBatchSceneImport({
+                        fetchScenesFn: fetchScenes,
+                        episodeId: activeEpisode?.id,
+                        patchSceneIds,
+                        liveImportedIds: liveImported,
+                    });
+                    if (skipBatchImport) {
+                        branchImportReport = {
+                            ok: true,
+                            changed: true,
+                            importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                            importedSceneRows: [],
+                        };
+                    } else {
+                        branchImportReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
+                            replaceExistingScenes: liveImported.length <= 0,
+                            skipSceneIds,
+                        });
+                    }
+                } else {
+                    branchImportReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
+                        switchToScenes: false,
+                        importOptions: {
+                            autoSupplementSceneSubjects: false,
+                            suppressAlerts: true,
+                        },
+                    });
+                }
+                if (!branchImportReport) {
+                    throw new Error(t(
+                        '自动导入未返回结果，场景未写入工作区。',
+                        'Auto-import returned no result; scenes were not written to the workspace.'
+                    ));
+                }
+                const expectedSceneCount = restartScenePatchMap
+                    ? Object.keys(restartScenePatchMap).filter(Boolean).length
+                    : (Array.isArray(parseMarkdownTable(validatedBeatsText)?.rows)
+                        ? parseMarkdownTable(validatedBeatsText).rows.length
+                        : 1);
+                const dbSceneCountAfterImport = await waitForEpisodeSceneCount(
+                    fetchScenes,
+                    activeEpisode?.id,
+                    expectedSceneCount || 1,
+                    { retries: 15, delayMs: 600 },
+                );
+                assertWorkspaceSceneImportComplete({
+                    importReport: branchImportReport,
+                    expectedSceneCount: expectedSceneCount || 1,
+                    dbSceneCount: dbSceneCountAfterImport,
+                    t,
+                });
+                return branchImportReport;
+            };
+
+            let importReport = { importedSceneRows: [] };
+            let postImportSceneSubjectReport = null;
+
+            if (needsSceneOrchestration && needsAssetDesign) {
+                const [sceneOutcome, assetOutcome] = await Promise.allSettled([
+                    runSceneOrchestrationResumeBranch(),
+                    runAssetDesignResumeBranch(),
+                ]);
+                if (sceneOutcome.status !== 'fulfilled') {
+                    throw sceneOutcome.reason;
+                }
+                if (assetOutcome.status !== 'fulfilled') {
+                    const assetErr = assetOutcome.reason;
+                    onLog?.(`Stage 3 asset design resume failed: ${assetErr?.message || assetErr}`, 'error');
+                    throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design resume failed'));
+                }
+                importReport = sceneOutcome.value || importReport;
+                postImportSceneSubjectReport = assetOutcome.value || null;
+            } else if (needsSceneOrchestration) {
+                importReport = await runSceneOrchestrationResumeBranch();
+            } else {
+                postImportSceneSubjectReport = await runAssetDesignResumeBranch();
+            }
+
+            if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
+                const mergedScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: mergedScenePostReport,
+                    dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                    dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                    importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+                };
+            } else if (postImportSceneSubjectReport) {
+                importReport = {
+                    ...importReport,
+                    sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                    dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                    dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                    importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+                };
+            }
 
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: '🎉 专属实体资产定制完毕，可随时投产使用！',
+                message: needsSceneOrchestration
+                    ? t('🎉 场景编排与资产生成已完成。', 'Scene orchestration and asset design completed.')
+                    : '🎉 专属实体资产定制完毕，可随时投产使用！',
             });
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
@@ -11403,7 +11594,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings: null,
-                importReport: finalImportReport,
+                importReport,
                 runtimeMeta: null,
                 warning: combinedWarning,
                 error: '',
@@ -11428,7 +11619,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         return true;
-    }, [activeEpisode?.ai_scene_analysis_subject_index, activeEpisode?.id, onLog, runPostImportSceneSubjectPipeline, subjectIndexText, t, updateEpisode]);
+    }, [
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_result,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        activeEpisode?.id,
+        assertWorkspaceSceneImportComplete,
+        buildStage2_2UserInputFromStage1,
+        buildCompletedAnalysisUiReport,
+        canSkipBatchSceneImport,
+        fetchScenes,
+        importScenesFromPerScenePatchMap,
+        normalizeLlmMarkdownTable,
+        onLog,
+        parseMarkdownTable,
+        persistSceneMarkdownBundle,
+        persistSceneMarkdownPatch,
+        resolveLiveImportedSceneIdsToSkip,
+        runAutoImportAndSwitchToScenes,
+        runPostImportSceneSubjectPipeline,
+        runStage2_2WithValidationRetry,
+        saveAnalysisTaskMarker,
+        subjectIndexText,
+        syncScenePostImportCheckedCount,
+        t,
+        updateEpisode,
+        validateStage2_2BeatsOutput,
+        waitForEpisodeSceneCount,
+    ]);
 
     const executeAnalysis = async (content, customSystemPrompt = null, skipMetadata = false, retryCount = 0) => {
         const forceRegenerate = forceRegenerateRef.current;
@@ -13050,14 +13268,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('📝 正在并发执行：场景拆解与视觉资产生成...', 'Running scene breakdown and visual asset generation in parallel...'),
             });
 
-                        const runStage2_2Task = async () => {
+            const runSceneOrchestrationRestartBranch = async () => {
                 let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText);
-                let finalStage2_2UserInput = stage2_2UserInputBody;
-
-                return runStage2_2WithValidationRetry({
+                const beatsResult = await runStage2_2WithValidationRetry({
                     label: 'Stage 2.2 restart',
                     logPhasePrefix: 'restart',
-                    finalStage2_2UserInput,
+                    finalStage2_2UserInput: stage2_2UserInputBody,
                     stage2_2UserInputBody,
                     stage2_1SubjectIndexText,
                     stage1SourceText,
@@ -13068,75 +13284,180 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
                     },
                 });
-            };
 
-                        const runStage3Task = async () => {
-                try {
-                                return await runPostImportSceneSubjectPipeline(null, globalStage2_1Text || stage2_1SubjectIndexText, {
-                                    explicitSubjectIndexText: globalStage2_1Text || stage2_1SubjectIndexText
+                const {
+                    stage2_2Text,
+                    stage2_2Result,
+                    perSceneParallel = false,
+                    sceneMarkdownPatchMap = null,
+                } = beatsResult || {};
+
+                onLog?.('[Task:Stage 2 Restart] [Phase:scene_beats_llm_returned] Stage 2.2 returned. Applying UI update and immediate writeback.', 'info');
+
+                const stage2Text = perSceneParallel
+                    ? String(stage2_1Text || '').trim()
+                    : [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
+                let validatedBeatsText = '';
+                let restartScenePatchMap = null;
+
+                if (perSceneParallel && sceneMarkdownPatchMap && Object.keys(sceneMarkdownPatchMap).length > 0) {
+                    restartScenePatchMap = sceneMarkdownPatchMap;
+                } else {
+                    const finalAnalysisText = String(stage2_2Text || '').trim();
+                    const stage2_2Check = validateStage2_2BeatsOutput(finalAnalysisText, 'Stage 2.2 restart');
+                    if (!stage2_2Check.ok) {
+                        throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (restart mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
+                    }
+                    validatedBeatsText = stage2_2Check.normalizedText;
+                }
+
+                const stage2Result = {
+                    ...(stage2_1Result || {}),
+                    ...(stage2_2Result || {}),
+                    meta: stage2_2Result?.meta || stage2_1Result?.meta,
+                    subjects_json: stage2_1Result?.subjects_json || stage2_2Result?.subjects_json,
+                };
+
+                const analysisSections = extractAnalysisSections(stage2Text);
+                if (!analysisSections.hasStructuredSubjectIndex) {
+                    throw new Error(SUBJECT_INDEX_PARSE_ERROR);
+                }
+
+                if (!restartScenePatchMap) {
+                    setLlmRawResultContent(validatedBeatsText);
+                    setLlmResultContent(validatedBeatsText);
+                    lastLoadedAnalysisRef.current = validatedBeatsText;
+                }
+
+                if (stage2Result?.meta) {
+                    runtimeMeta = extractAnalysisRuntimeMeta(stage2Result.meta);
+                    setAnalysisRuntimeMeta(runtimeMeta);
+                }
+
+                if (restartScenePatchMap) {
+                    await persistSceneMarkdownPatch(restartScenePatchMap, {
+                        source: 'restart-stage2-per-scene',
+                        stage1RawText: stage1SourceText,
+                        stage2_1Text: stage2_1Text || undefined,
+                        replaceSceneMarkdownByScene: true,
                     });
-                } catch (e) {
-                    if (onLog) onLog(`Stage 3 background execution failed: ${e?.message || e}`, 'error');
-                    return null;
+                } else {
+                    await persistSceneMarkdownBundle(validatedBeatsText, {
+                        source: 'restart-stage2',
+                        stage1RawText: stage1SourceText,
+                        stage2RawText: [String(stage2_1Text || '').trim(), String(validatedBeatsText || '').trim()].filter(Boolean).join('\n\n'),
+                        stage2_1Text: stage2_1Text || undefined,
+                    });
                 }
+                onLog?.('[Task:Stage 2 Restart] [Phase:writeback] Scene beats result persisted with per-scene storage.', 'success');
+
+                let branchImportReport = null;
+                try {
+                    if (restartScenePatchMap) {
+                        const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
+                        const skipSceneIds = await resolveLiveImportedSceneIdsToSkip({
+                            fetchScenesFn: fetchScenes,
+                            episodeId: activeEpisode?.id,
+                            liveImportedIds: liveImported,
+                        });
+                        const patchSceneIds = Object.keys(restartScenePatchMap).filter(Boolean);
+                        const skipBatchImport = await canSkipBatchSceneImport({
+                            fetchScenesFn: fetchScenes,
+                            episodeId: activeEpisode?.id,
+                            patchSceneIds,
+                            liveImportedIds: liveImported,
+                        });
+                        if (skipBatchImport) {
+                            branchImportReport = {
+                                ok: true,
+                                changed: true,
+                                importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
+                                importedSceneRows: [],
+                            };
+                        } else {
+                            branchImportReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
+                                replaceExistingScenes: liveImported.length <= 0,
+                                skipSceneIds,
+                            });
+                        }
+                    } else {
+                        branchImportReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
+                            switchToScenes: false,
+                            importOptions: {
+                                autoSupplementSceneSubjects: false,
+                                suppressAlerts: true,
+                                subjectsJson: stage2Result?.subjects_json || null,
+                            },
+                        });
+                    }
+                    if (!branchImportReport) {
+                        throw new Error(t(
+                            '自动导入未返回结果，场景未写入工作区。请检查导入配置或返回格式。',
+                            'Auto-import returned no result; scenes were not written to the workspace.'
+                        ));
+                    }
+                    const restartExpectedCount = restartScenePatchMap
+                        ? Object.keys(restartScenePatchMap).filter(Boolean).length
+                        : (Array.isArray(parseMarkdownTable(validatedBeatsText)?.rows)
+                            ? parseMarkdownTable(validatedBeatsText).rows.length
+                            : 1);
+                    const dbSceneCountAfterRestartImport = await waitForEpisodeSceneCount(
+                        fetchScenes,
+                        activeEpisode?.id,
+                        restartExpectedCount || 1,
+                        { retries: 15, delayMs: 600 },
+                    );
+                    assertWorkspaceSceneImportComplete({
+                        importReport: branchImportReport,
+                        expectedSceneCount: restartExpectedCount || 1,
+                        dbSceneCount: dbSceneCountAfterRestartImport,
+                        t,
+                    });
+                } catch (importErr) {
+                    await triggerSceneArrangementRegenerationTask(validatedBeatsText, {
+                        reason: t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`),
+                        source: 'stage2-restart-import-error',
+                    });
+                    throw importErr;
+                }
+
+                branchImportReport = await ensureSubjectsImportedBeforePostChecks(stage2Result, branchImportReport);
+                maybeAlertIncompleteSubjectsImport(stage2Result, validatedBeatsText);
+
+                return {
+                    importReport: branchImportReport,
+                    validatedBeatsText,
+                    stage2Result,
+                };
             };
 
-            const beatsPromise = runStage2_2Task();
-            const assetsPromise = runStage3Task();
-
-            const beatsResult = await beatsPromise;
-            const {
-                stage2_2Text,
-                stage2_2Result,
-                perSceneParallel = false,
-                sceneMarkdownPatchMap = null,
-            } = beatsResult || {};
-
-            setAnalysisFlowStatus({
-                phase: 'scene_beats',
-                message: t('✅ 场景编排 LLM 已返回，正在第一时间回写结果...', 'Scene beats LLM returned. Writing back results immediately...'),
-            });
-            onLog?.('[Task:Stage 2 Restart] [Phase:scene_beats_llm_returned] Stage 2.2 returned. Applying UI update and immediate writeback.', 'info');
-
-            const stage2Text = perSceneParallel
-                ? String(stage2_1Text || '').trim()
-                : [String(stage2_1Text || '').trim(), String(stage2_2Text || '').trim()].filter(Boolean).join('\n\n');
-            let validatedBeatsText = '';
-            let restartScenePatchMap = null;
-
-            if (perSceneParallel && sceneMarkdownPatchMap && Object.keys(sceneMarkdownPatchMap).length > 0) {
-                restartScenePatchMap = sceneMarkdownPatchMap;
-            } else {
-                const finalAnalysisText = String(stage2_2Text || '').trim();
-                const stage2_2Check = validateStage2_2BeatsOutput(finalAnalysisText, 'Stage 2.2 restart');
-                if (!stage2_2Check.ok) {
-                    throw new Error(stage2_2Check.reason || 'Stage 2.2 Beats Generation validation failed (restart mode): returned table lacks Scene ID column (may have received Subject Index instead of Scenes Table). Please retry.');
+            const runAssetDesignRestartBranch = async () => runPostImportSceneSubjectPipeline(
+                null,
+                globalStage2_1Text || stage2_1SubjectIndexText,
+                {
+                    explicitSubjectIndexText: globalStage2_1Text || stage2_1SubjectIndexText,
+                    parallelWithScenes: true,
                 }
-                validatedBeatsText = stage2_2Check.normalizedText;
-            }
-            
-            const stage2Result = {
-                ...(stage2_1Result || {}),
-                ...(stage2_2Result || {}),
-                meta: stage2_2Result?.meta || stage2_1Result?.meta,
-                subjects_json: stage2_1Result?.subjects_json || stage2_2Result?.subjects_json,
-            };
+            );
 
-            const analysisSections = extractAnalysisSections(stage2Text);
-            if (!analysisSections.hasStructuredSubjectIndex) {
-                throw new Error(SUBJECT_INDEX_PARSE_ERROR);
-            }
+            const [sceneOutcome, assetOutcome] = await Promise.allSettled([
+                runSceneOrchestrationRestartBranch(),
+                runAssetDesignRestartBranch(),
+            ]);
 
-            if (!restartScenePatchMap) {
-                setLlmRawResultContent(validatedBeatsText);
-                setLlmResultContent(validatedBeatsText);
-                lastLoadedAnalysisRef.current = validatedBeatsText;
+            if (sceneOutcome.status !== 'fulfilled') {
+                throw sceneOutcome.reason;
+            }
+            if (assetOutcome.status !== 'fulfilled') {
+                const assetErr = assetOutcome.reason;
+                onLog?.(`Stage 3 asset design failed during Stage 2 restart: ${assetErr?.message || assetErr}`, 'error');
+                throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design failed during Stage 2 restart'));
             }
 
-            if (stage2Result?.meta) {
-                runtimeMeta = extractAnalysisRuntimeMeta(stage2Result.meta);
-                setAnalysisRuntimeMeta(runtimeMeta);
-            }
+            importReport = sceneOutcome.value?.importReport || null;
+            const validatedBeatsText = sceneOutcome.value?.validatedBeatsText || '';
+            const stage2Result = sceneOutcome.value?.stage2Result || null;
+            const postImportSceneSubjectReport = assetOutcome.value || null;
 
             setAnalysisUiReport((prev) => ({
                 ...(prev && typeof prev === 'object' ? prev : {}),
@@ -13147,114 +13468,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 warning: '',
                 error: '',
             }));
-
-            if (restartScenePatchMap) {
-                await persistSceneMarkdownPatch(restartScenePatchMap, {
-                    source: 'restart-stage2-per-scene',
-                    stage1RawText: stage1SourceText,
-                    stage2_1Text: stage2_1Text || undefined,
-                    replaceSceneMarkdownByScene: true,
-                });
-            } else {
-                await persistSceneMarkdownBundle(validatedBeatsText, {
-                    source: 'restart-stage2',
-                    stage1RawText: stage1SourceText,
-                    stage2RawText: [String(stage2_1Text || '').trim(), String(validatedBeatsText || '').trim()].filter(Boolean).join('\n\n'),
-                    stage2_1Text: stage2_1Text || undefined,
-                });
-            }
-            onLog?.('[Task:Stage 2 Restart] [Phase:writeback] Scene beats result persisted with per-scene storage.', 'success');
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
-                message: t('🧩 场景编排已回写，正在导入场景表到工作区...', 'Scene beats written back, importing scene table to workspace...'),
+                message: t('✅ 场景编排与资产生成并发任务已完成。', 'Parallel scene orchestration and asset design completed.'),
             });
-
-            try {
-                if (restartScenePatchMap) {
-                    const liveImported = Array.from(orchestrationLiveImportedScenesRef.current || []);
-                    const skipSceneIds = await resolveLiveImportedSceneIdsToSkip({
-                        fetchScenesFn: fetchScenes,
-                        episodeId: activeEpisode?.id,
-                        liveImportedIds: liveImported,
-                    });
-                    const patchSceneIds = Object.keys(restartScenePatchMap).filter(Boolean);
-                    const skipBatchImport = await canSkipBatchSceneImport({
-                        fetchScenesFn: fetchScenes,
-                        episodeId: activeEpisode?.id,
-                        patchSceneIds,
-                        liveImportedIds: liveImported,
-                    });
-                    if (skipBatchImport) {
-                        setAnalysisFlowStatus({
-                            phase: 'scene_beats',
-                            message: t(
-                                `✅ 全部 ${patchSceneIds.length} 场已在工作区校验通过，跳过重复导入。`,
-                                `All ${patchSceneIds.length} scene(s) verified in workspace; skipping duplicate import.`
-                            ),
-                        });
-                        importReport = {
-                            ok: true,
-                            changed: true,
-                            importStats: { scenesCreated: 0, scenesUpdated: patchSceneIds.length },
-                            importedSceneRows: [],
-                        };
-                    } else {
-                        importReport = await importScenesFromPerScenePatchMap(restartScenePatchMap, {
-                            replaceExistingScenes: liveImported.length <= 0,
-                            skipSceneIds,
-                        });
-                    }
-                } else {
-                    importReport = await runAutoImportAndSwitchToScenes(validatedBeatsText, {
-                        switchToScenes: false,
-                        importOptions: {
-                            autoSupplementSceneSubjects: false,
-                            suppressAlerts: true,
-                            subjectsJson: stage2Result?.subjects_json || null,
-                        },
-                    });
-                }
-                if (!importReport) {
-                    throw new Error(t(
-                        '自动导入未返回结果，场景未写入工作区。请检查导入配置或返回格式。',
-                        'Auto-import returned no result; scenes were not written to the workspace.'
-                    ));
-                }
-                const restartExpectedCount = restartScenePatchMap
-                    ? Object.keys(restartScenePatchMap).filter(Boolean).length
-                    : (Array.isArray(parseMarkdownTable(validatedBeatsText)?.rows)
-                        ? parseMarkdownTable(validatedBeatsText).rows.length
-                        : 1);
-                const dbSceneCountAfterRestartImport = await waitForEpisodeSceneCount(
-                    fetchScenes,
-                    activeEpisode?.id,
-                    restartExpectedCount || 1,
-                    { retries: 15, delayMs: 600 },
-                );
-                assertWorkspaceSceneImportComplete({
-                    importReport,
-                    expectedSceneCount: restartExpectedCount || 1,
-                    dbSceneCount: dbSceneCountAfterRestartImport,
-                    t,
-                });
-            } catch (importErr) {
-                await triggerSceneArrangementRegenerationTask(validatedBeatsText, {
-                    reason: t(`自动导入失败：${importErr?.message || importErr}`, `Auto-import failed: ${importErr?.message || importErr}`),
-                    source: 'stage2-restart-import-error',
-                });
-                throw importErr;
-            }
-            setAnalysisFlowStatus({
-                phase: 'scene_beats',
-                message: t('✅ 场景编排导入完成，正在继续资产后处理...', 'Scene beats import completed, continuing asset post-processing...'),
-            });
-            importReport = await ensureSubjectsImportedBeforePostChecks(stage2Result, importReport);
-            maybeAlertIncompleteSubjectsImport(stage2Result, validatedBeatsText);
-
-            const assetsOutcome = await assetsPromise
-                .then((value) => ({ status: 'fulfilled', value }))
-                .catch((reason) => ({ status: 'rejected', reason }));
-            const postImportSceneSubjectReport = assetsOutcome.status === 'fulfilled' ? assetsOutcome.value : null;
 
             if (importReport && typeof importReport === 'object' && postImportSceneSubjectReport) {
                 const mergedRestartScenePostReport = syncScenePostImportCheckedCount(importReport, postImportSceneSubjectReport);

@@ -113,7 +113,10 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "persist_targets": ["episode.ai_scene_analysis_subject_index", "episode.ai_stage_outputs.stage2_1"],
             "injection_chain": ["frontend.stage1_project_context", "frontend.reusable_subject_assets", "backend.analyze_scene.project_metadata", "backend.analyze_scene.reuse_subject_assets"],
             "auto_start": True,
-            "fan_out": None,
+            # Subject Index is the shared input for scene orchestration and per-category asset design.
+            # After this node completes, scene_markdown and asset_design_* should run in parallel.
+            "fan_out": ["scene_markdown", "asset_design_character", "asset_design_prop", "asset_design_environment"],
+            "fan_out_mode": "parallel_after_complete",
             "status": "planned",
         },
         {
