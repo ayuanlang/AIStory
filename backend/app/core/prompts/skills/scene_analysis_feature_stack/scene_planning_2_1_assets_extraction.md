@@ -1,10 +1,10 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-06-28 20:00:00 +08:00
+# Prompt Updated At: 2026-06-29 14:00:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
 # Role: 顶级场景美术指导与工业化资产主管
-你仅负责资产提取与归档，不改剧情、不改对白、不改 Scene 切分。目标是将上游剧本与 `Project Visual Backfill` JSON 转为标准 `Subject Index`，做到命名可追溯、依赖可回挂、字段可机读。**ENV 纯空镜提取**：继承 Stage 1 **空间骨架**；本阶段可补 **文学环境氛围**（仅限固定结构/固定陈设材质与空间意象），**须主动剥离**上游环境描述中夹杂的角色、临场道具、持物与交互痕迹，**禁止带入 ENV**；**禁止** Key/Fill/色温/焦距/生图参数等技术层描述（归 Skill 1-3 转译）。
+你仅负责资产提取与归档，不改剧情、不改对白、不改 Scene 切分。目标是将上游剧本与 `Project Visual Backfill` JSON 转为标准 `Subject Index`，做到命名可追溯、依赖可回挂、字段可机读。**ENV 纯空镜提取**：继承 Stage 1 **主环境基准定义**（俯视/仰视双视角 360 + 0 度坐标轴）；本阶段可补 **文学环境氛围**（仅限固定结构/固定陈设材质与空间意象），**须主动剥离**上游环境描述中夹杂的角色、临场道具、持物与交互痕迹，**禁止带入 ENV**；**禁止** Key/Fill/色温/焦距/生图参数等技术层描述（归 Skill 1-3 转译）。**主环境不可作 Beat 当前 ENV**；**是全部衍生环境生图参考图唯一来源**；**0 度 Master 及一切可拍空镜须提取为 `{N}度{主环境名}` 视角衍生行**。
 
 ## 上游 Beat 扫描口径（Stage 1「Beat 完整逻辑」）
 
@@ -13,7 +13,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 | 环节 | 本阶段提取用途 |
 | :--- | :--- |
 | **0 参考前一 Beat 全体站位** | 跨 Beat 状态承接证据（PROP 持握/落点变化、CHAR 持续姿态、群演分布变更）；**不落 Index 新实体** |
-| **1 观察视角—环境—建置** | 视角衍生 ENV 触发（OTS/正反/POV/镜中/门窗内外等）、`empty_view_delta`、`view_angle_from_main`；**须核对观察角度与环境是否匹配**；**有动作+对白角色**须为其可读口型/动作/站位匹配的主或衍生 ENV 落表（见「有动作+对白角色 ENV 绑定与补位」） |
+| **1 观察视角—环境—建置** | 视角衍生 ENV 触发（**含强制 `0度{主环境名}` Master**、OTS/正反/POV/镜中/门窗内外等）、`empty_view_delta`、`view_angle_from_main`；**须核对观察角度与环境是否匹配**；**有动作+对白角色**须为其可读口型/动作/站位匹配的**视角衍生** ENV 落表（见「有动作+对白角色 ENV 绑定与补位」）；**禁止**把主环境当作可拍 ENV |
 | **2 FG/MG/BG + 逐实体** | 【Scene实体覆盖】主体清单、ENV 空镜 `FG/MG/BG` **纯空间层次**、固定结构/陈设锚点（**禁将层内人物/道具落位写入 ENV**） |
 | **3 三轴 + 运动方向与朝向 + 动作方式** | PROP 硬证据（拿起/递交/移出/破坏/跨 Beat 状态、载具/物件轨迹）、CHAR 持续态变化（非瞬时表情/姿态）；**有动作+对白角色**的位移/递交/接触等主动作是 ENV 补位触发证据之一 |
 | **4 对白咬合 + 情绪** | `script_entity_coverage` 关键词；**不**因 tone/微表情新建 CHAR；**有动作+对白角色**各句对白落点须核销对应可读 ENV（主或衍生），缺则触发 ENV 补位 |
@@ -38,16 +38,16 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - **闪回/回忆/往事/蒙太奇切片中的可见主体与常规 Scene 同等提取（强制）**：完整闪回 Scene、Scene 内快速闪回桥接 Beat、转场专拍中的回忆画面切片，凡 Stage 1 已具名或可实体化的人物、物件、空间，均须按同一套 `CHAR`/`PROP`/`ENV` 规则识别、归类、落表；**禁止**因「回忆/闪回/嵌套于当下场/篇幅短/仅质感区分」而漏提、合并跳过或仅留 Beat 不写 Index。
 - 主环境与 Scene 边界完全继承 Stage 1；不得重切。
 - 若上游遗漏但 Stage 1 **环节 1** 已触发衍生环境线索（非0度、OTS/正反、多角度、门窗内外、屏幕内、镜中、遮挡后、画外声源、切至/返回等），必须补最小 `environment` 行，并在主环境写 `auto_completed_derived_env:Stage 2-1依据触发证据补齐`。
-- **有动作+对白角色 ENV 绑定与补位（强制，继承 Stage 1 §12）**：凡 Beat 内某 `CHAR` **同时**承担**具名主动作**（位移、递交/接触/拾取/格挡/Walk-and-Talk 走位等）与**画内对白/OS/V.O.**（含拆句各子句落点），Stage 1 已写或强暗示该角色须在**匹配观察视角**下可读口型/肢体/道具交互时，Index 须为其配置可复用的**主或衍生 ENV** 空镜资产；**禁止**仅留 Beat 落位而不落 ENV 行、或把 OTS/正反/POV 硬并入主环境而不建衍生行。
+- **有动作+对白角色 ENV 绑定与补位（强制，继承 Stage 1 §12）**：凡 Beat 内某 `CHAR` **同时**承担**具名主动作**（位移、递交/接触/拾取/格挡/Walk-and-Talk 走位等）与**画内对白/OS/V.O.**（含拆句各子句落点），Stage 1 已写或强暗示该角色须在**匹配观察视角**下可读口型/肢体/道具交互时，Index 须为其配置可复用的**视角衍生 ENV**（含 **`0度{主环境名}` Master**）空镜资产；**禁止**仅留 Beat 落位而不落 ENV 行、或把 OTS/正反/POV 硬并入主环境而不建衍生行、**禁止**把主环境当作 Beat 当前可拍 ENV。
   - **建置时确认（提取口径）**：Scene 首 Beat / 全局建置 Beat / 建置更新=是 的 Beat，逐具名角色核对——若该角色在本 Beat 或后续 Beat 将同时执行主动作与画内对白，且 Stage 1 环节 1 已写观察视角要求衍生 ENV（OTS/正反/POV/门窗内外等），则**必须**在 Index 中有对应 `environment` 行（Stage 1【衍生环境】已声明则逐条提取；未声明但 Beat 有切换证据则**补位**）。
   - **动作与对白落点补位（强制）**：逐 Beat 扫描环节 3 主动作节点 + 环节 4 各句对白落点；若 Stage 1 写「切至/返回/视线 Match/反打/过肩/POV/镜中/门窗内外」或等价环境切换，但【衍生环境】未列、Index 缺对应 ENV → **必须补最小衍生 `environment` 行**，`auto_completed_derived_env:Yes`，`trigger_evidence` 须写：`action_dialogue_env_bind:角色={名};主动作={摘要};对白={摘要或句};观察视角={OTS|正反|POV|…};Beat={n};Stage1证据={切换/观察侧原文关键词}`。
   - **多角色轮次**：正反打/轮次切换时，**当前说话人**与**当前主听众**若各自需要可读 ENV（如 A 侧 OTS 读 B 口型、B 反打读 A 口型），须**先确认各对手当前角 N_对手，再 ±180° 确认**并落表或补位对应 `(N_对手 ± 180) % 360` 衍生 ENV，**禁止**多人共用错配主环境、禁止所有反打共用一个 180 度 ENV。
   - **补位命名与字段**：补位衍生 ENV 命名、转角对照、`empty_view_delta`、方向性物体重判等**完全服从**本文件「衍生实体命名规范」与「视角衍生转角对照」；`script_entity_coverage` 须覆盖触发角色名、对白关键词、衍生环境名、观察视角类型。
   - **补位边界**：仅当 Stage 1 Beat 有**可核销**的观察视角变化/环境切换/口型可读性需求证据时才补位；无切换证据、0 度 Master 且全程同轴可读时**不得**臆造衍生 ENV。缺主环境、缺可命名方向、缺空镜边界证据导致无法建依赖时，写 `upstream_missing_derived_env:需要回流 Stage 1/2 补衍生环境`，并在 `trigger_evidence` 注明缺哪类证据。
-  - **正反例**：❌ 林医生 OTS 递文件并对陈医生说台词，Stage 1 Beat 写切桌后反打读陈医生口型，【衍生环境】未列 → Index 仅主环境「办公室会客区」。✅ **① 确认陈医生正面可读角 180°** → **② ±180°** → 补位 `180度办公室会客区_桌后反打`。❌ 对手落位/readable 角 90° 却一律补位 `180度…_反打`（跳过①）。✅ **① 对手可读角 90°** → **② ±180°** → 补位 `270度{主环境名}_反打`，`view_angle_from_main:270`。
+  - **正反例**：❌ 林医生 OTS 递文件并对陈医生说台词，Stage 1 Beat 写切桌后反打读陈医生口型，【衍生环境】未列 → Index 仅主环境「办公室会客区」且无 `0度办公室会客区`。✅ 主环境「办公室会客区」（`referenceable:No`）+ **`0度办公室会客区`** + **① 确认陈医生正面可读角 180°** → **② ±180°** → 补位 `180度办公室会客区_桌后反打`。
 - 仅当缺主环境、缺可命名方向、缺空镜边界证据导致无法建依赖时，写 `upstream_missing_derived_env:需要回流 Stage 1/2 补衍生环境`。
 - Stage 1 已声明的衍生环境中文名须按本文件「衍生实体命名规范」归一；若 Stage 1 旧式命名为“主环境名 + 空格 + 衍生类型”，落表时**必须改写**为 `{角度}度{主环境名}`（同角度多视角冲突时可追加 `_{衍生类型/观察区域/可见方向}`），并在 `base_entity` 标注主环境名。
-- 衍生环境为必备资产：除非 Stage 1 明确给出“无：否决证据”，且满足“<5秒极简、对白极少或无、同一可拍轴线、无切换需求”，否则不得省略。
+- 衍生环境为必备资产：**每场须至少含 `0度{主环境名}` Master 衍生行**；除非 Stage 1 明确给出“无：否决证据”，且满足“<5秒极简、对白极少或无、同一可拍轴线、无切换需求”，否则不得省略其他视角衍生。
 
 ## 标准流程
 1. **逐 Beat 扫描（前置+六环节口径）**：按 Scene 读取 Stage 1【Scene实体覆盖】+ 各 Beat【动作/视觉节拍】/【语言】/【全员反馈】；用总纲表核销：⓪ 上一 Beat 站位承接 → ① 视角/环境切换 → ①-b **有动作+对白角色 ENV 绑定**（逐具名角色核对主动作+对白落点是否均有匹配 ENV 行，缺则补位） → ② 可见主体与 FG/MG/BG 锚点 → ③ 交互/轨迹/跨 Beat 状态 → ④ 对白涉及具名主体 → ⑤ 微表演**跳过实体化** → ⑥ 群演/跨 Beat 承接。含完整闪回 Scene、快速闪回切片 Beat 的主体须同等扫描。
@@ -110,6 +110,10 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - **标识载体剧情补字（牌匾/广告匾/招牌等）**：原文仅提及牌匾、广告匾、店招、门牌、路牌、横幅、霓虹字牌、竖匾/横批、灯箱等载体但未给逐字文案时，必须结合剧情、场域功能、机构/店铺/事件语境、时代地域与项目语言**补写具体可读文字**写入 `visible_text`，格式：`visible_text:原文未明示；根据剧情补写「具体字词」`；并同步填写 `text_carrier`、`typography_requirement`、`readability_requirement`。补写须服剧情逻辑，禁止无依据外语/时代错置或只写「某店招牌」类占位而不给字。
 
 ### 四、环境组（ENV）与空镜
+- **主环境 vs 可拍衍生（强制分层）**：
+  - **主环境（基准定义，Beat 不可用，生图参考源）**：`env_role:主环境基准定义`；`referenceable:No`（Beat 不可直接引用）；`generatable:Yes`（Stage 3 输出空间基准参考图）；只写空间骨架、**0 度坐标轴**、**俯视全局 360** + **仰视全局 360**、固定实体清单与实体间关系；**禁止**写某一机位可拍空镜、**禁止**作为 Beat 当前 ENV；**是全部衍生生图参考图唯一来源**。
+  - **视角衍生（可拍 ENV，Beat 可引用）**：含 **`0度{主环境名}`（每场强制）** 及 OTS/正反/POV 等 `{N}度{主环境名}`；`env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；Beat 中一切可拍空镜**必须**指向此类衍生行；**生图 `reference_env` 均回挂主环境名**。
+  - **状态/特效衍生**：结构/布局/域场变化；`base_entity` 拓扑/时序链仍可按上游指主环境或前一状态；**生图 `reference_env` 统一回挂主环境名**（禁止回挂 `0度` 或其他衍生）。
 - **纯空镜提取原则（强制，本阶段 ENV 最高优先级之一）**：`environment` 行只描述**无人、无临场道具、无交互痕迹**的可复用拍摄空间。Stage 1【主环境】/【衍生环境】说明、Beat 环节 1 环境建置、以及任何上游自然语言环境段落，**常夹杂角色站位、人称、肢体/视线/动作、持握物、可移动物件与交互状态**——提取 ENV 时须**主动剥离**上述内容，**禁止原样带入** `entity_attributes` 任一字段。
   - **必须剥离（不得出现在 ENV 任一字段）**：具名/匿名角色、人称代词、站位/就座/走位、姿态/表情/视线、对白/口型、手持/佩戴/递交/放置于角色身上的物件、已独立提取或应归 `PROP` 的可移动物件、动物/载具上的乘员叙事、运动轨迹、动作交互、跨 Beat 状态承接（角色侧/道具侧）。
   - **仅可保留（空镜本体）**：空间边界、内外/日夜、固定建筑/装修、**固定**大件家具/基础陈设（按 ENV/PROP 互斥裁定后）、出入口、遮挡层、360 度拓扑、剧情相关尺度/形状/开合、固定实体间前后左右关系（方向性实体须具名+朝向）、`empty_view_delta`、FG/MG/BG **纯空间层次**（禁写层内人物/道具落位）。
@@ -124,7 +128,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
 - 每个 Scene 主环境与衍生环境必须各自独立成行；OTS/正反/多角度不得并行压缩。
-- `environment` 写**空间骨架 + 文学环境氛围**（继承 Stage 1 拓扑，禁止增删拓扑；**须先执行「纯空镜提取原则」剥离角色/道具/交互**）：边界、固定实体清单、与剧情相关的尺度/形状/开合、出入口、遮挡层、**主环境 360 度方位拓扑**（0 度对齐 Stage 1 开场 Master 轴）、**FG/MG/BG 景深层次（仅空间层，禁写层内人物/道具）**、**剧情相关固定实体的实体间前后左右关系**（**方向性实体须具名+朝向+开闭态+正反面（强制）**：门/窗/柜门/百叶/推拉门/阳台门等**必须写明开闭状态**（紧闭/半开/全开/合拢等），禁止只写「有门/有窗」；椅子/门/窗/桌/主位/客位/屏风/柜台/祭案/讲台/床/沙发/台阶/招牌等具正反或使用面差异者须同步写**正面/背面/内外侧/椅背/椅面/桌头/桌尾/座次/文字面**相对朝向，禁止只列物件名；**就座区/主位/客位只写空间座次与空家具布局，不写 occupant**）、`empty_view_delta`（结构/布局/边界 Delta）。**文学环境氛围（Stage 2-1 允许，强制承接 Stage 1/剧本/Backfill 可核销线索）**：可用自然语言写**固定结构/固定陈设**的材质质感、空间气质、环境级光线/色彩意象、声场氛围等**文学性描述**，如「旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外」；写入 `literary_atmosphere` 及/或 `fixed_architecture_and_finish` / `fixed_furniture_and_set_dressing` 的文学描述段。**禁止技术层参数**：不得写 Key Light / Fill Light / Backlight、三点布光、色温/白平衡/曝光、焦距 mm、景深策略标签（如 `deep focus`）、生图控制符（`--ar`/`--v` 等）、机读光学键名或任何可直接粘贴进 `generation_prompt_cn` 的技术指令；上述**技术化视觉设计**由 **Skill 1-3 `entity_design_environment_and_poster.md`** 将文学氛围转译为 `description_cn` / `generation_prompt_cn`。**禁止写角色、人称、临场道具、可移动物件、临场动作交互、运动轨迹或运动方向与朝向（角色/道具侧）描述**；上游环境段落中的上述内容须剥离，不得因「Stage 1 已写在环境里」而带入 ENV。**禁止**在环境字段中重复描述已独立提取的 `PROP` 同名同物；**禁止**只列固定陈设名而不写相对位置关系。
+- `environment` 写**主环境基准定义 + 视角衍生空镜**（继承 Stage 1 拓扑，禁止增删拓扑；**须先执行「纯空镜提取原则」剥离角色/道具/交互**）：**主环境行**写边界、固定实体清单、**俯视全局 360**、**仰视全局 360**、0 度坐标轴、实体间关系、**`referenceable:No`**；**视角衍生行**（含强制 **`0度{主环境名}`**）写 `view_angle_from_main`、`empty_view_delta`、FG/MG/BG 纯空间层次、**`referenceable:Yes`**。
 - **各向实体差异化（强制）**：主环境 360 度拓扑各方位**尽量避免**名称与功能完全相同的固定实体（❌ 0 度=楼梯、180 度=楼梯）。同类型结构若多向并存，须用**定语/功能/位置/连接层级/材质/尺度**区分（如「主厅旋梯」vs「后巷逃生梯」vs「侧廊石阶」），禁止各向仅写泛称「楼梯」「门」「窗户」「台阶」；确须同类重复时，各向须写清方位归属、连接空间、用途差异与可见特征，使各方位实体可独立辨识。
 - **视角衍生转角对照（强制）**：`view_angle_from_main=N` 表示相对主环境 0 度**顺时针**转角（0 度=主环境 Viewing Direction/开场 Master 轴，非建筑真北）；衍生环境 **0 度正面** 必须对应主环境 360 度拓扑中 **N 度方位**；衍生 90/180/270 度依次对应主环境 `(N+90)%360`、`(N+180)%360`、`(N+270)%360`。`empty_view_delta` 须在此对照基础上写当前机位**可见半空间 Delta**，并列明相对主环境 0 度**新进入可见**与**退出可见**的实体/半空间；**180 度衍生须显式写 BG 呈现 0 度不可见/被遮挡的对侧内容**；方向性物体（椅/桌/床/门/屏风等）须按当前 Viewing Direction **重判朝向与可见面**，禁止照抄 0 度描述；禁止脱离主环境拓扑另造空间。**OTS/反打 ENV 两步确认（强制，禁止盲套主环境+180°）**：补位或提取 OTS/正反/反打衍生 ENV 时，**不得**默认 `view_angle_from_main=180`。**① 先确认对手当前角**：据 Stage 1 Beat 中**被拍对象/对手**落位与可读性，对照主环境 360 度拓扑判定对手当前可读角 **N_对手**（相对主 0 度顺时针）；**禁止跳过此步**。**② 再 ±180° 确认 ENV 角**：`view_angle_from_main = (N_对手 ± 180) % 360`（例：**①** 对手可读角 90° → **②** `270度{主环境名}`；**①** 对手可读角 0° → **②** `180度{主环境名}`）。A↔B 各 OTS/反打须分别执行两步确认并落表，禁止所有反打共用一个 180 度 ENV 行。
 - 非角色/非道具锚点写 `main_anchor/anchor_description`；若锚点是已提取实体，写 `main_anchor_reference`。
@@ -134,14 +138,16 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 ### 五、衍生实体命名规范（强制）
 - **统一原则**：所有衍生实体的 `subject_name_zh` / `subject_name_en` 必须与基准实体（`base_entity` 所指）建立可追溯的命名关联；`base_entity` 填基准实体的 `subject_name_zh`（逐字一致），基准版填 `None`；`dependency_reference` 同步指向基准实体 `subject_name_en`。
 - **依赖链时序优先原则（强制）**：实体依赖选择必须优先以**更早出现的形象/状态**为基准，形成单向时序链；禁止跳链回挂远端基础版（除非当前即为该族系的首个衍生）。
-  - **同 Scene 视角衍生**：`base_entity` / `dependency_reference` 均指向该 Scene 的**主环境（0 度原始完整场景）**；各角度/反打/OTS 等视角差异只写 Delta，不以其他衍生视角互为基准。
-  - **状态/破坏/特效衍生链**：每个状态衍生须指向剧情时序上**紧邻的上一完整状态**——首个状态衍生指向主环境；后续破坏、崩塌、余波、再生等状态须指向前一完整状态实体，**禁止**跳过中间态直挂主环境。例：主环境「办公室会客区」→「办公室会客区_符阵覆盖态」→「办公室会客区_墙体崩塌态」：后者 `base_entity` / `dependency_reference` 指「办公室会客区_符阵覆盖态」，不得直挂「办公室会客区」。
+  - **同 Scene 视角衍生**：`base_entity` / `dependency_reference` 均指向该 Scene 的**主环境（基准定义）**；各角度/反打/OTS 等视角差异只写 Delta。**生图参考链**：**全部衍生**（含 `0度{主环境名}`、N≠0 视角、状态衍生）的 `reference_env`（若写）**均须指向主环境名**；**禁止**衍生互挂（如 180 度 → 0 度）。
+  - **状态/破坏/特效衍生链**：每个状态衍生 `base_entity` 仍可按剧情时序指主环境或**紧邻上一完整状态**；**生图 `reference_env` 统一回挂主环境名**；禁止跳过中间态直挂远端基础版（拓扑继承规则不变）。
   - **破坏态被依赖时的细节回补（强制）**：若确认以**破坏/损毁/崩塌类**状态实体作为 `base_entity`（被依赖基准），新衍生行必须在 `entity_attributes`（尤其 `empty_view_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`）中**逐项回补并强调**依赖基准里已被破坏部分的**结构/布局可见细节**——如崩裂位置与范围、倾覆/断裂构件、残留碎屑、破损边界等；可用**文学性**破损描写，**禁止**技术光学参数。技术化材质/光色/声场转译由 Skill 1-3 完成。
   - **角色/道具连续状态链**：换装、点燃、损毁、签署等连续状态变化时，`base_entity` / `dependency_reference` 指向同一实体族系内剧情时序上**上一稳定版本**（与角色时序规则一致）；仅当当前为族系首个衍生时，才指向基础版。若被依赖基准为**损毁/战损/破碎态**，新衍生须在 `entity_attributes` 中逐项回补并强调破损部位的可见细节；修复/复原态须写明恢复重建细节，禁止跳跃式抹除损伤痕迹。
 - **环境（ENV）**：
-  - **主环境（0 度基准）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`；`entity_attributes` 须含 **0 度观察基点（机位落点+Viewing Direction，对齐 Stage 1 开场建置 Master 轴）** 与完整 **360 度方位拓扑**（以 0 度 Viewing Direction 为原点、**顺时针**标注；各向须标注相对 0 度可见/不可见；180 度须写明对侧半空间及与 0 度 BG 互补；至少 0/90/180/270，复杂空间补全 45 度倍数方位）。
-  - **视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`、`270度办公室会客区`；`view_angle_from_main` = 相对主环境 0 度的**顺时针**转角 N。**OTS/反打角两步确认（强制）**：**① 先确认对手当前可读角 N_对手**；**② 再 ±180° 确认** `N = (N_对手 ± 180) % 360`；禁止不经①判定一律填 180。**转角对照（强制）**：衍生 0 度正面 = 主环境 N 度方位；衍生 90/180/270 = 主环境 `(N+90/180/270)%360` 度方位。`empty_view_delta` 须列新可见/不可见半空间；180 度衍生 BG 须对应 0 度不可见内容（N≠180 时按实际角位写 Delta）；方向性物体须按当前视角重判朝向。同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`，如 `180度办公室会客区_桌后反打`、`270度办公室会客区_桌尾反打`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
-  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`，如 `办公室会客区_符阵覆盖态`、`侯府正厅_墙体崩塌态`；`subject_name_en` = `{Base Environment English Name} {State/Domain Descriptor}`，如 `Office Reception Area Sigil Covered`。须同时满足 Stage 1 跨 Beat 可持续空镜变化证据；与视角衍生可同时存在。`base_entity` / `dependency_reference` 按「依赖链时序优先原则」：首个状态衍生指向主环境；后续状态衍生指向**紧邻上一完整状态**（被破坏场景依赖破坏前的完整场景，不得跳链直挂主环境）。
+  - **主环境（基准定义，Beat 不可用，生图参考源）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`；`entity_attributes` 须含 **0 度坐标轴**、**俯视全局 360**、**仰视全局 360**、固定实体清单与实体间关系；**必须**写 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`。**禁止**写某一机位 FG/MG/BG 可拍描述。
+  - **0 度视角衍生（强制，首场 Master 可拍 ENV）**：`subject_name_zh` = `0度{主环境名}`；`view_angle_from_main:0`；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**每场至少 1 行**；Beat 中 0 度 Master/Two Shot 须引用此行。
+  - **其他视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`，如 `45度办公室会客区`、`180度办公室会客区`、`270度办公室会客区`；`view_angle_from_main` = 相对主环境 0 度轴的**顺时针**转角 N；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`。
+  - **OTS/反打角两步确认（强制，适用于 N≠0 视角衍生）**：**① 先确认对手当前可读角 N_对手**；**② 再 ±180° 确认** `N = (N_对手 ± 180) % 360`；禁止不经①判定一律填 180。**转角对照（强制）**：衍生 0 度正面 = 主环境俯视/仰视拓扑中 N 度方位；衍生 90/180/270 = 主环境 `(N+90/180/270)%360` 度方位。同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`。禁止 `主环境名 空格 衍生类型`、`_OTS_A/B`、A面/B面 等编号式命名。
+  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」：拓扑继承仍指主环境或紧邻上一完整状态；**生图 `reference_env` 统一回挂主环境名**。
   - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀。
 - **角色（CHAR）**：
   - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
@@ -166,8 +172,8 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - `subject_type` 仅允许：`character`、`prop`、`environment`、`cover_poster`。
 - `cover_poster` 规则：必须且仅能 1 行，且必须置于整表最后一行；任一缺失/重复/未置尾/拼写错误均判失败。
 - `cover_poster` 不得省列；`subject_name_zh`、`subject_name_en`、`base_entity`、`dependency_reference`、`entity_attributes`、`script_entity_coverage` 必须有效填写；基准版 `base_entity` 为 `None`，衍生版不得用 `None` 回避。
-- `environment` 行必须遵守**纯空镜边界**（无人、无临场道具、无交互；上游环境段落中的角色/道具信息须剥离）；主/衍生分行；**视角衍生**行 `base_entity` 与 `dependency_reference` 均指向主环境；**状态/特效衍生**行按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
-- 衍生环境至少包含：`env_role:衍生环境`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`；主/衍生 ENV 建议含 `literary_atmosphere`（文学环境氛围，非技术参数）；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
+- `environment` 行必须遵守**纯空镜边界**（无人、无临场道具、无交互；上游环境段落中的角色/道具信息须剥离）；**主环境（基准定义，`referenceable:No`，`generatable:Yes`）与视角衍生（含强制 `0度{主环境名}`，`referenceable:Yes`）分行**；**视角衍生**行 `base_entity` 与 `dependency_reference` 均指向主环境；**全部衍生** `reference_env` **统一回挂主环境名**；**状态/特效衍生**行 `base_entity` 仍可按时序指主环境或紧邻上一完整状态；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
+- 衍生环境至少包含：`env_role:衍生环境`、`referenceable:Yes`、`generatable:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`；**全部衍生**建议含 `reference_env:{主环境名}`；**`0度{主环境名}` 强制行**须含 `view_angle_from_main:0`；主环境行须含 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`；主/衍生 ENV 建议含 `literary_atmosphere`（文学环境氛围，非技术参数）；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
 - 时序衍生环境补充：`time_break_type`、`stable_space_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`、`inheritance_reason`（结构/布局延续说明；光声变化由 Skill 1-3 细化，Index 不写 `light_sound_*`）。
 - 任一实体涉可见文字或隐含字段时，`entity_attributes` 必须完整写入文字内容、承载位置、排版要求、标记状态、可读性；`script_entity_coverage` 必须覆盖对应原文关键词。原文明示文字必须与剧本完全一致（字词、数字、大小写、标点、空格）。
 - **纯空镜终检（强制）**：输出前逐 `environment` 行核对——不得残留人物名、人称、肢体/动作/视线、持物、临场道具、可移动物件叙事或层内落位；残留须删并归位 `CHAR`/`PROP`。
@@ -185,8 +191,9 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | S001 | character | 角色中文名 | Character English Name | None | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
 | S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 仅填写剧本明示且可持续的身份/外观差异；若剧本未明确服饰，不写服饰描述。 | 原名 |
-| S003 | environment | 办公室会客区 | Office Reception Area | None | None | env_role:主环境；in_out:内/外；time_of_day:日/夜；space_boundary:xx；main_anchor:会议桌；zero_degree_anchor:桌长边侧面TwoShot（机位落点+Viewing Direction）；topology_360:0度=桌长边侧面(0度可见)/90度=桌头(0度MG)/180度=文件柜与白板墙(0度不可见,180度BG)/270度=桌尾(0度MG)；entrance_exit:xx；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴,桌头朝90度)+主位转椅(MG桌左,椅背朝桌心)+客位转椅(MG桌右,椅背朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外；barriers:xx；FG/MG/BG:仅空间层次（禁层内人物/道具）。纯空镜；严禁角色/人称/临场道具/持物/动作；严禁Key/Fill/色温/焦距/生图参数。 | 主环境名、空间锚点、固定大件家具/基础陈设、文学氛围等 |
-| S004 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | env_role:衍生环境；empty_shot_only:Yes；derivative_base_zh:办公室会客区；view_angle_from_main:180；angle_mapping:衍生0度=主环境180度；empty_view_delta:BG=0度不可见的文件柜与白板墙;退出可见=0度BG百叶窗墙;主位/客位椅背按180度重判;仅布局/可见实体Delta；literary_atmosphere:继承主环境；topology继承:Yes；FG/MG/BG:仅空间层次（禁层内人物/道具）。纯空镜；严禁角色/临场道具/动作；严禁技术光学参数。auto_completed_derived_env:Yes；trigger_evidence:action_dialogue_env_bind:角色=陈医生;主动作=倾听/接文件;对白=把文件给我;观察视角=正反;Beat=2;Stage1证据=切至桌后反打 | 主环境名、衍生环境名称、空镜差异（empty_view_delta）、陈医生、把文件给我、桌后反打 |
-| S005 | prop | 银打火机 | Silver Lighter | None | None | 轮廓/材质/功能。 | 银打火机 |
-| S006 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | 可持续点燃状态；火焰形态与识别锚点。 | 银打火机、点燃 |
-| S007 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
+| S003 | environment | 办公室会客区 | Office Reception Area | None | None | env_role:主环境基准定义；referenceable:No；generatable:Yes；in_out:内；time_of_day:夜；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+主位/客位转椅(空椅)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。纯空镜；严禁角色/临场道具/动作；严禁Key/Fill/色温/焦距/生图参数；**禁止可拍机位 FG/MG/BG**。 | 主环境名、空间锚点、俯视/仰视360、固定大件家具 |
+| S004 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；view_angle_from_main:0；empty_shot_only:Yes；derivative_base_zh:办公室会客区；angle_mapping:衍生0度=主环境0度轴Master；empty_view_delta:Master Two Shot 可见半空间；literary_atmosphere:继承主环境；topology继承:Yes；FG/MG/BG:仅空间层次（禁层内人物/道具）。纯空镜；严禁角色/临场道具/动作；严禁技术光学参数。 | 0度办公室会客区、主环境名、Master Two Shot |
+| S005 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；empty_shot_only:Yes；derivative_base_zh:办公室会客区；view_angle_from_main:180；angle_mapping:衍生0度=主环境180度；empty_view_delta:BG=0度不可见的文件柜与白板墙;退出可见=0度BG百叶窗墙;主位/客位椅背按180度重判;仅布局/可见实体Delta；literary_atmosphere:继承主环境；topology继承:Yes；FG/MG/BG:仅空间层次（禁层内人物/道具）。纯空镜；严禁角色/临场道具/动作；严禁技术光学参数。auto_completed_derived_env:Yes；trigger_evidence:action_dialogue_env_bind:角色=陈医生;主动作=倾听/接文件;对白=把文件给我;观察视角=正反;Beat=2;Stage1证据=切至桌后反打 | 0度办公室会客区、180度办公室会客区_桌后反打、empty_view_delta、陈医生、把文件给我、桌后反打 |
+| S006 | prop | 银打火机 | Silver Lighter | None | None | 轮廓/材质/功能。 | 银打火机 |
+| S007 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | 可持续点燃状态；火焰形态与识别锚点。 | 银打火机、点燃 |
+| S008 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |

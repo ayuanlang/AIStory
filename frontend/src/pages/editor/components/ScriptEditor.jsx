@@ -16180,32 +16180,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
                     )}
 
-                    {analysisDetailLogs.length > 0 && (
-                        <div className="mb-2 rounded-md border border-white/10 bg-black/15">
-                            <div className="px-2.5 py-1.5 text-[10px] font-semibold tracking-wide opacity-70 border-b border-white/10">
-                                {t('运行日志', 'Run log')} ({analysisDetailLogs.length})
-                            </div>
-                            <div className="max-h-52 overflow-y-auto px-2.5 py-2 space-y-1 font-mono text-[11px] leading-relaxed">
-                                {analysisDetailLogs.map((entry) => {
-                                    const logType = String(entry?.type || 'info').toLowerCase();
-                                    const typeClass = logType === 'error'
-                                        ? 'text-red-300/95'
-                                        : logType === 'success'
-                                            ? 'text-emerald-300/95'
-                                            : logType === 'warning'
-                                                ? 'text-amber-300/95'
-                                                : 'text-white/75';
-                                    const clock = formatHistoryClock(entry?.at);
-                                    return (
-                                        <div key={entry.id} className={`whitespace-pre-wrap break-words ${typeClass}`}>
-                                            {clock ? `[${clock}] ` : ''}{entry.message}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
                     {(isAnalyzing || isRetryingPhase2) && String(analysisFlowStatus?.highlightHint || '').trim() && (
                         <div className="mb-2 rounded-lg border border-emerald-400/45 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 shadow-[0_0_14px_rgba(52,211,153,0.18)] animate-pulse">
                             🎨 {String(analysisFlowStatus.highlightHint).trim()}
