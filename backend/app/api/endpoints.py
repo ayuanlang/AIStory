@@ -23682,6 +23682,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
     project_language = get_context_val(["language", "project_language", "lang"])
     tone = get_context_val(["tone", "mood", "atmosphere"])
     lighting = get_context_val(["lighting", "light_style", "light"])
+    color_spectrum = get_context_val(["color_spectrum", "colorSpectrum", "色系光谱", "color_temperature_direction"])
     character_relationships = get_context_val(["character_relationships"])
     project_notes = get_context_val(["notes"])
     region_culture = get_context_val(["region_culture", "region", "country", "culture", "country_region"])
@@ -23737,6 +23738,8 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         project_context_lines.append(f"Tone: {tone}")
     if lighting:
         project_context_lines.append(f"Lighting: {lighting}")
+    if color_spectrum:
+        project_context_lines.append(f"Color Spectrum: {color_spectrum}")
     if era_setting:
         project_context_lines.append(f"Era / Period (年代): {era_setting}")
     if region_culture:
@@ -23793,6 +23796,7 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
         "global_style": global_style,
         "tone": tone,
         "lighting": lighting,
+        "color_spectrum": color_spectrum,
         "region_culture": region_culture,
         "era_setting": era_setting,
         "broadcast_security_level": broadcast_security_level,

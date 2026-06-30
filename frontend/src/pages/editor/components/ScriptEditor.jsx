@@ -3493,6 +3493,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const plotSummaryRaw = findValueByAliases(obj, ['plot_summary', 'plotSummary', 'story_summary', 'storySummary', '剧情总结']);
             const musicRecommendationRaw = findValueByAliases(obj, ['music_recommendation', 'musicRecommendation', 'score_recommendation', 'scoreRecommendation', '配乐推荐']);
             const colorPaletteRaw = findValueByAliases(obj, ['color_palette', 'colorPalette', 'palette', '色系', '色谱']);
+            const colorSpectrumRaw = findValueByAliases(obj, ['color_spectrum', 'colorSpectrum', '色系光谱', '冷暖色调', 'color_temperature_direction']);
 
             const payload = {
                 Global_Style: toNonEmptyString(globalStyleRaw),
@@ -3500,11 +3501,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 tone: toNonEmptyString(toneRaw),
                 lighting: toNonEmptyString(lightingRaw),
                 color_palette: toNonEmptyString(colorPaletteRaw),
+                color_spectrum: toNonEmptyString(colorSpectrumRaw),
                 plot_summary: toNonEmptyString(plotSummaryRaw),
                 music_recommendation: toNonEmptyString(musicRecommendationRaw),
             };
 
-            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.tone || payload.lighting || payload.color_palette || payload.plot_summary || payload.music_recommendation) {
+            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.tone || payload.lighting || payload.color_palette || payload.color_spectrum || payload.plot_summary || payload.music_recommendation) {
                 return payload;
             }
         }
@@ -3910,6 +3912,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const globalStyle = getInfoValue(['Global_Style', 'global_style']);
         const tone = getInfoValue(['tone']);
         const lighting = getInfoValue(['lighting']);
+        const colorSpectrum = getInfoValue(['color_spectrum', 'colorSpectrum', '色系光谱']);
         if (title) basicInfoLines.push(`Title: ${title}`);
         if (seriesEpisode) basicInfoLines.push(`Series/Episode: ${seriesEpisode}`);
         if (type) basicInfoLines.push(`Type: ${type}`);
@@ -3918,6 +3921,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (globalStyle) basicInfoLines.push(`Global Style: ${globalStyle}`);
         if (tone) basicInfoLines.push(`Tone: ${tone}`);
         if (lighting) basicInfoLines.push(`Lighting: ${lighting}`);
+        if (colorSpectrum) basicInfoLines.push(`Color Spectrum: ${colorSpectrum}`);
         if (borrowedFilms.length > 0) basicInfoLines.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
 
         const projectBasicInfoBlock = basicInfoLines.length > 0
@@ -4014,6 +4018,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const globalStyle = getInfoValue(['Global_Style', 'global_style', 'style']);
         const tone = getInfoValue(['tone', 'mood']);
         const lighting = getInfoValue(['lighting', 'light']);
+        const colorSpectrum = getInfoValue(['color_spectrum', 'colorSpectrum', '色系光谱']);
         if (aspectRatio) metaParts.push(`Aspect Ratio: ${aspectRatio}`);
         if (imageSize) metaParts.push(`Image Size: ${imageSize}`);
         if (horizontalResolution) metaParts.push(`Horizontal Resolution: ${horizontalResolution}`);
@@ -4024,6 +4029,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (borrowedFilms.length > 0) metaParts.push(`Borrowed Films: ${borrowedFilms.join(', ')}`);
         if (tone) metaParts.push(`Tone: ${tone}`);
         if (lighting) metaParts.push(`Lighting: ${lighting}`);
+        if (colorSpectrum) metaParts.push(`Color Spectrum: ${colorSpectrum}`);
 
         const eraField = getInfoValue(['era', 'era_setting', 'period', 'time_setting']);
         const regionField = getInfoValue(['region_culture', 'region', 'country', 'country_region']);

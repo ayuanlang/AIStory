@@ -115,9 +115,9 @@
 
 ### 1.5 大光比与冷暖光谱色系（Stage 3 本阶段落实，Mandatory）
 
-**职责边界**：Stage 1 `project_visual_backfill` **不含** `color_palette`、Key:Fill、色温数值、四层色谱等技术字段；本节全部在 **Stage 3 资产设计环节本阶段推导并统一落实**，供全 Subject 共享、下游 Shot 继承。
+**职责边界**：Stage 1 `project_visual_backfill` **须含**文学级 `color_spectrum`（主冷暖方向四选一 + 参考片依据）；**不含** `color_palette`、Key:Fill、色温 K 值、四层色谱等技术字段；本节全部在 **Stage 3 资产设计环节本阶段推导并统一落实**，供全 Subject 共享、下游 Shot 继承。
 
-**推导输入（须先读取）**：`Project Visual Backfill` 的 `Global_Style`、`tone`、`lighting`（文学级方向）+ `Project Context` 的 `Genre`、`Base Positioning`、时代/地域/类型。动笔 Node 1 前，**须先为本项目一次性确定**全剧大光比策略与主冷暖色谱体系，再写入各实体 `description_cn` / `generation_prompt_cn`；禁止各 Subject 各自发明冲突色系或回退均匀平光。
+**推导输入（须先读取）**：`Project Visual Backfill` 的 `Global_Style`、`tone`、`lighting`、**`color_spectrum`（Stage 1 基于 `borrowed_films` 推导的主冷暖方向四选一 + 参考片色谱依据，须作为 §B 主冷暖基调判定的首要输入，不得与之冲突）**（文学级方向）+ `Project Context` 的 `Genre`、`Base Positioning`、时代/地域/类型。动笔 Node 1 前，**须先为本项目一次性确定**全剧大光比策略与主冷暖色谱体系，再写入各实体 `description_cn` / `generation_prompt_cn`；禁止各 Subject 各自发明冲突色系或回退均匀平光。
 
 #### A. 光影大光比基线（本阶段默认主打，Mandatory）
 
@@ -140,7 +140,7 @@
 
 须让下游在不读剧本的情况下也能执行配色。**须在本阶段用连贯中文内部推导**（建议 120–220 字等价信息量），按下列顺序确定全项目色谱，并与 `tone`、`Global_Style`、§A 大光比同体系一致：
 
-1. **主冷暖基调判定（四选一，须显式写出）**
+1. **主冷暖基调判定（四选一，须显式写出；须与 Stage 1 `color_spectrum` 一致，不得另起冲突方向）**
    - **冷调主导**：主舞台/大面积表面偏冷灰/青/蓝，暖色仅 Practical 点缀；大光比下**暗部偏冷沉、亮部冷白/青灰高光**。
    - **暖调主导**：主辅色偏蜜/褐/琥珀/暖白，冷色仅阴影或远层退冷；大光比下**亮部蜜/琥珀高光、暗部暖褐压深**。
    - **冷暖对比**（情感悬疑/noir/职场对峙/雨夜室内等**首选**）：须写 **Key 冷/暖 + Fill 暖/冷** 及大光比下哪一层落亮区/暗区；禁止只写「有冷暖对比」。
