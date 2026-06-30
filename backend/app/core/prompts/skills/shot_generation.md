@@ -53,7 +53,7 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 | :--- | :--- | :--- |
 | **Beat 完整逻辑** | 前置+六环节完整继承；拆镜前核验 | 上文专节 + §一、§七、§八 |
 | `Shot Logic (CN)` | 切换判定、收束落幅、**Beat完整逻辑继承**、观察视角、主节拍、景深层次、环境切换、防穿帮、时间预估 | §零、§一、§三.1、§十一 |
-| `Video Content (CN)` | 自然语言 + P1/Pn + (Pn) 对白；**只写画面最终结果**；必含 ENV；**禁** Beat 承接与规则推演 | §八 |
+| `Video Content (CN)` | 自然语言 + P1/Pn + (Pn) 对白；**P 段严格时序、按角色组织、跨 P 空间关系与入画运镜**；**只写画面最终结果**；必含 ENV；**禁** Beat 承接与规则推演 | §八 |
 | 景深层次 | = 环节 2；先 FG/MG/BG，再逐实体 | §七.1 |
 | 实体落位七要素 | 层位(镜头)+左中右+距参照(标明ENV/镜头/实体)+运动方向与朝向+视线+动作+相对关系 | §七.3 |
 | 环境背景微动态 | 每镜 BG/可见环境须 ≥1 项环境实体持续微动（树枝/灯光/车流等，§七.7）；含人群簇时另须完全随机人群动势、跨镜不得重复（§七.7-b）；**双层并列，禁只写其一** | §七.7 |
@@ -78,7 +78,7 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
    - **环节 4**：**对白咬合**（说话人/主听众面向+视线+情绪）是否成立；tone/speed/volume 是否继承。  
    - **环节 5**：每个主动作/每句对白/每个听者是否各有微动作+微表情。  
    - **环节 6**：是否承接上 Beat/上镜；全员/群演反馈是否闭环。  
-   - 另检：轴线与进出画路径、**跨 Beat/跨镜具名角色画内可见性或面部可读性变化是否继承上游 §11 过渡动作（出画/入画/转身别脸/遮挡/视角切换/切 ENV 反打，禁同视角同站位凭空消失/出现或面部无过渡跳变）**、肢体接触、**Beat 动作/道具/ENV 逐句继承（§一.2，每个 PROP/修饰/层位节点是否在 Video Content 可检索）**、道具连续、**旁白/V.O. 是否显式写画内全员闭嘴（§六.4）**、口型/OS/V.O.、光色连续、特效相位、**环境实体微动态（§七.7，树枝/灯光/车流等，BG 是否完全静止）**、**含人群时是否双层并列（§七.7 环境实体 + §七.7-b 人群，禁只写人群漏环境）**、**背景人群是否完全随机且跨镜无重复描述（§七.7-b，≥2 种异质微动作，禁整簇同步木偶）**、**群演/背景人群是否禁中景/特写主拍（§三.1、§七.7-b，须远景/全景/虚化 BG）**。
+   - 另检：轴线与进出画路径、**P 段时序链是否单向无乱序/抢写、各 P 是否按角色组织且有主拍对象、跨 P 同框/距离/轴线是否承接、新入画角色是否写观察导向运镜（§八.2）**、**跨 Beat/跨镜具名角色画内可见性或面部可读性变化是否继承上游 §11 过渡动作（出画/入画/转身别脸/遮挡/视角切换/切 ENV 反打，禁同视角同站位凭空消失/出现或面部无过渡跳变）**、肢体接触、**Beat 动作/道具/ENV 逐句继承（§一.2，每个 PROP/修饰/层位节点是否在 Video Content 可检索）**、道具连续、**旁白/V.O. 是否显式写画内全员闭嘴（§六.4）**、口型/OS/V.O.、光色连续、特效相位、**环境实体微动态（§七.7，树枝/灯光/车流等，BG 是否完全静止）**、**含人群时是否双层并列（§七.7 环境实体 + §七.7-b 人群，禁只写人群漏环境）**、**背景人群是否完全随机且跨镜无重复描述（§七.7-b，≥2 种异质微动作，禁整簇同步木偶）**、**群演/背景人群是否禁中景/特写主拍（§三.1、§七.7-b，须远景/全景/虚化 BG）**。
 2. **写入格式**：`Shot Logic (CN)` 必含“防穿帮自检”：`风险点A/B/C -> 防御手法A/B/C -> 本镜执行落点`。
 3. **生成门槛**：高风险不可控 -> 拆镜/改机位/降复杂动作/局部特写；禁止硬写高危连续动作。输出前须完成 **§二.8 分镜序号** 逐行核验：`Shot ID`/`Scene ID` 三层完整、同场连续、行序正确，否则禁止出表。
 
@@ -207,12 +207,14 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 9. **多人同框压降**：两人以上对话/互动/压迫/对峙/复杂调度 -> 优先切镜拆解 + 运镜串联。工具：单人主拍、OTS、反应镜、插入特写、视线引导、遮挡转场、前后景分层、短程运镜。多人同框必须降动作复杂度、拉开距离、标明主拍/辅助，禁平面并排复杂动作。  
 10. **摄影术语联想库**：只作启发；按剧情、人物关系、空间风险、AI可生成性筛选；输出只写真正服务本镜的少量术语，禁堆砌。
    - **景别/镜头尺寸**：Extreme Wide Shot、Wide Shot、Full Shot、Medium Full Shot、Medium Shot、Medium Close-up、Close-up、Extreme Close-up、Insert Shot、Cutaway、Reaction Shot、Establishing Shot、Master Shot、Two Shot、Single、Group Shot、POV Shot、Over-the-Shoulder、Left-Shoulder OTS、Right-Shoulder OTS、Reverse Shot、Clean Shot、Dirty Single、Profile Shot、Cowboy Shot、Low-Angle Shot、High-Angle Shot、Top Shot、Bird's-Eye View、Worm's-Eye View、Dutch Angle、Eye-Level Shot、Ground-Level Shot、Table-Level Shot。
+   - **特殊运镜视角（§5.5 H）**：**FPV**（First Person View 第一人称主观）｜**OPV**（Objective/Others' POV 客观/他人观察）｜**ACT**（Action Camera 运动相机/Body Mount/Snorricam/Helmet Cam/Dash Cam）｜**虫蚁**（Insect/Ant View 贴地微距/Worm's-Eye+Macro/Low Rig/Table-Level）｜**鸟瞰**（Bird's-Eye/Aerial Top-Down/Drone Establishing/Map-Scale Top Shot）；切换：POV Handoff、Mount Off、Scope Overlay、Surveillance View、Bird's-Eye Descend/Drop-In。
    - **构图/画面组织**：Rule of Thirds、Golden Ratio、Golden Spiral、Symmetrical Composition、Asymmetrical Balance、Central Composition、Triangular Composition、Diagonal Composition、S-Curve Composition、Leading Lines、Vanishing Point、Frame within Frame、Foreground Framing、Natural Frame、Negative Space、Positive Space、Lead Room、Looking Room、Headroom、Nose Room、Deep Staging、Layered Composition、Foreground/Midground/Background、Silhouette Composition、Chiaroscuro Composition、Graphic Match Composition、Balanced Mass、Visual Weight、Open Frame、Closed Frame、Crowded Frame、Isolated Subject、Occlusion Layer、Depth Cues、Scale Contrast、Color Blocking、Shape Contrast、Texture Contrast、High/Low Horizon Line。
    - **镜头/焦段/透视**：Ultra Wide Angle、Wide Angle、Normal Lens、Telephoto、Long Lens、Macro Lens、Tilt-Shift、Anamorphic、Spherical Lens、Fisheye、Shallow Depth of Field、Deep Focus、Soft Focus、Selective Focus、Rack Focus、Split Diopter、Bokeh、Lens Compression、Perspective Distortion、Parallax、Foreground Magnification、Background Compression、Focus Pull、Focus Breathing、Whip Focus。
    - **机位/摄影机支撑**：Locked-Off Camera、Tripod、Dolly、Track、Slider、Crane、Jib、Steadicam、Gimbal、Handheld、Shoulder Rig、Drone、Cable Cam、Snorricam、Car Mount、Low Rig、Overhead Rig、Point-of-View Rig、Static Observer、Subjective Camera、Objective Camera、Surveillance Camera View、Phone Camera View、Screen View。
    - **运镜/运动语汇**：Dolly In/Out｜Push In/Pull Back｜Tracking/Lateral/Arc/Orbit｜Follow/Lead｜Crane/Boom｜Whip Pan｜Handheld/Steadicam/Gimbal｜Long Take｜Snorricam｜Counter-Move｜Master+Intercut｜Drone/Cable Cam。
    - **环境变化运镜联想库**：见 §5.6（环境/视角/状态切换时强制参考，择项写入 `环境切换运镜:` 与 Video Content）。
-   - **武打/仙侠/轻功/飞翔/宏观/追逐联想库**：见 §5.5（强制参考，按相位择项写入 Shot Logic）。
+   - **武打/仙侠/轻功/飞翔/宏观/追逐联想库**：见 §5.5 A–E（强制参考，按相位择项写入 Shot Logic）。
+   - **特殊运镜视角（ACT/FPV/OPV/虫蚁/鸟瞰）联想库**：见 §5.5 H（上游 Observer View 标注或剧本触发时强制参考）。
    - **调度/轴线/视线**：180-Degree Rule｜Eyeline Match｜Screen Direction｜Action Axis｜Match on Action｜Occlusion Pass｜Foreground Pass。
    - **转场/剪辑联想**：Match Cut｜Action Match｜Eyeline Match Cut｜Sound Bridge｜Whip Pan Transition｜Occlusion Transition｜Speed Ramp｜Bullet Time｜Freeze Frame。
    - **升格与快慢节奏**：见 §5.4.1；`快慢节奏:`+`升格技法:`+触发相位。
@@ -323,7 +325,7 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 - ✅ P2 常速 Handheld 快攻 2.5s → P3 Speed Ramp 入慢 + Bullet Time 读 MG 左肩命中 2s → P4 Speed Ramp 出常 + 受力反馈 1.5s。
 
 #### 5.5 电影运镜联想技巧库（剧本驱动选用）
-**用法**：先读本 Beat / Scene 的**具体剧本要素**（主相位、ENV 结构、人数与站位、空间宽窄、垂直/水平位移、题材基调、情绪落点、正式决战/宏观/升格标注），再按主相位从库择 1–2 项 → 写入 `Shot Logic` 对应字段 + `Video Content` 机位同步运动；`运镜选用依据:` 须写明**本 Beat 哪条信息**触发了该运镜/景别/升格选择（禁写片名/名场面/泛化“参考某电影”）。**原则**：打斗/特效攻击须**快慢结合**(§5.4.1)，至少一组「常速快相位→升格慢相位→Speed Ramp 回常速」或等效切镜；打斗主相位常速运镜，升格只短插关键瞬间；单镜禁3人+复杂缠斗；Long Take>8s拆镜。
+**用法**：先读本 Beat / Scene 的**具体剧本要素**（主相位、ENV 结构、人数与站位、空间宽窄、垂直/水平位移、题材基调、情绪落点、**Observer View 类型 ACT/FPV/OPV/虫蚁/鸟瞰**、正式决战/宏观/升格标注），再按主相位从库择 1–2 项 → 写入 `Shot Logic` 对应字段 + `Video Content` 机位同步运动；`运镜选用依据:` 须写明**本 Beat 哪条信息**触发了该运镜/景别/升格选择（禁写片名/名场面/泛化“参考某电影”）。**原则**：打斗/特效攻击须**快慢结合**(§5.4.1)，至少一组「常速快相位→升格慢相位→Speed Ramp 回常速」或等效切镜；打斗主相位常速运镜，升格只短插关键瞬间；单镜禁3人+复杂缠斗；Long Take>8s拆镜；**特殊视角**须写 `特殊视角运镜:`（§5.5 H）并与 ENV/对白规则配套。
 
 #### A. 武打/格斗/枪战（`打斗运镜技法:`）
 | 相位 | 运镜 | 景别/机位 | 升格 |
@@ -408,10 +410,11 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 | 兽潮/机群满幅 | Bird's-Eye / Drone 俯瞰 | EWS 满幅 | 无边 |
 
 #### F. 剧本驱动选用原则（`运镜选用依据:` 必填）
-**选用顺序**：① 读本 Beat `{行为过程}`/`{结果落位}`/ENV/人数/空间约束 → ② 对照 §5.5 A–E 相位表择运镜+景别+升格 → ③ 在 `运镜选用依据:` 写明**剧本触发点**（哪条动作、哪个 ENV 结构、何种空间/人数/节奏/情绪落点导致此选择）→ ④ 写入 `Video Content` 机位同步运动。**禁**：片名、名场面、泛化“参考某电影/某片手法”。
+**选用顺序**：① 读本 Beat `{行为过程}`/`{结果落位}`/ENV/人数/空间约束 + **Observer View 是否标注 ACT/FPV/OPV/虫蚁/鸟瞰** → ② 对照 §5.5 A–E 相位表 + **§5.5 H 特殊视角表**择运镜+景别+升格 → ③ 在 `运镜选用依据:` 写明**剧本触发点**（哪条动作、哪个 ENV 结构、何种空间/人数/节奏/情绪落点导致此选择）→ ④ 写入 `Video Content` 机位同步运动。**禁**：片名、名场面、泛化“参考某电影/某片手法”。
 
 **常见剧本触发维度（择项时须至少命中 2 项并写入依据）**：
 - **空间**：窄走廊/电梯/车内 → Handheld+Long Take｜开阔对峙 → Profile Two-Shot+Static Hold｜垂直落差/檐上/壁跑 → Crane/Drone 垂直跟｜掩体/遮挡物多 → Tracking+Occlusion
+- **特殊视角（§5.5 H）**：主观所见/瞄准/受击/窥视 → **FPV**+POV 衍生 ENV｜旁观/全知/监控/反打观察 → **OPV**+Master/衍生 ENV｜贴身极限/跑酷/载具内冲击 → **ACT**+Body Mount/Snorricam｜渺小/贴地/昆虫尺度/鞋底压迫 → **虫蚁**+Ground-Level/Macro｜全局建置/宏观/地图式调度/远距 POV 补全 → **鸟瞰**+Drone/Bird's-Eye/EWS
 - **人数与相位**：双决 → Orbit+Lateral｜群殴/混战 → Master+Intercut+High-Angle｜单人关键一击 → Push In/Crash Zoom+升格短插
 - **位移类型**：水平追逐 → Follow/Lead 交替｜载具 → Car Mount｜空中/御剑 → Bird's-Eye/Drone Orbit｜宏观军团 → EWS 满幅+三要素
 - **题材/基调**：写实 gritty → Handheld 贴战圈｜仙侠/奇幻奇观 → Crane/Drone 大纵深+升格短插｜仪式/阅兵整齐 → Insert 细节+Pull Back 揭示规模
@@ -422,6 +425,110 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 **依据写法示例**：`运镜选用依据: Beat 写“窄巷贴身缠斗、仅两人、无腾挪空间”→ 选 Handheld Combat+MCU 贴战圈；关键格挡相位上游标注升格 → Hyper Slow-Mo 短插读受力反馈`
 
 **快慢节奏示例**：`快慢节奏: P2 常速 Handheld 快攻连击 2.5s → P3 升格 Bullet Time 读命中 2s → P4 Speed Ramp 出常+受力反馈 1.5s；时间预估快慢分项已计入`
+
+#### H. 特殊运镜视角联想技巧库（ACT / FPV / OPV / 虫蚁 / 鸟瞰）
+
+**定位**：上游 Beat `Observer View`、环节 1 观察视角或剧本强暗示标注 **ACT / FPV / OPV / 虫蚁 / 鸟瞰**（或等价语义：第一人称/主观/客观/运动相机/贴地微距/俯瞰航拍）时，本库与 §5.5 A–E **并列选用**；写入 `特殊视角运镜:` + `Video Content` 机位描写。**术语口径**：
+
+| 缩写 | 全称 | 机位语义 | 与 ENV 关系 |
+| :--- | :--- | :--- | :--- |
+| **FPV** | First Person View | 第一人称主观，摄影机≈角色双眼/瞄准镜/屏幕 POV | **须** POV 衍生 ENV 或 `{观察介质}度{主环境名}`；禁错用 Master 写不可读视角 |
+| **OPV** | Objective / Others' Point of View | 客观/他人/旁观/监控/全知第三人称观察（非承载者双眼） | Master/OTS/衍生 ENV；**禁**写成 FPV 却标 OPV |
+| **ACT** | Action Camera | 运动相机贴身机位（GoPro/Body Mount/Snorricam/头盔/载具内硬绑） | 可贴承载者运动；空间读解优先轨迹+冲击，ENV 按可见半空间匹配 |
+| **虫蚁** | Insect/Ant View | 虫蚁级贴地/极低角/微距尺度（Worm's-Eye + Macro/Table-Level） | Ground-Level/Low Rig；强调渺小、窥视、鞋底/桌腿/草叶尺度 |
+| **鸟瞰** | Bird's-Eye / Aerial Top-Down | 正上方或高角度俯瞰（Drone/Crane/Map-Scale） | EWS/Top/Bird's-Eye；**全局建置补全优先**（§二.3）；宏观/地图式调度 |
+
+**用法**：① 读 Observer View 是否含上表类型 → ② 从对应子表择 1–2 项运镜+景别 → ③ `特殊视角运镜:` 写类型+选用项+ENV 匹配结论 → ④ `Video Content` 写机位高度/朝向/尺度感+运镜过程。**AI 防御**：FPV/ACT 禁复杂多人同框缠斗；虫蚁禁精细多指/写字；鸟瞰禁口型可读对白主拍（例外：宏观对白 §三.4）。
+
+##### H-1. FPV 第一人称主观（`特殊视角运镜: FPV`）
+| 相位 | 运镜 | 景别/机位 | ENV/升格 |
+|---|---|---|---|
+| 建置/入画 | POV Handoff / Steadicam 贴眼高 | POV MS→CU 眼高 | 切 POV 衍生 ENV + §5.6 过程 |
+| 行走/搜索 | Head-Mounted Follow / Gimbal 贴头 | POV MS 轻微呼吸晃 | Tracking 常速 |
+| 瞄准/窥视 | Static Hold POV / Scope Overlay | POV CU 十字/框景 | 受限 POV 仅可见范围 |
+| 受击/冲击 | Snorricam 短相位 / Handheld 剧震 | POV CU→黑场边缘 | 升格短插可选 |
+| 递交/拾取 | POV 下垂看手 / Rack Focus 手→目标 | POV CU Insert | 手+物件可读 |
+| 术法/御剑 POV | FPV Dive / Lead 俯冲 | POV→EWS 出云 | Speed Ramp |
+| 屏幕/镜中 POV | Screen View POV / Frame within Frame | 屏幕内 POV MCU | 互打 ENV 重建 |
+
+**配对速查**：窥门/窗缝→Static POV+框景｜奔跑→Head Follow+Handheld｜瞄准→Scope POV+受限 ENV｜受击→Snorricam+升格｜递物→POV 看手+Rack Focus
+
+**ENV 专规（强制）**：FPV 须切 **POV 衍生 ENV** 或 Beat 已写 `{观察介质}度{主环境名}`；`Video Content` 写**可见边界**（框景/门洞/镜筒/屏幕边）；**禁** FPV 相位写承载者正面口型（口型非 FPV 可读项，对白须切 OPV/OTS 主拍或标注画外）。
+
+##### H-2. OPV 客观/他人观察（`特殊视角运镜: OPV`）
+| 相位 | 运镜 | 景别/机位 | ENV/升格 |
+|---|---|---|---|
+| 全知建置 | Static Observer / Slow Dolly Master | EWS/MS Eye-level | `0度{主环境名}` Master |
+| 旁观对峙 | Profile Two-Shot / Static Hold | MS 侧轴 | Master 或衍生 |
+| 监控/监视 | Surveillance View / High-Angle Fixed | Wide 俯角固定 | 受限可见+颗粒/扫描线可选 |
+| 他人侧写 | Dirty Single / OTS 看承载者 | MCU/OTS | 衍生 ENV + §5.6 |
+| 反应读情绪 | Static Hold MCU / Push In | CU 面部可读 | Standard 焦段 |
+| 走远/离开 | Pull Back OPV / Crane 微升 | MS→Wide | 空间关系揭示 |
+| 群像观察 | High-Angle Master / Crane 缓降 | Wide Two Shot | 轴线稳定 |
+
+**配对速查**：全知开场→Static Master+0度 ENV｜监视→Surveillance+High-Angle｜看他人反应→OTS/Dirty Single｜客观记录→Locked-Off+Deep Focus
+
+**与 FPV 分界（强制）**：**OPV** = 摄影机不在任何角色眼内，观众为第三者；**FPV** = 摄影机绑定单一承载者感官。**对白**：口型可读须 OPV/OTS/MCU 主拍，**禁止**用 FPV 承载对白 lip-sync（自白/内心除外，见 §六.4）。
+
+##### H-3. ACT 运动相机（`特殊视角运镜: ACT`）
+| 相位 | 运镜 | 景别/机位 | ENV/升格 |
+|---|---|---|---|
+| 跑酷/追逐 | Body Mount Follow / Chest Cam | POV-MS 宽角畸变 | Handheld 常速跟 |
+| 格斗贴身 | Snorricam / Shoulder Rig Combat | CU 肩/胸幅 | 命中短插升格 |
+| 载具内 | Car Mount / Dash Cam / Helmet Cam | MS 路流/仪表 | 碰撞 Bullet Time |
+| 极限跃障 | Gimbal 贴身跃起 / Lead 反跑 | MLS→MS | Speed Ramp |
+| 坠落/翻滚 | Body Roll / Tumble Mount | 混乱 CU 短相位 | Hyper Slow-Mo 可选 |
+| 术法近身 ACT | Orbit 贴战圈+Body Mount | MCU 宽角 | 与 §5.5 A 快慢结合 |
+| 揭示脱离 ACT | Pull Off Mount→OPV Master | CU→Wide 机位脱离 | 1.5–2s 过渡 |
+
+**配对速查**：跑酷→Chest Follow+Wide Angle｜拳战→Snorricam+Handheld｜驾车→Dash Cam+Lead/Follow｜坠楼→Roll Mount+升格
+
+**AI 防御（强制）**：ACT 相位**单镜主体≤2**、禁复杂多人缠斗全景；宽角畸变须写「运动相机广角边缘拉伸」；脱离 ACT 须写 **Mount Off / 机位脱离** 过渡，禁无过程跳 OPV。
+
+##### H-4. 虫蚁视角（`特殊视角运镜: 虫蚁`）
+| 相位 | 运镜 | 景别/机位 | ENV/升格 |
+|---|---|---|---|
+| 贴地建置 | Ground-Level / Worm's-Eye Static | Low CU 贴地 | 桌腿/草叶/地砖 FG |
+| 逼近压迫 | Low-Angle Push In / Crawl Dolly | Worm's-Eye→Low MS | 鞋底/巨物底缘 FG |
+| 穿行缝隙 | Table-Level Tracking / Low Rig Slide | Macro MLS 贴地滑移 | 框景=桌底/门缝 |
+| 窥视上方 | Worm's-Eye Hold / Tilt Up 缓仰 | Low CU 自下而上 | 人物剪影/逆顶光 |
+| 昆虫尺度 | Macro Lens / Extreme Low Rig | ECU 纹理（叶脉/尘粒） | Shallow DOF |
+| 踩踏/落足 | Low Angle 跟足 / Crash 落点 | CU 鞋跟触地 | 震尘+升格可选 |
+| 脱离虫蚁 | Crane Up / Tilt Up 揭示 | Low→Eye-level MS | Pull Back 回 OPV |
+
+**配对速查**：渺小感→Worm's-Eye+Macro｜压迫→Low Push In+鞋底 FG｜桌底窥视→Table-Level Track｜自然微观→Macro+叶脉 ECU
+
+**尺度写法（强制）**：`Video Content` 须写**参照物尺度对比**（桌腿如柱、鞋跟占满画幅、草叶高过画顶）；**禁**虫蚁相位写口型可读对白；手部精细动作改概括或切 OPV Insert。
+
+##### H-5. 鸟瞰/俯瞰（`特殊视角运镜: 鸟瞰`）
+| 相位 | 运镜 | 景别/机位 | ENV/升格 |
+|---|---|---|---|
+| 全局建置 | Drone Establishing / Bird's-Eye Drop-In | EWS/Top Shot | §二.3 远距补全优先 |
+| 地图式调度 | Top Shot Static / Map-Scale Hold | EWS 棋盘俯看 | 全员落位可读 |
+| 垂直揭示 | Crane Down / Bird's-Eye Descend | EWS→MS 垂降 | 1.5–3s 过程 |
+| 跟随俯瞰 | Drone Follow / Orbit Top | EWS 贴轨迹 | 追逐/行军 |
+| 宏观对阵 | Bird's-Eye 双阵 / Drone Pull Back | EWS 满幅 | §5.5 E 三要素 |
+| 轻功/空战俯瞰 | Drone Top+Tilt / Crane Through | EWS 云岛/屋脊 | 与 §5.5 C 并用 |
+| 收束拉高 | Drone Pull Up / Crane Up Exit | MS→EWS 离场 | 无口型主拍 |
+
+**配对速查**：新 Scene 远距→Drone Drop-In+§二.3｜Walk-and-Talk 调度→Top Follow｜大军→Bird's-Eye EWS+§5.5 E｜单挑→Crane Down 入 Eye-level
+
+**与 OPV/宏观分界**：**鸟瞰**强调**垂直或高角俯看**与**地图式空间读解**；宏观群体 Beat 优先 **鸟瞰+§5.5 E**；常规对白**禁**鸟瞰 Wide 主拍口型（§三.4 宏观例外）。
+
+##### H-6. 特殊视角选用与切换（`特殊视角运镜:` + `环境切换运镜:` 配套）
+**选用顺序**：Observer View 类型 → 本库 H-1–H-5 择项 → 若切 ENV/观察侧 → **§5.6 视角转换过程**（禁硬切）→ `Video Content` 写高度/尺度/绑定关系。
+
+**常见切换链（择 1 项写入依据）**：
+- **OPV Master → FPV**：Eyeline Match+POV Handoff / Push In to Eyes / 瞄准镜入画
+- **FPV → OPV**：Pull Off Mount / 机位脱离 / 反打 OTS / 受击黑场再接 Master
+- **ACT → OPV**：Mount Off+Crane Up / 甩镜 Whip Pan 至 Third Person
+- **虫蚁 → OPV**：Tilt Up+Crane Up / Low Rig 升起至 Eye-level
+- **鸟瞰 → OPV**：Crane/Bird's-Eye Descend / Drone Drop-In 垂降至 Two Shot
+- **OPV → 鸟瞰**：Crane Up / Drone Pull Back（全局建置/收束）
+
+**依据示例**：`特殊视角运镜: FPV；Beat 写“甲透过门缝窥看乙”→ Scope POV+受限 ENV+框景；对白无口型，切 OPV OTS 承担下句`
+
+**Shot Logic 必填（上游标注或本镜主动选用特殊视角时）**：`特殊视角运镜:` 类型=ACT|FPV|OPV|虫蚁|鸟瞰；相位=…；选用运镜=…；ENV 匹配=…；与 FPV/OPV 分界=…；切换链=无|…
 
 #### G. 环境变化运镜联想技巧库（`环境切换运镜:` 强制参考，只列项）
 
@@ -548,15 +655,25 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 - 叙述体优先；禁 `结构=…｜`、`FG/MG/BG=` 键值体。
 - **只写画面最终结果（最高硬约束）**：正文只描述镜头里**实际看见**的机位、景别、运镜、实体落位、动作、表情、光影及其变化；上游 Beat 与分镜规则须在写作前消化，**以画面内化呈现，不得在正文解释如何承接 Beat、如何执行规则**。❌ `承接上一 Beat 站位后，按环节 2 建置三层`｜❌ `因对白组未完结故保持中近景`｜❌ `按 §三.1 收束落幅判定本镜末 Pull Back`｜✅ `Eye-level Two Shot 中全景，CHAR:[@Lin] 距桌右前角一步、朝右前倾压桌…`
 - **环境标签强制（硬约束）**：每镜 `Video Content (CN)` 至少一处显式写出当前主场 `ENV:[环境名]`；P1 建置段须出现；环境切换时须写“切换到 ENV:[...]”、物理桥接及**明确运镜手法**（运镜名直接写入画面，禁引用 § 章节）。禁止只在 `Associated Entities` 列环境名而正文不写 `ENV:[...]`；禁止 ENV 切换无运镜硬切。
-- 运镜与动作流按 `P1/P2/P3…`；对白用 `(Pn) {状态} — Dialogue/…: "原句" — {听者反应}`（§六.1）。
+- 运镜与动作流按 `P1/P2/P3…`；**P 段须严格按时序推进、按角色组织描写、跨 P 核验空间关系并显式运镜至新入角色观察视角**（§八.2 P 段时序与角色空间链）；对白用 `(Pn) {状态} — Dialogue/…: "原句" — {听者反应}`（§六.1）。
 - 保留 `CHAR/PROP/ENV` 方括号标签；凡 Index 与 Core Scene Info 双源均出现的实体**必须**使用标准表达（§一.0.1），名称逐字取自 Scene Subject Index。群演/匿名背景人群只用自然语言，**禁止** `EXTRA:`。段首可用中文维度引导。
 - **禁分镜推演与规则逻辑入正文（硬约束）**：`Video Content (CN)` **禁止**写入——Beat/上镜承接说明；`收束落幅判定`/`下一镜`/`路径 A/B`/调度预留/桥接动机/执行优先级；环节编号（环节 0–6）、章节引用（§x.x）、上游工程字段（`{对白组边界}`/`{下一节拍起幅}`/`建置更新=`/`Beat完整逻辑继承` 等）；规则判定句式（「按…判定」「因上游…故…」「须…故本镜…」）；以及任何仅属 `Shot Logic (CN)` 的解释性、推演性文字。
 - **禁上游空间推导术语入 Video Content（硬约束，§七.6）**：正文**禁止**出现——`0度/90度/180度/270度` 作工程坐标、`360度拓扑`、`转角对照`、`衍生0度=主环境N度`、`(N+90)%360`、`view_angle_from_main`、`empty_view_delta`、`angle_mapping`、`topology_360`、`zero_degree_anchor` 等 Index/Stage 推导字段或公式。**须转译为镜头语言**：机位落点（如「会议桌长边侧面、胸口高度 Eye-level」）、相对主视角的**顺时针回转 N 度**（如「沿桌轴线顺时针回转 180 度至桌内侧百叶窗侧」）、Reverse Shot / OTS / POV 等运镜名、**背景更替**（如「背景由半开木门与门外走廊取代主视角时的百叶窗墙」）、方向性物体**可见面变化**（如「椅背朝向镜头、门扇向室内开启停在画面右侧」）。`ENV:[180度办公室会客区_桌后反打]` 等 Index 原名**保留**作环境标签，但正文描述须用上述镜头语言，不得复读 ENV 名中的角度前缀当空间说明。
 
 1. **全局动态风格**：1–2 句重申项目基调；有 `Global_Style` 时首句须为 `全局动态风格：{原文}`。
 2. **运镜与动作流**（写作前须按 Beat 六环节与 §三.4、§五、§六、§七 完成推演，正文**只输出画面结果**；**动作/道具/ENV 逐句继承见 §一.2，与 §六.1 对白同级**）：
-   - **P1（起幅）**：机位/景别 → `ENV:[...]` → **机位落点与观察朝向（衍生 ENV 时写顺时针回转角度或 Reverse/OTS/POV 运镜，§七.6）** → 前景/中景/背景框架 → 逐实体落位与朝向（方向性家具/门窗须写当前可见面）→ **BG 环境实体微动态（§七.7，≥1 项，树枝/灯光/车流等，全镜持续）**；**BG 含人群簇时另写完全随机人群动势，跨镜禁复用他镜组合（§七.7-b，与 §七.7 并列，禁只写人群）** → 主节拍起势；**直接写出本镜起幅可见状态**，禁写 Beat/上镜承接过程；**宏观军团/机群等无明确数量**时 P1 以 Extreme Wide / 俯瞰建置，群体布满画面。
-   - **P2…Pn（过程）**：运镜/动作/对白/微表演/反馈；含 `(Pn)` 时写对白咬合与听者反应；移动写轨迹节点 FG/MG/BG+左中右；**跨 P 切换观察角度**（OTS/正反/POV/衍生 ENV）须写 **§5.6 视角转换过程专规**：过渡运镜过程 + 自然留白 + BG 渐进更替，**禁**无过程硬切直给新角度；打斗/术法/轻功/空战/特效/追逐/宏观场面须在 P 段**直接写出**对应运镜与快慢变化（§5.4.1：**快相位写机位跟轨迹+常速；慢相位写升格技法+锁定节点；切换写 Speed Ramp 入/出**；以画面速率描写呈现，禁写规则选用依据；禁「快速打斗/慢动作」泛化句）。
+
+   **P 段时序与角色空间链（强制，P1→P2→…→Pn/终段）**
+   - **严格时序（硬约束）**：`P1/P2/P3…/终段` 须按**叙事时间先后**单向推进；每段只写**本段相位内**发生的机位变化、角色动作、对白与反馈；**禁止**后段 P 内容抢写前段未完成动作，**禁止**乱序、倒叙或同相位重复描写；`(Pn)` 对白须落在**该句说话人主拍 P 段**，听者反应写在同段或**紧随其后的下一 P 段**，不得跨时序前置。
+   - **按角色组织（硬约束）**：每个 P 段须先明确**本段主拍角色/观察对象**（1 人主拍或 2 人同框关系镜），再写该角色（及同框内其他可见角色）的层位、朝向、视线、动作、微表演；**禁止**无主体地堆叠环境或泛写「两人对话」而不点名本段焦点是谁。**多角色 Beat** 时：尚未入画/尚未进入本段观察范围的角色**不得**在本 P 段写面部可读表演；须等其**入画 P 段**再写。
+   - **跨 P 空间关系（硬约束）**：每写下一 P 段前，须继承上一 P 段终态——**同框判定**（各 `CHAR:` 是否同处一镜、谁为虚焦/过肩/画外）、**相对距离**（近/一步/数步/桌宽/跨层 FG-MG-BG）、**轴线与面向**（谁朝谁、是否仍互视）。下一 P 段须**显式承接或更新**上述关系，**禁止**无依据跳变站位、距离或同框状态。
+   - **新入角色观察运镜（硬约束）**：角色**首次入画**、**从画外进入观察范围**或**本段才成为主拍/口型可读对象**时，**禁止** Static 硬切直给终态；须**显式写出运镜过程**（从 §5.6 择项：Push In / Pan / Track / Arc Orbit / Rack Focus / Reframe / OTS Switch / Pull Back→Two Shot / Follow 入画 / Eyeline Match+Reframe 等），将机位**导向可读该角色的合适观察视角**（中景/中近景/OTS/POV 等，§三.4），通常 **1.5–3s**；入画须写**从哪一侧/哪层进入、与已在画角色的距离如何建立**。
+   - **Shot Logic 配套**：`Shot Logic (CN)` 须写 `P段时序链:`（P1=…→P2=…→…，各段主拍角色+时序功能）与 `跨P空间关系:`（各段终态同框/距离/轴线摘要；新入角色=哪段+运镜手法）。
+   - **写法顺序（每 P 段建议）**：① 本段主拍/观察对象 → ② 与上一 P 的空间关系承接（同框/距离/轴线变化）→ ③ 运镜过程（含新入角色导向）→ ④ 本段内各可见 `CHAR:` 七要素 → ⑤ 动作/对白/反馈 → ⑥ 本段终态落点（供下一 P 继承）。
+   - **反例**：❌ P2 写 Chen 对白，P1 未建置 Chen 落位却 P2 直接 MCU 口型｜❌ P1 双人同框，P3 反打却未写距离/轴线承接｜❌ 甲从门后入画，P4 直接 Static 给甲特写而无 Push In/Follow 入画过程｜✅ P1 Two Shot 交代 Lin/Chen 隔桌一步对峙 → P2 Push In 至 Lin 主拍，Chen 虚焦过肩、距 Lin 仍约桌宽 → P3 Arc Orbit 过渡后 OTS 反打 Chen，显式承接桌轴线与一步距离 → P4 Track 跟 Lin 起身，Pan+Reframe 将刚入 MG 的 Wang 从侧后方纳入 Two Shot，写清 Wang 自 BG 左区入画、距 Lin 约两步。
+
+   - **P1（起幅）**：机位/景别 → `ENV:[...]` → **机位落点与观察朝向（衍生 ENV 时写顺时针回转角度或 Reverse/OTS/POV 运镜，§七.6）** → **本镜首批可见 `CHAR:` 按角色逐个**落位（层位+左中右+距参照+面向+视线）→ 前景/中景/背景框架 → 逐实体落位与朝向（方向性家具/门窗须写当前可见面）→ **写明画内各角色同框关系与相互距离** → **BG 环境实体微动态（§七.7，≥1 项，树枝/灯光/车流等，全镜持续）**；**BG 含人群簇时另写完全随机人群动势，跨镜禁复用他镜组合（§七.7-b，与 §七.7 并列，禁只写人群）** → 主节拍起势；**直接写出本镜起幅可见状态**，禁写 Beat/上镜承接过程；**宏观军团/机群等无明确数量**时 P1 以 Extreme Wide / 俯瞰建置，群体布满画面。
+   - **P2…Pn（过程）**：**先承接上一 P 终态空间关系，再写本段主拍角色与运镜**；运镜/动作/对白/微表演/反馈；含 `(Pn)` 时写对白咬合与听者反应；移动写轨迹节点 FG/MG/BG+左中右；**新入画/新成为主拍的角色须写观察导向运镜**（见上条）；**跨 P 切换观察角度**（OTS/正反/POV/衍生 ENV）须写 **§5.6 视角转换过程专规**：过渡运镜过程 + 自然留白 + BG 渐进更替，**禁**无过程硬切直给新角度；打斗/术法/轻功/空战/特效/追逐/宏观场面须在 P 段**直接写出**对应运镜与快慢变化（§5.4.1：**快相位写机位跟轨迹+常速；慢相位写升格技法+锁定节点；切换写 Speed Ramp 入/出**；以画面速率描写呈现，禁写规则选用依据；禁「快速打斗/慢动作」泛化句）。
    - **终段（落幅）**：动作/受力静止结果 + 全员反馈落点；若本镜末须 Pull Back/回全景，**只写运镜与落幅画面**，判定逻辑只写 Shot Logic。
    - 含语言时：完整原句 + 口型/闭口 + 听者微表演 + 对话布光；口型可读须写运镜+说话人景别；**旁白/V.O./NARRATOR 相位须 明确 写画内全员闭嘴**（§六.4）。
    - 微表情/特效：起势→中段→落点，以可视变化链写出；视线/肢体变化锚定立体空间落位。
@@ -603,12 +720,12 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 > 下表综合示例采用**路径 B 次选**（单镜内 P1–P4）；生产时同条件**优先路径 B 推荐写法**（拆成两镜）。
 
 #### 连续三镜叙事（单镜 P 段参考；完整 `Video Content (CN)` 见下表）
-> 景深层次基线见上文「示例场景设定」；以下仅列各镜变更与核心动作，不重述三层字段。
+> 景深层次基线见上文「示例场景设定」；以下仅列各镜变更与核心动作，不重述三层字段。**P 段须严格时序、按角色主拍组织，跨 P 承接同框/距离/轴线，反打与新主拍须写运镜过程（§八.2）。**
 
-1. **P1（全景建置）**：Two Shot 中全景建立双人对峙与 ENV:[Office] 三层空间。
-2. **P2（Lin 对白主拍+落点）**：Micro Push In 至 Lin 中近景；对白：“把文件给我”；说话/听者微表情微动作落点结景。
-3. **P3（Chen 反打主拍+落点）**：P2 落点停顿后 **Arc Orbit 绕轴过渡（1.5–2s，自然留白）** → OTS 反打 + Push In 至 Chen 中近景；对白：“你先后退”；说话/听者微表情微动作落点结景。
-4. **P4（收束落幅，路径 B 次选）**：本组对白完结 + `{下一节拍起幅}=全景建置`；同镜内 Pull Back 回 Two Shot 中全景。**路径 A** 或 **路径 B 推荐**时无 P4，止于 P3 中近景，建置由下一镜 P1 承担。
+1. **P1（全景建置，主拍=双人关系）**：Two Shot 中全景建立 Lin/Chen 隔桌一步对峙与 ENV:[Office] 三层空间；**同框、距约桌宽、互视**。
+2. **P2（Lin 对白主拍+落点，主拍=Lin）**：承接 P1 双人同框与一步距离；Micro Push In 至 Lin 中近景；对白：“把文件给我”；Chen 虚焦过肩仍在画内、距 Lin 约桌宽；说话/听者微表情微动作落点结景。
+3. **P3（Chen 反打主拍+落点，主拍=Chen）**：承接 P2 终态轴线；P2 落点停顿后 **Arc Orbit 绕轴过渡（1.5–2s，自然留白）** → OTS 反打 + Push In 至 Chen 中近景，**显式维持隔桌一步距离**；对白：“你先后退”；说话/听者微表情微动作落点结景。
+4. **P4（收束落幅，路径 B 次选，主拍=双人关系）**：本组对白完结 + `{下一节拍起幅}=全景建置`；同镜内 Pull Back 回 Two Shot 中全景，**复写双人同框与一步距离**。**路径 A** 或 **路径 B 推荐**时无 P4，止于 P3 中近景，建置由下一镜 P1 承担。
 
 #### 过轴与跨环境的最低合规写法
 - 若必须过轴：先在 `Shot Logic (CN)` 写明“过轴动作”与路径（例如角色沿桌角外侧走半步完成观察侧切换），再切换观察侧；运镜从 §5.6「视角衍生切换」择项。
@@ -625,7 +742,8 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 - `正式决战继承:`（正式决战镜必填）Scene|Beat总数|本镜Beat|阶段
 - `动作联想:`（打斗/术法镜必填）§七-B项+三轴+轨迹+反馈
 - `AI高成本奇观:`（轻功/飞翔/域场镜必填）§七-C项+运镜+景别
-- `运镜联想:`（武打/轻功/飞翔/追逐/宏观镜必填）§5.5分区=…；相位=…；选用运镜=…；景别=…；升格=…|无
+- `运镜联想:`（武打/轻功/飞翔/追逐/宏观/特殊视角镜必填）§5.5分区=…；相位=…；选用运镜=…；景别=…；升格=…|无
+- `特殊视角运镜:`（Observer View 标注 ACT/FPV/OPV/虫蚁/鸟瞰或本镜主动选用时必填）类型=…；相位=…；选用运镜=…；ENV 匹配=…；与 FPV/OPV 分界=…；切换链=无|…（§5.5 H）
 - `运镜选用依据:`（每场≥1镜）本 Beat 剧本触发点+选用运镜/景别/升格理由（§5.5-F；禁片名/名场面）
 - `宏观动作联想:`（宏观镜必填）§5.5-E项+FG/MG/BG密度
 - `高速跟拍技法:`（追逐镜必填）选用+机位关系
@@ -636,6 +754,8 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 - `宏观群体规模:`（宏观镜必填）类型=大军|机群|舰队|…；口径=布满画面；景别=…；密度=三层饱和|地平线|天空遮满
 - `宏观群体三要素:`（宏观镜必填）无边无际|细节整齐|压迫感=是|否；本镜主=…
 - `宏观群体继承:`（宏观Scene镜必填）Scene|Beat总数|本镜Beat|阶段|三要素
+- `P段时序链:`（每镜必填）P1=主拍/功能→P2=…→…；各段叙事时序=单向无乱序；`(Pn)` 落段=…
+- `跨P空间关系:`（每镜必填，≥2 P 段时须逐段写）各 P 终态同框=…；相互距离=…；轴线=…；新入角色=段号+入画侧+观察运镜=…|无
 - `收束落幅判定:`（=环节6）对白组完结=…；上游下一节拍起幅=…；四档=…；执行方式=…
 - `开场转场技巧说明:`（每个新 Scene 的首镜必填，见下候选库；禁 None）  
 - `环境切换运镜:`（含 `[环境切换声明]`/`建置更新=是`/视角或状态衍生 ENV 切换时必填）触发类型=视角衍生|门槛穿越|空间揭示|Match桥接|状态特效|跨场跳转；选用=§5.6项；桥接依据=…
@@ -676,12 +796,13 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 #### 输出前自检（`Shot Logic` 末尾勾选）
 - **分镜序号（§二.8）**：`Shot ID`=完整 `EPxx_SCyy_SHzz`｜同行 `Scene ID`=其 `EPxx_SCyy` 前缀｜同场 `SH` 从 01 连续无跳号/重号｜行序=EP→SC→SH 叙事序｜ID 取自上游 Core Scene Info，无自造 EP/SC。
 - **Beat 完整逻辑**：⓪ 全体站位 ① **ENV 环境—视角匹配**+观察视角+**360度转角继承（衍生 ENV）**+**切换后建置可执行性** ② 三层+逐实体 ③ 运动方向与朝向+动作 ④ 对白咬合 ⑤ 微表演 ⑥ 承接+反馈。**Beat 绝对覆盖**：本镜 Beat 全部信息点已映射；动作/道具/ENV 逐句继承（§一.2）可检索，无泛化/删实体。
-- 运镜：轴线 → 读 Beat 剧本要素 → §5.5择项 → `运镜联想`+`运镜选用依据`+对应技法字段 → 对白运镜+收束(§三.1) → 景别无越级；**环境切换/视角转换** → §5.6择项 → `环境切换运镜:` 已写 + Video 含**有过程、自然留白、禁硬切**的切换运镜（§5.6 视角转换过程专规）+ **§七.6 镜头语言转译（禁拓扑/度数公式入 Video）**
+- 运镜：轴线 → 读 Beat 剧本要素 + **Observer View 特殊视角类型** → §5.5 A–E + **§5.5 H** 择项 → `运镜联想`+`特殊视角运镜`（适用时）+`运镜选用依据`+对应技法字段 → 对白运镜+收束(§三.1) → 景别无越级；**环境切换/视角转换** → §5.6择项 → `环境切换运镜:` 已写 + Video 含**有过程、自然留白、禁硬切**的切换运镜（§5.6 视角转换过程专规）+ **§七.6 镜头语言转译（禁拓扑/度数公式入 Video）**；**FPV/ACT/虫蚁/鸟瞰** → ENV 匹配+对白/口型例外已核对（§5.5 H）
 - 宏观群体：`宏观群体=是` → 规模+三要素+§5.5-E → Video满幅+Beat≥6未合并(§26)
 - 追逐：§5.5-D已选 → `高速跟拍技法`已写Video → 耗时入时间预估
 - 正式决战：`正式决战=是` → 继承+逐Beat≥1 Shot+§5.5 A/B/C+动作联想(§5.4.2)+奇观≥3
 - 打斗/特效/升格：§5.4.1 三速同步（实体轨迹+机位+播放速率）+快慢成对+Speed Ramp 出入+§5.5 A/A-2 相位表+`快慢节奏:`/`特效攻击运镜:`/`升格技法:`已写+Video 含轨迹绑定运镜+时间预估快慢分项(§二.4)
 - 空间：七要素齐全 → **前后位置双轨（镜头+ENV/实体）** → ENV 已写 → **环境实体微动态（§七.7，树枝/灯光/车流等，BG 非完全静止）** → **含人群时双层并列（§七.7-b 完全随机、跨镜禁重复、远景/虚化禁中景特写，禁只写人群漏环境）** → **旁白/V.O. 相位画内全员 明确 闭嘴（§六.4）** → 语言逐字可检索（§六.1）→ 实体标准表达（§一.0.1）。
+- **P 段时序与角色空间链**：P1→Pn **严格时序**无乱序/抢写｜每 P **按角色组织**有明确主拍对象｜跨 P 已写**同框/距离/轴线**承接｜新入画/新主拍角色有**显式观察导向运镜**（禁 Static 硬切）｜`P段时序链:`+`跨P空间关系:` 已写 Shot Logic。
 - `Video Content`：自然叙述 + P1/Pn → **只写画面最终结果** → **BG 环境实体微动态已写（§七.7，非完全静止）** → **含人群时 §七.7+§七.7-b 均已写且群演为远景/虚化 BG** → **旁白/V.O. 已写画内全员闭嘴** → **无** Beat 承接说明、规则推演、§/环节引用、Shot Logic 解释句 → **无** 360度拓扑/转角公式/empty_view_delta 等上游推导术语（§七.6 已转译为机位/顺时针回转/BG更替/可见面） → 无「上镜/承接上一镜/上一 Beat」代指。
 
 #### 表头与示例
@@ -690,5 +811,5 @@ Stage 1 每个 Beat 按**前置 + 六环节**成稿；本阶段**只继承、不
 
 | Shot ID | Shot Name | Scene ID | Shot Logic (CN) | Start Frame | Video Content | Duration (s) | Keyframes | End Frame | Start Frame (CN) | Video Content (CN) | Keyframes (CN) | End Frame (CN) | Associated Entities |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| EPxx_SCyy_SHzz | (核心动作简述) | EPxx_SCyy | (Beat完整逻辑继承+切换判定+收束落幅+观察视角+360度转角继承+主节拍+景深层次+运镜联想+运镜选用依据+打斗运镜技法+特效攻击运镜+快慢节奏+高速跟拍技法+升格技法+宏观群体字段+环境切换+环境切换运镜+防穿帮+时间预估含快慢分项+空间自检) |  |  | (整数秒数) |  |  |  | (纯画面最终结果：P1/Pn运镜动作对白微表演；ENV必写；BG环境实体微动态§七.7+含人群时§七.7-b双层并列；衍生视角写机位落点+顺时针回转+BG更替+方向性物体可见面；禁拓扑/度数公式/上游推导字段；禁Beat承接、禁规则推演、禁§/环节引用、禁字段体与Shot Logic解释句) |  |  | (CHAR/PROP/ENV) |
+| EPxx_SCyy_SHzz | (核心动作简述) | EPxx_SCyy | (Beat完整逻辑继承+切换判定+收束落幅+观察视角+360度转角继承+主节拍+景深层次+运镜联想+特殊视角运镜+运镜选用依据+打斗运镜技法+特效攻击运镜+快慢节奏+高速跟拍技法+升格技法+宏观群体字段+环境切换+环境切换运镜+防穿帮+时间预估含快慢分项+空间自检) |  |  | (整数秒数) |  |  |  | (纯画面最终结果：P1/Pn运镜动作对白微表演；ENV必写；BG环境实体微动态§七.7+含人群时§七.7-b双层并列；衍生视角写机位落点+顺时针回转+BG更替+方向性物体可见面；ACT/FPV/OPV/虫蚁/鸟瞰写机位高度尺度与切换过程；禁拓扑/度数公式/上游推导字段；禁Beat承接、禁规则推演、禁§/环节引用、禁字段体与Shot Logic解释句) |  |  | (CHAR/PROP/ENV) |
 | EP01_SC02_SH01 | 对峙压桌综合示例 | EP01_SC02 | Beat完整逻辑继承: 来源Beat=Beat 1；本镜覆盖环节=0|1|2|3|4|5|6；上一Beat全体站位承接=Scene首Beat开场建置；缺口=无。<br>切换判定: 时空关系=连续；桥接依据=同轴关系镜+全景→中近景递进；轴线状态=同侧，未过轴；跨幅级别=小跨幅。<br>观察视角继承: 来源Beat=Beat 1；当前ENV=ENV:[Office]；观察起点=会议桌侧；观察角度=Eye-level；观察目标=双人对峙区；视角变化=无；建置更新=是。<br>景深层次继承: 来源Beat=Beat 1；建置更新=是；前景/中景/背景建置见示例场景设定。<br>主节拍规划继承: 来源Beat=Beat 1；核心动作=Lin 前倾压桌索要文件，Chen 防守回应；承接点=会议桌对峙建置；落点功能=为下一镜调度预留空间；本镜承担=综合示例。<br>收束落幅判定: 对白组完结=是；上游下一节拍起幅=全景建置；四档=回全景建置；执行方式=本镜 Pull Back（路径 B 次选）。<br>环境切换声明: None。<br>对白覆盖: P2=Lin 主拍；P3=Chen 反打；P4=Pull Back 收束。<br>防穿帮自检: 双人轴线、口型对白、手部细节、群演反馈 -> OTS 正反打+Push In -> 本镜完成双句对白收束。<br>时间预估: 建置2s+语言3.5s+动作2s+微表情2s+收束2s+转场1s=串行12.5s；并行核 P2=2s，P3=2s；Duration=9s。<br>空间结构自检: 六环节 2–3 七要素齐全；关键道具有坐标；动态起落无冲突。 |  |  | 9 |  |  |  | 全局动态风格：现实主义职场剧质感，自然通透光，真实真人影像纹理。<br>运镜与动作流：P1 Eye-level Two Shot 中全景起幅，镜头面向 ENV:[Office] 会议桌右前角，三分构图锁定双人对峙。前景是会议桌上沿与杯口虚焦形成近距框景，PROP:[Desk] 桌沿距镜头约一步、位于下沿中部；中景中 CHAR:[@Lin] 距桌右前角一步、位于左三分之一、朝右前倾压桌，CHAR:[@Chen] 距桌后缘一步、位于右三分之一、朝左端坐回视；背景中文件柜前左后簇 2–3 名虚化办公人员——一人停笔抬头、一人侧身低语、一人继续敲键盘；百叶侧右后簇 1–2 人——一人端杯小步让位、一人倚墙抱臂，百叶叶缝光斑随空调气流轻晃，窗外远距树冠随风低速摆动。P2 镜头沿桌沿 Steadicam Glide 低速侧移并 Micro Push In，从 P1 中全景推近至 CHAR:[@Lin] 中近景主拍，CHAR:[@Chen] 以虚焦过肩占画左三分之一形成 Dirty Single，焦点锁定 Lin 面部、下颌与口型；(P2) {Lin 前倾压桌发声，Chen 闭口聆听防备} — Dialogue (CHAR:[@Lin]) (voice_type: 对白, tone: 压迫恳切, speed: 中速, volume: 正常): "把文件给我" — {CHAR:[@Chen] 左肩微收、视线不回避，左后簇两人停笔抬头、一人仍敲键盘，右后簇一人侧身张望、一人端杯停步}；Lin 说完后下颌微绷、唇线落结景，Chen 左肩微收后静止。P3 于前段落点静止半拍后，镜头沿桌轴线低速 Arc Orbit 顺时针绕转约半圈，途经双人关系轴时 Lin 虚焦肩背占画右缘形成过渡框景与 lead room，BG 由文件柜与百叶墙段渐变为对侧通道景深；Left-Shoulder OTS 反打 Track 微移半幅并对 CHAR:[@Chen] Push In 落幅中近景，Chen 面部右侧留三分呼吸区，聚焦 Chen 抬眼开口的面部与口型，Lin 以虚焦肩背占画右三分之一；(P3) {Chen 抬眼开口回击，Lin 闭口压桌倾听} — Dialogue (CHAR:[@Chen]) (voice_type: 对白, tone: 冷静克制, speed: 中速, volume: 正常): "你先后退" — {CHAR:[@Lin] 下颌微绷、视线不退，桌沿手部仍保持压势}；Chen 说完后唇角抿紧、视线定住 Lin 落结景，Lin 指腹收紧桌沿半拍后静止。P4 Dolly Out / Pull Back 从 P3 中近景退回 P1 同级 Two Shot 中全景，复写 ENV:[Office] 前景/中景/背景：CHAR:[@Lin] 停于桌沿一步外保持压桌，CHAR:[@Chen] 文件仍压在掌下、抬眼与 Lin 对峙，桌沿居中分隔双人，背景群演各簇保持随机差异化动势——文件柜前簇两人停笔侧耳、一人继续翻页，百叶侧簇一人小步避让、一人倚墙抱臂未动。<br>动态连续光影/焦点：靠窗自然侧光为主、顶灯柔补为辅，光比连续，顶灯 Practical 极弱频闪与百叶光斑轻晃同步；P2/P3 浅景深锁定说话人面部，P4 Pull Back 后焦点回稳至双人关系平面与三层空间。<br>光线连动弧光：靠窗冷白侧光与室内暖顶光对比，服务对白张力升压至双人空间对峙收束。<br>物理文字生成：无。 |  |  | CHAR:[@Lin], CHAR:[@Chen], PROP:[Desk], ENV:[Office] |

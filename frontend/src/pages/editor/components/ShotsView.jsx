@@ -6486,7 +6486,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             // 1. Ref Images Init
             try {
                 const tech = JSON.parse(editingShot.technical_notes || '{}');
-                if (tech.ref_image_urls === undefined) {
+                if (tech.ref_image_urls === undefined && !tech.ref_image_urls_user_edited) {
                     // Initialize strictly with Start Frame Prompt (camera_position)
                     const suggested = getSuggestedRefImages(editingShot, editingShot.start_frame);
                     if (suggested.length > 0) {

@@ -196,7 +196,12 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     const tech = JSON.parse(shot.technical_notes || '{}');
     const isVideoRefManager = storageKey === 'video_ref_image_urls';
     const resolvedVideoMode = resolveUnifiedVideoMode(tech);
-    const isVideoManualOverride = isVideoRefManager && tech.video_ref_image_urls_manual === true;
+    const userEditedKey = `${storageKey}_user_edited`;
+    const isUserEdited = Boolean(tech[userEditedKey]);
+    const isVideoManualOverride = isVideoRefManager && (
+        tech.video_ref_image_urls_manual === true || tech.video_ref_image_urls_user_edited === true
+    );
+    const isManualRefOverride = isVideoRefManager ? isVideoManualOverride : isUserEdited;
     const isVideoRefUrl = (url) => /\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$/i.test(String(url || '').trim());
 
     const getEntityMatches = () => collectMatchedEntitiesFromPrompt({
@@ -228,11 +233,9 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         const seededTech = {
             ...tech,
             [storageKey]: seededRefs,
-            video_ref_image_urls_manual: false,
-            [`${storageKey}_user_edited`]: false,
         };
         onUpdate({ technical_notes: JSON.stringify(seededTech) });
-    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, tech, storageKey, shot, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly]);
+    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, shot?.technical_notes, storageKey, shot?.id, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly]);
 
     let activeRefs = [];
     
@@ -254,14 +257,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             entityPool: entities,
             promptText,
             additionalAutoRefs,
-            includeAdditionalAutoRefs: true,
+            includeAdditionalAutoRefs: !isVideoManualOverride,
         });
     } else {
         // Standard entity/manual ref logic
         const isManualMode = tech[storageKey] && Array.isArray(tech[storageKey]);
-           const userEditedKey = `${storageKey}_user_edited`;
-           const isUserEdited = Boolean(tech[userEditedKey]);
            const isLockedManual = isManualMode && isUserEdited;
+           const deleted = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
         
         const shouldDetectEntities = storageKey !== 'video_ref_image_urls';
         const matchedEntities = shouldDetectEntities ? getEntityMatches() : [];
@@ -278,7 +280,6 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
 
            if (isLockedManual) {
                // 用户已手动调整后：以用户列表为准，但自动补充新通过@提及且未被显式删除的实体
-               const deleted = new Set(tech.deleted_ref_urls || []);
                activeRefs = [...tech[storageKey]];
                for (const img of autoMatches) {
                    if (!activeRefs.includes(img) && !deleted.has(img)) {
@@ -288,7 +289,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
            } else if (isManualMode) {
                          // Manual but not locked: treat stored list as cache only.
                          // Recompute from current subject/entity latest images each reload.
-                         activeRefs = [...autoMatches];
+                         activeRefs = autoMatches.filter((url) => !deleted.has(url));
         } else {
              // Auto Mode: Visualize what will be used by default (since nothing saved yet)
              activeRefs = [...autoMatches];
@@ -301,8 +302,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         // 2. Special Logic for End Refs: Always include Start Frame (Global Injection to ensure Realtime Updates)
         if (!isLockedManual && storageKey === 'end_ref_image_urls' && shot.image_url) {
             // Check if explicitly deleted
-            const deleted = tech.deleted_ref_urls || [];
-            const isExplicitlyDeleted = deleted.includes(shot.image_url);
+            const isExplicitlyDeleted = deleted.has(shot.image_url);
             let hasStartFrame = activeRefs.includes(shot.image_url);
 
             if (!hasStartFrame && !isExplicitlyDeleted) {
@@ -326,7 +326,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     // --- GLOBAL INJECTION FOR ALL MODES (E.g. Prev Shot Video, Global Context) ---
     // Video refs already merged inside resolveShotVideoActiveRefs; keep for other managers.
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
-    const shouldInjectAdditionalAutoRefs = !isVideoRefManager && !(isVideoRefManager && isVideoManualOverride);
+    const shouldInjectAdditionalAutoRefs = !isManualRefOverride;
     if (shouldInjectAdditionalAutoRefs && additionalAutoRefs && additionalAutoRefs.length > 0) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i--) {
             const ref = additionalAutoRefs[i];
@@ -368,7 +368,6 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         
         if (!changed) return;
 
-        const userEditedKey = `${storageKey}_user_edited`;
         const newTech = { ...tech, [storageKey]: newRefList, [userEditedKey]: true };
         if (isVideoRefManager) {
             newTech.video_ref_image_urls_manual = true;
@@ -380,14 +379,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         if (useSequenceLogic) return; // Cannot remove derived items in this view
         
         // Track deletions to prevent zombie resurrection by auto-injection
-        let deleted = tech.deleted_ref_urls || [];
-        if (!deleted.includes(url)) {
-            deleted = [...deleted, url];
+        let deletedList = Array.isArray(tech.deleted_ref_urls) ? [...tech.deleted_ref_urls] : [];
+        if (!deletedList.includes(url)) {
+            deletedList = [...deletedList, url];
         }
 
         const newRefs = activeRefs.filter(u => u !== url);
-        const userEditedKey = `${storageKey}_user_edited`;
-        const newTech = { ...tech, [storageKey]: newRefs, deleted_ref_urls: deleted, [userEditedKey]: true };
+        const newTech = { ...tech, [storageKey]: newRefs, deleted_ref_urls: deletedList, [userEditedKey]: true };
         if (isVideoRefManager) {
             newTech.video_ref_image_urls_manual = true;
         }
@@ -399,7 +397,6 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
 
         const replacedRefs = activeRefs.map((url) => (url === currentUrl ? nextUrl : url)).filter(Boolean);
         const dedupedRefs = [...new Set(replacedRefs)];
-        const userEditedKey = `${storageKey}_user_edited`;
         let deleted = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
         if (!deleted.includes(currentUrl)) {
             deleted = [...deleted, currentUrl];
@@ -446,7 +443,9 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             promptText,
             entityPool: entities,
             includeAssociatedEntities: false,
-            includeEntityPlaceholders: true,
+            includeEntityPlaceholders: !isVideoManualOverride,
+            manualOverride: isVideoManualOverride,
+            deletedRefUrls: tech.deleted_ref_urls || [],
         })
         : activeRefs.map((url, idx) => ({
             key: `ref-${url}-${idx}`,
@@ -567,7 +566,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 <div className="flex flex-col items-start gap-1 pb-1">
                      <h4 className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-2">
                         {title}
-                        {isVideoManualOverride && (
+                        {isManualRefOverride && (
                             <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9px] font-bold text-amber-200 normal-case">
                                 {t('手工调整', 'Manual')}
                             </span>

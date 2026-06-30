@@ -625,8 +625,31 @@ export const buildShotVideoRefDisplayItems = ({
     entityPool = [],
     includeAssociatedEntities = true,
     includeEntityPlaceholders = true,
+    manualOverride = false,
+    deletedRefUrls = [],
 } = {}) => {
     const refs = normalizeMediaRefList(activeRefs);
+    const deletedSet = new Set(normalizeMediaRefList(deletedRefUrls));
+    const entityPoolArr = Array.isArray(entityPool) ? entityPool : [];
+    const findEntityByUrl = (url) => entityPoolArr.find(
+        (entity) => String(entity?.image_url || '').trim() === String(url || '').trim()
+    );
+
+    if (manualOverride) {
+        return refs
+            .filter((url) => !deletedSet.has(url))
+            .map((url, idx) => {
+                const entity = findEntityByUrl(url);
+                return {
+                    key: `ref-${url}-${idx}`,
+                    kind: 'image',
+                    entity: entity || null,
+                    url,
+                    label: String(entity?.name || entity?.name_en || '').trim(),
+                };
+            });
+    }
+
     const matchedEntities = collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities,
@@ -639,6 +662,7 @@ export const buildShotVideoRefDisplayItems = ({
     matchedEntities.forEach((entity) => {
         const imageUrl = String(entity?.image_url || '').trim();
         if (imageUrl) {
+            if (deletedSet.has(imageUrl)) return;
             usedUrls.add(imageUrl);
             items.push({
                 key: `entity-${entity?.id || entity?.name || imageUrl}`,
@@ -660,7 +684,7 @@ export const buildShotVideoRefDisplayItems = ({
     });
 
     refs.forEach((url, idx) => {
-        if (usedUrls.has(url)) return;
+        if (usedUrls.has(url) || deletedSet.has(url)) return;
         items.push({
             key: `ref-${url}-${idx}`,
             kind: 'image',
@@ -1138,8 +1162,9 @@ export const resolveShotVideoActiveRefs = ({
         ? normalizeMediaRefList(tech.video_ref_image_urls)
         : buildAutoVideoRefList(shotLike, tech, resolvedVideoMode, promptEntityRefs);
 
-    const isManualOverride = tech.video_ref_image_urls_manual === true;
+    const isManualOverride = tech.video_ref_image_urls_manual === true || tech.video_ref_image_urls_user_edited === true;
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
+    activeRefs = activeRefs.filter((url) => !deletedRefSet.has(url));
     const shouldInjectAdditionalAutoRefs = Boolean(includeAdditionalAutoRefs && !isManualOverride);
     if (shouldInjectAdditionalAutoRefs && Array.isArray(additionalAutoRefs)) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i -= 1) {
