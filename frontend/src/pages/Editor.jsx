@@ -1137,6 +1137,7 @@ const Editor = ({
                 lighting: lightingRaw ? toText(lightingRaw) : '',
                 plot_summary: toText(pickValue(base, ['plot_summary', 'story_summary', '剧情总结'])),
                 music_recommendation: toText(pickValue(base, ['music_recommendation', 'score_recommendation', '配乐推荐'])),
+                color_palette: toText(pickValue(base, ['color_palette', 'colorPalette', 'palette', '色系', '色谱'])),
             };
 
             const payload = {};
@@ -1203,6 +1204,7 @@ const Editor = ({
             const lightingRaw = findValueByAliases(obj, ['lighting', 'light']);
             const plotSummaryRaw = findValueByAliases(obj, ['plot_summary', 'plotSummary', 'story_summary', 'storySummary', '剧情总结']);
             const musicRecommendationRaw = findValueByAliases(obj, ['music_recommendation', 'musicRecommendation', 'score_recommendation', 'scoreRecommendation', '配乐推荐']);
+            const colorPaletteRaw = findValueByAliases(obj, ['color_palette', 'colorPalette', 'palette', '色系', '色谱']);
 
             const payload = {
                 Global_Style: toNonEmptyString(globalStyleRaw),
@@ -1210,11 +1212,12 @@ const Editor = ({
                 borrowed_films_note: toNonEmptyString(borrowedFilmsNoteRaw),
                 tone: toNonEmptyString(toneRaw),
                 lighting: toNonEmptyString(lightingRaw),
+                color_palette: toNonEmptyString(colorPaletteRaw),
                 plot_summary: toNonEmptyString(plotSummaryRaw),
                 music_recommendation: toNonEmptyString(musicRecommendationRaw),
             };
 
-            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.borrowed_films_note || payload.tone || payload.lighting || payload.plot_summary || payload.music_recommendation) {
+            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.borrowed_films_note || payload.tone || payload.lighting || payload.color_palette || payload.plot_summary || payload.music_recommendation) {
                 return payload;
             }
         }
@@ -1857,6 +1860,9 @@ const Editor = ({
             }
             if (isBlank(originalGlobalInfo.lighting) && projectVisualBackfill.lighting) {
                 backfillPatch.lighting = projectVisualBackfill.lighting;
+            }
+            if (isBlank(originalGlobalInfo.color_palette) && projectVisualBackfill.color_palette) {
+                backfillPatch.color_palette = projectVisualBackfill.color_palette;
             }
             if (isBlank(originalGlobalInfo.borrowed_films_note) && projectVisualBackfill.borrowed_films_note) {
                 backfillPatch.borrowed_films_note = projectVisualBackfill.borrowed_films_note;

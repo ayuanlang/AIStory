@@ -3482,17 +3482,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const lightingRaw = findValueByAliases(obj, ['lighting']);
             const plotSummaryRaw = findValueByAliases(obj, ['plot_summary', 'plotSummary', 'story_summary', 'storySummary', '剧情总结']);
             const musicRecommendationRaw = findValueByAliases(obj, ['music_recommendation', 'musicRecommendation', 'score_recommendation', 'scoreRecommendation', '配乐推荐']);
+            const colorPaletteRaw = findValueByAliases(obj, ['color_palette', 'colorPalette', 'palette', '色系', '色谱']);
 
             const payload = {
                 Global_Style: toNonEmptyString(globalStyleRaw),
                 borrowed_films: toStringArray(borrowedFilmsRaw),
                 tone: toNonEmptyString(toneRaw),
                 lighting: toNonEmptyString(lightingRaw),
+                color_palette: toNonEmptyString(colorPaletteRaw),
                 plot_summary: toNonEmptyString(plotSummaryRaw),
                 music_recommendation: toNonEmptyString(musicRecommendationRaw),
             };
 
-            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.tone || payload.lighting || payload.plot_summary || payload.music_recommendation) {
+            if (payload.Global_Style || payload.borrowed_films.length > 0 || payload.tone || payload.lighting || payload.color_palette || payload.plot_summary || payload.music_recommendation) {
                 return payload;
             }
         }

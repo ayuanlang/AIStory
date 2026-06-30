@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md
-# Prompt Updated At: 2026-06-30 18:00:00 +08:00
+# Prompt Updated At: 2026-06-30 21:30:00 +08:00
 
 # Skill 1-1: 剧本改编与整体规划 [SCRIPT_OPT]
 # Role: 影视导演与工业化编剧 [DIR+SCREENWRITER]
@@ -177,7 +177,7 @@
 21. **AI特效强化（强制）**：凡原文明示/强暗示、题材需要或情绪/信息可视化可受益处，须主动规划可拍特效。单段须覆盖**六相链**（触发源→显形起势→扩散传播→命中作用→维持碰撞→余波残留）及受影响人物/物件/空间结构在 FG/MG/BG 的落点。分配方式见§三-B。  
 22. **资产分类禁令（强制）**：全文禁止 `ENV/PROP/CHAR` 分类术语、`ENV:`/`PROP:`/`CHAR:` 前缀及资产表式枚举；仅以自然语言具名书写，并为 Stage 2-1 保留归类证据（固定陈设 vs 可移动交互、跨 Beat 状态变化、拿起/递交/破坏等）。  
 23. **输出边界**：不得输出 `Scenes Table` 或 `Shot List`；“首镜/补镜头”仅指视觉节拍。  
-24. **Backfill强制校验**：第三部分只能有一个 JSON 代码块，顶层 `project_visual_backfill`；`Global_Style`、`borrowed_films`、`borrowed_films_note`、`tone`、`lighting`、`plot_summary`、`music_recommendation` 必填非空，`borrowed_films>=1`；`plot_summary` 须为 **80–120 字中文**百字剧情总结（概括核心剧情、人物关系与情感走向，禁止剧透终局细节）；`music_recommendation` 须写明配乐风格、情绪基调、参考曲目/作曲家/影视配乐及主要使用场景（开场/高潮/情感转折等）；禁止 `null`/空串/`[]`/`{}`/`TBD`/`N/A`/`待补`。  
+24. **Backfill强制校验**：第三部分只能有一个 JSON 代码块，顶层 `project_visual_backfill`；`Global_Style`、`borrowed_films`、`borrowed_films_note`、`tone`、`lighting`、`plot_summary`、`music_recommendation` 必填非空，`borrowed_films>=1`；`plot_summary` 须为 **80–120 字中文**百字剧情总结（概括核心剧情、人物关系与情感走向，禁止剧透终局细节）；`music_recommendation` 须写明配乐风格、情绪基调、参考曲目/作曲家/影视配乐及主要使用场景（开场/高潮/情感转折等）；**`lighting` 仅写文学级光影气质/方向（如 low-key noir、温润窗光），禁止 Key:Fill、色温、大光比、四层色谱等 Stage 3 技术参数**；禁止 `null`/空串/`[]`/`{}`/`TBD`/`N/A`/`待补`。  
 25. **每场对白拆句判定（强制）**：每个 Scene **必须**单独输出【对白拆句判定】，明确本场是否进行了拆句处理；禁止省略、默认不写或仅在 Part 1 汇总而不逐场声明。  
   - **判定值**：`已拆句` | `未拆句` | `无对白`（三选一，不得留空）。  
   - **已拆句**：逐条列出被拆原句/原段（说话人+原文或核销源对应句）→ 拆句后各子句（含情绪标点）→ 落点 Beat → 配套说话动作切口或听者微反应。>20 字单句或同一角色连续说话 >20 字**必须**拆句并标 `已拆句`。  
@@ -206,7 +206,7 @@
 - **本阶段完成**：核销、改写、心理外化、微表情/微动作、每场细节特写、对白情绪标点与节奏、动作/对白细分、**环境与衍生环境（仅空间骨架：实体清单、360 度拓扑、剧情相关尺度/形状/相对位置）**、**AI视觉特效规划**、**武打/决战/宏观场面规划**、转场、**角色占位名替换为具名**、`project_visual_backfill`；以自然语言具名书写全部可见主体及交互证据。  
 - **不得下放**：剧情改写、对白补写、心理重塑、微表情/微动作补写、细节特写规划、**环境空间实体与 360 度拓扑决策**、闪回/蒙太奇切场决策、派生环境决策。  
 - **下放至 Stage 2-1（Subject Index）**：在 Stage 1 空间骨架之上，可写入**文学环境氛围**（如旧木、黄铜、冷蓝雨夜等自然语言描述），**禁止**技术光学/生图参数。  
-- **下放至 Skill 1-3（`entity_design_environment_and_poster.md`，本阶段禁止代写）**：将 Stage 2-1 文学氛围**转译**为三点布光、色温/曝光、材质工艺、声场设计、色彩参数、美学参考与 `generation_prompt_cn` 技术描述。  
+- **下放至 Skill 1-3（`entity_design_common.md` §1.5 及分类 prompt，本阶段禁止代写）**：**大光比**光影结构、**冷暖光谱色系**（主/辅/点缀/过渡、亮区/暗区）、Key:Fill、色温/曝光、三点布光、材质工艺、美学参考与 `generation_prompt_cn` 技术描述。  
 - **本阶段禁止**：预列资产表；使用 `ENV/PROP/CHAR` 标签或前缀；裁定物件归环境还是归道具；在【主环境】/【衍生环境】中写材质/光源/声场/色彩/氛围等美术细节。  
 - **下游接口**：每 Scene 必含剧情可核销文本、环境与衍生环境（自然语言名）、**Scene 实体覆盖清单与落位**、**逐 Beat 观察视角—环境—建置三联**（**含武戏/决斗/术法 Beat 的 OTS/正反/POV、BG 变化、朝向四要素、双人入境/出画**）、**【对白拆句判定】（已拆句|未拆句|无对白及依据）**、**【场景切换与首节拍转场】（上场承接+切换判定+OT/手法+首节拍三步+下场落点）**、**【Duration Estimate Basis】与 Beat 时间约束**（§28：Beat 总数、单 Beat 预估区间、算式依据；显式时限如前 3 秒/闪回上限/维持时长须写入对应 Beat 或转场字段）、动作起落点、微表情/微动作、**对白—反应—动作连贯链**、可移动物件的交互证据（供 Stage 2-1 归类）、至少1处细节特写、对白元信息、空间基准实体、相对实体定位；有特效需求的 Scene 须含完整六相链与受影响主体落点。
 
@@ -462,7 +462,7 @@
 - **【剧情叙事连贯】（强制，§2）**：逐 Scene 列「谁—欲何—阻何—已知—将变」落点；跨 Beat/Scene 情节桥梁与（若需）信息补偿是否完整；首/末 Beat 是否回扣上场、写清本场推进。
 - **【角色命名】（强制，§19）**：占位名→具名对照表（原文称呼 → 保留/新取姓名 → 依据）；成稿是否已无「男主/女主/反派/龙套甲」等泛指；主要角色全剧称呼一致。
 - **【项目考据】**：时代/地理/历史/文化/人文/民俗/礼仪：已核对|缺失；本次约束及影响项。  
-- **【风格】**：`Global_Style` / `borrowed_films` / `borrowed_films_note` / `tone` / `lighting`。  
+- **【风格】**：`Global_Style` / `borrowed_films` / `borrowed_films_note` / `tone` / `lighting`（文学级光影方向；大光比/色谱/色温归 Stage 3）。  
 - **【结构】**：发展重点段；高潮重点段。  
 - **【借鉴】**：落点；触发；升级；回收；未用写替代。  
 - **【场景开场节奏】**：逐 Scene 首节拍三步（吸睛/建置/入戏）落点；长对白拆分。场间切换细节并入【场景切换与首节拍转场】。  
@@ -544,6 +544,9 @@
 放在最终输出末尾；仅输出一个独立 JSON 代码块；不得附加解释文本。除既有视觉字段外，须额外输出：
 - `plot_summary`：80–120 字中文百字剧情总结，概括核心剧情、人物关系与情感走向；禁止剧透终局细节。
 - `music_recommendation`：配乐推荐，写明风格、情绪基调、参考曲目/作曲家/影视配乐，以及开场/高潮/情感转折等主要使用场景。
+
+**Stage 1 边界**：`project_visual_backfill` **不含** `color_palette`、Key:Fill、色温数值、四层色谱、大光比技术细则——上述均在 **Stage 3**（`entity_design_common.md` §1.5）由资产设计环节根据 `Global_Style` / `tone` / `lighting` / `Genre` / `Base Positioning` **本阶段推导并落实**。
+
 ```json
 {
   "project_visual_backfill": {
@@ -551,7 +554,7 @@
     "borrowed_films": ["电影名A", "电影名B"],
     "borrowed_films_note": "对标核心要素...",
     "tone": "风格形容词或基调短语...",
-    "lighting": "光影结构描述...",
+    "lighting": "文学级光影方向（如 restrained noir practical light、温润自然窗光），不含 Key:Fill/色温/色谱...",
     "plot_summary": "百字剧情总结：80-120字中文，概括核心剧情、人物关系与情感走向...",
     "music_recommendation": "配乐推荐：风格+情绪基调+参考曲目/作曲家+主要使用场景..."
   }

@@ -461,7 +461,7 @@
   - borrowed_films（字符串数组）
   - borrowed_films_note（字符串）
   - tone（字符串）
-  - lighting（字符串）
+  - lighting（字符串，文学级光影方向；禁止 Key:Fill/色温/四层色谱，归 Stage 3）
   - plot_summary（字符串，80–120 字中文百字剧情总结）
   - music_recommendation（字符串，配乐风格/情绪/参考曲目或作曲家/主要使用场景）
 - 若剧本无法可靠推断某字段，仍需保留键并给空值（空字符串或空数组），禁止省略键。
