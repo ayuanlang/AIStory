@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Video } from 'lucide-react';
+import { Loader2, Video, RefreshCw } from 'lucide-react';
 import { BASE_URL, ASSET_BASE_URL } from '../../config';
 import { createEntity, regenerateScene, batchSupplementMissingEntities } from '../../services/api';
 import { normalizeEntityToken, entityTokenMatchesName, extractEntityRawNamesFromPrompt } from '../../lib/entityToken';
@@ -187,6 +187,86 @@ export const clearBrokenMediaUrl = (url) => {
     if (!normalized) return;
     brokenMediaUrlTs.delete(normalized);
     brokenMediaUrls.delete(normalized);
+};
+
+let mediaReloadNonce = 0;
+const mediaReloadListeners = new Set();
+
+export const getMediaReloadNonce = () => mediaReloadNonce;
+
+export const subscribeMediaReload = (listener) => {
+    if (typeof listener !== 'function') return () => {};
+    mediaReloadListeners.add(listener);
+    return () => mediaReloadListeners.delete(listener);
+};
+
+export const clearBrokenMediaCaches = () => {
+    brokenMediaUrlTs.clear();
+    brokenMediaUrls.clear();
+    brokenSceneImageUrls.clear();
+};
+
+export const triggerMediaReload = () => {
+    clearBrokenMediaCaches();
+    mediaReloadNonce += 1;
+    mediaReloadListeners.forEach((listener) => {
+        try {
+            listener(mediaReloadNonce);
+        } catch (error) {
+            console.warn('[media-reload] listener failed', error);
+        }
+    });
+};
+
+export const useMediaReloadTick = () => {
+    const [tick, setTick] = useState(() => getMediaReloadNonce());
+    useEffect(() => subscribeMediaReload(setTick), []);
+    return tick;
+};
+
+export const useTabMediaRefreshEffect = ({
+    tabMediaRefreshSignal = 0,
+    isTabActive = true,
+    onRefresh,
+}) => {
+    const signalRef = useRef(tabMediaRefreshSignal);
+    const onRefreshRef = useRef(onRefresh);
+    onRefreshRef.current = onRefresh;
+
+    useEffect(() => {
+        if (!isTabActive) return;
+        if (tabMediaRefreshSignal === signalRef.current) return;
+        signalRef.current = tabMediaRefreshSignal;
+        if (tabMediaRefreshSignal <= 0) return;
+        const refresh = onRefreshRef.current;
+        if (typeof refresh === 'function') {
+            void refresh();
+        }
+    }, [tabMediaRefreshSignal, isTabActive]);
+};
+
+export const TabMediaRefreshButton = ({
+    onClick,
+    disabled = false,
+    loading = false,
+    uiLang = 'zh',
+    className = '',
+    compact = false,
+}) => {
+    const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled || loading}
+            className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/90 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 ${className}`.trim()}
+            title={t('重新检查并加载图片/视频（链接变更或未加载时有效）', 'Recheck and reload images/videos when URLs changed or failed to load')}
+            aria-label={t('刷新媒体', 'Reload Media')}
+        >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            {!compact && <span>{t('刷新媒体', 'Reload Media')}</span>}
+        </button>
+    );
 };
 
 export const shouldBypassBrokenMediaCache = (url) => {
@@ -418,6 +498,21 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
         observer.observe(node);
         return () => observer.disconnect();
     }, [eagerLoad, shouldLoad, rawSrc, failed]);
+
+    useEffect(() => {
+        return subscribeMediaReload(() => {
+            if (retryTimerRef.current) {
+                clearTimeout(retryTimerRef.current);
+                retryTimerRef.current = null;
+            }
+            retryAttemptRef.current = 0;
+            setRetryToken((value) => value + 1);
+            setFailed(false);
+            setIsLoaded(false);
+            setUseProxy(false);
+            setShouldLoad(eagerLoad || Boolean(rawSrc));
+        });
+    }, [eagerLoad, rawSrc]);
 
     const resolvedSrc = failed ? '' : getMediaUrlWithFallback(rawSrc, useProxy);
     const thumbSrc = getThumbUrl(rawSrc);
@@ -1260,6 +1355,16 @@ export const LazyHoverVideo = ({
     }, [poster]);
 
     useEffect(() => {
+        return subscribeMediaReload(() => {
+            setVideoFailed(false);
+            setPosterFailed(false);
+            setVideoUseProxy(false);
+            setIsVideoLoaded(false);
+            setShouldLoad(Boolean(src));
+        });
+    }, [src]);
+
+    useEffect(() => {
         const node = containerRef.current;
         if (!node || shouldLoad || !src || videoFailed) return undefined;
 
@@ -1435,6 +1540,16 @@ export const InViewVideo = ({
         };
     }, []);
 
+    useEffect(() => {
+        return subscribeMediaReload(() => {
+            setVideoFailed(false);
+            setPosterFailed(false);
+            setVideoUseProxy(false);
+            setPosterUseProxy(false);
+            setShouldLoad(Boolean(src));
+        });
+    }, [src]);
+
     if (!src || videoFailed) {
         return fallback || null;
     }
@@ -1494,6 +1609,7 @@ export const ManagedVideoPlayer = ({
     const [posterFailed, setPosterFailed] = useState(() => !poster || isBrokenMediaUrl(poster));
     const [videoUseProxy, setVideoUseProxy] = useState(false);
     const [posterUseProxy, setPosterUseProxy] = useState(false);
+    const [reloadToken, setReloadToken] = useState(0);
 
     useEffect(() => {
         setVideoFailed(!src || isBrokenMediaUrl(src));
@@ -1512,6 +1628,19 @@ export const ManagedVideoPlayer = ({
         }
         setLoadState('loading');
     }, [src, suspend, videoFailed]);
+
+    useEffect(() => {
+        return subscribeMediaReload(() => {
+            setVideoFailed(false);
+            setPosterFailed(false);
+            setVideoUseProxy(false);
+            setPosterUseProxy(false);
+            setReloadToken((value) => value + 1);
+            if (src && !suspend) {
+                setLoadState('loading');
+            }
+        });
+    }, [src, suspend]);
 
     const isBusy = loadState === 'loading' || loadState === 'buffering';
     const busyText = loadState === 'buffering'
@@ -1534,7 +1663,7 @@ export const ManagedVideoPlayer = ({
         <div className={centeredWrapperClassName} onClick={onClick}>
             {!suspend ? (
                 <video
-                    key={src}
+                    key={`${src}:${reloadToken}`}
                     src={getMediaUrlWithFallback(src, videoUseProxy)}
                     poster={!posterFailed && poster ? getMediaUrlWithFallback(poster, posterUseProxy) : undefined}
                     className={centeredMediaClassName}

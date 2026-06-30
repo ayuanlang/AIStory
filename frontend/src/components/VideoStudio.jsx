@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { fetchScenes, fetchShots, api, waitForAsyncTask, stopAsyncTask, deleteMontageResult, downloadEpisodeShotVideosZip } from '../services/api';
 import { Loader2, Play, Plus, Trash2, Film, Save, Clock, Scissors, ChevronRight, GripVertical, Download, Check } from 'lucide-react';
 import { getUiLang, tUI } from '../lib/uiLang';
+import { getFullUrl, TabMediaRefreshButton, useMediaReloadTick, useTabMediaRefreshEffect } from '../pages/editor/editorHelpers';
 
 const buildMontageHistoryStorageKey = (projectId) => {
     const stableProjectId = String(projectId || '').trim();
@@ -61,9 +62,10 @@ const getMontageProgressMeta = (status, startedAt) => {
     return { labelZh: '渲染中', labelEn: 'Rendering', percent: runningPercent };
 };
 
-const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
+const VideoStudio = ({ activeEpisode, projectId, onLog, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const mediaReloadTick = useMediaReloadTick();
     const [scenes, setScenes] = useState([]);
     const [shots, setShots] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -80,9 +82,35 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
     const [activeMontageStartedAt, setActiveMontageStartedAt] = useState(0);
     const [montageHistory, setMontageHistory] = useState([]);
 
+    const loadData = useCallback(async () => {
+        if (!activeEpisode) return;
+        setLoading(true);
+        try {
+            const scenesData = await fetchScenes(activeEpisode.id);
+            setScenes(scenesData);
+
+            const shotsPromises = scenesData.map(scene => fetchShots(scene.id));
+            const shotsArrays = await Promise.all(shotsPromises);
+
+            const allShots = shotsArrays.flat().filter(s => s.video_url);
+            setShots(allShots);
+        } catch (error) {
+            console.error(error);
+            onLog("Failed to load video assets", "error");
+        } finally {
+            setLoading(false);
+        }
+    }, [activeEpisode, onLog]);
+
     useEffect(() => {
         loadData();
-    }, [activeEpisode]);
+    }, [loadData]);
+
+    useTabMediaRefreshEffect({
+        tabMediaRefreshSignal,
+        isTabActive,
+        onRefresh: loadData,
+    });
 
     useEffect(() => {
         setMontageHistory(readMontageHistory(projectId));
@@ -120,28 +148,6 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
         const stableUrl = String(url || '').trim();
         if (!stableUrl) return;
         setMontageHistory((prev) => (Array.isArray(prev) ? prev : []).filter((item) => String(item?.url || '').trim() !== stableUrl));
-    };
-
-    const loadData = async () => {
-        if (!activeEpisode) return;
-        setLoading(true);
-        try {
-            const scenesData = await fetchScenes(activeEpisode.id);
-            setScenes(scenesData);
-
-            // Fetch shots for all scenes in parallel
-            const shotsPromises = scenesData.map(scene => fetchShots(scene.id));
-            const shotsArrays = await Promise.all(shotsPromises);
-            
-            // Flatten and filter for videos
-            const allShots = shotsArrays.flat().filter(s => s.video_url);
-            setShots(allShots);
-        } catch (error) {
-            console.error(error);
-            onLog("Failed to load video assets", "error");
-        } finally {
-            setLoading(false);
-        }
     };
 
     const addToPlaylist = (shot) => {
@@ -367,7 +373,15 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                     <h2 className="font-semibold flex items-center gap-2">
                         <Film size={18} /> {t('素材库', 'Library')}
                     </h2>
-                    <select 
+                    <div className="flex items-center gap-2">
+                        <TabMediaRefreshButton
+                            onClick={() => onMediaRefreshRequest?.()}
+                            loading={loading}
+                            uiLang={uiLang}
+                            compact
+                            className="border-gray-600 bg-gray-700/60"
+                        />
+                        <select 
                         className="bg-gray-700 border-none rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500"
                         value={selectedSceneId}
                         onChange={(e) => setSelectedSceneId(e.target.value)}
@@ -377,6 +391,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                             <option key={s.id} value={s.id}>{t(`场景 ${s.scene_number}`, `Scene ${s.scene_number}`)}</option>
                         ))}
                     </select>
+                    </div>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -389,7 +404,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                             <div key={shot.id} className="group relative bg-gray-800 rounded border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer overflow-hidden p-2 flex gap-3 items-center" onClick={() => addToPlaylist(shot)}>
                                 <div className="w-20 h-12 bg-black rounded overflow-hidden flex-shrink-0 relative">
                                     {shot.image_url ? (
-                                        <img src={shot.image_url} loading="lazy" alt="" className="w-full h-full object-cover" />
+                                        <img key={`${shot.image_url}:${mediaReloadTick}`} src={getFullUrl(shot.image_url)} loading="lazy" alt="" className="w-full h-full object-cover" />
                                     ) : (
                                         <div className="w-full h-full flex items-center justify-center bg-gray-700"><Film size={12}/></div>
                                     )}
@@ -438,7 +453,7 @@ const VideoStudio = ({ activeEpisode, projectId, onLog }) => {
                         <div className="aspect-video bg-black flex items-center justify-center">
                             {previewUrl ? (
                                 <video
-                                    key={previewUrl}
+                                    key={`${previewUrl}:${mediaReloadTick}`}
                                     src={previewUrl}
                                     controls
                                     preload="metadata"

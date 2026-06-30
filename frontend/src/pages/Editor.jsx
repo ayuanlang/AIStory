@@ -24,7 +24,7 @@ import {
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel,     buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, preloadOssActiveUrlSignatures
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel,     buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, preloadOssActiveUrlSignatures, triggerMediaReload
 } from './editor/editorHelpers';
 
 import { 
@@ -256,6 +256,15 @@ const Editor = ({
     const [refreshKey, setRefreshKey] = useState(0);
     const [entitiesRefreshKey, setEntitiesRefreshKey] = useState(0);
     const [scenesRefreshKey, setScenesRefreshKey] = useState(0);
+    const [tabMediaRefreshSignals, setTabMediaRefreshSignals] = useState(() => ({
+        overview: 0,
+        generator: 0,
+        script: 0,
+        subjects: 0,
+        scenes: 0,
+        shots: 0,
+        montage: 0,
+    }));
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
     const [assetRerunRequest, setAssetRerunRequest] = useState(null);
@@ -715,6 +724,34 @@ const Editor = ({
             return next;
         });
     }, [activeTab]);
+
+    const bumpTabMediaRefresh = useCallback((tabId) => {
+        const stableTabId = String(tabId || '').trim();
+        if (!stableTabId) return;
+        triggerMediaReload();
+        setTabMediaRefreshSignals((prev) => ({
+            ...prev,
+            [stableTabId]: (Number(prev?.[stableTabId]) || 0) + 1,
+        }));
+    }, []);
+
+    const prevActiveTabRef = useRef(activeTab);
+    const hasInitializedTabTrackingRef = useRef(false);
+
+    useEffect(() => {
+        const prev = prevActiveTabRef.current;
+        if (!hasInitializedTabTrackingRef.current) {
+            hasInitializedTabTrackingRef.current = true;
+            prevActiveTabRef.current = activeTab;
+            return;
+        }
+        if (prev !== activeTab) {
+            if (visitedTabs.has(activeTab)) {
+                bumpTabMediaRefresh(activeTab);
+            }
+            prevActiveTabRef.current = activeTab;
+        }
+    }, [activeTab, visitedTabs, bumpTabMediaRefresh]);
 
     const handleUpdateScript = async (epId, content) => {
         try {
@@ -3712,6 +3749,7 @@ const Editor = ({
     const navigateTopMenu = (item) => {
         if (item.id === activeTab) {
             setTabResetKey(prev => prev + 1);
+            bumpTabMediaRefresh(item.id);
         }
         if (item.id === 'shots') {
             setEditingShot(null);
@@ -3982,6 +4020,9 @@ const Editor = ({
                                         onProjectUpdate={loadProjectData}
                                         onRefreshEpisodes={refreshEpisodesForEditor}
                                         onTabChange={setActiveTab}
+                                        tabMediaRefreshSignal={tabMediaRefreshSignals.overview}
+                                        isTabActive={activeTab === 'overview'}
+                                        onMediaRefreshRequest={() => bumpTabMediaRefresh('overview')}
                                         onJumpToEpisode={(episodeId, options = {}) => {
                                             const jump = () => {
                                                 setActiveEpisodeId(episodeId);
@@ -4020,6 +4061,9 @@ const Editor = ({
                                     onProjectUpdate={loadProjectData}
                                     onRefreshEpisodes={refreshEpisodesForEditor}
                                     onTabChange={setActiveTab}
+                                    tabMediaRefreshSignal={tabMediaRefreshSignals.generator}
+                                    isTabActive={activeTab === 'generator'}
+                                    onMediaRefreshRequest={() => bumpTabMediaRefresh('generator')}
                                     onJumpToEpisode={(episodeId, options = {}) => {
                                         const jump = () => {
                                             setActiveEpisodeId(episodeId);
@@ -4040,12 +4084,12 @@ const Editor = ({
                             )}
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
-                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} />
+                                    <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
                                 </div>
                             )}
                             {shouldRenderSubjectsTab && (
                                 <div className={activeTab === 'subjects' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'subjects'}>
-                                    <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} />
+                                    <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} tabMediaRefreshSignal={tabMediaRefreshSignals.subjects} isTabActive={activeTab === 'subjects'} onMediaRefreshRequest={() => bumpTabMediaRefresh('subjects')} />
                                 </div>
                             )}
                             {shouldRenderScenesTab && (
@@ -4065,7 +4109,7 @@ const Editor = ({
                                             </div>
                                         )}
                                     >
-                                        <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}-${scenesRefreshKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} onSwitchToShots={(sceneId) => {
+                                        <SceneManager key={`scenes-${activeEpisode?.id || 'none'}-${tabResetKey}-${scenesRefreshKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} onImportText={handleImport} tabMediaRefreshSignal={tabMediaRefreshSignals.scenes} isTabActive={activeTab === 'scenes'} onMediaRefreshRequest={() => bumpTabMediaRefresh('scenes')} onSwitchToShots={(sceneId) => {
                                             if (sceneId) {
                                                 setShotsFocusRequest({ sceneId: String(sceneId), nonce: Date.now() });
                                             }
@@ -4079,10 +4123,10 @@ const Editor = ({
                             )}
                             {shouldRenderShotsTab && (
                                 <div className={activeTab === 'shots' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'shots'}>
-                                    <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} />
+                                    <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} tabMediaRefreshSignal={tabMediaRefreshSignals.shots} isTabActive={activeTab === 'shots'} onMediaRefreshRequest={() => bumpTabMediaRefresh('shots')} />
                                 </div>
                             )}
-                            {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} />}
+                            {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} tabMediaRefreshSignal={tabMediaRefreshSignals.montage} isTabActive={activeTab === 'montage'} onMediaRefreshRequest={() => bumpTabMediaRefresh('montage')} />}
                                 </>
                             )}
                         </React.Suspense>

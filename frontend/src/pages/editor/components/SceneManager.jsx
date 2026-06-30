@@ -47,7 +47,7 @@ const resolveAiShotsStagingRows = (rawText, serverContent = [], warnings = []) =
 };
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext,     buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefDisplayItems, getMissingShotVideoEntityRefSlots, buildShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext,     buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton
 } from '../editorHelpers';
 
 import { 
@@ -1101,7 +1101,7 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
     );
 };
 
-export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, onSwitchToScriptAssetRerun, uiLang = 'zh' }) => {
+export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImportText, onSwitchToShots, onSwitchToScriptAssetRerun, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const functionApiConfigs = useFunctionApis();
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const defaultSceneRegenRequirement = t('补充所缺实体', 'Supplement missing entities');
@@ -2335,6 +2335,38 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             }
         });
     }, [activeEpisode?.id, activeEpisode?.scene_content, projectId]);
+
+    const reloadScenesData = useCallback(async () => {
+        if (!activeEpisode?.id) return;
+        setSceneListLoading(true);
+        try {
+            const dbScenes = await fetchScenes(activeEpisode.id);
+            if (dbScenes && dbScenes.length > 0) {
+                setScenes((dbScenes || []).map((scene) => ({
+                    ...scene,
+                    original_script_text: normalizeOriginalScriptText(scene?.original_script_text),
+                })));
+            }
+        } catch (error) {
+            console.error('Failed to reload scenes', error);
+        } finally {
+            setSceneListLoading(false);
+        }
+        if (projectId) {
+            try {
+                const latestEntities = await fetchEntities(projectId);
+                setEntities(latestEntities);
+            } catch (error) {
+                console.error('Failed to reload scene entities', error);
+            }
+        }
+    }, [activeEpisode?.id, projectId]);
+
+    useTabMediaRefreshEffect({
+        tabMediaRefreshSignal,
+        isTabActive,
+        onRefresh: reloadScenesData,
+    });
 
     // Load cost data from project's cost_estimation snapshot
     useEffect(() => {
@@ -4289,6 +4321,11 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                     <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">{filteredScenes.length}/{scenes.length} {t('场景', 'Scenes')}</span>
                 </h2>
                 <div className="flex gap-2 items-center">
+                    <TabMediaRefreshButton
+                        onClick={() => onMediaRefreshRequest?.()}
+                        loading={sceneListLoading}
+                        uiLang={uiLang}
+                    />
                     <FunctionApiSelector functionName="ai_shot" configs={functionApiConfigs} />
                     <button
                         onClick={runBatchGenerateAiShotsForAllScenes}
