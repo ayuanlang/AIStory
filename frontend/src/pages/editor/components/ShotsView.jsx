@@ -27,7 +27,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, shotVideoEligibleForAutoOssPersistRetry, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT
 } from '../editorHelpers';
 
 import { 
@@ -630,8 +630,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoStatuses, setVideoStatuses] = useState({});
     const [shotMediaOssPersistBusy, setShotMediaOssPersistBusy] = useState({});
     const [mediaPersistGraceRefreshSeq, setMediaPersistGraceRefreshSeq] = useState(0);
-    const autoVideoOssPersistAttemptedRef = useRef(new Set());
-    const autoVideoOssPersistTimerRef = useRef(null);
     const activeOssVideoSyncRef = useRef(new Set());
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
     const [isDraftMode, setIsDraftMode] = useState(false);
@@ -5281,8 +5279,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     if (!synced) {
                                         onLog?.(
                                             t(
-                                                '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
-                                                'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
+                                                '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击「临时视频」。',
+                                                'Warning: recovered video is still a temporary URL and was not stored to OSS. Click "Temp Video" in shot details.'
                                             ),
                                             'warning'
                                         );
@@ -5317,8 +5315,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         if (!synced) {
                                             onLog?.(
                                                 t(
-                                                    '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击“补传 OSS”。',
-                                                    'Warning: recovered video is still a temporary URL and was not stored to OSS. Use "Upload to OSS" in shot details.'
+                                                    '警告：恢复的视频仍为临时地址，尚未写入 OSS。请在镜头详情中点击「临时视频」。',
+                                                    'Warning: recovered video is still a temporary URL and was not stored to OSS. Click "Temp Video" in shot details.'
                                                 ),
                                                 'warning'
                                             );
@@ -8484,8 +8482,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
-    const handlePersistShotMediaToOss = useCallback(async (shotLike = null, slot = 'video', options = {}) => {
-        const isAuto = options?.auto === true;
+    const handlePersistShotMediaToOss = useCallback(async (shotLike = null, slot = 'video') => {
         const normalizedSlot = String(slot || 'video').trim().toLowerCase();
         const apiSlot = normalizedSlot === 'start' || normalizedSlot === 'start_frame'
             ? 'start'
@@ -8502,26 +8499,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 : shotVideoNeedsOssPersist(targetShot);
 
         if (!targetShotId || !sourceUrl) {
-            if (!isAuto) {
-                showNotification(t('当前镜头没有可补传的素材地址。', 'No media URL available to persist.'), 'warning');
-            }
+            showNotification(t('当前镜头没有可补传的素材地址。', 'No media URL available to persist.'), 'warning');
             return false;
         }
         if (!needsPersist) {
-            if (!isAuto) {
-                showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
-            }
+            showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
             return true;
         }
 
         const busyKey = `${targetShotId}:${apiSlot}`;
         setShotMediaOssPersistBusy((prev) => ({ ...prev, [busyKey]: true }));
-        onLog?.(
-            isAuto
-                ? t('检测到临时视频已超过 1 分钟，正在自动补传到 OSS...', 'Temporary video is over 1 minute old; auto-uploading to OSS...')
-                : t('正在补传素材到 OSS...', 'Uploading media to OSS...'),
-            'info'
-        );
+        onLog?.(t('正在补传素材到 OSS...', 'Uploading media to OSS...'), 'info');
         try {
             const result = await persistShotMedia(targetShotId, {
                 slot: apiSlot,
@@ -8589,27 +8577,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
             refreshShotAssetsMeta();
             Promise.resolve(refreshShots()).catch(() => {});
-            onLog?.(
-                isAuto
-                    ? t('临时视频已自动补传到 OSS。', 'Temporary video auto-uploaded to OSS.')
-                    : t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'),
-                'success'
-            );
-            if (!isAuto) {
-                showNotification(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
-            }
+            onLog?.(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
+            showNotification(t('素材已成功补传到 OSS。', 'Media uploaded to OSS successfully.'), 'success');
             return true;
         } catch (err) {
             const detail = err?.response?.data?.detail || err?.message || t('未知错误', 'unknown error');
-            onLog?.(
-                isAuto
-                    ? `${t('临时视频自动补传 OSS 失败', 'Temporary video auto OSS upload failed')}: ${detail}`
-                    : `${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`,
-                'error'
-            );
-            if (!isAuto) {
-                showNotification(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
-            }
+            onLog?.(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
+            showNotification(`${t('素材补传 OSS 失败', 'Media OSS upload failed')}: ${detail}`, 'error');
             return false;
         } finally {
             setShotMediaOssPersistBusy((prev) => {
@@ -8620,65 +8594,69 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     }, [editingShot, onLog, onUpdateShot, refreshShotAssetsMeta, refreshShots, showNotification, t]);
 
-    useEffect(() => {
-        if (autoVideoOssPersistTimerRef.current) {
-            clearTimeout(autoVideoOssPersistTimerRef.current);
-            autoVideoOssPersistTimerRef.current = null;
+    const handleTempVideoBadgeClick = useCallback(async (shotLike, event) => {
+        if (event) {
+            event.stopPropagation();
+            event.preventDefault();
         }
 
-        const shotPool = [editingShot, ...(shots || [])].filter(Boolean);
-        const seenShotIds = new Set();
-        let nextRetryAtMs = null;
+        const shotId = String(shotLike?.id || '').trim();
+        if (!shotId) return;
 
-        shotPool.forEach((shot) => {
-            const shotId = String(shot?.id || '').trim();
-            if (!shotId || seenShotIds.has(shotId)) return;
-            seenShotIds.add(shotId);
+        const busyKey = `${shotId}:video`;
+        if (shotMediaOssPersistBusy[busyKey]) {
+            showNotification(t('正在补传中，请稍候...', 'Upload in progress, please wait...'), 'info');
+            return;
+        }
 
-            if (!shotVideoNeedsOssPersist(shot)) return;
+        let freshShot = shotLike;
+        try {
+            const latestShot = await fetchShot(shotId);
+            if (latestShot?.id) {
+                freshShot = latestShot;
+                if (isShotVideoOssPersistComplete(latestShot)) {
+                    const patch = {
+                        video_url: latestShot.video_url,
+                        technical_notes: latestShot.technical_notes,
+                    };
+                    setEditingShot((prev) => (prev && String(prev.id) === shotId ? { ...prev, ...patch } : prev));
+                    setShots((prev) => prev.map((item) => (
+                        String(item?.id) === shotId ? { ...item, ...patch } : item
+                    )));
+                    setMediaPersistGraceRefreshSeq((seq) => seq + 1);
+                    showNotification(t('视频已是稳定存储地址。', 'Video is already on durable storage.'), 'info');
+                    return;
+                }
+            }
+        } catch (fetchErr) {
+            console.warn('[handleTempVideoBadgeClick] fetchShot failed:', fetchErr);
+        }
 
-            const boundMs = getShotVideoMediaBoundAtMs(shot);
-            if (!boundMs) return;
+        if (!shotVideoNeedsOssPersist(freshShot)) {
+            showNotification(t('当前素材已是稳定存储地址。', 'Current media URL is already durable.'), 'info');
+            return;
+        }
 
-            const videoUrl = String(shot.video_url || '').trim();
-            const attemptKey = `${shotId}:${videoUrl}`;
-            if (autoVideoOssPersistAttemptedRef.current.has(attemptKey)) return;
-
+        const boundMs = getShotVideoMediaBoundAtMs(freshShot);
+        if (boundMs) {
             const ageMs = Date.now() - boundMs;
-            if (ageMs >= EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS) {
-                const busyKey = `${shotId}:video`;
-                if (shotMediaOssPersistBusy[busyKey]) return;
-                autoVideoOssPersistAttemptedRef.current.add(attemptKey);
-                void handlePersistShotMediaToOss(shot, 'video', { auto: true });
+            if (ageMs < EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS) {
+                const remainSec = Math.ceil((EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS - ageMs) / 1000);
+                showNotification(
+                    t(`临时视频绑定未满 1 分钟，请 ${remainSec} 秒后再试。`, `Temporary video was bound less than 1 minute ago; try again in ${remainSec}s.`),
+                    'info'
+                );
                 return;
             }
-
-            const retryAt = boundMs + EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS;
-            if (!nextRetryAtMs || retryAt < nextRetryAtMs) {
-                nextRetryAtMs = retryAt;
-            }
-        });
-
-        if (nextRetryAtMs) {
-            const delayMs = Math.max(100, nextRetryAtMs - Date.now() + 100);
-            autoVideoOssPersistTimerRef.current = setTimeout(() => {
-                autoVideoOssPersistTimerRef.current = null;
-                setMediaPersistGraceRefreshSeq((seq) => seq + 1);
-            }, delayMs);
         }
 
-        return () => {
-            if (autoVideoOssPersistTimerRef.current) {
-                clearTimeout(autoVideoOssPersistTimerRef.current);
-                autoVideoOssPersistTimerRef.current = null;
-            }
-        };
+        await handlePersistShotMediaToOss(freshShot, 'video');
     }, [
-        editingShot,
-        shots,
-        mediaPersistGraceRefreshSeq,
-        shotMediaOssPersistBusy,
+        fetchShot,
         handlePersistShotMediaToOss,
+        shotMediaOssPersistBusy,
+        showNotification,
+        t,
     ]);
 
     const notifyShotMediaOssPersistWarning = useCallback((shotLike, slot = 'video') => {
@@ -8706,14 +8684,21 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 : 'video';
 
         onLog?.(
-            t(
-                `警告：${labelZh}仍为供应商临时地址，尚未持久化到 OSS。请在详情页点击“补传 OSS”。`,
-                `Warning: ${labelEn} is still on a temporary provider URL and was not persisted to OSS. Use "Upload to OSS" in the detail panel.`
-            ),
+            apiSlot === 'video'
+                ? t(
+                    '警告：视频仍为供应商临时地址，尚未持久化到 OSS。请在镜头详情中点击「临时视频」。',
+                    'Warning: video is still on a temporary provider URL and was not persisted to OSS. Click "Temp Video" in shot details.'
+                )
+                : t(
+                    `警告：${labelZh}仍为供应商临时地址，尚未持久化到 OSS。请在详情页点击“补传 OSS”。`,
+                    `Warning: ${labelEn} is still on a temporary provider URL and was not persisted to OSS. Use "Upload to OSS" in the detail panel.`
+                ),
             'warning'
         );
         showNotification(
-            t(`${labelZh}未写入 OSS，请及时补传`, `${labelEn} not stored to OSS — please upload soon`),
+            apiSlot === 'video'
+                ? t('视频未写入 OSS，请点击「临时视频」补传', 'Video not stored to OSS — click "Temp Video" to upload')
+                : t(`${labelZh}未写入 OSS，请及时补传`, `${labelEn} not stored to OSS — please upload soon`),
             'warning'
         );
     }, [onLog, showNotification, t]);
@@ -8724,6 +8709,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : slot === 'end' || slot === 'end_frame'
                 ? 'end'
                 : 'video';
+        if (apiSlot === 'video') return null;
+
         const needsPersist = apiSlot === 'start'
             ? shotStartFrameNeedsOssPersist(shotLike)
             : apiSlot === 'end'
@@ -10648,13 +10635,34 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         </div>
                                     )}
                                     {shotNeedsAnyOssPersist(shot) && (
-                                        <div
-                                            className="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow pointer-events-none"
-                                            title={t('部分素材未持久化到 OSS', 'Some media not persisted to OSS')}
-                                        >
-                                            <AlertTriangle size={12} />
-                                            <span>{shotVideoNeedsOssPersist(shot) ? t('临时视频', 'Temp Video') : t('临时图片', 'Temp Image')}</span>
-                                        </div>
+                                        shotVideoNeedsOssPersist(shot) ? (
+                                            <button
+                                                type="button"
+                                                onClick={(e) => handleTempVideoBadgeClick(shot, e)}
+                                                disabled={Boolean(shotMediaOssPersistBusy[`${String(shot?.id || '').trim()}:video`])}
+                                                className="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 rounded bg-amber-500/90 hover:bg-amber-400 disabled:opacity-70 disabled:cursor-wait text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow cursor-pointer"
+                                                title={t('点击检查并补传到 OSS', 'Click to check and upload to OSS')}
+                                            >
+                                                {shotMediaOssPersistBusy[`${String(shot?.id || '').trim()}:video`] ? (
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                ) : (
+                                                    <AlertTriangle size={12} />
+                                                )}
+                                                <span>
+                                                    {shotMediaOssPersistBusy[`${String(shot?.id || '').trim()}:video`]
+                                                        ? t('补传中', 'Uploading')
+                                                        : t('临时视频', 'Temp Video')}
+                                                </span>
+                                            </button>
+                                        ) : (
+                                            <div
+                                                className="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow pointer-events-none"
+                                                title={t('部分素材未持久化到 OSS', 'Some media not persisted to OSS')}
+                                            >
+                                                <AlertTriangle size={12} />
+                                                <span>{t('临时图片', 'Temp Image')}</span>
+                                            </div>
+                                        )
                                     )}
                                     <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold pointer-events-none">
                                         {getShotDurationDisplayValue(shot.duration) || '0s'}
@@ -11448,31 +11456,24 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             )}
                                              {(editingShot.video_url) && <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:bg-black/10"><Maximize2 className="text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/></div>}
                                              {shotVideoNeedsOssPersist(editingShot) && (
-                                                <div className="absolute bottom-2 left-2 z-20 flex items-center gap-2">
-                                                    <div
-                                                        className="inline-flex items-center gap-1 rounded bg-amber-500/90 text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow pointer-events-none"
-                                                        title={t('视频未持久化到 OSS', 'Video not persisted to OSS')}
-                                                    >
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => handleTempVideoBadgeClick(editingShot, e)}
+                                                    disabled={Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])}
+                                                    className="absolute bottom-2 left-2 z-20 inline-flex items-center gap-1 rounded bg-amber-500/90 hover:bg-amber-400 disabled:opacity-70 disabled:cursor-wait text-amber-950 px-1.5 py-0.5 text-[10px] font-bold shadow cursor-pointer"
+                                                    title={t('点击检查并补传到 OSS', 'Click to check and upload to OSS')}
+                                                >
+                                                    {shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`] ? (
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                    ) : (
                                                         <AlertTriangle size={12} />
-                                                        <span>{t('临时视频', 'Temp Video')}</span>
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            handlePersistShotMediaToOss(editingShot, 'video');
-                                                        }}
-                                                        disabled={Boolean(shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`])}
-                                                        className="inline-flex items-center gap-1 rounded bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-amber-950 px-2 py-0.5 text-[10px] font-bold shadow"
-                                                    >
-                                                        {shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`] ? (
-                                                            <Loader2 className="w-3 h-3 animate-spin" />
-                                                        ) : (
-                                                            <Upload className="w-3 h-3" />
-                                                        )}
-                                                        <span>{shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`] ? t('补传中', 'Uploading') : t('补传 OSS', 'Upload OSS')}</span>
-                                                    </button>
-                                                </div>
+                                                    )}
+                                                    <span>
+                                                        {shotMediaOssPersistBusy[`${String(editingShot?.id || '').trim()}:video`]
+                                                            ? t('补传中', 'Uploading')
+                                                            : t('临时视频', 'Temp Video')}
+                                                    </span>
+                                                </button>
                                              )}
                                              
                                              {/* Video Actions Overlay */}
