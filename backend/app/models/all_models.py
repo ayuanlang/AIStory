@@ -1,5 +1,5 @@
 
-from sqlalchemy import func, DateTime, Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
+from sqlalchemy import event, func, DateTime, Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 from app.core.time_utils import now_bj_iso
@@ -166,6 +166,11 @@ class Project(Base):
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
     entities = relationship("Entity", back_populates="project", cascade="all, delete-orphan")
     asset_review_threads = relationship("ProjectAssetReviewThread", back_populates="project", cascade="all, delete-orphan")
+
+
+@event.listens_for(Project, "before_update")
+def _project_set_updated_at(_mapper, _connection, target):
+    target.updated_at = now_bj_iso()
 
 
 class ProjectShare(Base):

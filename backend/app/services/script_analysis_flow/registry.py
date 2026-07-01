@@ -141,7 +141,7 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "outputs": ["shots_markdown", "shot_rows"],
             "persist_targets": ["scene.ai_shots_result", "shot_rows"],
             "executor": "shot_generation.batch_per_scene",
-            "injection_chain": ["backend.shot_generation.project_context", "backend.shot_generation.feature_bundle", "backend.shot_generation.scene_context", "backend.shot_generation.scene_subject_index_only"],
+            "injection_chain": ["backend.shot_generation.project_context", "backend.shot_generation.feature_bundle", "backend.shot_generation.scene_context", "backend.shot_generation.scene_subject_index_only", "backend.shot_generation.scene_subject_image_prompts_cn"],
             "auto_start": True,
             "fan_out": "per_scene",
             "status": "routable_existing_executor",

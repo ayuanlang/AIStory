@@ -13987,6 +13987,8 @@ class ProjectOut(BaseModel):
     missing_basic_fields: Optional[List[str]] = None
     has_missing_basic_info: Optional[bool] = False
     share_count: Optional[int] = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -17997,7 +17999,7 @@ def read_projects(
                 )
             )
             .group_by(Project.id)
-            .order_by(Project.created_at.desc(), Project.id.desc())
+            .order_by(Project.updated_at.desc(), Project.id.desc())
             .offset(skip)
             .limit(limit)
             .all()
@@ -23823,6 +23825,91 @@ def _build_project_prompt_context(project_info_input: Any) -> Dict[str, Any]:
 def _build_shot_generation_project_context(project: Project) -> Dict[str, Any]:
     return _build_project_prompt_context(project.global_info)
 
+
+def _build_scene_subject_image_prompts_cn_section(
+    project_entities: List[Any],
+    subject_match_keys: set,
+    *,
+    scene_id: Optional[int] = None,
+) -> str:
+    if not subject_match_keys:
+        return ""
+
+    def _entity_matches_subject_keys(ent: Any) -> bool:
+        aliases = [getattr(ent, "name", None), getattr(ent, "name_en", None)]
+        for alias in aliases:
+            alias_text = str(alias or "").strip()
+            if not alias_text:
+                continue
+            if subject_compare_key(alias_text) in subject_match_keys:
+                return True
+            if subject_match_keys.intersection(subject_compare_key_variants(alias_text)):
+                return True
+        return False
+
+    type_order = {"character": 0, "prop": 1, "environment": 2, "cover": 3}
+    matched_entities = [
+        ent for ent in (project_entities or [])
+        if not bool(getattr(ent, "is_deleted", False))
+        and _entity_matches_subject_keys(ent)
+        and str(getattr(ent, "generation_prompt_cn", None) or "").strip()
+    ]
+    matched_entities.sort(
+        key=lambda ent: (
+            type_order.get(_normalize_subject_entity_type(getattr(ent, "type", None)), 9),
+            int(getattr(ent, "id", 0) or 0),
+        )
+    )
+
+    prompt_lines: List[str] = []
+    seen_refs: set = set()
+    for ent in matched_entities:
+        normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "character"
+        canonical_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
+        if not canonical_name:
+            continue
+        if normalized_type == "character":
+            subject_ref = f"CHAR:[@{canonical_name}]"
+        elif normalized_type == "prop":
+            subject_ref = f"PROP:[{canonical_name}]"
+        elif normalized_type == "environment":
+            subject_ref = f"ENV:[{canonical_name}]"
+        else:
+            subject_ref = f"COVER:[{canonical_name}]"
+        if subject_ref in seen_refs:
+            continue
+        seen_refs.add(subject_ref)
+        prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
+        if not prompt_cn:
+            continue
+        prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={prompt_cn}")
+
+    if not prompt_lines:
+        logger.info(
+            "[_build_shot_prompts] no scene subject image prompts matched scene_id=%s keys=%s",
+            scene_id,
+            len(subject_match_keys),
+        )
+        return ""
+
+    body = (
+        "# Scene Subject Image Prompts (CN)\n"
+        "Authoritative Chinese image-generation prompts for scene-involved subjects only. "
+        "Use for visual identity consistency (appearance, materials, palette, anchor features, spatial tone) when writing Video Content (CN). "
+        "Translate into dynamic video language; do not paste static framing/canvas instructions verbatim. "
+        "Entity naming authority remains Scene Subject Index.\n"
+        + "\n".join(prompt_lines)
+        + "\n"
+    )
+    logger.info(
+        "[_build_shot_prompts] injected scene subject image prompts scene_id=%s keys=%s rows=%s",
+        scene_id,
+        len(subject_match_keys),
+        len(prompt_lines),
+    )
+    return wrap_injection_section("实体中文生图提示词", body)
+
+
 def _build_shot_prompts(
     db: Session,
     scene: Scene,
@@ -23846,8 +23933,12 @@ def _build_shot_prompts(
     project_context_section = str(project_context.get("project_context_section") or "")
 
     # Scene Info
-    # Fetch project entities only for Environment Context enrichment in Core Scene Info.
-    project_entities = db.query(Entity).filter(Entity.project_id == project.id).all()
+    project_entities = (
+        db.query(Entity)
+        .filter(Entity.project_id == project.id, Entity.is_deleted.is_(False))
+        .order_by(Entity.id.asc())
+        .all()
+    )
     
     def _scene_subject_compare_key(value: Any) -> str:
         return subject_compare_key(value)
@@ -24096,7 +24187,7 @@ def _build_shot_prompts(
 
         lines = [
             "# Scene Subject Index",
-            "Authoritative filtered Subject Index for this scene only. Use subject_no/subject_type/subject_name fields as the sole entity naming source; do not infer subjects outside this list and do not expect generation_prompt_cn/en blocks in the user prompt.",
+            "Authoritative filtered Subject Index for this scene only. Use subject_no/subject_type/subject_name fields as the sole entity naming source; do not infer subjects outside this list.",
         ]
         lines.extend(header_lines)
         lines.extend(separator_lines if header_lines else [])
@@ -24117,7 +24208,13 @@ def _build_shot_prompts(
         )
 
     scene_subject_keys = _extract_scene_subject_candidates()
-    scene_subject_index_section, _ = _build_filtered_scene_subject_index(scene_subject_keys)
+    scene_subject_index_section, index_subject_keys = _build_filtered_scene_subject_index(scene_subject_keys)
+    subject_match_keys = set(scene_subject_keys) | set(index_subject_keys)
+    scene_subject_image_prompts_section = _build_scene_subject_image_prompts_cn_section(
+        project_entities,
+        subject_match_keys,
+        scene_id=getattr(scene, "id", None),
+    )
 
     # 3. Prepare System Prompt
     system_prompt = ""
@@ -24159,6 +24256,7 @@ def _build_shot_prompts(
 {core_scene_info_block}
 
 {scene_subject_index_section}
+{scene_subject_image_prompts_section}
 # Instruction
 1. Analyze the script and break it down into shots.
 """

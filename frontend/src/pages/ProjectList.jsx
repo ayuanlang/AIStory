@@ -362,9 +362,11 @@ const createDefaultReviewRoundForm = () => ({
 
 const sortProjectsNewestFirst = (items = []) => {
     const safeList = Array.isArray(items) ? [...items] : [];
+    const projectSortTs = (item) =>
+        Date.parse(item?.updated_at || item?.created_at || '') || 0;
     return safeList.sort((a, b) => {
-        const aTs = Date.parse(a?.created_at || '') || 0;
-        const bTs = Date.parse(b?.created_at || '') || 0;
+        const aTs = projectSortTs(a);
+        const bTs = projectSortTs(b);
         if (bTs !== aTs) return bTs - aTs;
         return (Number(b?.id) || 0) - (Number(a?.id) || 0);
     });

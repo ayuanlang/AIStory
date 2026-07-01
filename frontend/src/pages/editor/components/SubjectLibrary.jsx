@@ -212,6 +212,104 @@ const resolveDependencyEntity = (dependencyToken, entities) => {
     }) || null;
 };
 
+const buildEntityNameMap = (entities) => {
+    const nameMap = new Map();
+    (Array.isArray(entities) ? entities : []).forEach((entity) => {
+        const normName = normalizeEntityToken(entity?.name || '');
+        const normNameEn = normalizeEntityToken(entity?.name_en || '');
+        if (normName) nameMap.set(normName, entity);
+        if (normNameEn) nameMap.set(normNameEn, entity);
+    });
+    return nameMap;
+};
+
+const getEntityVisualDependencyTargets = (entity, allEntities, nameMap = null) => {
+    const deps = parseVisualDependencies(entity?.visual_dependencies);
+    const seen = new Set();
+    const targets = [];
+    deps.forEach((depRaw) => {
+        const dep = normalizeEntityToken(depRaw);
+        const target = resolveDependencyEntity(depRaw, allEntities)
+            || nameMap?.get?.(dep)
+            || null;
+        if (!target || seen.has(target.id)) return;
+        seen.add(target.id);
+        targets.push({ token: depRaw, entity: target });
+    });
+    return targets;
+};
+
+const getMissingVisualDependencyTargets = (entity, allEntities, resolveImageUrl, nameMap = null) => {
+    return getEntityVisualDependencyTargets(entity, allEntities, nameMap).filter(({ entity: target }) => {
+        const imageUrl = typeof resolveImageUrl === 'function'
+            ? resolveImageUrl(target)
+            : target?.image_url;
+        return !String(imageUrl || '').trim();
+    });
+};
+
+const formatEntityDependencyLabel = (entry) => {
+    const target = entry?.entity;
+    const token = String(entry?.token || '').trim();
+    return target?.name || target?.name_en || token || String(target?.id || '');
+};
+
+const topoSortEntitiesByVisualDependencies = (entities, allEntities, nameMap) => {
+    if (!Array.isArray(entities) || entities.length <= 1) return [...(entities || [])];
+
+    const entityIds = new Set(entities.map((entity) => entity.id));
+    const orderIndex = new Map(entities.map((entity, index) => [entity.id, index]));
+    const inDegree = new Map(entities.map((entity) => [entity.id, 0]));
+    const adj = new Map(entities.map((entity) => [entity.id, []]));
+
+    entities.forEach((entity) => {
+        getEntityVisualDependencyTargets(entity, allEntities, nameMap).forEach(({ entity: target }) => {
+            if (!entityIds.has(target.id) || target.id === entity.id) return;
+            adj.get(target.id).push(entity.id);
+            inDegree.set(entity.id, (inDegree.get(entity.id) || 0) + 1);
+        });
+    });
+
+    const pending = entities
+        .filter((entity) => (inDegree.get(entity.id) || 0) === 0)
+        .sort((a, b) => orderIndex.get(a.id) - orderIndex.get(b.id));
+    const sorted = [];
+
+    while (pending.length > 0) {
+        const current = pending.shift();
+        sorted.push(current);
+        (adj.get(current.id) || []).forEach((dependentId) => {
+            const nextDegree = (inDegree.get(dependentId) || 0) - 1;
+            inDegree.set(dependentId, nextDegree);
+            if (nextDegree === 0) {
+                pending.push(entities.find((entity) => entity.id === dependentId));
+                pending.sort((a, b) => orderIndex.get(a.id) - orderIndex.get(b.id));
+            }
+        });
+    }
+
+    entities.forEach((entity) => {
+        if (!sorted.some((item) => item.id === entity.id)) sorted.push(entity);
+    });
+
+    return sorted;
+};
+
+const sortEntitiesBySceneThenDependencies = (entities, sceneRankMap, allEntities, nameMap) => {
+    const getRank = (entity) => (sceneRankMap.has(entity.id) ? sceneRankMap.get(entity.id) : 999999);
+    const groups = new Map();
+
+    (entities || []).forEach((entity) => {
+        const rank = getRank(entity);
+        if (!groups.has(rank)) groups.set(rank, []);
+        groups.get(rank).push(entity);
+    });
+
+    return Array.from(groups.keys())
+        .sort((a, b) => a - b)
+        .flatMap((rank) => topoSortEntitiesByVisualDependencies(groups.get(rank) || [], allEntities, nameMap));
+};
+
 export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
@@ -4856,6 +4954,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const draftPrompt = String(promptDrafts?.cn || '').trim();
         const promptToUse = customPrompt || String(draftPrompt || selectedLangPrompt || '').trim();
         if (!promptToUse) return;
+
+        const entityNameMap = buildEntityNameMap(allEntities);
+        const missingDependencyTargets = getMissingVisualDependencyTargets(
+            activeEntity,
+            allEntities,
+            (target) => target?.image_url,
+            entityNameMap
+        );
+        if (missingDependencyTargets.length > 0) {
+            const missingLabels = missingDependencyTargets.map(formatEntityDependencyLabel).join('、');
+            showSubjectNotification(
+                t(
+                    `无法生图：以下依赖资产尚未生成图片，请先生成依赖资产：${missingLabels}`,
+                    `Cannot generate image: the following dependency assets have no image yet. Generate them first: ${missingLabels}`
+                ),
+                'warning'
+            );
+            onLog?.(
+                t(
+                    `主体生图已阻止：${targetEntityName} 缺少依赖图片：${missingLabels}`,
+                    `Subject generation blocked: ${targetEntityName} is missing dependency images: ${missingLabels}`
+                ),
+                'warning'
+            );
+            return;
+        }
+
         setGenerating(true);
         setShowPromptLangMenu(false);
 
@@ -5120,7 +5245,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return;
         }
 
-        if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
+        if (!await confirmUiMessage(
+            t(
+                `将为 ${toGenerate.length} 个主体批量生图。系统将先按场景顺序、再按依赖顺序排队，依赖资产未生图时会跳过并提示。是否继续？`,
+                `Batch generate images for ${toGenerate.length} subjects. Items will be queued by scene order, then dependency order. Entries with missing dependency images will be skipped with a notice. Continue?`
+            )
+        )) return;
 
         let scenesToScan = [];
         try {
@@ -5161,22 +5291,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             });
         });
 
-        toGenerate.sort((a, b) => {
-            const rankA = sceneRankMap.has(a.id) ? sceneRankMap.get(a.id) : 999999;
-            const rankB = sceneRankMap.has(b.id) ? sceneRankMap.get(b.id) : 999999;
-            return rankA - rankB;
-        });
+        const nameMap = buildEntityNameMap(allEntities);
+        const orderedToGenerate = sortEntitiesBySceneThenDependencies(toGenerate, sceneRankMap, allEntities, nameMap);
 
         subjectBatchGenerateStopRequestedRef.current = false;
         const batchSessionId = `subject-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         subjectBatchGenerateSessionRef.current = batchSessionId;
         setIsStoppingBatchGenerateEntities(false);
 
-        updateGenerateBatchRuntimeState(true, { current: 0, total: toGenerate.length, status: 'Initializing...' });
+        updateGenerateBatchRuntimeState(true, { current: 0, total: orderedToGenerate.length, status: 'Initializing...' });
         const batchStartedAt = Date.now();
         updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
-            toGenerate.forEach((entity) => {
+            orderedToGenerate.forEach((entity) => {
                 const stableEntityId = String(entity?.id || '').trim();
                 if (!stableEntityId) return;
                 next[stableEntityId] = {
@@ -5190,15 +5317,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return next;
         });
 
-        // Determine Dependency Map
-        const nameMap = new Map();
-        allEntities.forEach(e => {
-            const normName = normalizeEntityToken(e.name || '');
-            const normNameEn = normalizeEntityToken(e.name_en || '');
-            if (normName) nameMap.set(normName, e);
-            if (normNameEn) nameMap.set(normNameEn, e);
-        });
-
         // Current status of images (starts with existing)
         // We use a mutable URL map to track latest URLs during the batch process
         const urlMap = new Map();
@@ -5206,23 +5324,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             if (e.image_url) urlMap.set(e.id, e.image_url);
         });
 
-        let queue = [...toGenerate];
+        let queue = [...orderedToGenerate];
         let processedCount = 0;
         let skippedPromptCount = 0;
+        let skippedDepCount = 0;
         
         // Helper to check if entity is ready (all its deps have images)
-        const isReady = (ent) => {
-            const deps = parseVisualDependencies(ent.visual_dependencies);
-            if (deps.length === 0) return true;
-            
-            return deps.every(depRaw => {
-                const dep = normalizeEntityToken(depRaw);
-                const target = resolveDependencyEntity(depRaw, allEntities) || nameMap.get(dep) || null;
-
-                if (!target) return true; // External/Unknown dep doesn't block
-                return urlMap.has(target.id);
-            });
-        };
+        const isReady = (ent) => getMissingVisualDependencyTargets(
+            ent,
+            allEntities,
+            (target) => urlMap.get(target.id),
+            nameMap
+        ).length === 0;
 
         try {
             const shouldStopBatchGenerate = () => (
@@ -5248,8 +5361,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     .filter(Boolean)
                     .join(', ');
                 updateGenerateBatchRuntimeState(true, {
-                    current: Math.min(processedCount + 1, toGenerate.length),
-                    total: toGenerate.length,
+                    current: Math.min(processedCount + 1, orderedToGenerate.length),
+                    total: orderedToGenerate.length,
                     status: t(`生成中${getSceneContextLabel()}：${activeLabels}`, `Generating${getSceneContextLabel()}: ${activeLabels}`),
                 });
             };
@@ -5274,6 +5387,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 );
                 if (finalPrompt.length < MIN_BATCH_IMAGE_PROMPT_CHARS) {
                     return { entity, skippedPrompt: true };
+                }
+
+                const missingDependencyTargets = getMissingVisualDependencyTargets(
+                    entity,
+                    allEntities,
+                    (target) => urlMap.get(target.id),
+                    nameMap
+                );
+                if (missingDependencyTargets.length > 0) {
+                    return {
+                        entity,
+                        skippedDependency: true,
+                        missingLabels: missingDependencyTargets.map(formatEntityDependencyLabel),
+                    };
                 }
 
                 const depUrls = [];
@@ -5366,8 +5493,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             let currentSceneRank = null;
             let currentSceneBatchLimit = workerLimit;
 
+            const skipEntityForMissingDependencies = (entity, missingLabels = []) => {
+                skippedDepCount += 1;
+                clearLocalSubjectImageJobState(entity.id);
+                const labelText = (missingLabels || []).filter(Boolean).join('、');
+                onLog?.(
+                    t(
+                        `批量生图跳过：${entity?.name || entity?.name_en || entity?.id}${labelText ? ` 的依赖资产尚未生成图片：${labelText}` : ' 的依赖资产尚未生成图片'}`,
+                        `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id}${labelText ? ` — dependency assets have no image yet: ${labelText}` : ' — dependency assets have no image yet'}`
+                    ),
+                    'warning'
+                );
+            };
+
             const startNextGenerateTask = () => {
-                const nextEntity = queue.find(e => isReady(e)) || (activeTasks.size === 0 ? queue[0] : null);
+                const nextEntity = queue.find(e => isReady(e));
                 if (!nextEntity) {
                     return false;
                 }
@@ -5405,6 +5545,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 }
 
                 if (activeTasks.size === 0) {
+                    if (queue.length > 0 && !shouldStopBatchGenerate()) {
+                        queue.forEach((entity) => {
+                            const missingDependencyTargets = getMissingVisualDependencyTargets(
+                                entity,
+                                allEntities,
+                                (target) => urlMap.get(target.id),
+                                nameMap
+                            );
+                            skipEntityForMissingDependencies(
+                                entity,
+                                missingDependencyTargets.map(formatEntityDependencyLabel)
+                            );
+                            processedCount += 1;
+                        });
+                        queue = [];
+                    }
                     break;
                 }
 
@@ -5428,6 +5584,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             ),
                             'warning'
                         );
+                    } else if (settledTask.value?.skippedDependency) {
+                        skipEntityForMissingDependencies(entity, settledTask.value?.missingLabels || []);
                     } else if (settledTask.value?.imageUrl) {
                         urlMap.set(entity.id, settledTask.value.imageUrl);
                         applySubjectEntityImageLocally(entity.id, settledTask.value.imageUrl);
@@ -5456,17 +5614,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                 updateGenerateBatchRuntimeState(true, {
                     current: processedCount,
-                    total: toGenerate.length,
-                    status: t(`已处理 ${processedCount}/${toGenerate.length}${getSceneContextLabel()}`, `Processed ${processedCount}/${toGenerate.length}${getSceneContextLabel()}`),
+                    total: orderedToGenerate.length,
+                    status: t(`已处理 ${processedCount}/${orderedToGenerate.length}${getSceneContextLabel()}`, `Processed ${processedCount}/${orderedToGenerate.length}${getSceneContextLabel()}`),
                 });
                 updateGenerateActiveStatus();
             }
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量生图已停止。', 'Batch image generation stopped.'));
-            } else if (skippedPromptCount > 0) {
-                alert(`Batch Generation Complete! Skipped ${skippedPromptCount} item(s) due to short prompt (<${MIN_BATCH_IMAGE_PROMPT_CHARS} chars).`);
+            } else if (skippedDepCount > 0 || skippedPromptCount > 0) {
+                const summaryParts = [];
+                if (skippedDepCount > 0) {
+                    summaryParts.push(
+                        t(`跳过 ${skippedDepCount} 个依赖未就绪项`, `skipped ${skippedDepCount} item(s) with missing dependency images`)
+                    );
+                }
+                if (skippedPromptCount > 0) {
+                    summaryParts.push(
+                        t(`跳过 ${skippedPromptCount} 个提示词过短项`, `skipped ${skippedPromptCount} item(s) with short prompts`)
+                    );
+                }
+                alert(
+                    t(
+                        `批量生图完成。${summaryParts.join('，')}。详情请查看日志。`,
+                        `Batch generation complete. ${summaryParts.join(', ')}. See logs for details.`
+                    )
+                );
             } else {
-                alert("Batch Generation Complete!");
+                alert(t('批量生图完成。', 'Batch generation complete.'));
             }
         } catch (e) {
             console.error(e);
@@ -5478,7 +5652,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             subjectBatchGenerateActiveJobsRef.current.clear();
             updateSubjectImageJobsAndStorage(prev => {
                 const next = { ...(prev || {}) };
-                toGenerate.forEach((entity) => {
+                orderedToGenerate.forEach((entity) => {
                     const stableEntityId = String(entity?.id || '').trim();
                     if (!stableEntityId) return;
                     const existing = next[stableEntityId];
@@ -5490,7 +5664,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             });
             setStoppingSubjectImageJobs(prev => {
                 const next = { ...(prev || {}) };
-                toGenerate.forEach((entity) => {
+                orderedToGenerate.forEach((entity) => {
                     const stableEntityId = String(entity?.id || '').trim();
                     if (!stableEntityId) return;
                     delete next[stableEntityId];

@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-06-30 22:00:00 +08:00
+# Prompt Updated At: 2026-07-01 14:00:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -31,7 +31,7 @@
     - **恐怖 / 惊悚 / 悬疑压迫向 / 暗黑风格**：才可低照度与高反差；即使暗黑也必须保持关键信息可读，禁止整场压黑。
   - **视觉正向注入矩阵**：所有 `generation_prompt` 必须写入匹配类型的正向视觉词：
     - **真人实拍 (Live Action/Photoreal)**：真实体征、微细孔/肤质、物理服饰材质、自然光学、电影布光、可信尺度；仅表现真实物理质感。
-    - **真人写实硬约束**：若 `Project Context.Type`、`Genre`、`Base Positioning`、`Global_Style` 任一命中真人写实/现实主义/都市家庭/职场/社会派/纪实向，优先写入：未美颜真实面部细节、符合年龄的肤质纹理、真实毛孔与微瑕、自然妆感、真人演员面部组织关系。禁止：玻璃肌、零毛孔、强偶像妆、二次元比例、过度雾化、棚拍广告感。服装/体态/场景保持基本可信。
+    - **真人写实硬约束**：若 `Project Context.Type`、`Genre`、`Base Positioning`、`Global_Style` 任一命中真人写实/现实主义/都市家庭/职场/社会派/纪实向，所有 character 须按 `entity_design_character.md` **§2.1F-A 六必锚**全量写入：保留毛孔纹理、matte-to-satin 分区光泽、薄透自然妆面、真人面部组织、微瑕个体标记（≥1）、发丝真实结构。禁止：玻璃肌、零毛孔、强偶像妆、二次元比例、过度雾化、棚拍广告感、油腻/塑料质感。服装/体态/场景保持基本可信。
     - **动漫二次元 (Anime)**：赛璐璐线稿、二维形体、块面明暗、风格化背景材质；仅表现纯二维质感。
     - **风格化三维 (Stylized 3D)**：清晰几何体块、受控高光/边缘光、可复用三维模型骨学。
     - **未命中类型**：依 `Global_Style` 或 `Base Positioning` 补具体正向风格短语。
