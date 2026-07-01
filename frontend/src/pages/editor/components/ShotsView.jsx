@@ -10950,16 +10950,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 </div>
                             </h3>
                             <div className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={handleRestoreShotFromAiStaging}
-                                    disabled={restoringFromStaging || !editingShot?.scene_id}
-                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
-                                    title={t('从场景 AI 镜头暂存区恢复该分镜的提示词等信息（保留已生成图片/视频）', 'Restore prompts from scene AI staging (keeps generated images/videos)')}
-                                >
-                                    {restoringFromStaging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                                    {restoringFromStaging ? t('恢复中…', 'Restoring…') : t('恢复分镜', 'Restore Storyboard')}
-                                </button>
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型: ', 'Image: ')} />
                                 <div className="flex items-center gap-1" ref={shotNotePopoverRef}>
                                     <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
@@ -10994,7 +10984,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         <div className="p-4 sm:p-6 space-y-6">
 
                             <div>
-                                <label className="text-[10px] uppercase font-bold text-muted-foreground block mb-1">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                                    <label className="text-[10px] uppercase font-bold text-muted-foreground">{t('镜头逻辑（中文）', 'Shot Logic (CN)')}</label>
+                                    <button
+                                        type="button"
+                                        onClick={handleRestoreShotFromAiStaging}
+                                        disabled={restoringFromStaging || !editingShot?.scene_id}
+                                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                                        title={t('从场景 AI 镜头暂存区恢复该分镜的提示词等信息（保留已生成图片/视频）', 'Restore prompts from scene AI staging (keeps generated images/videos)')}
+                                    >
+                                        {restoringFromStaging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                                        {restoringFromStaging ? t('恢复中…', 'Restoring…') : t('恢复分镜', 'Restore Storyboard')}
+                                    </button>
+                                </div>
                                 <PromptMentionTextarea entities={entities} uiLang={uiLang}
                                     className="w-full bg-black/20 border border-white/10 rounded p-2 text-xs text-white/80 h-[80px] focus:outline-none focus:border-primary/50 cursor-not-allowed opacity-80"
                                     value={editingShot.shot_logic_cn || ''}
