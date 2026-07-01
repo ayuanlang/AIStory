@@ -173,7 +173,7 @@
 | 实体 | `description_cn` | `generation_prompt_cn` |
 | :--- | :--- | :--- |
 | **Character** | Key/Fill/Backlight 光源类型、方向、色温、冷暖 rationale；服装主辅点缀色须服从 §B 四层色谱 | 须含大光比下肤色/服饰**亮区与暗区**光学响应；禁止只写「暖肤/冷调」 |
-| **Environment / Poster** | 光学 rationale + 主辅色谱 + FG/MG/BG 各层受光与投影；**夜景须按 `entity_design_environment_and_poster.md` §3.1.8 写覆盖照明** | 须写 **≥2 动机光源**（夜景剧情允许时 **≥3** 或 1 强自然光+≥2 Practical）；**每个光源须写作用范围 + 可见效果**；夜景须写自然主光/暖调覆盖/多人工覆盖网之一；主环境两宫格须与 §B 主色/辅色/过渡色一致 |
+| **Environment / Poster** | 光学 rationale + 主辅色谱 + FG/MG/BG 各层受光与投影；**夜景须按 `entity_design_environment_and_poster.md` §3.1.8 写覆盖照明** | 须写 **≥2 动机光源**（夜景剧情允许时 **≥3** 或 1 强自然光+≥2 Practical）；**每个光源须写作用范围 + 可见效果**；夜景须写自然主光/暖调覆盖/多人工覆盖网之一；主环境俯拍全景须与 §B 主色/辅色/过渡色一致 |
 | **Prop** | 材质色与 §B 主辅色/点缀色绑定 | 须写动机光下材质高光/半影/暗部与全项目色谱一致 |
 
 #### D. 输出前色谱自检（强制）

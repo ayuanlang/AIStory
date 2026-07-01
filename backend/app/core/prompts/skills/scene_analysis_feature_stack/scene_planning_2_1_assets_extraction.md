@@ -111,7 +111,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 ### 四、环境组（ENV）与空镜
 - **主环境 vs 可拍衍生（强制分层）**：
-  - **主环境（基准定义，Beat 不可用，生图参考源）**：`env_role:主环境基准定义`；`referenceable:No`（Beat 不可直接引用）；`generatable:Yes`（Stage 3 输出空间基准参考图）；只写空间骨架、**0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一，分居 Viewing Direction 轴线两端）、**俯视全局 360** + **仰视全局 360**（四向+中心，可不写 FG/MG/BG；两视角对称一致）、固定实体清单与实体间关系；**禁止**写某一机位可拍空镜、**禁止**作为 Beat 当前 ENV；**是全部衍生生图参考图唯一来源**。
+  - **主环境（基准定义，Beat 不可用，生图参考源）**：`env_role:主环境基准定义`；`referenceable:No`（Beat 不可直接引用）；`generatable:Yes`（Stage 3 输出**俯拍全景**空间基准参考图，1:1 正方形，正上方鸟瞰）；只写空间骨架、**0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一，分居 Viewing Direction 轴线两端）、**俯视全局 360**（四向+中心，可不写 FG/MG/BG）、固定实体清单与实体间关系；如有仰视全局 360 可一并写入供空间互证参考，但不强制；**禁止**写某一机位可拍空镜、**禁止**作为 Beat 当前 ENV；**是全部衍生生图参考图唯一来源**。
   - **视角衍生（可拍 ENV，Beat 可引用）**：含 **`0度{主环境名}`（每场强制）** 及 OTS/正反/POV 等 `{N}度{主环境名}`；`env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；Beat 中一切可拍空镜**必须**指向此类衍生行；**生图 `reference_env` 均回挂主环境名**。
   - **状态/特效衍生**：结构/布局/域场变化；`base_entity` 拓扑/时序链仍可按上游指主环境或前一状态；**生图 `reference_env` 统一回挂主环境名**（禁止回挂 `0度` 或其他衍生）。
 - **纯空镜提取原则（强制，本阶段 ENV 最高优先级之一）**：`environment` 行只描述**无人、无临场道具、无交互痕迹**的可复用拍摄空间。Stage 1【主环境】/【衍生环境】说明、Beat 环节 1 环境建置、以及任何上游自然语言环境段落，**常夹杂角色站位、人称、肢体/视线/动作、持握物、可移动物件与交互状态**——提取 ENV 时须**主动剥离**上述内容，**禁止原样带入** `entity_attributes` 任一字段。
@@ -146,7 +146,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
   - **破坏态被依赖时的细节回补（强制）**：若确认以**破坏/损毁/崩塌类**状态实体作为 `base_entity`（被依赖基准），新衍生行必须在 `entity_attributes`（尤其 `empty_view_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`）中**逐项回补并强调**依赖基准里已被破坏部分的**结构/布局可见细节**——如崩裂位置与范围、倾覆/断裂构件、残留碎屑、破损边界等；可用**文学性**破损描写，**禁止**技术光学参数。技术化材质/光色/声场转译由 Skill 1-3 完成。
   - **角色/道具连续状态链**：换装、点燃、损毁、签署等连续状态变化时，`base_entity` / `dependency_reference` 指向同一实体族系内剧情时序上**上一稳定版本**（与角色时序规则一致）；仅当当前为族系首个衍生时，才指向基础版。若被依赖基准为**损毁/战损/破碎态**，新衍生须在 `entity_attributes` 中逐项回补并强调破损部位的可见细节；修复/复原态须写明恢复重建细节，禁止跳跃式抹除损伤痕迹。
 - **环境（ENV）**：
-  - **主环境（基准定义，Beat 不可用，生图参考源）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`；`entity_attributes` 须含 **0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一）、**俯视全局 360**、**仰视全局 360**（四向+中心，可不写 FG/MG/BG；两视角对称一致）、固定实体清单与实体间关系（**含垂直上/中/下**）；**必须**写 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`**禁止**写某一机位 FG/MG/BG 可拍描述。
+  - **主环境（基准定义，Beat 不可用，生图参考源）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`；`entity_attributes` 须含 **0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一）、**俯视全局 360**（四向+中心，可不写 FG/MG/BG）、固定实体清单与实体间关系（**含垂直上/中/下**）；如有仰视全局 360 可一并写入供空间互证参考，但不强制；**必须**写 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`；**禁止**写某一机位 FG/MG/BG 可拍描述。
   - **0 度视角衍生（强制，首场 Master 可拍 ENV）**：`subject_name_zh` = `0度{主环境名}`；`view_angle_from_main:0`；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含 `derivative_view_360_entities`（四向自然语言具名实体描述，独立撰写）**；**每场至少 1 行**；Beat 中 0 度 Master/Two Shot 须引用此行。
   - **其他视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`；`view_angle_from_main` = N；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含 `derivative_view_360_entities`（四向自然语言具名实体描述，与本行机位匹配，禁止照抄其他衍生行）**。
   - **OTS/反打角两步确认（强制，适用于 N≠0 视角衍生）**：**① N_对手 → ② (N_对手±180)%360**（细则 Stage 1 §12，不重述）。**展示成稿**：四向/FG/MG/BG 只写推导结果（同 Stage 1 §11 跨阶段契约）。同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`。
