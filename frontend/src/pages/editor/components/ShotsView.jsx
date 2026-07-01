@@ -12,6 +12,11 @@ import {
     dedupeShotsForDisplay,
     dedupeShotRowsForImport,
 } from '../../../lib/sceneTableParser';
+import {
+    buildShotWritePayloadFromRow,
+    findStagingRowByShotId,
+    resolveAiShotsStagingRows,
+} from '../../../lib/aiShotStagingHelpers';
 import FunctionApiSelector from '../../../components/FunctionApiSelector';
 import { useFunctionApis } from '../../../components/useFunctionApis';
 import { ReferenceManager } from './SceneManager';
@@ -21,7 +26,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -559,6 +564,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     // Local Notification for ShotsView (Edit Dialog)
     const [notification, setNotification] = useState(null);
+    const [restoringFromStaging, setRestoringFromStaging] = useState(false);
     const showNotification = (message, type = 'success') => {
         setNotification({ message, type });
         setTimeout(() => setNotification(null), 3000);
@@ -3491,6 +3497,66 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setEditingShot(prev => ({ ...(prev || {}), ...updates }));
         return await onUpdateShot(editingShot.id, updates);
     };
+
+    const handleRestoreShotFromAiStaging = useCallback(async () => {
+        if (!editingShot?.id || restoringFromStaging) return;
+
+        const sceneId = Number(editingShot.scene_id || 0);
+        const displayShotId = String(editingShot.shot_id || '').trim();
+        if (!sceneId || !displayShotId) {
+            showNotification(t('缺少场景或镜头 ID', 'Missing scene or shot ID'), 'error');
+            return;
+        }
+
+        if (!await confirmUiMessage(t(
+            '从对应场景的 AI 镜头暂存区恢复分镜提示词等信息？已生成的图片、视频等媒体不会被清除。',
+            'Restore shot prompts from this scene\'s AI staging area? Generated images, videos, and other media will be preserved.'
+        ))) {
+            return;
+        }
+
+        setRestoringFromStaging(true);
+        try {
+            const latest = await getSceneLatestAIResult(sceneId);
+            const rawText = latest?.raw_text || '';
+            const serverContent = Array.isArray(latest?.content) ? latest.content : [];
+            const resolved = resolveAiShotsStagingRows(
+                rawText,
+                serverContent,
+                Array.isArray(latest?.warnings) ? latest.warnings : []
+            );
+            const stagingRow = findStagingRowByShotId(resolved.content, displayShotId);
+            if (!stagingRow) {
+                showNotification(
+                    t(`暂存区未找到镜头 ${displayShotId} 的分镜记录`, `No staging record found for shot ${displayShotId}`),
+                    'error'
+                );
+                return;
+            }
+
+            const sceneMeta = scenes.find((scene) => String(scene?.id) === String(sceneId));
+            const fallbackSceneCode = String(
+                editingShot.scene_code || sceneMeta?.scene_no || sceneMeta?.scene_id || ''
+            ).trim();
+            const payload = buildShotWritePayloadFromRow(stagingRow, {
+                fallbackSceneCode,
+                existingTechnicalNotes: editingShot.technical_notes || '',
+            });
+
+            await onUpdateShot(editingShot.id, payload);
+            showNotification(t('已从 AI 暂存区恢复分镜信息', 'Restored shot info from AI staging area'), 'success');
+            onLog?.(
+                t(`镜头 ${displayShotId} 已从 AI 暂存区恢复分镜提示词`, `Shot ${displayShotId} prompts restored from AI staging`),
+                'success'
+            );
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showNotification(t(`恢复分镜失败: ${detail}`, `Restore failed: ${detail}`), 'error');
+            onLog?.(t(`恢复分镜失败: ${detail}`, `Restore failed: ${detail}`), 'error');
+        } finally {
+            setRestoringFromStaging(false);
+        }
+    }, [editingShot, onLog, onUpdateShot, restoringFromStaging, scenes, showNotification, t]);
 
     const handleApplyTunedShotPrompt = useCallback(async (refinedPrompt) => {
         if (!editingShot?.id) return;
@@ -10884,6 +10950,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 </div>
                             </h3>
                             <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleRestoreShotFromAiStaging}
+                                    disabled={restoringFromStaging || !editingShot?.scene_id}
+                                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={t('从场景 AI 镜头暂存区恢复该分镜的提示词等信息（保留已生成图片/视频）', 'Restore prompts from scene AI staging (keeps generated images/videos)')}
+                                >
+                                    {restoringFromStaging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                                    {restoringFromStaging ? t('恢复中…', 'Restoring…') : t('恢复分镜', 'Restore Storyboard')}
+                                </button>
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型: ', 'Image: ')} />
                                 <div className="flex items-center gap-1" ref={shotNotePopoverRef}>
                                     <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
