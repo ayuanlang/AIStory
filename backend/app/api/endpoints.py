@@ -2350,6 +2350,16 @@ def _persist_remote_image_result(
             raw,
         )
         return media_url, metadata
+    updated_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    if _is_provider_direct_oss_url(raw, updated_metadata, db):
+        updated_metadata["provider_direct_oss_url"] = True
+        logger.info(
+            "[ImageResultNormalize] skip localization for provider direct oss url | user_id=%s provider=%s url=%s",
+            getattr(current_user, "id", None),
+            str(updated_metadata.get("provider") or "").strip() or None,
+            raw,
+        )
+        return raw, updated_metadata
 
     source_url = raw
     temp_filename = _extract_media_filename_from_url(raw)
@@ -2928,6 +2938,8 @@ def _is_durable_persisted_media_url(
         return True
 
     if _url_matches_configured_oss(raw, metadata, db):
+        return True
+    if _is_provider_direct_oss_url(raw, metadata, db):
         return True
     return False
 
@@ -36249,8 +36261,14 @@ async def _run_generate_image(
 
             request_mode = str(getattr(req, "mode", "") or "").strip().lower()
 
-            # Trigger background task for OSS upload, if the URL is an external HTTP URL
-            if temp_url.startswith("http"):
+            result_meta_for_bind = dict(result.get("metadata") or {})
+            skip_remote_localization = _is_provider_direct_oss_url(temp_url, result_meta_for_bind)
+            if skip_remote_localization:
+                result_meta_for_bind["provider_direct_oss_url"] = True
+                result["metadata"] = result_meta_for_bind
+
+            # Trigger background task for OSS upload only when the URL still needs localization.
+            if temp_url.startswith("http") and not skip_remote_localization:
                 if job_id:
                     _set_image_job(job_id, status="storing_asset")
                 async def _bg_upload_and_update(user: User, req_obj: Any, raw_url: str, meta: Optional[dict] = None):
