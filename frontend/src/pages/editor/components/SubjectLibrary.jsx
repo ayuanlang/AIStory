@@ -893,6 +893,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const subjectImageJobPollingRef = useRef(false);
     const subjectImageJobPollTokenRef = useRef(0);
     const recentlyCompletedSubjectImageUrlsRef = useRef({});
+    const allEntitiesRef = useRef([]);
+    const loadEntitiesRef = useRef(async () => []);
     const RECENT_SUBJECT_IMAGE_URL_TTL_MS = 1000 * 60 * 10;
     const subjectImageJobTerminalLogRef = useRef(new Set());
     const subjectBatchGenerateStopRequestedRef = useRef(false);
@@ -1268,15 +1270,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
     }, [extractSubjectHistoryField, t]);
 
-    const fetchSubjectGenerationHistory = useCallback(async (entity) => {
+    const fetchSubjectGenerationHistory = useCallback(async (entity, options = {}) => {
+        const silent = Boolean(options?.silent);
         const stableEntityId = String(entity?.id || entity || '').trim();
         const stableProjectId = String(projectId || '').trim();
         if (!stableEntityId) {
-            setSubjectGenerationHistory([]);
+            if (!silent) {
+                setSubjectGenerationHistory([]);
+            }
             return;
         }
 
-        setSubjectGenerationHistoryLoading(true);
+        if (!silent) {
+            setSubjectGenerationHistoryLoading(true);
+        }
         try {
             const pageSize = 120;
             const maxPages = 8;
@@ -1339,12 +1346,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     duration: meta?.duration
                 };
             }).sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
-            setSubjectGenerationHistory(filtered.slice(0, 12));
+            setSubjectGenerationHistory((prev) => {
+                const next = filtered.slice(0, 12);
+                if (next.length === 0 && silent && Array.isArray(prev) && prev.length > 0) {
+                    return prev;
+                }
+                return next;
+            });
         } catch (e) {
             onLog?.(`Failed to load subject generation history: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-            setSubjectGenerationHistory([]);
+            if (!silent) {
+                setSubjectGenerationHistory([]);
+            }
         } finally {
-            setSubjectGenerationHistoryLoading(false);
+            if (!silent) {
+                setSubjectGenerationHistoryLoading(false);
+            }
         }
     }, [currentEpisode?.id, onLog, t, projectId]);
 
@@ -2504,12 +2521,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [projectId]);
 
     const refreshSubjectAssetsAfterImageCompletion = useCallback((entityId) => {
-        [0, 1500, 4000].forEach((delayMs) => {
+        [0, 1500, 4000, 8000].forEach((delayMs) => {
             window.setTimeout(() => {
                 if (!isMountedRef.current) return;
                 void loadAssets({ includeHistoricalEpisodeAssets: false });
+                void loadEntitiesRef.current();
                 if (entityId) {
-                    void fetchSubjectGenerationHistory(entityId);
+                    void fetchSubjectGenerationHistory(entityId, { silent: delayMs > 0 });
                 }
             }, delayMs);
         });
@@ -2544,9 +2562,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         if (refreshEntityIds.length > 0) {
             refreshEntityIds.forEach((entityId) => {
-                [0, 1500, 4000].forEach((delayMs) => {
+                [0, 1500, 4000, 8000].forEach((delayMs) => {
                     window.setTimeout(() => {
-                        void fetchSubjectGenerationHistory(entityId);
+                        void fetchSubjectGenerationHistory(entityId, { silent: delayMs > 0 });
                     }, delayMs);
                 });
             });
@@ -2862,6 +2880,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setPickerConfig({ isOpen: true, callback, context });
     };
 
+    useEffect(() => {
+        allEntitiesRef.current = Array.isArray(allEntities) ? allEntities : [];
+    }, [allEntities]);
+
     // Load entities - NOW FETCHES ALL and filters locally
     const loadEntities = useCallback(async () => {
         if (!projectId) return [];
@@ -2876,17 +2898,39 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 const recentImageUrl = String(recentImage?.imageUrl || '').trim();
                 const recentUpdatedAt = Number(recentImage?.updatedAt || 0) || 0;
                 const backendImageUrl = String(item?.image_url || '').trim();
-                const keepRecentImage = Boolean(
+                const recentStillValid = Boolean(
                     stableEntityId
                     && recentImageUrl
                     && recentUpdatedAt > 0
                     && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
+                );
+
+                if (backendImageUrl && recentImageUrl && backendImageUrl === recentImageUrl) {
+                    delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
+                }
+
+                const keepRecentImage = Boolean(
+                    recentStillValid
                     && (
                         !backendImageUrl
                         || backendImageUrl !== recentImageUrl
                     )
                 );
-                const nextItem = keepRecentImage ? { ...item, image_url: recentImageUrl } : item;
+                const prevLocalImageUrl = String(
+                    (allEntitiesRef.current || []).find((entry) => String(entry?.id || '') === stableEntityId)?.image_url || ''
+                ).trim();
+                const keepPrevLocalImage = Boolean(
+                    recentStillValid
+                    && !backendImageUrl
+                    && prevLocalImageUrl
+                    && prevLocalImageUrl === recentImageUrl
+                );
+                const resolvedImageUrl = keepRecentImage
+                    ? recentImageUrl
+                    : (keepPrevLocalImage ? prevLocalImageUrl : backendImageUrl);
+                const nextItem = resolvedImageUrl && resolvedImageUrl !== backendImageUrl
+                    ? { ...item, image_url: resolvedImageUrl }
+                    : item;
                 if (nextItem.type === 'environment' && (nextItem.name === '封面海报' || nextItem.name_en === 'Cover Poster')) {
                     return { ...nextItem, type: 'poster' };
                 }
@@ -2901,6 +2945,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setEntityListLoading(false);
         }
     }, [projectId]);
+
+    useEffect(() => {
+        loadEntitiesRef.current = loadEntities;
+    }, [loadEntities]);
 
     const mediaReloadTick = useMediaReloadTick();
 
@@ -2964,7 +3012,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     // Local Filtering based on subTab + episode scope
     useEffect(() => {
-        setEntities(scopedEntities.filter(e => e.type === subTab));
+        setEntities((prevEntities) => {
+            const prevById = new Map(
+                (Array.isArray(prevEntities) ? prevEntities : []).map((entry) => [String(entry?.id || ''), entry])
+            );
+            return scopedEntities
+                .filter((entry) => entry.type === subTab)
+                .map((entry) => {
+                    const stableEntityId = String(entry?.id || '').trim();
+                    if (String(entry?.image_url || '').trim()) {
+                        return entry;
+                    }
+                    const recentImage = recentlyCompletedSubjectImageUrlsRef.current?.[stableEntityId] || null;
+                    const recentImageUrl = String(recentImage?.imageUrl || '').trim();
+                    const recentUpdatedAt = Number(recentImage?.updatedAt || 0) || 0;
+                    const recentStillValid = Boolean(
+                        stableEntityId
+                        && recentImageUrl
+                        && recentUpdatedAt > 0
+                        && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
+                    );
+                    if (recentStillValid) {
+                        return { ...entry, image_url: recentImageUrl };
+                    }
+                    const prevImageUrl = String(prevById.get(stableEntityId)?.image_url || '').trim();
+                    if (prevImageUrl) {
+                        return { ...entry, image_url: prevImageUrl };
+                    }
+                    return entry;
+                });
+        });
     }, [scopedEntities, subTab]);
 
     const subjectCategoryStats = useMemo(() => {
@@ -3650,6 +3727,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             updateEntity(updated.id, { [field]: value }).catch(console.error);
         }
     };
+
+    const copyEntityDetailUrl = useCallback(async (url, kindLabel) => {
+        const stableUrl = String(url || '').trim();
+        if (!stableUrl) return;
+        const copyValue = getFullUrl(stableUrl);
+        try {
+            if (!navigator?.clipboard?.writeText) {
+                throw new Error('clipboard unavailable');
+            }
+            await navigator.clipboard.writeText(copyValue);
+            showSubjectNotification(t(`已复制${kindLabel}链接`, `Copied ${kindLabel} URL`), 'success');
+        } catch {
+            showSubjectNotification(t('复制链接失败', 'Failed to copy URL'), 'error');
+        }
+    }, [showSubjectNotification, t]);
 
     const ENTITY_MEDIA_REF_CONFIG = useMemo(() => ({
         video: {
@@ -6103,11 +6195,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                     fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
                                     retryOnError={isRecentlyCompletedImage}
                                     retryDelays={[800, 1800, 3500, 6500, 10000]}
-                                    onLoad={() => {
-                                        if (stableEntityId && isRecentlyCompletedImage) {
-                                            delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
-                                        }
-                                    }}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                                 />
                             ) : entity.video_url ? (
@@ -6287,7 +6374,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             {/* Left: Image */}
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
-                                    <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                    <>
+                                        <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                        {!entityImageNeedsOssPersist(viewingEntity) && (
+                                            <div className="absolute bottom-0 inset-x-0 z-10 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-4 pb-3 pt-10 pointer-events-none">
+                                                <div className="text-[9px] uppercase tracking-wider text-white/45 mb-0.5">{t('图片链接', 'Image URL')}</div>
+                                                <div
+                                                    className="text-[10px] font-mono text-white/70 break-all line-clamp-2 pointer-events-auto select-all"
+                                                    title={getFullUrl(viewingEntity.image_url)}
+                                                >
+                                                    {getFullUrl(viewingEntity.image_url)}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
                                 ) : (
                                     <div className="flex flex-col items-center justify-center px-8 text-center text-white/20">
                                         <Users size={64} />
@@ -6303,6 +6403,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             <div className="space-y-1 text-xs leading-relaxed">
                                                 <div className="font-bold">{t('图片尚未持久化到 OSS', 'Image not persisted to OSS')}</div>
                                                 <div>{t('当前为供应商临时地址，可能会过期。请尽快补传到 OSS。', 'The current link is a temporary provider URL and may expire. Upload it to OSS as soon as possible.')}</div>
+                                                {String(viewingEntity?.image_url || '').trim() && (
+                                                    <div className="pt-1 font-mono text-[10px] text-amber-50/80 break-all select-all">
+                                                        {getFullUrl(viewingEntity.image_url)}
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                         <button
@@ -6491,6 +6596,60 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                             className="w-full text-sm leading-relaxed text-white/80 bg-transparent border border-transparent hover:border-white/10 focus:border-primary focus:bg-white/5 rounded p-2 outline-none h-24 resize-none transition-colors"
                                             placeholder="Enter description..."
                                         />
+                                    </div>
+
+                                    {/* Media URLs */}
+                                    <div className="space-y-2">
+                                        <h4 className="text-xs font-bold uppercase text-muted-foreground flex items-center gap-2">
+                                            <LinkIcon size={12} /> {t('媒体链接', 'Media URLs')}
+                                        </h4>
+                                        <div className="bg-black/20 rounded-lg border border-white/5 divide-y divide-white/5">
+                                            {[
+                                                { field: 'image_url', label: t('图片', 'Image') },
+                                                { field: 'video_url', label: t('视频', 'Video') },
+                                                { field: 'audio_url', label: t('音频', 'Audio') },
+                                            ].map(({ field, label }) => {
+                                                const rawUrl = String(viewingEntity?.[field] || '').trim();
+                                                const displayUrl = rawUrl ? getFullUrl(rawUrl) : '';
+                                                const isImageTemp = field === 'image_url' && rawUrl && entityImageNeedsOssPersist(viewingEntity);
+                                                return (
+                                                    <div key={field} className="p-3 space-y-1.5">
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+                                                            {isImageTemp && (
+                                                                <span className="inline-flex items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-100">
+                                                                    <AlertTriangle size={10} /> {t('临时', 'Temp')}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {rawUrl ? (
+                                                            <>
+                                                                <div className="text-[11px] font-mono text-white/75 break-all leading-relaxed select-all">{displayUrl}</div>
+                                                                <div className="flex flex-wrap gap-2 pt-0.5">
+                                                                    <a
+                                                                        href={displayUrl}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                    >
+                                                                        <Maximize2 size={10} /> {t('打开', 'Open')}
+                                                                    </a>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => void copyEntityDetailUrl(rawUrl, label)}
+                                                                        className="inline-flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
+                                                                    >
+                                                                        <Copy size={10} /> {t('复制', 'Copy')}
+                                                                    </button>
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="text-[11px] text-white/35">{t('未绑定', 'Not linked')}</div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
 
                                     {/* Environment Details */}
