@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-07-01 16:00:00 +08:00
+# Prompt Updated At: 2026-07-02 22:00:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -50,7 +50,7 @@
 
 ### 1.1 核心底线与实体输出规范
 - 资产标准化：Environment / Character / Prop 独立且可关联；所有实体原样继承 `subject_no`。
-- **角色四宫格与画幅**：所有 character 的 `generation_prompt_cn` 必须为四视图设定图：16:9 横向画布、纯白背景、同一横排、连续统一白画板。禁止上下两排、2x2、换行、错层、第二排延展。**第一宫面部/细节特写占 35% 且纵向居中，为 prompt 绝对重心**——须用最多篇幅写五官骨相、肤质纹理、妆发、眼神与个体标记；正面/侧面/背面全身共享 65%，鞋履完整可见。`generation_prompt_en` 字段保留但固定输出空字符串 `""`。
+- **角色四宫格与画幅**：所有 character 的 `generation_prompt_cn` 必须为四视图设定图：16:9 横向画布、纯白背景、同一横排、连续统一白画板。禁止上下两排、2x2、换行、错层、第二排延展。**第一宫面部/细节特写占 35% 且纵向居中，为 prompt 绝对重心**——须用最多篇幅写五官骨相、肤质纹理、妆发、眼神与个体标记；正面/侧面/背面全身共享 65%，鞋履完整可见。`generation_prompt_en` 字段保留但固定输出空字符串 `""`。**唯一例外——群演簇（Collective 匿名背景角色）**：命中 §2.1H 触发条件时，**改用** 16:9 横向纯白画布 **2×2 四宫格**、每宫一位不同随机个体全身像，**不适用**本条单人横排四视图与第一宫特写规则，详见 §2.1H。
 - **命名权威源**：输出 `name` 逐字符透传 subjects index 对应 `name`；禁止润色、翻译、补词、删改、标点/空格/大小写修正。
 - 示例、模板、职业/服装/镜头话术仅作格式参考；每次按当前剧本设计专属角色形象、服饰、材质、细节。
 
@@ -373,7 +373,23 @@
 - **与 §2.1F-A 联动写法顺序（`generation_prompt_cn`）**：`{{必锚0 真人实拍语义}} + {{面目五官 8+ 项}} + {{必锚1–6}} + {{体态}} + {{服饰}} + {{≤1 句无感光照}}`。
 - **negative_prompt_en 追加（真人写实类）**：`dramatic lighting, visible shadows, harsh shadows, nose shadow, rim light, chiaroscuro, split lighting, high contrast lighting, hard shadow edge, teal orange, color cast, ring light, beauty dish, harsh flash, studio strobe, artificial studio glow`.
 
+### 2.1H 群演簇（Collective 匿名背景角色）四宫格规范（Mandatory）
+- **触发条件**：上游 Subject Index 该 character 行 `entity_attributes` 含 `crowd_role:群演簇`，或该实体本身即为无具名个体、无独立叙事身份、按簇/群/众提取的匿名背景集合体（如「办公人员簇」「村民群」「士兵群」「侍从簇」「龙套甲/乙/丙」等 collective `character`，参见 `scene_planning_2_1_assets_extraction.md` 二·群演簇提取）。命中即执行本节，**替代** §1.1、§2.1、§2.1A–§2.1G 中「单一身份四视图/相貌组合择型/七必锚全量」的相关规定，改用本节 **2×2 四宫格随机多人**规范；项目语境注入（§1.2A）、题材映射、审美基调（§1.4）、播出安全分级、`negative_prompt_en` 通用过滤等章节仍全量适用。
+- **核心设计目标**：群演簇在下游 Shot/Video 中**永远只作远景/全景/虚化 BG 层出现，禁中景/特写/面部可读主拍**（见 `shot_generation.md` §三.1、§七.7-b）；设定图因此**无需**、也**不得**做单一身份的高精面部特写，而应一次性展示该簇**内部随机多样性**，供下游镜头按需截取代表个体或整体氛围。
+- **画幅规格（强制，替代单人四视图）**：16:9 横向画布、纯白背景、**2×2 四宫格**（左上/右上/左下/右下均分四格）；禁止横排单行、禁止 2×1、禁止不均分、禁止某一宫放大或裁切。**每宫独立呈现一位从头到脚完整入镜的全身人物**（发型、鞋履完整可见，机位高度、构图比例、镜头距离四宫一致）；**四宫必须是四个互不相同的随机个体**——禁止四宫画同一人的不同角度、禁止四宫共享同一张脸/同一套发型服饰、禁止镜像复制。`generation_prompt_en` 字段同样保留但固定输出空字符串 `""`。
+- **群体身份一致 + 个体随机差异化（强制）**：四人须共享该簇的身份/职业/阶层/时代/地域/制服或着装规范（如同为「办公室职员」「村民」「士兵」），保证可信度与可复用性；但**性别、年龄段、体型、发型发色、面部大致轮廓、肤色、服饰细节（同制式时的内搭/配饰/磨损/整理度）须随机拉开差异**，禁止四人身高体态、发型、配色高度雷同产生「复制粘贴感」。制服/统一着装类簇（工装、校服、军警、服务业等）须按 §2.1 反同质化矩阵在**版型合身度、内搭层次、袖口处理、佩戴物、磨损新旧、个人化小配件**上做区分，而非四人一模一样。
+- **无第一宫特写例外**：本节**不设**面部特写宫格；四宫地位均等，均为全身构图。
+- **相貌与真人感简化（Mandatory）**：因群演在下游成片中不做面部特写，`generation_prompt_cn` **无需**执行 §2.1E 相貌组合择型、§2.1A–§2.1D 单人相貌模板、§2.1F-A 真人感七必锚逐项全覆盖；真人写实类项目仍须整体呈现真人可信质感（自然肤色分布、可信比例、非二次元、非塑料感、非同一张脸复制），面部细节用简明可辨的概括词即可（如「圆脸寸头」「长脸马尾」），不要求逐项五官骨相拆解。光照仍遵循 §2.0/§2.1G 无感自然光基调，`generation_prompt_cn` 光照段 **≤1 句**概括，色调统一柔和。
+- **`appearance_cn` 写法（Mandatory）**：先写共同身份锚点（职业/阶层/时代地域/着装规范），再逐宫简述 4 位个体差异（性别、年龄段、体型、发型发色、简要面部特征、服饰差异点）。句式参考：`{共同身份与时代地域}。左上：{性别}，{年龄段}，{体型}，{发型}，{服饰差异点}；右上：…；左下：…；右下：…。`
+- **`clothing` 写法**：第一句仍固定播出安全等级；随后写该簇统一着装规范/制服基调，再分述四宫在该规范内的可见差异（新旧、内搭、配饰、磨损、整理度、鞋履）。
+- **`generation_prompt_cn` 写法（Mandatory 顺序）**：项目语境+风格定位开篇（§1.2A）→ 画布规格声明（`16:9 横向纯白画布，2×2 四宫格，左上/右上/左下/右下均分`）→ 共同身份/职业/时代地域着装基调 → 逐宫描述（左上/右上/左下/右下各一句，含性别年龄体型发型服饰要点，全身从头到脚完整可见、鞋履清楚）→ **≤1 句**无感光照 → 四宫清晰度一致、纯白连续背景声明。**禁止**四宫描述套用完全相同的句式模板或仅替换姓名/局部词导致读起来像复制。
+- **`anchor_description`**：写该簇的身份类别短语（如 `office worker crowd, four varied individuals, business casual`），不描述单一面部。
+- **`negative_prompt_en`**：在通用真人感/材质过滤基础上追加 `identical faces, cloned characters, duplicate person, repeated identity, same outfit across all four, mirrored figure, single-row layout, close-up face` 等防复制/防单行/防特写过滤词。
+- **Node 4 数据封装**：群演簇仍作为**单条** `characters[]` 记录，与 Subject Index 中的 collective character 一一对应，**不得**拆成 4 条独立角色、不得批量新取姓名；`dependency_strategy.type=Original`（除非上游标注为衍生），`logic` 须注明 `群演簇：2×2 四宫格随机多人设定`。
+- **反例（禁止）**：❌ 四宫仍按单人四视图画正/侧/背/特写（同一人不同角度）｜❌ 四人性别年龄体型服饰高度相同、仅换发色｜❌ 输出面部特写占比 35% 的第一宫｜❌ 四宫排成横排一行而非 2×2｜❌ 逐宫描述句式完全相同仅替换局部词｜❌ 将群演簇拆成 4 条独立 `characters[]` 记录。
+
 ### 2.2 Character Prompt Template
+- **适用范围**：本节及 §2.1E–§2.1G 单人相貌/画幅规则仅适用于**具名单一身份角色**；**群演簇（Collective 匿名背景角色）须改用 §2.1H 的 2×2 四宫格随机多人规范**，不套用本节单人四视图信息顺序。
 - **信息顺序（`generation_prompt_cn`）**：画布规格 + 项目风格（**色调柔和**）→ **面目五官肤质妆发（绝对重心）** → 体态 → 服饰鞋履 → 静态姿态 → **≤1 句无感光照** → 四视图面板排布。**`description_cn` 顺序可含** Key/Fill/Rim rationale。
 - **`description_cn`（设计推导层）**：纳入输入 `entity_attributes`；写身份/叙事功能、§2.1E 择型依据、§2.1G-E **内部** Key/Fill/Rim 光源类型/方向/色温 rationale、变体 Delta 推导（衍生角色）；末尾主要角色须含「选角参考：」段落。可引用节号与组合型名称。
 - **`appearance_cn` / `clothing`（结构化可见数据层）**：相貌与服饰写成镜头可见细节；写实类须按 **§2.1F-A 七必锚**全量写入；主要女性角色的肤色肤质必须写入；`clothing` 第一句固定播出安全等级。**不得**假设生图模型会读取这两字段——面目与服饰须**完整转写**进 `generation_prompt_cn`；光照**不得**从 `description_cn` 扩写，仅用 §2.0 **1 句**。
@@ -417,7 +433,7 @@
 - 输出前逐条核对输入类型与输出数组；总数正确但归类错误仍失败。
 - 字段按类型分离；`characters[]` 才允许 `gender/role/archetype/appearance_cn/clothing/action_characteristics` 等角色字段。
 - `name/name_en/base_name_en` 等名称与输入 subjects index 逐字符一致；任意字符差异必须修正。
-- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 §1.2A **项目语境+风格定位**可视化落点（含 `风格定位为{…}` 及转译落点）；**`description_cn`** 须说明 Key/Fill/Backlight 内部 setup rationale（写实类 §2.1G-E）；**`generation_prompt_cn`** 须 **聚焦面目细节**、**§2.1F-A 七必锚全量**、**色调柔和**、光照 **≤1 句无感概括**（§2.0），**禁止明显光影感**；`generation_prompt_cn` 细节特征 **>8**；`description_cn` 主要角色末尾须含「选角参考：」段落；`generation_prompt_en` 保留但输出 `""`。**衍生角色**的 `description_cn` 须含相对基准的 Delta 推导；`generation_prompt_cn` 须含参考图声明且**不得**含节号/组合型名/「见某字段」/可见光影词（§1.3）。
+- `description_cn` 与 `generation_prompt_cn` 必须纳入 `entity_attributes` **全部**要素（零缺失，见 common §1.3），并显式包含 §1.2A **项目语境+风格定位**可视化落点（含 `风格定位为{…}` 及转译落点）；**`description_cn`** 须说明 Key/Fill/Backlight 内部 setup rationale（写实类 §2.1G-E）；**`generation_prompt_cn`** 须 **聚焦面目细节**、**§2.1F-A 七必锚全量**、**色调柔和**、光照 **≤1 句无感概括**（§2.0），**禁止明显光影感**；`generation_prompt_cn` 细节特征 **>8**；`description_cn` 主要角色末尾须含「选角参考：」段落；`generation_prompt_en` 保留但输出 `""`。**衍生角色**的 `description_cn` 须含相对基准的 Delta 推导；`generation_prompt_cn` 须含参考图声明且**不得**含节号/组合型名/「见某字段」/可见光影词（§1.3）。**群演簇（Collective 匿名背景角色）例外**：命中 §2.1H 触发条件时，本条中「单人四视图第一宫特写」「§2.1E 相貌组合择型」「§2.1F-A 七必锚全量」「选角参考段落」均**不适用**，改按 §2.1H 的 2×2 四宫格随机多人规范执行；其余项目语境注入、色调柔和、光照 ≤1 句、`generation_prompt_en` 输出空字符串等要求仍适用。
 - 固定双语字段契约沿用；每个实体必须提供 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 
 #### 统一 JSON 示例（字段形态参考）
@@ -468,6 +484,28 @@
       "dependency_strategy": {
         "type": "Type A",
         "logic": "Battle-damaged derived state: inherits Lin Yue identity anchors; Delta = torn jacket, scuffed shorts, dust, fatigue marks."
+      }
+    },
+    {
+      "subject_no": "S003",
+      "name": "办公人员簇",
+      "name_en": "Office Staff Crowd",
+      "base_name_en": "Office Staff Crowd",
+      "description_cn": "群演簇（§2.1H），无具名个体、无独立叙事身份，仅作远景/虚化 BG 背景人群使用。项目基础定位为情感悬疑，项目全局风格为电影级写实冷暖对比与克制压迫，年代/时代为当代都市，地域/国家为东亚一线华语城市，语言环境为中文现实职场语境，风格定位为冷峻克制——偏冷灰蓝主辅色、利落职业着装。四人共享「开放式办公室职员」身份与当代职场语境，个体随机拉开性别、年龄段、体型、发型、服饰细节差异，避免复制粘贴感。群演簇：2×2 四宫格随机多人设定，不执行单人相貌组合择型与七必锚全量。",
+      "gender": "Mixed",
+      "role": "Background Office Staff (Collective)",
+      "archetype": "无独立叙事动作；按 Beat 需要呈现随机差异化背景微动作",
+      "appearance_cn": "四人均为东亚都市职场人士，当代职业着装语境。左上：男性，30岁左右，中等偏瘦体型，短寸头，圆脸；右上：女性，20代后期，高挑体型，齐肩直发侧分；左下：男性，40代，微胖体型，梳背短发，方脸；右下：女性，30代，中等体型，低马尾，鹅蛋脸。四人肤色均为自然亚洲肤色不同段位，无同质化重复。",
+      "clothing": "播出安全等级：非成人。统一着装规范：当代商务休闲职业装。左上：浅蓝衬衫、深灰西裤、黑色皮鞋，衬衫略微皱褶显加班感；右上：米白针织衫、卡其直筒裤、白色平底鞋，整洁利落；左下：藏青polo衫、深色休闲裤、棕色乐福鞋，腰间挂工牌；右下：浅灰西装外套、黑色铅笔裙、黑色浅口高跟鞋，佩戴细框眼镜。四人鞋履、内搭、配饰均不相同。",
+      "action_characteristics": "静态站姿，各自独立朝向，无群体同步动作。",
+      "generation_prompt_cn": "16:9 横向纯白画布，2×2 四宫格，左上/右上/左下/右下均分四格，禁止横排单行。项目基础定位为情感悬疑，项目全局风格为电影级写实与职场质感，年代/时代为当代都市，地域/国家为东亚一线华语城市，语言环境为中文现实职场语境，风格定位为冷峻克制——冷灰蓝与米白职业配色、利落剪裁。四宫共同呈现「开放式办公室职员」当代职场身份，四位互不相同的随机个体，均从头到脚完整入镜、鞋履清晰可见。左上：30岁左右男性，中等偏瘦体型，短寸头，圆脸，浅蓝衬衫配深灰西裤与黑色皮鞋，站姿自然。右上：20代后期女性，高挑体型，齐肩直发侧分，鹅蛋脸，米白针织衫配卡其直筒裤与白色平底鞋。左下：40代男性，微胖体型，背头短发，方脸，藏青polo衫配深色休闲裤与棕色乐福鞋，腰间工牌。右下：30代女性，中等体型，低马尾，细框眼镜，浅灰西装外套配黑色铅笔裙与黑色高跟鞋。柔和均匀室内漫射光，色调柔和统一，无明显光影感。四宫清晰度一致、纹理可读、纯白连续背景。",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "identical faces, cloned characters, duplicate person, repeated identity, same outfit across all four, mirrored figure, single-row layout, close-up face, 2x1 layout, oily skin, plastic face, wax figure, CGI hard highlight, dramatic lighting, harsh shadows, cropped shoes",
+      "anchor_description": "office staff crowd, four varied individuals, business casual, 2x2 grid full body",
+      "visual_dependencies": [],
+      "dependency_strategy": {
+        "type": "Original",
+        "logic": "群演簇：2×2 四宫格随机多人设定；四人共享开放式办公室职员身份，性别/年龄/体型/发型/服饰随机差异化，无需相貌组合择型与七必锚全量。"
       }
     }
   ]
