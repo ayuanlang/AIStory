@@ -32,7 +32,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -2490,6 +2490,31 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [shotAssetsMetaLoading, setShotAssetsMetaLoading] = useState(false);
     const [shotAssetsRefreshKey, setShotAssetsRefreshKey] = useState(0);
     const refreshShotAssetsMeta = useCallback(() => setShotAssetsRefreshKey(k => k + 1), []);
+
+    const [editShotRefreshing, setEditShotRefreshing] = useState(false);
+    const handleRefreshEditShotElements = useCallback(async () => {
+        if (editShotRefreshing) return;
+        setEditShotRefreshing(true);
+        try {
+            const shotId = editingShotRef.current?.id;
+            await Promise.allSettled([
+                loadEntities(),
+                shotId ? fetchShot(shotId).then((fullShot) => {
+                    if (!fullShot?.id) return;
+                    setEditingShot((prev) => {
+                        if (!prev || String(prev?.id || '') !== String(fullShot.id)) return prev;
+                        return { ...prev, ...fullShot, is_compact: false };
+                    });
+                }) : Promise.resolve(),
+            ]);
+            refreshShotAssetsMeta();
+            triggerMediaReload();
+        } catch (e) {
+            console.error('Failed to refresh edit shot elements', e);
+        } finally {
+            setEditShotRefreshing(false);
+        }
+    }, [editShotRefreshing, loadEntities, refreshShotAssetsMeta, setEditingShot]);
 
     const syncShotImageCfgFromSettings = useCallback(() => {
         const nextDefault = resolveShotImageCfgDefault(getCachedUserPreferences());
@@ -10978,6 +11003,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         {renderShotNotePopoverPanel('edit')}
                                     </div>
                                 </div>
+                                <TabMediaRefreshButton
+                                    onClick={handleRefreshEditShotElements}
+                                    loading={editShotRefreshing}
+                                    uiLang={uiLang}
+                                    compact
+                                />
                                 <button onClick={() => setEditingShot(null)} className="p-2 hover:bg-white/10 rounded-full"><X className="w-5 h-5"/></button>
                             </div>
                         </div>
