@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-06-29 14:00:00 +08:00
+# Prompt Updated At: 2026-07-02 12:00:00 +08:00
 
 # Skill 1-2-2: 资产映射与节拍落表
 
@@ -56,7 +56,7 @@
 | **ENV 状态/特效衍生** | — | Stage 1 已写跨 Beat 可持续结构/布局/域场变化，且 Index 有 `{主环境名}_{状态标识}` 行；切至后沿用直至 Stage 1 明确返回 |
 | **PROP** | 常规持握/静置/交互 | Stage 1 已写可持续状态（点燃、签署、损毁等），且 Index 有 `{原名}_{状态/面/形态}` 行 |
 
-**逐 Beat 快检**：视角变化 → 落 Index 视角衍生 ENV（`Observer View`、`[环境切换声明]`、`Environment Name` 与 Stage 1 一致）；角色/道具态变化 → 落对应衍生 CHAR/PROP；Stage 1 写切换但 Index 缺行 → 标缺口；Stage 1 写 `衍生环境=无：否决证据` → 可写 `None`。**环境块快检**：【主环境】/【衍生环境】/`derivative_view_360_entities` **禁人物/人称/站位/交互**（仅空椅/空桌布局）；同一具名固定实体**跨衍生世界朝向一致**（状态/特效或明示受力移位除外）；**主环境须已声明头尾双锚**；衍生方向性朝向**优先挂可见头/尾锚**，不可见时改挂对向锚。
+**逐 Beat 快检**：视角变化 → 落 Index 视角衍生 ENV（`Observer View`、`[环境切换声明]`、`Environment Name` 与 Stage 1 一致）；角色/道具态变化 → 落对应衍生 CHAR/PROP；Stage 1 写切换但 Index 缺行 → 标缺口；Stage 1 写 `衍生环境=无：否决证据` → 可写 `None`。**环境块快检**：【主环境】/【衍生环境】/`derivative_view_360_entities` **禁人物/人称/站位/交互**（仅空椅/空桌布局）；**同类多件（椅/杯/窗/柜等）个数与逐具区分特征跨主/衍生须一致**；同一具名固定实体**跨衍生世界朝向一致**（状态/特效或明示受力移位除外）；**主环境须已声明头尾双锚**；衍生方向性朝向**优先挂可见头/尾锚**，不可见时改挂对向锚。
 
 ### 继承边界
 
@@ -113,7 +113,7 @@ Stage 1 优化可能改变对白字数与动作密度；本环节**不改 Beat �
 
 ### 输出前自检
 
-Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 说明性字段全集已逐条落入 Core Scene Info、无省略写法**｜语义 = Stage 1（仅实体 Index 化）｜衍生选用与 Stage 1 观察/状态一致｜**衍生四向实体与主环境固定清单无矛盾、同等具体度；方向性物体成稿须头尾双锚优先、首选不可见改挂对向锚、禁度数回转**｜全部 CHAR/ENV/PROP = Index 逐字一致｜时长已复核｜缺口已标 `{覆盖核销}`。
+Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 说明性字段全集已逐条落入 Core Scene Info、无省略写法**｜语义 = Stage 1（仅实体 Index 化）｜衍生选用与 Stage 1 观察/状态一致｜**衍生四向实体与主环境固定清单无矛盾、同等具体度；同类多件个数与逐具区分特征跨主/衍生一致；方向性物体成稿须头尾双锚优先、首选不可见改挂对向锚、禁度数回转**｜全部 CHAR/ENV/PROP = Index 逐字一致｜时长已复核｜缺口已标 `{覆盖核销}`。
 
 ## Core Scene Info 字段
 
@@ -125,7 +125,7 @@ Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Sta
 | :--- | :--- | :--- |
 | 【核销源】 | `{核销源}` | 含继承/扩写/改写/细分及原文表演层核销对照 |
 | 【故事内核】 | `{故事内核}` | 叙事目标/冲突/落点/剧情要点；含 `正式决战=是`｜`宏观群体=是` 标记 |
-| 【节拍时间规划】 | `{节拍时间规划}` | 目标秒 T、Beat 总数、单 Beat 区间、镜头偏好、显式时限 |
+| 【节拍时间规划】 | `{节拍时间规划}` | 等效秒 T、Beat 总数、单 Beat 区间、显式时限（镜头偏好不参与 Stage 1 Beat 切分） |
 | 【Duration Estimate Basis】 | `{Duration Estimate Basis}` | 完整算式与总和；本环节须复核 |
 | 【决战 Beat 规划】 | `{决战 Beat 规划}` | **正式决战场强制**；Stage 1 有则必写，禁止省略 |
 | 【宏观 Beat 规划】 | `{宏观 Beat 规划}` | **宏观群体场强制**；Stage 1 有则必写，禁止省略 |

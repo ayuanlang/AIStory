@@ -12038,7 +12038,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         model = (config or {}).get("model")
         reservation_tx = None
         if billing_service.is_token_pricing(db, "analysis", provider, model):
-            est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
+            est = billing_service.estimate_reserve_tokens_from_messages(messages)
             debug_meta.update({
                 "est_input_tokens": est.get("input_tokens", 0),
                 "est_output_tokens": est.get("output_tokens", 0),
@@ -12047,7 +12047,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             reserve_details = {
                 "item": "scene_analysis",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "system_prompt_len": len(system_instruction or ""),
                 "user_prompt_len": len(user_content or ""),
                 "input_tokens": est.get("input_tokens", 0),
@@ -13082,7 +13082,7 @@ async def translate_text(
     reservation_tx = None
     try:
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-            est = billing_service.estimate_input_output_tokens_from_messages(
+            est = billing_service.estimate_reserve_tokens_from_messages(
                 [{"role": "user", "content": text}],
                 output_ratio=1.0
             )
@@ -13572,11 +13572,11 @@ async def process_agent_command(
             messages_est.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         messages_est.append({"role": "user", "content": request.query})
 
-        est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+        est = billing_service.estimate_reserve_tokens_from_messages(messages_est)
         reserve_details = {
             "item": "agent_intent",
             "estimation_method": "prompt_tokens_ratio",
-            "estimated_output_ratio": 1.5,
+            "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
             "query_len": len(request.query or ""),
             "input_tokens": est.get("input_tokens", 0),
             "output_tokens": est.get("output_tokens", 0),
@@ -13686,11 +13686,11 @@ async def process_system_management_agent_command(
             messages_est.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
         messages_est.append({"role": "user", "content": request.query})
 
-        est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+        est = billing_service.estimate_reserve_tokens_from_messages(messages_est)
         reserve_details = {
             "item": "system_management_agent_intent",
             "estimation_method": "prompt_tokens_ratio",
-            "estimated_output_ratio": 1.5,
+            "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
             "query_len": len(request.query or ""),
             "input_tokens": est.get("input_tokens", 0),
             "output_tokens": est.get("output_tokens", 0),
@@ -17347,12 +17347,11 @@ async def generate_project_story_dna_global(
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -17363,7 +17362,7 @@ async def generate_project_story_dna_global(
             {
                 "item": "story_generator_global",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -17871,12 +17870,11 @@ async def analyze_project_novel_to_story_generator_fields(
     )
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt_template},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -17887,7 +17885,7 @@ async def analyze_project_novel_to_story_generator_fields(
             {
                 "item": "analyze_novel",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -18944,12 +18942,11 @@ async def generate_project_character_profile(
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -18960,7 +18957,7 @@ async def generate_project_character_profile(
             {
                 "item": "character_profile_project_generate",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -19354,12 +19351,11 @@ async def generate_episode_character_profile(
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -19370,7 +19366,7 @@ async def generate_episode_character_profile(
             {
                 "item": "character_profile_episode_generate",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -19562,12 +19558,11 @@ async def generate_episode_story_dna(
     reservation_tx = None
     item_name = f"story_generator_{mode}"
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -19578,7 +19573,7 @@ async def generate_episode_story_dna(
             {
                 "item": item_name,
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -19795,12 +19790,11 @@ async def generate_episode_scenes_from_story(
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-        est = billing_service.estimate_input_output_tokens_from_messages(
+        est = billing_service.estimate_reserve_tokens_from_messages(
             [
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            output_ratio=1.5,
         )
         reservation_tx = billing_service.reserve_credits(
             db,
@@ -19811,7 +19805,7 @@ async def generate_episode_scenes_from_story(
             {
                 "item": "script_generator_scenes",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
                 "output_tokens": est.get("output_tokens", 0),
                 "total_tokens": est.get("total_tokens", 0),
@@ -20977,12 +20971,11 @@ async def generate_project_episode_scripts_from_global_framework(
             sys_prompt_episode = sys_prompt
 
         if billing_service.is_token_pricing(db, "llm_chat", provider, model):
-            est = billing_service.estimate_input_output_tokens_from_messages(
+            est = billing_service.estimate_reserve_tokens_from_messages(
                 [
                     {"role": "system", "content": sys_prompt_episode},
                     {"role": "user", "content": user_prompt},
                 ],
-                output_ratio=1.5,
             )
             reservation_tx = billing_service.reserve_credits(
                 db,
@@ -20995,7 +20988,7 @@ async def generate_project_episode_scripts_from_global_framework(
                     "episode_id": ep_id,
                     "episode_number": idx,
                     "estimation_method": "prompt_tokens_ratio",
-                    "estimated_output_ratio": 1.5,
+                    "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                     "input_tokens": est.get("input_tokens", 0),
                     "output_tokens": est.get("output_tokens", 0),
                     "total_tokens": est.get("total_tokens", 0),
@@ -25199,11 +25192,11 @@ async def ai_generate_shots(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input},
             ]
-            est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+            est = billing_service.estimate_reserve_tokens_from_messages(messages_est)
             reserve_details = {
                 "item": "generate_shots",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "system_prompt_len": len(system_prompt or ""),
                 "user_prompt_len": len(user_input or ""),
                 "input_tokens": est.get("input_tokens", 0),
@@ -25522,11 +25515,11 @@ async def ai_regenerate_shots(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input},
             ]
-            est = billing_service.estimate_input_output_tokens_from_messages(messages_est, output_ratio=1.5)
+            est = billing_service.estimate_reserve_tokens_from_messages(messages_est)
             reserve_details = {
                 "item": "regenerate_shots",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "system_prompt_len": len(system_prompt or ""),
                 "user_prompt_len": len(user_input or ""),
                 "input_tokens": est.get("input_tokens", 0),
@@ -27358,17 +27351,17 @@ async def generate_sora_character(
             {"role": "system", "content": "sora-create-character"},
             {"role": "user", "content": prompt},
         ]
-        est = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.5)
+        est = billing_service.estimate_reserve_tokens_from_messages(est_messages)
 
         estimated_image_tokens = 1000 * image_count
         estimated_video_tokens = 2000 * video_count
         est_input = int(est.get("input_tokens", 0) or 0) + int(estimated_image_tokens) + int(estimated_video_tokens)
-        est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+        est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
 
         reserve_details = {
             "item": "sora_create_character",
             "estimation_method": "prompt_tokens_ratio",
-            "estimated_output_ratio": 1.5,
+            "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
             "estimated_image_tokens": estimated_image_tokens,
             "estimated_video_tokens": estimated_video_tokens,
             "input_tokens": est_input,
@@ -43984,15 +43977,15 @@ async def analyze_asset_image(
                     ],
                 }
             ]
-            est = billing_service.estimate_input_output_tokens_from_messages(est_messages, output_ratio=1.5)
+            est = billing_service.estimate_reserve_tokens_from_messages(est_messages)
             estimated_image_tokens = 1000
             est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
-            est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+            est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
 
             reserve_details = {
                 "item": "asset_analysis",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "estimated_image_tokens": estimated_image_tokens,
                 "input_tokens": est_input,
                 "output_tokens": est_output,
@@ -44420,14 +44413,14 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         # _release_db_connection(db, "analyze_entity_image_llm_call")
 
         if billing_service.is_token_pricing(db, "analysis_character", api_provider, api_model):
-            est = billing_service.estimate_input_output_tokens_from_messages(messages, output_ratio=1.5)
+            est = billing_service.estimate_reserve_tokens_from_messages(messages)
             estimated_image_tokens = 1000
             est_input = int(est.get("input_tokens", 0) or 0) + estimated_image_tokens
-            est_output = int((est_input * 3 + 1) // 2) if est_input > 0 else 0
+            est_output = int(math.ceil(float(est_input) * billing_service.RESERVE_OUTPUT_RATIO)) if est_input > 0 else 0
             reserve_details = {
                 "item": "entity_image_analysis",
                 "estimation_method": "prompt_tokens_ratio",
-                "estimated_output_ratio": 1.5,
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "estimated_image_tokens": estimated_image_tokens,
                 "input_tokens": est_input,
                 "output_tokens": est_output,

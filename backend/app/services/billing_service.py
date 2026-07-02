@@ -56,6 +56,9 @@ class BillingService:
     MINIMUM_CHARGE_BY_TASK = {
         "llm_chat": 1,
     }
+    # LLM pre-reserve: output is typically shorter than input.
+    # Legacy reserve used 1.5x input for output; pre-deduct at ~30% of that (0.45x).
+    RESERVE_OUTPUT_RATIO = 0.45
     KIE_STANDARD_PROVIDER = "kie"
     DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER = 0.7
     DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER = 1.5
@@ -2382,6 +2385,22 @@ class BillingService:
             "output_tokens": int(output_tokens),
             "total_tokens": int(input_tokens + output_tokens)
         }
+
+    @staticmethod
+    def estimate_reserve_tokens_from_messages(
+        messages: List[Dict[str, Any]],
+        output_ratio: Optional[float] = None,
+    ) -> Dict[str, int]:
+        """Token estimate for LLM credit reservation (output assumed < input)."""
+        ratio = (
+            BillingService.RESERVE_OUTPUT_RATIO
+            if output_ratio is None
+            else float(output_ratio)
+        )
+        return BillingService.estimate_input_output_tokens_from_messages(
+            messages,
+            output_ratio=ratio,
+        )
 
     @staticmethod
     def is_token_pricing(db: Session, task_type: str, provider: str = None, model: str = None) -> bool:
