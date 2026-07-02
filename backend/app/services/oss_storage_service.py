@@ -10,6 +10,7 @@ import random
 import threading
 import time
 import urllib.parse
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -524,6 +525,9 @@ class OSSStorageService:
         root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
         if root_prefix:
             segments.append(root_prefix)
+        # Year-month top-level bucket keeps any single directory from growing
+        # unbounded over time (easier lifecycle/archival management on OSS).
+        segments.append(datetime.utcnow().strftime("%Y%m"))
         segments.append(str(user_id or 0))
         if object_prefix:
             cleaned_prefix = str(object_prefix).strip().strip("/")
