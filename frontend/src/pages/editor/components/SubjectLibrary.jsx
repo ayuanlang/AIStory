@@ -2054,6 +2054,30 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     }, [selectedEntity?.id, showImageModal]);
 
+    // Freshly generated subject images can briefly 404 while the provider's OSS object propagates,
+    // even though the generation job already reports success. Any SafeImage instance that fails
+    // once without retrying permanently marks the URL "broken" in the shared cache (editorHelpers'
+    // brokenMediaUrls), which then blocks every other place rendering that same URL (main grid card,
+    // detail modal, dependency thumbnails) until a full page reload. Gate a long retry window on
+    // recency so all of these renders stay resilient instead of just the primary card.
+    const getSubjectImageRetryProps = useCallback((entityId, imageUrl) => {
+        const stableEntityId = String(entityId || '').trim();
+        const stableImageUrl = String(imageUrl || '').trim();
+        const recentImage = recentlyCompletedSubjectImageUrlsRef.current?.[stableEntityId] || null;
+        const recentImageUrl = String(recentImage?.imageUrl || '').trim();
+        const recentUpdatedAt = Number(recentImage?.updatedAt || 0) || 0;
+        const isRecent = Boolean(
+            stableImageUrl
+            && recentImageUrl
+            && stableImageUrl === recentImageUrl
+            && recentUpdatedAt > 0
+            && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
+        );
+        return isRecent
+            ? { retryOnError: true, retryDelays: [800, 1800, 3500, 6500, 10000] }
+            : { retryOnError: false };
+    }, [RECENT_SUBJECT_IMAGE_URL_TTL_MS]);
+
     const clearSubjectEntityImageLocally = useCallback((entityId) => {
         const stableEntityId = String(entityId || '').trim();
         if (!stableEntityId || !isMountedRef.current) return;
@@ -6375,7 +6399,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             <div className="w-1/2 bg-black relative flex items-center justify-center">
                                 {viewingEntity.image_url ? (
                                     <>
-                                        <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
+                                        <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" {...getSubjectImageRetryProps(viewingEntity.id, viewingEntity.image_url)} fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
                                         {!entityImageNeedsOssPersist(viewingEntity) && (
                                             <div className="absolute bottom-0 inset-x-0 z-10 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-4 pb-3 pt-10 pointer-events-none">
                                                 <div className="text-[9px] uppercase tracking-wider text-white/45 mb-0.5">{t('图片链接', 'Image URL')}</div>
@@ -7368,7 +7392,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 >
                                                                     <div className="aspect-square bg-black rounded overflow-hidden">
                                                                          {depEntity?.image_url ? (
-                                                                             <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
+                                                                             <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
                                                                          ) : (
                                                                              <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                                  <ImageIcon className="w-4 h-4 opacity-40" />
@@ -8110,7 +8134,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
                                                                 <div className="aspect-square bg-black rounded overflow-hidden">
                                                                      {depEntity?.image_url ? (
-                                                                         <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" />
+                                                                         <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
                                                                      ) : (
                                                                          <div className="w-full h-full flex items-center justify-center bg-white/5">
                                                                              <Users size={16} className="text-white/20"/>

@@ -7,7 +7,6 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import ProjectStatusBar from '../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
@@ -3973,19 +3972,6 @@ const Editor = ({
                 accept="application/json,.json"
                 className="hidden"
                 onChange={handleImportBackupFileChange}
-            />
-
-            {/* Compact Project Status and Cost Bar */}
-            <ProjectStatusBar 
-                activeTab={activeTab} 
-                workflowStage={project?.global_info?.workflow_stage}
-                totalProjectCost={projectBillingStats.total_cost}
-                userCost={projectBillingStats.user_cost}
-                userBalance={currentUserCredits}
-                t={t}
-                hasAssets={project?.global_info?.has_existing_assets === true}
-                lensPreference={project?.global_info?.lens_preference}
-                videoGenPreference={project?.global_info?.video_generation_preference}
             />
 
             {/* Main Content Area */}

@@ -441,11 +441,20 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const [retryToken, setRetryToken] = useState(0);
     const retryAttemptRef = useRef(0);
     const retryTimerRef = useRef(null);
+    const retryStartedAtRef = useRef(0);
 
-    const { onLoad: userOnLoad, onError: userOnError, retryOnError = false, retryDelays = null, ...restImgProps } = imgProps;
+    const { onLoad: userOnLoad, onError: userOnError, retryOnError = false, retryDelays = null, retryMaxTotalMs = null, ...restImgProps } = imgProps;
     const retryDelayList = Array.isArray(retryDelays) && retryDelays.length > 0
         ? retryDelays.map((value) => Math.max(250, Number(value) || 0)).filter(Boolean)
         : [1000, 2500, 5000, 9000];
+    // Freshly-written OSS/CDN objects can lag behind the "job completed" signal by more than the
+    // short default retry window, so callers that opt into retryOnError (e.g. just-generated
+    // assets) get a much longer overall retry budget instead of being permanently marked broken.
+    const retryBudgetMs = Number(retryMaxTotalMs) > 0 ? Number(retryMaxTotalMs) : (retryOnError ? 180000 : 4000);
+    // Even without an explicit retryOnError opt-in, give every image a couple of quick, silent
+    // retries before caching it as "broken" — a single transient miss right after upload should
+    // not poison the shared broken-URL cache for every other component rendering the same URL.
+    const baselineRetryDelays = [700, 1800];
 
     useEffect(() => {
         if (retryTimerRef.current) {
@@ -453,6 +462,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
             retryTimerRef.current = null;
         }
         retryAttemptRef.current = 0;
+        retryStartedAtRef.current = 0;
         setRetryToken(0);
         setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
         setIsLoaded(isWarmMediaUrl(rawSrc));
@@ -506,6 +516,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 retryTimerRef.current = null;
             }
             retryAttemptRef.current = 0;
+            retryStartedAtRef.current = 0;
             setRetryToken((value) => value + 1);
             setFailed(false);
             setIsLoaded(false);
@@ -560,19 +571,33 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                         if (typeof userOnError === 'function') userOnError();
                         return;
                     }
-                    if (retryOnError && retryAttemptRef.current < retryDelayList.length) {
-                        const retryDelay = retryDelayList[retryAttemptRef.current];
-                        retryAttemptRef.current += 1;
-                        setShouldLoad(false);
-                        setIsLoaded(false);
-                        retryTimerRef.current = setTimeout(() => {
-                            retryTimerRef.current = null;
-                            setFailed(false);
-                            setShouldLoad(true);
-                            setRetryToken((value) => value + 1);
-                        }, retryDelay);
-                        if (typeof userOnError === 'function') userOnError();
-                        return;
+                    if (!retryStartedAtRef.current) {
+                        retryStartedAtRef.current = Date.now();
+                    }
+                    const retryElapsedMs = Date.now() - retryStartedAtRef.current;
+                    const withinRetryBudget = retryElapsedMs < retryBudgetMs;
+                    if (withinRetryBudget) {
+                        // Once the explicit retryDelays list is exhausted, keep polling at its last
+                        // interval (instead of giving up) until the overall retry budget elapses.
+                        const retryDelay = retryOnError
+                            ? (retryAttemptRef.current < retryDelayList.length
+                                ? retryDelayList[retryAttemptRef.current]
+                                : retryDelayList[retryDelayList.length - 1])
+                            : baselineRetryDelays[Math.min(retryAttemptRef.current, baselineRetryDelays.length - 1)];
+                        const hasBaselineAttemptsLeft = retryOnError || retryAttemptRef.current < baselineRetryDelays.length;
+                        if (hasBaselineAttemptsLeft) {
+                            retryAttemptRef.current += 1;
+                            setShouldLoad(false);
+                            setIsLoaded(false);
+                            retryTimerRef.current = setTimeout(() => {
+                                retryTimerRef.current = null;
+                                setFailed(false);
+                                setShouldLoad(true);
+                                setRetryToken((value) => value + 1);
+                            }, retryDelay);
+                            if (typeof userOnError === 'function') userOnError();
+                            return;
+                        }
                     }
                     rememberBrokenMediaUrl(rawSrc);
                     setFailed(true);
