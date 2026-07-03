@@ -786,7 +786,14 @@ def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
 def _ensure_transaction_schema(is_postgres: bool = False):
     from sqlalchemy import inspect, text
     from .session import engine
-    from ..models.all_models import TransactionHistory, TransactionAction
+    from ..models.all_models import (
+        TransactionHistory,
+        TransactionAction,
+        RechargePlan,
+        PaymentOrder,
+        InvoiceProfile,
+        Invoice,
+    )
     import logging
     logger = logging.getLogger(__name__)
 
@@ -821,16 +828,20 @@ def _ensure_transaction_schema(is_postgres: bool = False):
                         conn.execute(text("ALTER TABLE transaction_history ADD COLUMN episode_id INTEGER REFERENCES episodes(id)"))
                     logger.info("Added project_id and episode_id to transaction_history")
 
-        # Ensure payment_orders columns
-        if inspector.has_table("payment_orders"):
-            cols = {c['name'] for c in inspector.get_columns("payment_orders")}
-            with engine.begin() as conn:
-                if "target_group_id" not in cols:
-                    if is_postgres:
-                        conn.execute(text("ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS target_group_id INTEGER"))
-                    else:
-                        conn.execute(text("ALTER TABLE payment_orders ADD COLUMN target_group_id INTEGER"))
-                    logger.info("Added target_group_id to payment_orders")
+        # Ensure billing / payment / invoice tables and columns
+        for tname, tmodel in [
+            ("recharge_plans", RechargePlan),
+            ("payment_orders", PaymentOrder),
+            ("invoice_profiles", InvoiceProfile),
+            ("invoices", Invoice),
+        ]:
+            try:
+                if not inspector.has_table(tname):
+                    tmodel.__table__.create(bind=engine, checkfirst=True)
+                    logger.info("Created %s table", tname)
+                _ensure_missing_table_columns(tname, tmodel, is_postgres=is_postgres)
+            except Exception as e:
+                logger.error("Failed to ensure %s table/columns: %s", tname, e)
 
         # Ensure transaction_action columns
         if inspector.has_table("transaction_action"):
