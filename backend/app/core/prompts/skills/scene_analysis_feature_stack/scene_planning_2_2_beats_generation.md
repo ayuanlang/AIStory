@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-02 20:00:00 +08:00
+# Prompt Updated At: 2026-07-03 10:20:00 +08:00
 
 # Skill 1-2-2: 资产映射与节拍落表
 
@@ -109,7 +109,7 @@ Stage 1 具名 → Index 标准表达，落位于：`{Scene实体覆盖}`、`{�
 
 ### 输出前自检
 
-Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 全部【】说明块原样落入 Core Scene Info、无省略写法**｜语义 = Stage 1（仅实体 Index 化）｜**未重判基础/衍生选用、未改观察视角/环境切换/Beat 内容**｜**全部 `CHAR:`/`ENV:`/`PROP:` 可反向追溯到 Index `subject_no`；Index 外实体无类型前缀标注**｜时长原样继承 Stage 1｜缺口已标 `{覆盖核销}`。
+Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 全部【】说明块原样落入 Core Scene Info、无省略写法**｜语义 = Stage 1（仅实体 Index 化）｜**骑乘/载具绑定态（骑马/骑车/乘载具等）逐 Beat 与 Stage 1 一致，禁省略马/车/骑姿**｜**未重判基础/衍生选用、未改观察视角/环境切换/Beat 内容**｜**全部 `CHAR:`/`ENV:`/`PROP:` 可反向追溯到 Index `subject_no`；Index 外实体无类型前缀标注**｜时长原样继承 Stage 1｜缺口已标 `{覆盖核销}`。
 
 ## Core Scene Info 字段
 
