@@ -6756,7 +6756,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                     value={viewingEntity.generation_prompt_cn || ''}
                                                     onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                     onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
-                                                    className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                    className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[270px] resize-y"
                                                     placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
                                                 />
                                             </div>
@@ -7413,7 +7413,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                             value={viewingEntity.generation_prompt_cn || ''}
                                                             onChange={(e) => setViewingEntity(prev => ({ ...prev, generation_prompt_cn: e.target.value }))}
                                                             onBlur={(e) => handleFieldUpdate('generation_prompt_cn', e.target.value)}
-                                                            className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[90px] resize-y"
+                                                            className="w-full p-3 bg-black/20 rounded-lg border border-white/5 text-xs font-mono text-white/70 focus:text-white/90 focus:border-primary outline-none min-h-[270px] resize-y"
                                                             placeholder={t('输入中文生图提示词...', 'Enter Chinese generation prompt...')}
                                                         />
                                                     </div>
