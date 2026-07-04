@@ -542,6 +542,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [isGeneratingEntityRefAudio, setIsGeneratingEntityRefAudio] = useState(false);
     const [entityRefAudioPromptByEntity, setEntityRefAudioPromptByEntity] = useState({});
     const [entityRefAudioProfileByEntity, setEntityRefAudioProfileByEntity] = useState({});
+    const [entityRefAudioIdentity, setEntityRefAudioIdentity] = useState('');
     const [entityRefAudioTone, setEntityRefAudioTone] = useState('');
     const [entityRefAudioPace, setEntityRefAudioPace] = useState('');
     const [entityRefAudioEmotion, setEntityRefAudioEmotion] = useState('');
@@ -573,7 +574,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const resolveDefaultEntityRefAudioProfile = useCallback((entity) => {
         const normalizedGender = String(entity?.gender || '').trim().toLowerCase();
         const isMale = ['male', 'man', 'boy', 'masculine', 'm', '男', '男性'].some((token) => normalizedGender.includes(token));
+        const identityRaw = String(entity?.role || entity?.archetype || entity?.type || '').trim();
         return {
+            identity: identityRaw || (isMale ? '守夜人' : '巡夜人'),
             tone: isMale ? '中低音（沉稳克制）' : '中高音（清晰明亮）',
             pace: '中速偏慢（0.9x）',
             emotion: '克制、安抚、轻微紧张',
@@ -588,6 +591,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         const defaultProfile = resolveDefaultEntityRefAudioProfile(entity);
         const activeProfile = {
+            identity: String(profileOverrides?.identity || '').trim() || defaultProfile.identity,
             tone: String(profileOverrides?.tone || '').trim() || defaultProfile.tone,
             pace: String(profileOverrides?.pace || '').trim() || defaultProfile.pace,
             emotion: String(profileOverrides?.emotion || '').trim() || defaultProfile.emotion,
@@ -597,9 +601,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const ageCn = ageRaw || (isMale ? '28岁' : '25岁');
         const ageEn = ageRaw || (isMale ? '28 years old' : '25 years old');
 
-        const identityRaw = String(entity?.role || entity?.archetype || entity?.type || '').trim();
-        const identityCn = identityRaw || (isMale ? '守夜人' : '巡夜人');
-        const identityEn = identityRaw || (isMale ? 'night watchman' : 'night patrol officer');
+        const identityCn = activeProfile.identity;
+        const identityEn = activeProfile.identity;
 
         const pitchCn = activeProfile.tone;
         const pitchEn = activeProfile.tone;
@@ -718,6 +721,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const currentEntityKey = String(viewingEntity?.id || '').trim();
         if (!currentEntityKey) {
             setEntityRefAudioPrompt('');
+            setEntityRefAudioIdentity('');
             setEntityRefAudioTone('');
             setEntityRefAudioPace('');
             setEntityRefAudioEmotion('');
@@ -726,10 +730,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const defaultProfile = resolveDefaultEntityRefAudioProfile(viewingEntity);
         const savedProfile = entityRefAudioProfileByEntity?.[currentEntityKey] || {};
         const activeProfile = {
+            identity: String(savedProfile?.identity || '').trim() || defaultProfile.identity,
             tone: String(savedProfile?.tone || '').trim() || defaultProfile.tone,
             pace: String(savedProfile?.pace || '').trim() || defaultProfile.pace,
             emotion: String(savedProfile?.emotion || '').trim() || defaultProfile.emotion,
         };
+        setEntityRefAudioIdentity(activeProfile.identity);
         setEntityRefAudioTone(activeProfile.tone);
         setEntityRefAudioPace(activeProfile.pace);
         setEntityRefAudioEmotion(activeProfile.emotion);
@@ -3836,6 +3842,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setEntityRefAudioProfileByEntity((prev) => ({
             ...prev,
             [currentEntityKey]: {
+                identity: String(nextProfile?.identity || '').trim(),
                 tone: String(nextProfile?.tone || '').trim(),
                 pace: String(nextProfile?.pace || '').trim(),
                 emotion: String(nextProfile?.emotion || '').trim(),
@@ -3845,6 +3852,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const handleRegenerateEntityRefAudioPrompt = useCallback(() => {
         const nextProfile = {
+            identity: String(entityRefAudioIdentity || '').trim(),
             tone: String(entityRefAudioTone || '').trim(),
             pace: String(entityRefAudioPace || '').trim(),
             emotion: String(entityRefAudioEmotion || '').trim(),
@@ -3853,7 +3861,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const nextPrompt = buildDefaultEntityRefAudioPrompt(viewingEntity, nextProfile);
         persistEntityRefAudioPrompt(nextPrompt);
         showSubjectNotification(t('已按当前配音要素重建参考文案。', 'Reference prompt rebuilt from current dubbing parameters.'), 'success');
-    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioEmotion, entityRefAudioPace, entityRefAudioTone, persistEntityRefAudioProfile, persistEntityRefAudioPrompt, showSubjectNotification, t, viewingEntity]);
+    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioEmotion, entityRefAudioIdentity, entityRefAudioPace, entityRefAudioTone, persistEntityRefAudioProfile, persistEntityRefAudioPrompt, showSubjectNotification, t, viewingEntity]);
 
     const extractGeneratedAudioUrl = useCallback((payload) => {
         const visited = new Set();
@@ -7093,13 +7101,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
                                                                 className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
                                                             />
-                                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={entityRefAudioIdentity}
+                                                                    onChange={(e) => {
+                                                                        const next = e.target.value;
+                                                                        setEntityRefAudioIdentity(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            identity: next,
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    placeholder={t('身份角色（如：守夜人）', 'Identity/role (e.g. night watchman)')}
+                                                                    title={t('身份角色说明', 'Identity/role description')}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
+                                                                />
                                                                 <select
                                                                     value={entityRefAudioTone}
                                                                     onChange={(e) => {
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioTone(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: next,
                                                                             pace: entityRefAudioPace,
                                                                             emotion: entityRefAudioEmotion,
@@ -7117,6 +7143,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioPace(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: entityRefAudioTone,
                                                                             pace: next,
                                                                             emotion: entityRefAudioEmotion,
@@ -7134,6 +7161,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioEmotion(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: entityRefAudioTone,
                                                                             pace: entityRefAudioPace,
                                                                             emotion: next,
@@ -7276,13 +7304,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
                                                                 className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
                                                             />
-                                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={entityRefAudioIdentity}
+                                                                    onChange={(e) => {
+                                                                        const next = e.target.value;
+                                                                        setEntityRefAudioIdentity(next);
+                                                                        persistEntityRefAudioProfile({
+                                                                            identity: next,
+                                                                            tone: entityRefAudioTone,
+                                                                            pace: entityRefAudioPace,
+                                                                            emotion: entityRefAudioEmotion,
+                                                                        });
+                                                                    }}
+                                                                    placeholder={t('身份角色（如：守夜人）', 'Identity/role (e.g. night watchman)')}
+                                                                    title={t('身份角色说明', 'Identity/role description')}
+                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
+                                                                />
                                                                 <select
                                                                     value={entityRefAudioTone}
                                                                     onChange={(e) => {
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioTone(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: next,
                                                                             pace: entityRefAudioPace,
                                                                             emotion: entityRefAudioEmotion,
@@ -7300,6 +7346,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioPace(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: entityRefAudioTone,
                                                                             pace: next,
                                                                             emotion: entityRefAudioEmotion,
@@ -7317,6 +7364,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         const next = String(e.target.value || '').trim();
                                                                         setEntityRefAudioEmotion(next);
                                                                         persistEntityRefAudioProfile({
+                                                                            identity: entityRefAudioIdentity,
                                                                             tone: entityRefAudioTone,
                                                                             pace: entityRefAudioPace,
                                                                             emotion: next,

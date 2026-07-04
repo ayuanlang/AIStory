@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-07-01 16:00:00 +08:00
+# Prompt Updated At: 2026-07-04 19:45:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -31,7 +31,7 @@
     - **恐怖 / 惊悚 / 悬疑压迫向 / 暗黑风格**：才可低照度与高反差；即使暗黑也必须保持关键信息可读，禁止整场压黑。
   - **视觉正向注入矩阵**：所有 `generation_prompt` 必须写入匹配类型的正向视觉词；**四类互斥，须先按 §1.6 完成渲染风格判定后再套用对应一类**：
     - **真人实拍 (Live Action/Photoreal)**：真实体征、微细孔/肤质、物理服饰材质、自然光学、电影布光、可信尺度；仅表现真实物理质感。
-    - **真人写实硬约束**：**仅当 §1.6 判定为真人实拍时生效**——即 `Project Context.Type`、`Global_Style`、`Base Positioning`、`entity_attributes.project_global_style` 任一**显式**命中「真人」「真人写实」「实拍」「Live Action」「Photoreal」等制式词（题材/情绪标签如都市家庭/职场/社会派/纪实向/现实题材长剧/都市生活流**不得**单独触发）；命中后，所有 character 须按 `entity_design_character.md` **§2.1F-A 七必锚（0–6）**全量写入，且 **§2.0 反面部光斑**（面部大面积均匀 Fill、无局部亮斑/光斑不均、禁鼻梁/颧骨 spotlight）。禁止：玻璃肌、零毛孔、强 idol 妆、二次元比例、3D/CGI/插画风、面部光斑不均、过度雾化、棚拍广告感、油腻/塑料质感。服装/体态/场景保持基本可信。
+    - **真人写实硬约束**：**仅当 §1.6 判定为真人实拍时生效**——即 `Project Context.Type`、`Global_Style`、`Base Positioning`、`entity_attributes.project_global_style` 任一**显式**命中「真人」「真人写实」「实拍」「Live Action」「Photoreal」等制式词（题材/情绪标签如都市家庭/职场/社会派/纪实向/现实题材长剧/都市生活流**不得**单独触发）；命中后，所有 character 须按 `entity_design_character.md` **§2.1F-A 七必锚（0–6）**全量写入 + **§2.1F-B 真人实拍资产属性五层增强**全量落地，且 **§2.0 反面部光斑**（面部大面积均匀 Fill、无局部亮斑/光斑不均、禁鼻梁/颧骨 spotlight、面部高光占比 ≤10%）。禁止：玻璃肌、零毛孔、强 idol 妆、二次元比例、3D/CGI/插画风、面部光斑不均、过度雾化、棚拍广告感、油腻/塑料/硅胶质感、网红脸/锥子脸/过度瘦脸。服装/体态/场景保持基本可信。
     - **三维动画 / 风格化三维 (3D Animation / Stylized 3D)**：**由 §1.6 判定命中「三维动画/3D/CG/次世代渲染/风格化三维」等制式词时生效**；执行各实体文件的「三维动画专项」章节（角色见 `entity_design_character.md` §2.1I；道具见 `entity_design_prop.md` §4.2；环境/海报见 `entity_design_environment_and_poster.md` §3.3）；核心要求清晰几何体块、受控 PBR/卡通高光与边缘光、可复用三维模型骨学与拓扑一致性、渲染引擎级材质响应；**禁止**套用真人专属的毛孔/肤质/选角约束，也**禁止**误用二维赛璐璐块面。
     - **二维动画 (2D / Anime / Cel-shaded)**：**由 §1.6 判定命中「二维动画/赛璐璐/二次元/日漫/美漫/Cel-shaded」等制式词时生效**；执行各实体文件的「二维动画专项」章节（角色见 `entity_design_character.md` §2.1J；道具见 `entity_design_prop.md` §4.3；环境/海报见 `entity_design_environment_and_poster.md` §3.4）；核心要求赛璐璐线稿、二维形体、块面明暗、风格化背景材质；仅表现纯二维质感，**禁止**混入真人肤质纹理或三维体块光影。
     - **未命中类型**：依 `Global_Style` 或 `Base Positioning` 补具体正向风格短语，仍须先按 §1.6 判定落入真人/三维/二维三者之一（默认真人实拍，见 §1.6 未声明规则）。
@@ -192,7 +192,7 @@
 **核心原则**：项目渲染风格只有三选一——**真人实拍（Live Action）**、**三维动画 / CG 风格化（3D Animation / Stylized 3D）**、**二维动画（2D / 赛璐璐 / 二次元）**；三者规则体系互斥、不可混用，且**只能由项目信息显式声明触发**，不得用题材、受众、场域、情绪标签反推。
 
 - **触发词（唯一合法判定依据）**：读取 `Project Context.Type`、`Global_Style`、`Base Positioning`、`entity_attributes.project_global_style`：
-  - 命中「真人」「真人写实」「实拍」「Live Action」「Photoreal」「真人电影」「真人剧集」「真人短剧」等 → **真人实拍**专项规则生效（各实体文件 §2.0/§2.1F/§2.1G 或对应真人章节）。
+  - 命中「真人」「真人写实」「实拍」「Live Action」「Photoreal」「真人电影」「真人剧集」「真人短剧」等 → **真人实拍**专项规则生效（各实体文件 §2.0/§2.1F/§2.1F-B/§2.1G 或对应真人章节）。
   - 命中「三维动画」「3D 动画」「CG 动画」「三维番剧」「次世代渲染」「风格化三维」「3D 渲染风格」「Pixar 风」「Unreal/UE 渲染感」等 → **三维动画专项**规则生效（角色 `entity_design_character.md` §2.1I；道具 `entity_design_prop.md` §4.2；环境/海报 `entity_design_environment_and_poster.md` §3.3）。
   - 命中「二维动画」「二维番剧」「赛璐璐」「二次元」「日漫」「美漫」「扁平插画风」「Cel-shaded」等 → **二维动画专项**规则生效（角色 `entity_design_character.md` §2.1J；道具 `entity_design_prop.md` §4.3；环境/海报 `entity_design_environment_and_poster.md` §3.4）。
   - 均未命中时，默认沿用**真人实拍**（行业默认基线），但一经上游任一处补充声明三维/二维，须**立即切换**为对应专项规则，且真人专属硬约束（肤质毛孔、演员选角对标、无感打光七必锚等）**立即停止生效**。
