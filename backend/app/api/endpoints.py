@@ -30360,7 +30360,7 @@ def get_assets(
                 if sid_int in shot_map: meta['shot_number'] = shot_map[sid_int]
             except: pass
 
-            meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
+        meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
 
         results.append({
             "id": a.id,
@@ -34277,6 +34277,7 @@ def _normalize_entity_type(raw: Optional[str]) -> Optional[str]:
 
 def _serialize_asset_row(asset: Asset, db: Session = None) -> Dict[str, Any]:
     _sync_asset_denormalized_fields(asset)
+    meta = _asset_meta_dict(getattr(asset, "meta_info", None))
     return {
         "id": asset.id,
         "type": asset.type,
@@ -34285,7 +34286,7 @@ def _serialize_asset_row(asset: Asset, db: Session = None) -> Dict[str, Any]:
         "project_id": getattr(asset, "project_id", None),
         "episode_id": getattr(asset, "episode_id", None),
         "is_current_project_asset": bool(getattr(asset, "is_current_project_asset", False)),
-        "meta_info": asset.meta_info,
+        "meta_info": meta,
         "remark": asset.remark,
         "created_at": asset.created_at,
     }

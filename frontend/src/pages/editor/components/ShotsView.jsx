@@ -12378,7 +12378,79 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             : (modalType === 'video' ? persistedVideoMeta : null)));
                                                 const shotConfiguredDuration = getShotDurationDisplayValue(editingShot?.duration);
 
-                                                const renderAssetMetaPanel = (assetDetail = linkedAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
+                                                const effectiveAssetDetail = (() => {
+                                                    const hasBuiltDetail = Boolean(
+                                                        linkedAssetDetail.resolution
+                                                        || linkedAssetDetail.fileSize
+                                                        || linkedAssetDetail.model
+                                                        || linkedAssetDetail.aspectRatio
+                                                        || linkedAssetDetail.duration
+                                                    );
+                                                    if (hasBuiltDetail) return linkedAssetDetail;
+                                                    if (resolvedShotMediaMeta && Object.keys(resolvedShotMediaMeta).length > 0) {
+                                                        return buildShotAssetDetail(
+                                                            {
+                                                                meta_info: resolvedShotMediaMeta,
+                                                                url: detailPreviewUrl,
+                                                                type: detailType,
+                                                            },
+                                                            detailType,
+                                                            detailPreviewUrl
+                                                        );
+                                                    }
+                                                    return linkedAssetDetail;
+                                                })();
+
+                                                const renderAssetMetaStrip = (assetDetail = effectiveAssetDetail) => {
+                                                    const mediaType = String(assetDetail.type || detailType || '').trim().toLowerCase();
+                                                    const items = [
+                                                        { label: t('分辨率', 'Resolution'), value: assetDetail.resolution },
+                                                        { label: t('画幅比', 'Aspect Ratio'), value: assetDetail.aspectRatio },
+                                                        { label: t('文件大小', 'File Size'), value: assetDetail.fileSize },
+                                                        { label: t('生成模型', 'Model'), value: assetDetail.model },
+                                                        {
+                                                            label: t('提供商', 'Provider'),
+                                                            value: assetDetail.providerAlias || assetDetail.provider,
+                                                        },
+                                                        ...(mediaType === 'video'
+                                                            ? [{ label: t('时长', 'Duration'), value: assetDetail.duration }]
+                                                            : []),
+                                                        ...(assetDetail.format
+                                                            ? [{ label: t('格式', 'Format'), value: assetDetail.format }]
+                                                            : []),
+                                                    ].filter((item) => {
+                                                        const value = String(item.value || '').trim();
+                                                        return value && value !== '-';
+                                                    });
+
+                                                    return (
+                                                        <div className="border-t border-white/10 bg-black/75 backdrop-blur-sm px-4 py-2.5 shrink-0">
+                                                            {shotAssetsMetaLoading ? (
+                                                                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                                    {t('加载元数据...', 'Loading metadata...')}
+                                                                </div>
+                                                            ) : items.length > 0 ? (
+                                                                <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+                                                                    {items.map(({ label, value }) => (
+                                                                        <div key={label} className="flex items-baseline gap-1.5 text-[11px] min-w-0">
+                                                                            <span className="text-white/45 shrink-0">{label}</span>
+                                                                            <span className="text-white/90 font-mono truncate max-w-[220px]" title={String(value)}>
+                                                                                {value}
+                                                                            </span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                <div className="text-[11px] text-white/40">
+                                                                    {t('暂无分辨率/模型等元数据', 'No resolution/model metadata yet')}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                };
+
+                                                const renderAssetMetaPanel = (assetDetail = effectiveAssetDetail, rawMeta = linkedAssetMeta, titleText = t('资产元数据', 'Asset Metadata')) => (
                                                     <div className="space-y-2 rounded-lg border border-white/10 bg-black/30 p-3">
                                                         <div className="text-[11px] text-muted-foreground uppercase font-bold">{titleText}</div>
                                                         {shotAssetsMetaLoading && (
@@ -12713,11 +12785,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                                                 const isOriginalPreview = assetDetailPreviewMode === 'original';
                                                 const previewShellClass = isOriginalPreview
-                                                    ? 'h-[46vh] xl:h-[58vh] bg-black/60 rounded border overflow-auto flex items-start justify-center relative transition-colors'
-                                                    : 'h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex items-center justify-center relative transition-colors';
+                                                    ? 'h-[46vh] xl:h-[58vh] bg-black/60 rounded border overflow-hidden flex flex-col relative transition-colors'
+                                                    : 'h-[46vh] xl:h-[58vh] bg-black/40 rounded border overflow-hidden flex flex-col relative transition-colors';
                                                 const previewContentClass = isOriginalPreview
-                                                    ? 'min-w-max min-h-max p-4 flex items-start justify-center'
-                                                    : 'w-full h-full flex items-center justify-center';
+                                                    ? 'flex-1 min-h-0 overflow-auto p-4 flex items-start justify-center'
+                                                    : 'flex-1 min-h-0 overflow-hidden flex items-center justify-center relative';
                                                 const imagePreviewClass = isOriginalPreview
                                                     ? 'max-w-none max-h-none w-auto h-auto shadow-lg rounded'
                                                     : 'max-w-full max-h-full object-contain shadow-lg rounded';
@@ -12754,14 +12826,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     <div className={previewContentClass}>
                                                                         {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className={imagePreviewClass} fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                     </div>
+                                                                    {renderAssetMetaStrip()}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
-                                                                    { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
+                                                                    { label: t('素材名', 'Asset Name'), value: effectiveAssetDetail.displayName || '-' },
                                                                     { label: t('图片 URL', 'Image URL'), value: editingShot.image_url || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.ref_image_urls) ? tech.ref_image_urls.length : 0) },
                                                                 ])}
                                                                 {renderOssPersistWarningPanel(editingShot, 'start')}
-                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3 min-w-0">
                                                                 {renderFrameGeneratingNotice('start')}
@@ -12866,14 +12938,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     <div className={previewContentClass}>
                                                                         {detailPreviewUrl ? <SafeImage src={detailPreviewUrl} className={imagePreviewClass} fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
                                                                     </div>
+                                                                    {renderAssetMetaStrip()}
                                                                 </div>
                                                                 {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
-                                                                    { label: t('素材名', 'Asset Name'), value: linkedAssetDetail.displayName || '-' },
+                                                                    { label: t('素材名', 'Asset Name'), value: effectiveAssetDetail.displayName || '-' },
                                                                     { label: t('结束帧 URL', 'End Frame URL'), value: endFrameUrl || '-', breakAll: true },
                                                                     { label: t('参考图数量', 'Ref Count'), value: String(Array.isArray(tech.end_ref_image_urls) ? tech.end_ref_image_urls.length : 0) },
                                                                 ])}
                                                                 {renderOssPersistWarningPanel(editingShot, 'end')}
-                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3 min-w-0">
                                                                 {renderFrameGeneratingNotice('end')}
@@ -13009,8 +13081,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             />
                                                                         ) : <Video className="w-8 h-8 opacity-30" />}
                                                                     </div>
+                                                                    {renderAssetMetaStrip()}
                                                                 </div>
-                                                                <div className="text-xs text-muted-foreground break-all">{t('素材名', 'Asset Name')}: {linkedAssetDetail.displayName || '-'}</div>
+                                                                <div className="text-xs text-muted-foreground break-all">{t('素材名', 'Asset Name')}: {effectiveAssetDetail.displayName || '-'}</div>
                                                                 <div className="text-xs text-muted-foreground break-all">{t('视频 URL', 'Video URL')}: {editingShot.video_url || '-'}</div>
                                                                 {modalType === 'video' && renderOssPersistWarningPanel(editingShot, 'video', {
                                                                     bodyZh: '当前链接为供应商临时地址（如 volces TOS 签名 URL），可能会过期。请尽快补传到 OSS。',
@@ -13019,7 +13092,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 <div className="text-xs text-muted-foreground break-all">{t('配音 URL', 'Voice URL')}: {String(tech.voiceover_url || '') || '-'}</div>
                                                                 <div className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3">
                                                                     <div className="text-[11px] text-muted-foreground uppercase font-bold">{t('素材实际时长', 'Asset Duration')}</div>
-                                                                    <div className="text-sm text-white">{linkedAssetDetail.duration || '-'}</div>
+                                                                    <div className="text-sm text-white">{effectiveAssetDetail.duration || '-'}</div>
                                                                     <div className="text-[11px] text-muted-foreground">
                                                                         {t('这里显示当前视频素材元数据里的实际时长。', 'This is the actual duration read from the current video asset metadata.')}
                                                                     </div>
@@ -13073,7 +13146,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <pre className="mt-1 p-2 rounded border border-white/10 bg-black/40 text-[10px] text-gray-300 overflow-auto max-h-36">{JSON.stringify(voicePlanMeta, null, 2)}</pre>
                                                                     </div>
                                                                 )}
-                                                                {renderAssetMetaPanel(linkedAssetDetail, resolvedShotMediaMeta, t('素材元信息', 'Asset Metadata'))}
                                                             </div>
                                                             <div className="space-y-3 min-w-0">
                                                                 <div className="flex flex-wrap items-center gap-2">
@@ -13192,14 +13264,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 return (
                                                     <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-4">
                                                         <div className="space-y-3">
-                                                            <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex items-center justify-center">
-                                                                {keyframe?.url ? <SafeImage src={keyframe.url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                            <div className="h-[46vh] xl:h-[58vh] bg-black/40 rounded border border-white/10 overflow-hidden flex flex-col">
+                                                                <div className="flex-1 min-h-0 flex items-center justify-center">
+                                                                    {keyframe?.url ? <SafeImage src={keyframe.url} className="max-w-full max-h-full object-contain" fallback={<ImageIcon className="w-8 h-8 opacity-30" />} /> : <ImageIcon className="w-8 h-8 opacity-30" />}
+                                                                </div>
+                                                                {renderAssetMetaStrip()}
                                                             </div>
                                                             {renderInfoPanel(t('当前素材信息', 'Current Asset Info'), [
                                                                 { label: t('关键帧时间', 'Keyframe Time'), value: keyframe?.time || '-' },
                                                                 { label: t('关键帧 URL', 'Keyframe URL'), value: keyframe?.url || '-', breakAll: true },
                                                             ])}
-                                                            {renderAssetMetaPanel()}
                                                         </div>
                                                         <div className="space-y-3">
                                                             <div className="flex flex-wrap items-center gap-2">

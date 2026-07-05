@@ -266,9 +266,6 @@ def _probe_remote_image(url: str) -> Dict[str, Any]:
         content_len = int(resp.headers.get("Content-Length") or 0)
         if content_len > 0:
             _apply_file_size(probed, content_len)
-        if content_len and content_len > max_probe_bytes:
-            resp.close()
-            return probed
         if not resp.ok:
             resp.close()
             return probed
@@ -278,7 +275,7 @@ def _probe_remote_image(url: str) -> Dict[str, Any]:
             if not chunk:
                 continue
             probe.extend(chunk)
-            if len(probe) > max_probe_bytes:
+            if len(probe) >= max_probe_bytes:
                 break
         resp.close()
         if probe:

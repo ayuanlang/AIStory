@@ -111,9 +111,11 @@ import {
     backfillEpisodeMediaFromLibrary,
     persistEntityMedia,
     getCachedUserPreferences,
+    probeAssetMetadata,
 } from '../../../services/api';
 
 import RefineControl from '../../../components/RefineControl.jsx';
+import AssetPreviewMetaBar from '../../../components/AssetPreviewMetaBar';
 import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
@@ -473,6 +475,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [includeHistoricalEpisodeAssets, setIncludeHistoricalEpisodeAssets] = useState(false);
     const [imageSelectAction, setImageSelectAction] = useState('direct_use');
     const [viewingEntity, setViewingEntity] = useState(null);
+    const [entityDetailLinkedAsset, setEntityDetailLinkedAsset] = useState(null);
+    const [entityMetaProbing, setEntityMetaProbing] = useState(false);
     const [historyList, setHistoryList] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -4783,6 +4787,79 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         ).trim();
     }, [getAssetMeta, pickAssetMetaValue]);
 
+    const resolveLinkedAssetForEntity = useCallback((entity) => {
+        if (!entity) return null;
+        const imageUrl = String(entity?.image_url || '').trim();
+        if (!imageUrl || !(assets?.length)) return null;
+
+        const entityTokens = collectAssetUrlTokens(imageUrl);
+        if (!(entityTokens instanceof Set) || entityTokens.size === 0) return null;
+
+        const entityId = String(entity?.id || '').trim();
+        let best = null;
+        let bestScore = -1;
+
+        for (const asset of assets) {
+            const assetTokens = collectAssetUrlTokens(asset?.url);
+            let urlMatch = false;
+            for (const token of entityTokens) {
+                if (assetTokens.has(token)) {
+                    urlMatch = true;
+                    break;
+                }
+            }
+            if (!urlMatch) continue;
+
+            const assetEntityId = String(getAssetEntityId(asset) || '').trim();
+            const score = (entityId && entityId !== 'new' && assetEntityId === entityId) ? 2 : 1;
+            if (score > bestScore) {
+                bestScore = score;
+                best = asset;
+            }
+        }
+        return best;
+    }, [assets, collectAssetUrlTokens, getAssetEntityId]);
+
+    useEffect(() => {
+        if (!viewingEntity?.image_url) {
+            setEntityDetailLinkedAsset(null);
+            return;
+        }
+        if (!assets.length && !assetsLoading) {
+            void loadAssets({ includeHistoricalEpisodeAssets: false });
+            return;
+        }
+        setEntityDetailLinkedAsset(resolveLinkedAssetForEntity(viewingEntity));
+    }, [viewingEntity?.id, viewingEntity?.image_url, assets, assetsLoading, resolveLinkedAssetForEntity, loadAssets]);
+
+    useEffect(() => {
+        if (!viewingEntity?.image_url || entityMetaProbing) return;
+        const linked = entityDetailLinkedAsset;
+        if (!linked?.id) return;
+
+        const meta = linked?.meta_info && typeof linked.meta_info === 'object' ? linked.meta_info : {};
+        const metaMissing = !meta.resolution && !meta.width && !meta.height;
+        if (!metaMissing) return;
+
+        let cancelled = false;
+        (async () => {
+            try {
+                setEntityMetaProbing(true);
+                const res = await probeAssetMetadata(linked.id);
+                if (cancelled) return;
+                if (res?.asset) {
+                    setEntityDetailLinkedAsset(res.asset);
+                    setAssets((prev) => prev.map((item) => (item.id === res.asset.id ? res.asset : item)));
+                }
+            } catch (e) {
+                if (!cancelled) console.error(e);
+            } finally {
+                if (!cancelled) setEntityMetaProbing(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [viewingEntity?.id, viewingEntity?.image_url, entityDetailLinkedAsset?.id]);
+
     const resolveAssetEntity = useCallback((asset) => {
         const entityId = getAssetEntityId(asset);
         if (!entityId) return null;
@@ -6898,7 +6975,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             className="bg-[#1e1e1e] border border-white/10 rounded-2xl w-full max-w-5xl h-[80vh] flex shadow-2xl overflow-hidden"
                         >
                             {/* Left: Image */}
-                            <div className="w-1/2 bg-black relative flex items-center justify-center">
+                            <div className="w-1/2 bg-black relative flex flex-col min-h-0">
+                                <div className="flex-1 relative flex items-center justify-center min-h-0 overflow-hidden">
                                 {viewingEntity.image_url ? (
                                     <>
                                         <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" {...getSubjectImageRetryProps(viewingEntity.id, viewingEntity.image_url)} fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
@@ -6984,6 +7062,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                          
                                          
                                     </div>
+                                )}
+                                </div>
+                                {viewingEntity.image_url && (
+                                    <AssetPreviewMetaBar
+                                        asset={entityDetailLinkedAsset || { url: viewingEntity.image_url, type: 'image', meta_info: {} }}
+                                        t={t}
+                                        loading={entityMetaProbing || (assetsLoading && !entityDetailLinkedAsset)}
+                                        emptyHint={t('暂无元数据，正在尝试从素材库读取…', 'No metadata yet. Reading from asset library...')}
+                                    />
                                 )}
                             </div>
                             

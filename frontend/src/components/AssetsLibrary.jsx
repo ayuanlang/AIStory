@@ -13,6 +13,7 @@ import RefineControl from './RefineControl.jsx';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 import { SafeImage, getThumbUrl } from '../pages/editor/editorHelpers';
+import AssetPreviewMetaBar from './AssetPreviewMetaBar';
 
 // Helper to construct full URL if relative
 const getFullUrl = (url) => {
@@ -1810,15 +1811,18 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                 onClick={e => e.stopPropagation()}
             >
                 {/* Preview Area */}
-                <div className="flex-1 bg-black/50 flex items-center justify-center p-8 relative">
-                    {category === 'image' ? (
-                        <img src={getFullUrl(displayAsset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
-                    ) : (
-                        <video src={getFullUrl(displayAsset.url)} controls className="w-full h-full object-contain rounded-lg shadow-2xl" />
-                    )}
-                    <div className="absolute top-4 left-4 p-2 bg-black/60 backdrop-blur rounded-lg text-xs text-white/50 font-mono">
-                        {typeLabel}
+                <div className="flex-1 bg-black/50 flex flex-col min-w-0 min-h-0">
+                    <div className="flex-1 flex items-center justify-center p-8 relative min-h-0">
+                        {category === 'image' ? (
+                            <img src={getFullUrl(displayAsset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
+                        ) : (
+                            <video src={getFullUrl(displayAsset.url)} controls className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
+                        )}
+                        <div className="absolute top-4 left-4 p-2 bg-black/60 backdrop-blur rounded-lg text-xs text-white/50 font-mono">
+                            {typeLabel}
+                        </div>
                     </div>
+                    <AssetPreviewMetaBar asset={displayAsset} t={t} loading={probingMeta} />
                 </div>
 
                 {/* Sidebar Info */}
