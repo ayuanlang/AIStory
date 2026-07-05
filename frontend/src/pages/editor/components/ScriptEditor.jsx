@@ -2022,13 +2022,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const strictBlock = extractScenesBlockOnly(candidate);
             if (strictBlock) return strictBlock;
 
-            const sceneHeadingMatch = candidate.match(/^\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])/im);
-            if (sceneHeadingMatch?.index >= 0) {
+            if (/\[SCENE_START:/i.test(candidate)) {
+                const endMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
+                const fallbackEndMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
+                if (endMarkerMatch?.index >= 0) {
+                    candidate = candidate.slice(0, endMarkerMatch.index).trim();
+                } else if (fallbackEndMarkerMatch?.index >= 0) {
+                    candidate = candidate.slice(0, fallbackEndMarkerMatch.index).trim();
+                }
+                return candidate.trim();
+            }
+
+            const sceneHeadingMatch = candidate.match(/(?:^|\n)\s*(?:\*\*)?\s*(?:【场景\s+(?:\d+|EP\d+_SC\d+)[^】]*】|\*\*【场景\s+(?:\d+|EP\d+_SC\d+)[^】]*】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])/i);
+            if (sceneHeadingMatch?.index >= 0 && sceneHeadingMatch.index < 200) {
                 candidate = candidate.slice(sceneHeadingMatch.index).trim();
             }
 
-            const endMarkerMatch = candidate.match(/^\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
-            const fallbackEndMarkerMatch = candidate.match(/^\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
+            const endMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
+            const fallbackEndMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
             if (endMarkerMatch?.index >= 0) {
                 candidate = candidate.slice(0, endMarkerMatch.index).trim();
             } else if (fallbackEndMarkerMatch?.index >= 0) {

@@ -126,12 +126,38 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
             return candidate[start_idx:end_idx_abs].strip()
         return candidate[start_idx:].strip()
 
+    if scenes_start:
+        start_idx = scenes_start.start()
+        after_start = candidate[scenes_start.end():]
+        scenes_end = re.search(r"`?\[SCENES_BLOCK_END\]`?", after_start, flags=re.IGNORECASE)
+        if scenes_end:
+            end_idx_abs = scenes_start.end() + scenes_end.end()
+            return candidate[start_idx:end_idx_abs].strip()
+        return candidate[start_idx:].strip()
+
+    if re.search(r"\[SCENE_START:", candidate, flags=re.IGNORECASE):
+        end_marker = re.search(
+            r"(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        fallback_end_marker = re.search(
+            r"(?:^|\n)\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*\"project_visual_backfill\"\s*:)",
+            candidate,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if end_marker and end_marker.start() > 0:
+            candidate = candidate[: end_marker.start()].strip()
+        elif fallback_end_marker and fallback_end_marker.start() > 0:
+            candidate = candidate[: fallback_end_marker.start()].strip()
+        return candidate.strip()
+
     scene_heading = re.search(
-        r"(?:^|\n)\s*(?:\*\*)?\s*(?:【场景\s*[^\n]+】|\*\*【场景\s*[^\n]+】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])",
+        r"(?:^|\n)\s*(?:\*\*)?\s*(?:【场景\s+(?:\d+|EP\d+_SC\d+)[^】]*】|\*\*【场景\s+(?:\d+|EP\d+_SC\d+)[^】]*】\*\*|Scene\s*\d+\s*[:：]|\[Scene\s*\d+[^\n]*\])",
         candidate,
         flags=re.IGNORECASE,
     )
-    if scene_heading and scene_heading.start() >= 0:
+    if scene_heading and scene_heading.start() >= 0 and scene_heading.start() < 200:
         candidate = candidate[scene_heading.start():].strip()
 
     end_marker = re.search(
