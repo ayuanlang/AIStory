@@ -32951,6 +32951,7 @@ class VoiceGenerationRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     project_id: Optional[int] = None
+    entity_id: Optional[int] = None
     shot_id: Optional[int] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
@@ -32960,6 +32961,31 @@ class VoiceGenerationRequest(BaseModel):
     language_code: Optional[str] = None
     project_language: Optional[str] = None
     seed: Optional[int] = None
+    provider_options: Optional[Dict[str, Any]] = None
+    # KIE Suno music generation (entity reference audio)
+    custom_mode: Optional[bool] = None
+    customMode: Optional[bool] = None
+    instrumental: Optional[bool] = None
+    suno_model: Optional[str] = None
+    sunoModel: Optional[str] = None
+    suno_style: Optional[str] = None
+    sunoStyle: Optional[str] = None
+    suno_title: Optional[str] = None
+    sunoTitle: Optional[str] = None
+    negative_tags: Optional[str] = None
+    negativeTags: Optional[str] = None
+    vocal_gender: Optional[str] = None
+    vocalGender: Optional[str] = None
+    style_weight: Optional[float] = None
+    styleWeight: Optional[float] = None
+    weirdness_constraint: Optional[float] = None
+    weirdnessConstraint: Optional[float] = None
+    audio_weight: Optional[float] = None
+    audioWeight: Optional[float] = None
+    persona_id: Optional[str] = None
+    personaId: Optional[str] = None
+    persona_model: Optional[str] = None
+    personaModel: Optional[str] = None
 
 
 _DEFAULT_FRAME_INTEGRITY_NEGATIVE_PROMPT = (
@@ -32995,6 +33021,50 @@ def _normalize_seed_value(value: Any) -> Optional[int]:
     if seed_num <= 0 or seed_num > 2147483647:
         return None
     return seed_num
+
+
+def _is_suno_voice_runtime(resolved_model: Optional[str], provider_options: Optional[Dict[str, Any]] = None) -> bool:
+    model_text = str(resolved_model or "").strip().lower()
+    if "suno" in model_text:
+        return True
+    opts = provider_options if isinstance(provider_options, dict) else {}
+    for key in ("customMode", "custom_mode", "suno_model", "sunoModel", "suno_style", "sunoStyle", "suno_title", "sunoTitle"):
+        if opts.get(key) not in (None, ""):
+            return True
+    return False
+
+
+def _build_voice_suno_provider_options(req: VoiceGenerationRequest) -> Dict[str, Any]:
+    opts: Dict[str, Any] = {}
+    raw_provider_options = getattr(req, "provider_options", None)
+    if isinstance(raw_provider_options, dict):
+        opts.update(raw_provider_options)
+
+    def _set_if_present(target_key: str, *source_keys: str) -> None:
+        for source_key in source_keys:
+            value = getattr(req, source_key, None)
+            if value not in (None, ""):
+                opts[target_key] = value
+                return
+
+    _set_if_present("customMode", "customMode", "custom_mode")
+    _set_if_present("instrumental", "instrumental")
+    _set_if_present("suno_model", "suno_model", "sunoModel")
+    _set_if_present("suno_style", "suno_style", "sunoStyle")
+    _set_if_present("suno_title", "suno_title", "sunoTitle")
+    _set_if_present("negativeTags", "negativeTags", "negative_tags")
+    _set_if_present("vocalGender", "vocalGender", "vocal_gender")
+    _set_if_present("styleWeight", "styleWeight", "style_weight")
+    _set_if_present("weirdnessConstraint", "weirdnessConstraint", "weirdness_constraint")
+    _set_if_present("audioWeight", "audioWeight", "audio_weight")
+    _set_if_present("personaId", "personaId", "persona_id")
+    _set_if_present("personaModel", "personaModel", "persona_model")
+
+    entity_id = _normalize_seed_value(getattr(req, "entity_id", None))
+    if entity_id:
+        opts["entity_id"] = int(entity_id)
+        opts["__entity_id"] = int(entity_id)
+    return opts
 
 
 def _resolve_project_id_for_generation(req: Any, db: Session) -> Optional[int]:
@@ -37695,7 +37765,7 @@ async def generate_voice_endpoint(
         extracted_dialogue_lines = [line for line in str(extracted_dialogue or "").splitlines() if str(line or "").strip()]
         has_explicit_dialogue = bool(extracted_dialogue_lines)
 
-        provider_options: Dict[str, Any] = {}
+        provider_options: Dict[str, Any] = _build_voice_suno_provider_options(req)
         planned_payload: Dict[str, Any] = {}
         planner_system_prompt = ""
         planner_user_prompt = ""
@@ -37703,8 +37773,9 @@ async def generate_voice_endpoint(
         effective_prompt = stable_prompt
         explicit_language_code = _normalize_language_code(req.language_code)
         explicit_project_language = str(req.project_language or "").strip()
+        is_suno_voice = _is_suno_voice_runtime(reserve_model, provider_options)
 
-        if bool(req.use_llm_param_planning):
+        if bool(req.use_llm_param_planning) and not is_suno_voice:
             # Strict mode: voice TTS input must come from planner-extracted dialogue only.
             effective_prompt = ""
             planner_system_prompt, planner_user_prompt, planner_prompt_meta = _build_voice_tts_planner_prompts(stable_prompt)
@@ -37871,6 +37942,8 @@ async def generate_voice_endpoint(
         for field_name, (min_key, max_key, default_min, default_max) in voice_numeric_fields.items():
             if provider_options.get(field_name) is None:
                 continue
+            if is_suno_voice and field_name == "style":
+                continue
             min_value = _read_api_capability_number(pre_api_cfg, min_key)
             max_value = _read_api_capability_number(pre_api_cfg, max_key)
             effective_min = default_min if min_value is None else float(min_value)
@@ -37898,18 +37971,19 @@ async def generate_voice_endpoint(
         )
 
         # Final strict gate before provider submission: never send non-dialogue text.
-        final_dialogue_prompt = _extract_dialogue_text_for_tts(provider_options.get("text") or effective_prompt)
-        if bool(req.use_llm_param_planning) and not str(final_dialogue_prompt or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail="No valid dialogue remained after final sanitization; voice generation cancelled",
-            )
-        if str(final_dialogue_prompt or "").strip():
-            effective_prompt = str(final_dialogue_prompt).strip()
-            provider_options["text"] = effective_prompt
-            provider_options["prompt"] = effective_prompt
-            provider_options["__voice_submit_text"] = effective_prompt
-            provider_options["__voice_strict_text_only"] = bool(req.use_llm_param_planning)
+        if not is_suno_voice:
+            final_dialogue_prompt = _extract_dialogue_text_for_tts(provider_options.get("text") or effective_prompt)
+            if bool(req.use_llm_param_planning) and not str(final_dialogue_prompt or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="No valid dialogue remained after final sanitization; voice generation cancelled",
+                )
+            if str(final_dialogue_prompt or "").strip():
+                effective_prompt = str(final_dialogue_prompt).strip()
+                provider_options["text"] = effective_prompt
+                provider_options["prompt"] = effective_prompt
+                provider_options["__voice_submit_text"] = effective_prompt
+                provider_options["__voice_strict_text_only"] = bool(req.use_llm_param_planning)
 
         logger.info(
             "[GenerateVoice] final submit text | user_id=%s prompt_len=%s text_len=%s preview=%s",

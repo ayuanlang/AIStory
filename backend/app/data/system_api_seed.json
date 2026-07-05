@@ -3706,7 +3706,7 @@
     },
     {
       "name": "Kie Suno",
-      "category": "Audio",
+      "category": "Voice",
       "provider": "kie",
       "base_url": "https://api.kie.ai",
       "model": "suno",
@@ -3716,18 +3716,28 @@
         ]
       },
       "config": {
-        "endpoint": "https://api.kie.ai/api/v1/jobs/createTask",
-        "query_endpoint": "https://api.kie.ai/api/v1/jobs/recordInfo",
+        "endpoint": "https://api.kie.ai/api/v1/generate",
+        "query_endpoint": "https://api.kie.ai/api/v1/record-info",
+        "suno_endpoint": "https://api.kie.ai/api/v1/generate",
+        "suno_query_endpoint": "https://api.kie.ai/api/v1/record-info",
         "credits_endpoint": "https://api.kie.ai/api/v1/user/credits",
         "credits_endpoint_v2": "https://api.kie.ai/api/v1/chat/credit",
+        "runtime_activation": "audio_kie_compatible",
+        "customMode": true,
+        "instrumental": true,
+        "suno_model": "V4",
         "deprecated": false,
         "provider_api_key_strategy": "random",
-        "is_deprecated": true,
-        "disable_api": true
+        "is_deprecated": false,
+        "disable_api": false
       },
       "deprecated": false,
-      "is_active": false,
-      "tags": null
+      "is_active": true,
+      "tags": [
+        "suno",
+        "music",
+        "reference-audio"
+      ]
     },
     {
       "name": "RunningHub SparkVideo 2.0 (I2V)",

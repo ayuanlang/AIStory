@@ -550,6 +550,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         video: 'generate_entity_reference_audio_video',
         audio: 'generate_entity_reference_audio_audio',
     });
+    const [entityRefAudioGenMode, setEntityRefAudioGenMode] = useState('suno');
+    const [entityRefAudioSunoByEntity, setEntityRefAudioSunoByEntity] = useState({});
+    const [entityRefAudioSunoModel, setEntityRefAudioSunoModel] = useState('V4');
+    const [entityRefAudioSunoStyle, setEntityRefAudioSunoStyle] = useState('Classical');
+    const [entityRefAudioSunoTitle, setEntityRefAudioSunoTitle] = useState('');
+    const [entityRefAudioSunoInstrumental, setEntityRefAudioSunoInstrumental] = useState(true);
+    const [entityRefAudioSunoCustomMode, setEntityRefAudioSunoCustomMode] = useState(true);
+    const [entityRefAudioSunoNegativeTags, setEntityRefAudioSunoNegativeTags] = useState('');
+    const [entityRefAudioSunoVocalGender, setEntityRefAudioSunoVocalGender] = useState('m');
+    const [entityRefAudioSunoStyleWeight, setEntityRefAudioSunoStyleWeight] = useState(0.65);
+    const [entityRefAudioSunoWeirdness, setEntityRefAudioSunoWeirdness] = useState(0.65);
+    const [entityRefAudioSunoAudioWeight, setEntityRefAudioSunoAudioWeight] = useState(0.65);
+    const [entityRefAudioSunoPersonaId, setEntityRefAudioSunoPersonaId] = useState('');
+    const [entityRefAudioSunoPersonaModel, setEntityRefAudioSunoPersonaModel] = useState('');
     const [advancedInstruction, setAdvancedInstruction] = useState('');
     const [isAdvancedOptimizing, setIsAdvancedOptimizing] = useState(false);
 
@@ -630,6 +644,55 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         { value: 'generate_entity_reference_audio', label: t('兼容路由', 'Legacy Route') },
     ]), [t]);
 
+    const ENTITY_REF_AUDIO_GEN_MODE_OPTIONS = useMemo(() => ([
+        { value: 'suno', label: t('Suno 音乐生成 (KIE)', 'Suno Music (KIE)') },
+        { value: 'tts', label: t('配音/TTS', 'Voice / TTS') },
+    ]), [t]);
+
+    const ENTITY_REF_AUDIO_SUNO_MODEL_OPTIONS = useMemo(() => ([
+        { value: 'V4', label: 'V4' },
+        { value: 'V4_5', label: 'V4.5' },
+        { value: 'V5', label: 'V5' },
+    ]), []);
+
+    const ENTITY_REF_AUDIO_SUNO_STYLE_OPTIONS = useMemo(() => (
+        ['Classical', 'Pop', 'Jazz', 'Rock', 'Electronic', 'Ambient', 'Cinematic', 'Folk', 'R&B', 'Hip Hop']
+            .map((style) => ({ value: style, label: style }))
+    ), []);
+
+    const defaultEntityRefAudioSunoSettings = useCallback((entity) => ({
+        customMode: true,
+        instrumental: true,
+        suno_model: 'V4',
+        suno_style: 'Classical',
+        suno_title: String(entity?.name || '').trim() ? `${String(entity.name).trim()} Reference Theme` : 'Entity Reference Theme',
+        negativeTags: 'Heavy Metal, Upbeat Drums',
+        vocalGender: 'm',
+        styleWeight: 0.65,
+        weirdnessConstraint: 0.65,
+        audioWeight: 0.65,
+        personaId: '',
+        personaModel: '',
+    }), []);
+
+    const buildDefaultEntityRefAudioSunoPrompt = useCallback((entity, profileOverrides = null, sunoOverrides = null) => {
+        const defaultProfile = resolveDefaultEntityRefAudioProfile(entity);
+        const activeProfile = {
+            identity: String(profileOverrides?.identity || '').trim() || defaultProfile.identity,
+            tone: String(profileOverrides?.tone || '').trim() || defaultProfile.tone,
+            pace: String(profileOverrides?.pace || '').trim() || defaultProfile.pace,
+            emotion: String(profileOverrides?.emotion || '').trim() || defaultProfile.emotion,
+        };
+        const entityName = String(entity?.name || activeProfile.identity || 'Character').trim();
+        const roleText = String(entity?.role || entity?.archetype || activeProfile.identity || '').trim();
+        const styleText = String(sunoOverrides?.suno_style || 'Classical').trim() || 'Classical';
+        const emotionText = activeProfile.emotion;
+        return t(
+            `为角色「${entityName}」生成参考音频：${styleText}风格，情绪基调为${emotionText}，适合${roleText || '该角色'}的人物气质与叙事场景。节奏${activeProfile.pace}，整体${activeProfile.tone}，可用于视频参考与角色声线/氛围锚点。`,
+            `Generate reference audio for character "${entityName}": ${styleText} style with emotional tone "${emotionText}", suited to ${roleText || 'this character'} and narrative scenes. Pace: ${activeProfile.pace}. Overall timbre: ${activeProfile.tone}. Suitable as video reference and character mood anchor.`
+        );
+    }, [resolveDefaultEntityRefAudioProfile, t]);
+
     const entityRefAudioPromptStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.entityRefAudioPromptByEntity.${pid}` : 'aistory.entityRefAudioPromptByEntity.global';
@@ -643,6 +706,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const entityRefAudioProfileStorageKey = useMemo(() => {
         const pid = String(projectId || '').trim();
         return pid ? `aistory.entityRefAudioProfileByEntity.${pid}` : 'aistory.entityRefAudioProfileByEntity.global';
+    }, [projectId]);
+
+    const entityRefAudioSunoStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.entityRefAudioSunoByEntity.${pid}` : 'aistory.entityRefAudioSunoByEntity.global';
+    }, [projectId]);
+
+    const entityRefAudioGenModeStorageKey = useMemo(() => {
+        const pid = String(projectId || '').trim();
+        return pid ? `aistory.entityRefAudioGenMode.${pid}` : 'aistory.entityRefAudioGenMode.global';
     }, [projectId]);
 
     useEffect(() => {
@@ -718,6 +791,46 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [entityRefAudioFunctionByTab, entityRefAudioFunctionStorageKey]);
 
     useEffect(() => {
+        try {
+            const raw = localStorage.getItem(entityRefAudioSunoStorageKey);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                setEntityRefAudioSunoByEntity(parsed);
+            }
+        } catch {}
+    }, [entityRefAudioSunoStorageKey]);
+
+    useEffect(() => {
+        try {
+            const cleaned = Object.fromEntries(
+                Object.entries(entityRefAudioSunoByEntity || {}).filter(([k, v]) => String(k || '').trim() && v && typeof v === 'object')
+            );
+            if (Object.keys(cleaned).length === 0) {
+                localStorage.removeItem(entityRefAudioSunoStorageKey);
+            } else {
+                localStorage.setItem(entityRefAudioSunoStorageKey, JSON.stringify(cleaned));
+            }
+        } catch {}
+    }, [entityRefAudioSunoByEntity, entityRefAudioSunoStorageKey]);
+
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem(entityRefAudioGenModeStorageKey);
+            const nextMode = String(raw || '').trim();
+            if (nextMode === 'suno' || nextMode === 'tts') {
+                setEntityRefAudioGenMode(nextMode);
+            }
+        } catch {}
+    }, [entityRefAudioGenModeStorageKey]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(entityRefAudioGenModeStorageKey, entityRefAudioGenMode);
+        } catch {}
+    }, [entityRefAudioGenMode, entityRefAudioGenModeStorageKey]);
+
+    useEffect(() => {
         const currentEntityKey = String(viewingEntity?.id || '').trim();
         if (!currentEntityKey) {
             setEntityRefAudioPrompt('');
@@ -725,6 +838,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             setEntityRefAudioTone('');
             setEntityRefAudioPace('');
             setEntityRefAudioEmotion('');
+            setEntityRefAudioSunoModel('V4');
+            setEntityRefAudioSunoStyle('Classical');
+            setEntityRefAudioSunoTitle('');
+            setEntityRefAudioSunoInstrumental(true);
+            setEntityRefAudioSunoCustomMode(true);
+            setEntityRefAudioSunoNegativeTags('');
+            setEntityRefAudioSunoVocalGender('m');
+            setEntityRefAudioSunoStyleWeight(0.65);
+            setEntityRefAudioSunoWeirdness(0.65);
+            setEntityRefAudioSunoAudioWeight(0.65);
+            setEntityRefAudioSunoPersonaId('');
+            setEntityRefAudioSunoPersonaModel('');
             return;
         }
         const defaultProfile = resolveDefaultEntityRefAudioProfile(viewingEntity);
@@ -739,9 +864,37 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setEntityRefAudioTone(activeProfile.tone);
         setEntityRefAudioPace(activeProfile.pace);
         setEntityRefAudioEmotion(activeProfile.emotion);
+
+        const defaultSuno = defaultEntityRefAudioSunoSettings(viewingEntity);
+        const savedSuno = entityRefAudioSunoByEntity?.[currentEntityKey] || {};
+        const activeSuno = {
+            ...defaultSuno,
+            ...savedSuno,
+        };
+        setEntityRefAudioSunoModel(String(activeSuno.suno_model || 'V4'));
+        setEntityRefAudioSunoStyle(String(activeSuno.suno_style || 'Classical'));
+        setEntityRefAudioSunoTitle(String(activeSuno.suno_title || defaultSuno.suno_title || ''));
+        setEntityRefAudioSunoInstrumental(activeSuno.instrumental !== false);
+        setEntityRefAudioSunoCustomMode(activeSuno.customMode !== false);
+        setEntityRefAudioSunoNegativeTags(String(activeSuno.negativeTags || defaultSuno.negativeTags || ''));
+        setEntityRefAudioSunoVocalGender(String(activeSuno.vocalGender || 'm'));
+        setEntityRefAudioSunoStyleWeight(Number(activeSuno.styleWeight ?? 0.65));
+        setEntityRefAudioSunoWeirdness(Number(activeSuno.weirdnessConstraint ?? 0.65));
+        setEntityRefAudioSunoAudioWeight(Number(activeSuno.audioWeight ?? 0.65));
+        setEntityRefAudioSunoPersonaId(String(activeSuno.personaId || ''));
+        setEntityRefAudioSunoPersonaModel(String(activeSuno.personaModel || ''));
+
         const saved = String(entityRefAudioPromptByEntity?.[currentEntityKey] || '').trim();
-        setEntityRefAudioPrompt(saved || buildDefaultEntityRefAudioPrompt(viewingEntity, activeProfile));
-    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioProfileByEntity, entityRefAudioPromptByEntity, resolveDefaultEntityRefAudioProfile, viewingEntity]);
+        if (saved) {
+            setEntityRefAudioPrompt(saved);
+            return;
+        }
+        if (entityRefAudioGenMode === 'suno') {
+            setEntityRefAudioPrompt(buildDefaultEntityRefAudioSunoPrompt(viewingEntity, activeProfile, activeSuno));
+        } else {
+            setEntityRefAudioPrompt(buildDefaultEntityRefAudioPrompt(viewingEntity, activeProfile));
+        }
+    }, [buildDefaultEntityRefAudioPrompt, buildDefaultEntityRefAudioSunoPrompt, defaultEntityRefAudioSunoSettings, entityRefAudioGenMode, entityRefAudioProfileByEntity, entityRefAudioPromptByEntity, entityRefAudioSunoByEntity, resolveDefaultEntityRefAudioProfile, viewingEntity]);
     
     // Analyzing state mapping (entityId -> timestamp)
     const subjectAnalyzingStorageKey = useMemo(() => {
@@ -3850,6 +4003,56 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }));
     }, [viewingEntity?.id]);
 
+    const collectEntityRefAudioSunoSettings = useCallback(() => ({
+        customMode: Boolean(entityRefAudioSunoCustomMode),
+        instrumental: Boolean(entityRefAudioSunoInstrumental),
+        suno_model: String(entityRefAudioSunoModel || 'V4').trim() || 'V4',
+        suno_style: String(entityRefAudioSunoStyle || 'Classical').trim() || 'Classical',
+        suno_title: String(entityRefAudioSunoTitle || '').trim(),
+        negativeTags: String(entityRefAudioSunoNegativeTags || '').trim(),
+        vocalGender: String(entityRefAudioSunoVocalGender || 'm').trim() || 'm',
+        styleWeight: Number(entityRefAudioSunoStyleWeight ?? 0.65),
+        weirdnessConstraint: Number(entityRefAudioSunoWeirdness ?? 0.65),
+        audioWeight: Number(entityRefAudioSunoAudioWeight ?? 0.65),
+        personaId: String(entityRefAudioSunoPersonaId || '').trim(),
+        personaModel: String(entityRefAudioSunoPersonaModel || '').trim(),
+    }), [
+        entityRefAudioSunoAudioWeight,
+        entityRefAudioSunoCustomMode,
+        entityRefAudioSunoInstrumental,
+        entityRefAudioSunoModel,
+        entityRefAudioSunoNegativeTags,
+        entityRefAudioSunoPersonaId,
+        entityRefAudioSunoPersonaModel,
+        entityRefAudioSunoStyle,
+        entityRefAudioSunoStyleWeight,
+        entityRefAudioSunoTitle,
+        entityRefAudioSunoVocalGender,
+        entityRefAudioSunoWeirdness,
+    ]);
+
+    const persistEntityRefAudioSuno = useCallback((nextSuno) => {
+        const currentEntityKey = String(viewingEntity?.id || '').trim();
+        if (!currentEntityKey) return;
+        setEntityRefAudioSunoByEntity((prev) => ({
+            ...prev,
+            [currentEntityKey]: {
+                customMode: nextSuno?.customMode !== false,
+                instrumental: nextSuno?.instrumental !== false,
+                suno_model: String(nextSuno?.suno_model || 'V4').trim() || 'V4',
+                suno_style: String(nextSuno?.suno_style || 'Classical').trim() || 'Classical',
+                suno_title: String(nextSuno?.suno_title || '').trim(),
+                negativeTags: String(nextSuno?.negativeTags || '').trim(),
+                vocalGender: String(nextSuno?.vocalGender || 'm').trim() || 'm',
+                styleWeight: Number(nextSuno?.styleWeight ?? 0.65),
+                weirdnessConstraint: Number(nextSuno?.weirdnessConstraint ?? 0.65),
+                audioWeight: Number(nextSuno?.audioWeight ?? 0.65),
+                personaId: String(nextSuno?.personaId || '').trim(),
+                personaModel: String(nextSuno?.personaModel || '').trim(),
+            },
+        }));
+    }, [viewingEntity?.id]);
+
     const handleRegenerateEntityRefAudioPrompt = useCallback(() => {
         const nextProfile = {
             identity: String(entityRefAudioIdentity || '').trim(),
@@ -3858,10 +4061,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             emotion: String(entityRefAudioEmotion || '').trim(),
         };
         persistEntityRefAudioProfile(nextProfile);
-        const nextPrompt = buildDefaultEntityRefAudioPrompt(viewingEntity, nextProfile);
+        const nextSuno = collectEntityRefAudioSunoSettings();
+        persistEntityRefAudioSuno(nextSuno);
+        const nextPrompt = entityRefAudioGenMode === 'suno'
+            ? buildDefaultEntityRefAudioSunoPrompt(viewingEntity, nextProfile, nextSuno)
+            : buildDefaultEntityRefAudioPrompt(viewingEntity, nextProfile);
         persistEntityRefAudioPrompt(nextPrompt);
-        showSubjectNotification(t('已按当前配音要素重建参考文案。', 'Reference prompt rebuilt from current dubbing parameters.'), 'success');
-    }, [buildDefaultEntityRefAudioPrompt, entityRefAudioEmotion, entityRefAudioIdentity, entityRefAudioPace, entityRefAudioTone, persistEntityRefAudioProfile, persistEntityRefAudioPrompt, showSubjectNotification, t, viewingEntity]);
+        showSubjectNotification(
+            entityRefAudioGenMode === 'suno'
+                ? t('已按当前 Suno 参数重建参考文案。', 'Reference prompt rebuilt from current Suno parameters.')
+                : t('已按当前配音要素重建参考文案。', 'Reference prompt rebuilt from current dubbing parameters.'),
+            'success'
+        );
+    }, [buildDefaultEntityRefAudioPrompt, buildDefaultEntityRefAudioSunoPrompt, collectEntityRefAudioSunoSettings, entityRefAudioEmotion, entityRefAudioGenMode, entityRefAudioIdentity, entityRefAudioPace, entityRefAudioTone, persistEntityRefAudioProfile, persistEntityRefAudioPrompt, persistEntityRefAudioSuno, showSubjectNotification, t, viewingEntity]);
 
     const extractGeneratedAudioUrl = useCallback((payload) => {
         const visited = new Set();
@@ -3904,14 +4116,42 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableTab = sourceTab === 'video' ? 'video' : 'audio';
         const functionName = String(entityRefAudioFunctionByTab?.[stableTab] || '').trim() || (stableTab === 'video' ? 'generate_entity_reference_audio_video' : 'generate_entity_reference_audio_audio');
         const selectedSystemApiId = Number(localStorage.getItem(`func_api_${functionName}`) || 0) || null;
+        const nextSuno = collectEntityRefAudioSunoSettings();
+        persistEntityRefAudioSuno(nextSuno);
 
         setIsGeneratingEntityRefAudio(true);
         try {
-            const result = await generateVoice(stablePrompt, null, null, {
+            const voiceOptions = {
                 function_name: functionName,
+                asset_type: 'subject',
                 ...(selectedSystemApiId ? { system_api_id: selectedSystemApiId } : {}),
                 ...(projectId ? { project_id: projectId } : {}),
-            });
+                ...(viewingEntity?.id ? { entity_id: viewingEntity.id } : {}),
+            };
+            if (entityRefAudioGenMode === 'suno') {
+                Object.assign(voiceOptions, {
+                    customMode: nextSuno.customMode,
+                    custom_mode: nextSuno.customMode,
+                    instrumental: nextSuno.instrumental,
+                    suno_model: nextSuno.suno_model,
+                    suno_style: nextSuno.suno_style,
+                    suno_title: nextSuno.suno_title || `${String(viewingEntity?.name || 'Entity').trim()} Reference Theme`,
+                    negativeTags: nextSuno.negativeTags,
+                    negative_tags: nextSuno.negativeTags,
+                    vocalGender: nextSuno.vocalGender,
+                    vocal_gender: nextSuno.vocalGender,
+                    styleWeight: nextSuno.styleWeight,
+                    style_weight: nextSuno.styleWeight,
+                    weirdnessConstraint: nextSuno.weirdnessConstraint,
+                    weirdness_constraint: nextSuno.weirdnessConstraint,
+                    audioWeight: nextSuno.audioWeight,
+                    audio_weight: nextSuno.audioWeight,
+                    ...(nextSuno.personaId ? { personaId: nextSuno.personaId, persona_id: nextSuno.personaId } : {}),
+                    ...(nextSuno.personaModel ? { personaModel: nextSuno.personaModel, persona_model: nextSuno.personaModel } : {}),
+                });
+            }
+
+            const result = await generateVoice(stablePrompt, null, null, voiceOptions);
 
             const nextAudioUrl = extractGeneratedAudioUrl(result);
             if (!nextAudioUrl) {
@@ -3927,7 +4167,261 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         } finally {
             setIsGeneratingEntityRefAudio(false);
         }
-    }, [entityRefAudioFunctionByTab, entityRefAudioPrompt, extractGeneratedAudioUrl, handleFieldUpdate, projectId, showSubjectNotification, t]);
+    }, [collectEntityRefAudioSunoSettings, entityRefAudioFunctionByTab, entityRefAudioGenMode, entityRefAudioPrompt, extractGeneratedAudioUrl, handleFieldUpdate, persistEntityRefAudioSuno, projectId, showSubjectNotification, t, viewingEntity?.id, viewingEntity?.name]);
+
+    const renderEntityRefAudioGenerationPanel = useCallback((sourceTab = 'audio') => {
+        const tabKey = sourceTab === 'video' ? 'video' : 'audio';
+        const functionName = entityRefAudioFunctionByTab?.[tabKey] || (tabKey === 'video' ? 'generate_entity_reference_audio_video' : 'generate_entity_reference_audio_audio');
+        const updateSuno = (patch) => {
+            const merged = { ...collectEntityRefAudioSunoSettings(), ...patch };
+            if (patch.suno_model !== undefined) setEntityRefAudioSunoModel(String(patch.suno_model || 'V4'));
+            if (patch.suno_style !== undefined) setEntityRefAudioSunoStyle(String(patch.suno_style || 'Classical'));
+            if (patch.suno_title !== undefined) setEntityRefAudioSunoTitle(String(patch.suno_title || ''));
+            if (patch.customMode !== undefined) setEntityRefAudioSunoCustomMode(Boolean(patch.customMode));
+            if (patch.instrumental !== undefined) setEntityRefAudioSunoInstrumental(Boolean(patch.instrumental));
+            if (patch.negativeTags !== undefined) setEntityRefAudioSunoNegativeTags(String(patch.negativeTags || ''));
+            if (patch.vocalGender !== undefined) setEntityRefAudioSunoVocalGender(String(patch.vocalGender || 'm'));
+            if (patch.styleWeight !== undefined) setEntityRefAudioSunoStyleWeight(Number(patch.styleWeight));
+            if (patch.weirdnessConstraint !== undefined) setEntityRefAudioSunoWeirdness(Number(patch.weirdnessConstraint));
+            if (patch.audioWeight !== undefined) setEntityRefAudioSunoAudioWeight(Number(patch.audioWeight));
+            if (patch.personaId !== undefined) setEntityRefAudioSunoPersonaId(String(patch.personaId || ''));
+            if (patch.personaModel !== undefined) setEntityRefAudioSunoPersonaModel(String(patch.personaModel || ''));
+            persistEntityRefAudioSuno(merged);
+        };
+
+        return (
+            <div className="space-y-2 pt-2 border-t border-white/5">
+                <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-[10px] font-bold uppercase text-muted-foreground">
+                        {t('参考音频生成', 'Reference Audio Generation')}
+                    </div>
+                    <select
+                        value={entityRefAudioGenMode}
+                        onChange={(e) => {
+                            const nextMode = String(e.target.value || '').trim() === 'tts' ? 'tts' : 'suno';
+                            setEntityRefAudioGenMode(nextMode);
+                        }}
+                        className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
+                        title={t('生成模式', 'Generation mode')}
+                    >
+                        {ENTITY_REF_AUDIO_GEN_MODE_OPTIONS.map((opt) => (
+                            <option key={`${tabKey}-mode-${opt.value}`} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                    <select
+                        value={functionName}
+                        onChange={(e) => {
+                            const next = String(e.target.value || '').trim() || functionName;
+                            setEntityRefAudioFunctionByTab((prev) => ({ ...prev, [tabKey]: next }));
+                        }}
+                        className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
+                        title={t('选择生成参考音频所用路由', 'Select function route for reference audio generation')}
+                    >
+                        {ENTITY_REF_AUDIO_FUNCTION_OPTIONS.map((opt) => (
+                            <option key={`${tabKey}-${opt.value}`} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                    <FunctionApiSelector
+                        functionName={functionName}
+                        configs={functionApiConfigs}
+                        label={t('功能API: ', 'Function API: ')}
+                    />
+                </div>
+                <textarea
+                    value={entityRefAudioPrompt}
+                    onChange={(e) => persistEntityRefAudioPrompt(e.target.value)}
+                    placeholder={entityRefAudioGenMode === 'suno'
+                        ? t('输入 Suno 音乐描述（将写入 audio_url）...', 'Enter Suno music description (result will fill audio_url)...')
+                        : t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
+                    className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
+                />
+                {entityRefAudioGenMode === 'suno' ? (
+                    <div className="space-y-2 rounded border border-white/10 bg-black/20 p-2">
+                        <div className="text-[10px] font-bold uppercase text-muted-foreground">{t('Suno 参数', 'Suno Parameters')}</div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                            <select
+                                value={entityRefAudioSunoModel}
+                                onChange={(e) => updateSuno({ suno_model: e.target.value })}
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                title={t('Suno 模型版本', 'Suno model version')}
+                            >
+                                {ENTITY_REF_AUDIO_SUNO_MODEL_OPTIONS.map((opt) => (
+                                    <option key={`${tabKey}-suno-model-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </select>
+                            <select
+                                value={entityRefAudioSunoStyle}
+                                onChange={(e) => updateSuno({ suno_style: e.target.value })}
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                title={t('音乐风格', 'Music style')}
+                            >
+                                {ENTITY_REF_AUDIO_SUNO_STYLE_OPTIONS.map((opt) => (
+                                    <option key={`${tabKey}-suno-style-${opt.value}`} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </select>
+                            <input
+                                type="text"
+                                value={entityRefAudioSunoTitle}
+                                onChange={(e) => updateSuno({ suno_title: e.target.value })}
+                                placeholder={t('曲目标题', 'Track title')}
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30 md:col-span-2"
+                            />
+                            <label className="inline-flex items-center gap-1.5 text-xs text-white/80">
+                                <input type="checkbox" checked={entityRefAudioSunoCustomMode} onChange={(e) => updateSuno({ customMode: e.target.checked })} />
+                                customMode
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 text-xs text-white/80">
+                                <input type="checkbox" checked={entityRefAudioSunoInstrumental} onChange={(e) => updateSuno({ instrumental: e.target.checked })} />
+                                {t('纯音乐', 'Instrumental')}
+                            </label>
+                            {!entityRefAudioSunoInstrumental && (
+                                <select
+                                    value={entityRefAudioSunoVocalGender}
+                                    onChange={(e) => updateSuno({ vocalGender: e.target.value })}
+                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
+                                    title={t('人声性别', 'Vocal gender')}
+                                >
+                                    <option value="m">{t('男声', 'Male')}</option>
+                                    <option value="f">{t('女声', 'Female')}</option>
+                                </select>
+                            )}
+                            <input
+                                type="text"
+                                value={entityRefAudioSunoNegativeTags}
+                                onChange={(e) => updateSuno({ negativeTags: e.target.value })}
+                                placeholder={t('负面标签（逗号分隔）', 'Negative tags (comma-separated)')}
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30 md:col-span-2"
+                            />
+                            <input
+                                type="text"
+                                value={entityRefAudioSunoPersonaId}
+                                onChange={(e) => updateSuno({ personaId: e.target.value })}
+                                placeholder="personaId"
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
+                            />
+                            <input
+                                type="text"
+                                value={entityRefAudioSunoPersonaModel}
+                                onChange={(e) => updateSuno({ personaModel: e.target.value })}
+                                placeholder="personaModel"
+                                className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
+                            />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <label className="text-[10px] text-white/70">
+                                styleWeight ({entityRefAudioSunoStyleWeight.toFixed(2)})
+                                <input type="range" min="0" max="1" step="0.01" value={entityRefAudioSunoStyleWeight} onChange={(e) => updateSuno({ styleWeight: Number(e.target.value) })} className="w-full" />
+                            </label>
+                            <label className="text-[10px] text-white/70">
+                                weirdnessConstraint ({entityRefAudioSunoWeirdness.toFixed(2)})
+                                <input type="range" min="0" max="1" step="0.01" value={entityRefAudioSunoWeirdness} onChange={(e) => updateSuno({ weirdnessConstraint: Number(e.target.value) })} className="w-full" />
+                            </label>
+                            <label className="text-[10px] text-white/70">
+                                audioWeight ({entityRefAudioSunoAudioWeight.toFixed(2)})
+                                <input type="range" min="0" max="1" step="0.01" value={entityRefAudioSunoAudioWeight} onChange={(e) => updateSuno({ audioWeight: Number(e.target.value) })} className="w-full" />
+                            </label>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                        <input
+                            type="text"
+                            value={entityRefAudioIdentity}
+                            onChange={(e) => {
+                                const next = e.target.value;
+                                setEntityRefAudioIdentity(next);
+                                persistEntityRefAudioProfile({
+                                    identity: next,
+                                    tone: entityRefAudioTone,
+                                    pace: entityRefAudioPace,
+                                    emotion: entityRefAudioEmotion,
+                                });
+                            }}
+                            placeholder={t('身份角色（如：守夜人）', 'Identity/role (e.g. night watchman)')}
+                            className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
+                        />
+                        <select value={entityRefAudioTone} onChange={(e) => {
+                            const next = String(e.target.value || '').trim();
+                            setEntityRefAudioTone(next);
+                            persistEntityRefAudioProfile({ identity: entityRefAudioIdentity, tone: next, pace: entityRefAudioPace, emotion: entityRefAudioEmotion });
+                        }} className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50">
+                            {ENTITY_REF_AUDIO_TONE_OPTIONS.map((opt) => (
+                                <option key={`${tabKey}-tone-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                        </select>
+                        <select value={entityRefAudioPace} onChange={(e) => {
+                            const next = String(e.target.value || '').trim();
+                            setEntityRefAudioPace(next);
+                            persistEntityRefAudioProfile({ identity: entityRefAudioIdentity, tone: entityRefAudioTone, pace: next, emotion: entityRefAudioEmotion });
+                        }} className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50">
+                            {ENTITY_REF_AUDIO_PACE_OPTIONS.map((opt) => (
+                                <option key={`${tabKey}-pace-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                        </select>
+                        <select value={entityRefAudioEmotion} onChange={(e) => {
+                            const next = String(e.target.value || '').trim();
+                            setEntityRefAudioEmotion(next);
+                            persistEntityRefAudioProfile({ identity: entityRefAudioIdentity, tone: entityRefAudioTone, pace: entityRefAudioPace, emotion: next });
+                        }} className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50">
+                            {ENTITY_REF_AUDIO_EMOTION_OPTIONS.map((opt) => (
+                                <option key={`${tabKey}-emotion-${opt.value}`} value={opt.value}>{opt.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
+                <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => handleRegenerateEntityRefAudioPrompt()} className="px-3 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white">
+                        {t('按参数重建文案', 'Rebuild Prompt by Params')}
+                    </button>
+                    <button
+                        type="button"
+                        disabled={isGeneratingEntityRefAudio}
+                        onClick={() => void handleGenerateEntityReferenceAudio(tabKey)}
+                        className="px-3 py-1.5 rounded text-xs font-bold bg-primary text-black hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                    >
+                        {isGeneratingEntityRefAudio ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        {isGeneratingEntityRefAudio ? t('生成中...', 'Generating...') : t('生成参考音频', 'Generate Reference Audio')}
+                    </button>
+                </div>
+            </div>
+        );
+    }, [
+        ENTITY_REF_AUDIO_EMOTION_OPTIONS,
+        ENTITY_REF_AUDIO_FUNCTION_OPTIONS,
+        ENTITY_REF_AUDIO_GEN_MODE_OPTIONS,
+        ENTITY_REF_AUDIO_PACE_OPTIONS,
+        ENTITY_REF_AUDIO_SUNO_MODEL_OPTIONS,
+        ENTITY_REF_AUDIO_SUNO_STYLE_OPTIONS,
+        ENTITY_REF_AUDIO_TONE_OPTIONS,
+        collectEntityRefAudioSunoSettings,
+        entityRefAudioEmotion,
+        entityRefAudioFunctionByTab,
+        entityRefAudioGenMode,
+        entityRefAudioIdentity,
+        entityRefAudioPace,
+        entityRefAudioPrompt,
+        entityRefAudioSunoAudioWeight,
+        entityRefAudioSunoCustomMode,
+        entityRefAudioSunoInstrumental,
+        entityRefAudioSunoModel,
+        entityRefAudioSunoNegativeTags,
+        entityRefAudioSunoPersonaId,
+        entityRefAudioSunoPersonaModel,
+        entityRefAudioSunoStyle,
+        entityRefAudioSunoStyleWeight,
+        entityRefAudioSunoTitle,
+        entityRefAudioSunoVocalGender,
+        entityRefAudioSunoWeirdness,
+        entityRefAudioTone,
+        functionApiConfigs,
+        handleGenerateEntityReferenceAudio,
+        handleRegenerateEntityRefAudioPrompt,
+        isGeneratingEntityRefAudio,
+        persistEntityRefAudioProfile,
+        persistEntityRefAudioPrompt,
+        persistEntityRefAudioSuno,
+        t,
+    ]);
 
     // Helper: Commit Create (Save manually)
     const handleCommitCreate = async () => {
@@ -7071,128 +7565,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 />
                                                             </label>
                                                         </div>
-                                                        <div className="space-y-2 pt-2 border-t border-white/5">
-                                                            <div className="flex flex-wrap items-center gap-2">
-                                                                <div className="text-[10px] font-bold uppercase text-muted-foreground">
-                                                                    {t('参考音频生成', 'Reference Audio Generation')}
-                                                                </div>
-                                                                <select
-                                                                    value={entityRefAudioFunctionByTab.video || 'generate_entity_reference_audio_video'}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim() || 'generate_entity_reference_audio_video';
-                                                                        setEntityRefAudioFunctionByTab((prev) => ({ ...prev, video: next }));
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
-                                                                    title={t('选择视频页生成参考音频所用路由', 'Select function route for video-tab reference audio generation')}
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_FUNCTION_OPTIONS.map((opt) => (
-                                                                        <option key={`video-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <FunctionApiSelector
-                                                                    functionName={entityRefAudioFunctionByTab.video || 'generate_entity_reference_audio_video'}
-                                                                    configs={functionApiConfigs}
-                                                                    label={t('功能API: ', 'Function API: ')}
-                                                                />
-                                                            </div>
-                                                            <textarea
-                                                                value={entityRefAudioPrompt}
-                                                                onChange={(e) => persistEntityRefAudioPrompt(e.target.value)}
-                                                                placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
-                                                                className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
-                                                            />
-                                                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    value={entityRefAudioIdentity}
-                                                                    onChange={(e) => {
-                                                                        const next = e.target.value;
-                                                                        setEntityRefAudioIdentity(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: next,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    placeholder={t('身份角色（如：守夜人）', 'Identity/role (e.g. night watchman)')}
-                                                                    title={t('身份角色说明', 'Identity/role description')}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
-                                                                />
-                                                                <select
-                                                                    value={entityRefAudioTone}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioTone(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: next,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_TONE_OPTIONS.map((opt) => (
-                                                                        <option key={`video-tone-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <select
-                                                                    value={entityRefAudioPace}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioPace(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: next,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_PACE_OPTIONS.map((opt) => (
-                                                                        <option key={`video-pace-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <select
-                                                                    value={entityRefAudioEmotion}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioEmotion(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: next,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_EMOTION_OPTIONS.map((opt) => (
-                                                                        <option key={`video-emotion-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                            </div>
-                                                            <div className="flex justify-end gap-2">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleRegenerateEntityRefAudioPrompt()}
-                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
-                                                                >
-                                                                    {t('按参数重建文案', 'Rebuild Prompt by Params')}
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    disabled={isGeneratingEntityRefAudio}
-                                                                    onClick={() => void handleGenerateEntityReferenceAudio('video')}
-                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-primary text-black hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
-                                                                >
-                                                                    {isGeneratingEntityRefAudio ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                                                                    {isGeneratingEntityRefAudio ? t('生成中...', 'Generating...') : t('生成参考音频', 'Generate Reference Audio')}
-                                                                </button>
-                                                            </div>
-                                                        </div>
+                                                        {renderEntityRefAudioGenerationPanel('video')}
                                                     </div>
                                                 );
                                             })()}
@@ -7274,128 +7647,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 />
                                                             </label>
                                                         </div>
-                                                        <div className="space-y-2 pt-2 border-t border-white/5">
-                                                            <div className="flex flex-wrap items-center gap-2">
-                                                                <div className="text-[10px] font-bold uppercase text-muted-foreground">
-                                                                    {t('参考音频生成', 'Reference Audio Generation')}
-                                                                </div>
-                                                                <select
-                                                                    value={entityRefAudioFunctionByTab.audio || 'generate_entity_reference_audio_audio'}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim() || 'generate_entity_reference_audio_audio';
-                                                                        setEntityRefAudioFunctionByTab((prev) => ({ ...prev, audio: next }));
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1 text-[10px] text-white outline-none focus:border-primary/50"
-                                                                    title={t('选择音频页生成参考音频所用路由', 'Select function route for audio-tab reference audio generation')}
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_FUNCTION_OPTIONS.map((opt) => (
-                                                                        <option key={`audio-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <FunctionApiSelector
-                                                                    functionName={entityRefAudioFunctionByTab.audio || 'generate_entity_reference_audio_audio'}
-                                                                    configs={functionApiConfigs}
-                                                                    label={t('功能API: ', 'Function API: ')}
-                                                                />
-                                                            </div>
-                                                            <textarea
-                                                                value={entityRefAudioPrompt}
-                                                                onChange={(e) => persistEntityRefAudioPrompt(e.target.value)}
-                                                                placeholder={t('输入要生成音频的文案（将写入音频链接）...', 'Enter text for reference audio generation (result will fill audio URL)...')}
-                                                                className="w-full min-h-[74px] bg-black/40 border border-white/10 rounded px-2 py-2 text-xs text-white focus:border-primary/50 outline-none resize-y"
-                                                            />
-                                                            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    value={entityRefAudioIdentity}
-                                                                    onChange={(e) => {
-                                                                        const next = e.target.value;
-                                                                        setEntityRefAudioIdentity(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: next,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    placeholder={t('身份角色（如：守夜人）', 'Identity/role (e.g. night watchman)')}
-                                                                    title={t('身份角色说明', 'Identity/role description')}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50 placeholder:text-white/30"
-                                                                />
-                                                                <select
-                                                                    value={entityRefAudioTone}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioTone(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: next,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_TONE_OPTIONS.map((opt) => (
-                                                                        <option key={`audio-tone-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <select
-                                                                    value={entityRefAudioPace}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioPace(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: next,
-                                                                            emotion: entityRefAudioEmotion,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_PACE_OPTIONS.map((opt) => (
-                                                                        <option key={`audio-pace-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                                <select
-                                                                    value={entityRefAudioEmotion}
-                                                                    onChange={(e) => {
-                                                                        const next = String(e.target.value || '').trim();
-                                                                        setEntityRefAudioEmotion(next);
-                                                                        persistEntityRefAudioProfile({
-                                                                            identity: entityRefAudioIdentity,
-                                                                            tone: entityRefAudioTone,
-                                                                            pace: entityRefAudioPace,
-                                                                            emotion: next,
-                                                                        });
-                                                                    }}
-                                                                    className="rounded border border-white/15 bg-black/40 px-2 py-1.5 text-xs text-white outline-none focus:border-primary/50"
-                                                                >
-                                                                    {ENTITY_REF_AUDIO_EMOTION_OPTIONS.map((opt) => (
-                                                                        <option key={`audio-emotion-${opt.value}`} value={opt.value}>{opt.label}</option>
-                                                                    ))}
-                                                                </select>
-                                                            </div>
-                                                            <div className="flex justify-end gap-2">
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => handleRegenerateEntityRefAudioPrompt()}
-                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-white/10 hover:bg-white/20 text-white"
-                                                                >
-                                                                    {t('按参数重建文案', 'Rebuild Prompt by Params')}
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    disabled={isGeneratingEntityRefAudio}
-                                                                    onClick={() => void handleGenerateEntityReferenceAudio('audio')}
-                                                                    className="px-3 py-1.5 rounded text-xs font-bold bg-primary text-black hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1"
-                                                                >
-                                                                    {isGeneratingEntityRefAudio ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                                                                    {isGeneratingEntityRefAudio ? t('生成中...', 'Generating...') : t('生成参考音频', 'Generate Reference Audio')}
-                                                                </button>
-                                                            </div>
-                                                        </div>
+                                                        {renderEntityRefAudioGenerationPanel('audio')}
                                                     </div>
                                                 );
                                             })()}
