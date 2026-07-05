@@ -12160,8 +12160,9 @@ class MediaGenerationService:
         is_kling_26_i2v_model = bool(gen_type == "video" and model_lower == "kling-2.6/image-to-video")
         is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
         is_gemini_omni_video_model = bool(gen_type == "video" and model_lower == "gemini-omni-video")
+        is_topaz_video_upscale = bool(gen_type == "video" and str(model_lower or "").strip() == "topaz/video-upscale")
         # KIE market video endpoints require duration as string for compatibility across models.
-        duration_string_required_model = bool(gen_type == "video")
+        duration_string_required_model = bool(gen_type == "video" and not is_topaz_video_upscale)
 
         base_url = (config.get("base_url") or tool_conf.get("base_url") or "https://api.kie.ai").strip().rstrip("/")
         if "/api/v1/jobs" in base_url:
@@ -12521,7 +12522,6 @@ class MediaGenerationService:
                 else:
                     payload_input.pop("image_size", None)
         elif gen_type == "video":
-            is_topaz_video_upscale = bool(str(model_lower or "").strip() == "topaz/video-upscale")
             if is_topaz_video_upscale:
                 source_video_url = str(
                     tool_conf.get("video_url")
@@ -12546,103 +12546,106 @@ class MediaGenerationService:
                     }
 
                 upscale_factor = str(tool_conf.get("upscale_factor") or "2").strip() or "2"
+                if upscale_factor not in {"1", "2", "4"}:
+                    upscale_factor = "2"
                 payload_input = {
                     "video_url": source_video_url,
                     "upscale_factor": upscale_factor,
                 }
 
-            duration_value = 5
-            try:
-                duration_value = int(float(duration if duration is not None else 5))
-            except Exception:
+            if not is_topaz_video_upscale:
                 duration_value = 5
-            allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-            if duration_value <= 0:
-                normalized_allowed = self._normalize_duration_enum_values(allowed_durations)
-                duration_value = int(normalized_allowed[0]) if normalized_allowed else 5
-            if isinstance(allowed_durations, list) and allowed_durations:
-                mapped_duration = self._map_duration_nearest(
-                    duration_value,
-                    allowed_durations,
-                    prefer_higher_on_tie=is_seedance_video_model,
-                )
-                if mapped_duration is not None:
-                    duration_value = int(mapped_duration)
+                try:
+                    duration_value = int(float(duration if duration is not None else 5))
+                except Exception:
+                    duration_value = 5
+                allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                if duration_value <= 0:
+                    normalized_allowed = self._normalize_duration_enum_values(allowed_durations)
+                    duration_value = int(normalized_allowed[0]) if normalized_allowed else 5
+                if isinstance(allowed_durations, list) and allowed_durations:
+                    mapped_duration = self._map_duration_nearest(
+                        duration_value,
+                        allowed_durations,
+                        prefer_higher_on_tie=is_seedance_video_model,
+                    )
+                    if mapped_duration is not None:
+                        duration_value = int(mapped_duration)
 
-            max_duration = runtime_enum_catalog.get("max_duration")
-            try:
-                if max_duration is not None:
-                    duration_value = min(int(duration_value), int(max_duration))
-            except Exception:
-                pass
-            duration_normalized = int(max(1, duration_value))
-            payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
+                max_duration = runtime_enum_catalog.get("max_duration")
+                try:
+                    if max_duration is not None:
+                        duration_value = min(int(duration_value), int(max_duration))
+                except Exception:
+                    pass
+                duration_normalized = int(max(1, duration_value))
+                payload_input["duration"] = str(duration_normalized) if duration_string_required_model else duration_normalized
 
-            # Propagate project/request-level sound setting to all video models.
-            # Previously only kling 2.6 explicitly consumed this flag.
-            sound_raw = tool_conf.get("sound")
-            if sound_raw is not None:
-                if isinstance(sound_raw, bool):
-                    payload_input["sound"] = sound_raw
-                else:
-                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
-
-            if is_kling_26_i2v_model:
-                kling_allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
-                kling_allowed_durations = self._normalize_duration_enum_values(kling_allowed_durations)
-                # KIE Kling 2.6 i2v rejects non-enum durations; use a safe fallback
-                # when runtime enum catalog is missing or incomplete.
-                if not kling_allowed_durations:
-                    kling_allowed_durations = [5, 10]
-                mapped_duration = self._map_duration_nearest(duration_value, kling_allowed_durations)
-                if mapped_duration is not None:
-                    duration_value = int(mapped_duration)
-                payload_input["duration"] = str(int(duration_value))
-
+                # Propagate project/request-level sound setting to all video models.
+                # Previously only kling 2.6 explicitly consumed this flag.
                 sound_raw = tool_conf.get("sound")
-                if sound_raw is None:
-                    payload_input["sound"] = True
-                elif isinstance(sound_raw, bool):
-                    payload_input["sound"] = sound_raw
-                else:
-                    payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+                if sound_raw is not None:
+                    if isinstance(sound_raw, bool):
+                        payload_input["sound"] = sound_raw
+                    else:
+                        payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
 
-            # --- Inject quality/output_format for KIE video ---
-            # quality
-            requested_quality = str(tool_conf.get("quality") or "").strip().lower()
-            allowed_qualities = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("quality") or []) if str(item or "").strip()]
-            if requested_quality and allowed_qualities:
-                if requested_quality not in allowed_qualities:
-                    fallback_quality = allowed_qualities[0]
-                    logger.warning(
-                        "KIE quality enum fallback | model=%s requested=%s allowed=%s fallback=%s",
-                        model,
-                        requested_quality,
-                        allowed_qualities,
-                        fallback_quality,
-                    )
-                    requested_quality = fallback_quality
-                payload_input["quality"] = requested_quality
-            elif requested_quality:
-                payload_input["quality"] = requested_quality
+                if is_kling_26_i2v_model:
+                    kling_allowed_durations = runtime_enum_catalog.get("durations_seconds") or []
+                    kling_allowed_durations = self._normalize_duration_enum_values(kling_allowed_durations)
+                    # KIE Kling 2.6 i2v rejects non-enum durations; use a safe fallback
+                    # when runtime enum catalog is missing or incomplete.
+                    if not kling_allowed_durations:
+                        kling_allowed_durations = [5, 10]
+                    mapped_duration = self._map_duration_nearest(duration_value, kling_allowed_durations)
+                    if mapped_duration is not None:
+                        duration_value = int(mapped_duration)
+                    payload_input["duration"] = str(int(duration_value))
 
-            # output_format
-            requested_output_format = str(tool_conf.get("output_format") or tool_conf.get("outputFormat") or "").strip().lower()
-            allowed_output_formats = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("output_format") or []) if str(item or "").strip()]
-            if requested_output_format and allowed_output_formats:
-                if requested_output_format not in allowed_output_formats:
-                    fallback_output_format = allowed_output_formats[0]
-                    logger.warning(
-                        "KIE output_format enum fallback | model=%s requested=%s allowed=%s fallback=%s",
-                        model,
-                        requested_output_format,
-                        allowed_output_formats,
-                        fallback_output_format,
-                    )
-                    requested_output_format = fallback_output_format
-                payload_input["output_format"] = requested_output_format
-            elif requested_output_format:
-                payload_input["output_format"] = requested_output_format
+                    sound_raw = tool_conf.get("sound")
+                    if sound_raw is None:
+                        payload_input["sound"] = True
+                    elif isinstance(sound_raw, bool):
+                        payload_input["sound"] = sound_raw
+                    else:
+                        payload_input["sound"] = str(sound_raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+                # --- Inject quality/output_format for KIE video ---
+                # quality
+                requested_quality = str(tool_conf.get("quality") or "").strip().lower()
+                allowed_qualities = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("quality") or []) if str(item or "").strip()]
+                if requested_quality and allowed_qualities:
+                    if requested_quality not in allowed_qualities:
+                        fallback_quality = allowed_qualities[0]
+                        logger.warning(
+                            "KIE quality enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                            model,
+                            requested_quality,
+                            allowed_qualities,
+                            fallback_quality,
+                        )
+                        requested_quality = fallback_quality
+                    payload_input["quality"] = requested_quality
+                elif requested_quality:
+                    payload_input["quality"] = requested_quality
+
+                # output_format
+                requested_output_format = str(tool_conf.get("output_format") or tool_conf.get("outputFormat") or "").strip().lower()
+                allowed_output_formats = [str(item or "").strip().lower() for item in (runtime_enum_catalog.get("output_format") or []) if str(item or "").strip()]
+                if requested_output_format and allowed_output_formats:
+                    if requested_output_format not in allowed_output_formats:
+                        fallback_output_format = allowed_output_formats[0]
+                        logger.warning(
+                            "KIE output_format enum fallback | model=%s requested=%s allowed=%s fallback=%s",
+                            model,
+                            requested_output_format,
+                            allowed_output_formats,
+                            fallback_output_format,
+                        )
+                        requested_output_format = fallback_output_format
+                    payload_input["output_format"] = requested_output_format
+                elif requested_output_format:
+                    payload_input["output_format"] = requested_output_format
         if gen_type == "audio":
             payload_input.pop("duration", None)
 
@@ -12779,7 +12782,7 @@ class MediaGenerationService:
                 if resolved:
                     resolved_refs.append(resolved)
 
-        if resolved_refs:
+        if resolved_refs and not is_topaz_video_upscale:
             if is_gpt_image_15_i2i:
                 payload_input["input_urls"] = resolved_refs
                 payload_input.pop("image_urls", None)
@@ -12876,7 +12879,7 @@ class MediaGenerationService:
                     "runtime_model": model,
                 }
 
-        if last_frame_url and not is_sora2_i2v_model:
+        if last_frame_url and not is_sora2_i2v_model and not is_topaz_video_upscale:
             if use_veo_api:
                 last_ref = await self._process_veo_image_async(last_frame_url, normalized_ar or "16:9")
             else:

@@ -17,9 +17,9 @@
     {
       "key": "project_type",
       "title": "Project Type",
-      "source_keys": ["type", "genre", "category", "film_type"],
+      "source_keys": ["type", "genre", "category", "film_type", "project_type", "visual_type"],
       "slot_token": "[[SHOT_GENERATION_PROJECT_TYPE_RULES]]",
-      "prompt_template": "Project Type is {value}. Treat this as a first-class routing constraint for shot planning: bias scene-type selection, shot scale rhythm, blocking density, reaction coverage, and lens language toward {value} instead of a generic fallback. Keep the original shot_generator output contract unchanged."
+      "prompt_template": "Project Type is {value}. This is a first-class constraint for every shot's Video Content (CN) global-style opening: explicitly state the visual system (live-action photoreal, anime/cel-shaded, stylized 3D/CG, illustrated, etc.) and inject type-matched positive audiovisual cues (material fidelity, motion texture, lens temperament, lighting logic) into the video prompt body. Do not drift into a mismatched rendering system. Keep the original shot_generator output contract unchanged."
     },
     {
       "key": "base_positioning",

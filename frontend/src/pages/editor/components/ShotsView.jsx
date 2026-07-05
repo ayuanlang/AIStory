@@ -3350,13 +3350,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
     const getGlobalContextStr = (options = {}) => {
         const info = activeEpisode?.episode_info?.e_global_info;
-        if (!info) return "";
+        const projectInfo = project?.global_info || {};
+        const basicInfo = projectInfo?.basic_info || {};
+        if (!info && !projectInfo) return "";
         const { includeStyle = true } = options || {};
         const parts = [];
+        const projectType = String(
+            info?.type
+            || basicInfo?.type
+            || projectInfo?.type
+            || ''
+        ).trim();
+        if (projectType) parts.push(`Type: ${projectType}`);
         // Append explicit labels so the model understands the context
         const globalStyle = getShotGlobalStyleText();
         if (includeStyle && globalStyle) parts.push(`Style: ${globalStyle}`);
-        if (info.tone) parts.push(`Tone: ${info.tone}`);
+        if (info?.tone) parts.push(`Tone: ${info.tone}`);
         
         return parts.length > 0 ? " | " + parts.join(", ") : "";
     };
@@ -8913,13 +8922,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         const sourceProbe = await probeVideoUrlReachable(currentVideoUrl);
         if (!sourceProbe?.ok) {
-            const msg = t(
-                '当前视频链接不可访问，请先刷新链接或重新生成后再提质。',
-                'Current video URL is not reachable. Refresh the URL or regenerate video before upscaling.'
+            onLog?.(
+                t(
+                    '浏览器无法预检当前视频链接，仍将尝试提交 Topaz 提质任务。',
+                    'Browser preflight could not reach the current video URL; submitting Topaz upscale anyway.'
+                ) + ` (${sourceProbe?.reason || 'unreachable'})`,
+                'warning'
             );
-            onLog?.(`${msg} (${sourceProbe?.reason || 'unreachable'})`, 'warning');
-            showNotification(msg, 'warning');
-            return;
         }
 
         setShotGeneratingState(targetShotId, 'video', true);
@@ -8927,6 +8936,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
         let createdVideoJobId = '';
         let keepRunningUi = false;
+        const stableTargetShotId = String(targetShotId || '').trim();
 
         try {
             const upscaleTask = generateVideo(
@@ -8937,14 +8947,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 null,
                 5,
                 {
-                    function_name: 'generate_videos',
+                    system_api_id: null,
                     project_id: projectId,
                     shot_id: targetShotId,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     asset_type: 'video',
                     model: 'topaz/video-upscale',
-                    mode: 'upscale',
                     video_url: currentVideoUrl,
                     source_video_url: currentVideoUrl,
                     upscale_factor: '2',
@@ -8968,6 +8977,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 clearPendingVideoJob(targetShotId);
                 const newData = { video_url: res.url };
 
+                setShots((prev) => (prev || []).map((shot) => (
+                    String(shot?.id || '').trim() === stableTargetShotId ? { ...shot, ...newData } : shot
+                )));
                 setEditingShot((prev) => {
                     if (!prev || prev.id !== targetShotId) return prev;
                     return { ...prev, ...newData };
@@ -8983,6 +8995,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 showNotification(t('视频清晰度提升完成', 'Video upscale completed'), 'success');
                 refreshShotAssetsMeta();
                 Promise.resolve(refreshShots()).catch(() => {});
+
+                if (shotVideoNeedsOssPersist({ ...shotSnapshot, ...newData })) {
+                    void syncShotVideoAfterOssPersist({
+                        shotId: targetShotId,
+                        jobId: createdVideoJobId,
+                        initialUrl: res.url,
+                    });
+                }
+
                 setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
             }
 
@@ -11469,11 +11490,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <button
                                                     onClick={handleUpscaleCurrentVideo}
                                                     disabled={currentShotGenerating || !String(editingShot?.video_url || '').trim()}
-                                                    className={`text-[10px] font-bold px-2 py-1 rounded flex items-center justify-center ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
-                                                    title="topaz 视频画质提升 upscale*2"
-                                                    aria-label="topaz 视频画质提升 upscale*2"
+                                                    className={`text-[10px] font-bold px-2 py-1 rounded flex items-center justify-center gap-1 ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'}`}
+                                                    title={t('Topaz 视频画质提升 2x', 'Topaz video upscale 2x')}
+                                                    aria-label={t('Topaz 视频画质提升 2x', 'Topaz video upscale 2x')}
                                                 >
                                                     <Sparkles className="w-3 h-3" />
+                                                    <span>2x</span>
                                                 </button>
 
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
@@ -11516,10 +11538,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <div className="absolute inset-0 bg-black/60 z-10 flex items-center justify-center flex-col gap-2">
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
+                                                        videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
                                                         (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                         '正在生成视频...',
+                                                        videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
                                                         (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
@@ -12534,15 +12558,29 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             updates = { 'video_url': resultUrl };
         }
         
+        const stableTargetShotId = String(editingShot.id || '').trim();
+
         try {
-            if (onUpdateShot) {
-                await onUpdateShot(editingShot.id, updates);
-            }
+            // Force local state update immediately so any view derived from `shots`
+            // (e.g. the continuous-play/playlist modal) reflects the newly selected
+            // version right away, instead of only the `editingShot` detail state.
+            setShots((prev) => (prev || []).map((shot) => (
+                String(shot?.id || '').trim() === stableTargetShotId ? { ...shot, ...updates } : shot
+            )));
             setEditingShot((prev) => {
                 if (!prev) return prev;
                 return { ...prev, ...updates };
             });
+
+            if (onUpdateShot) {
+                await onUpdateShot(editingShot.id, updates);
+            }
             showNotification(t('已选用为当前', 'Applied as current'), 'success');
+
+            // Reconcile with the backend so the shot list (source of truth for the
+            // playlist) never drifts out of sync with the detail view.
+            refreshShotAssetsMeta?.();
+            Promise.resolve(refreshShots?.()).catch(() => {});
         } catch (e) {
             if (onLog) onLog(`Failed to apply generated media: ${e.message}`, 'error');
             showNotification(t('选用失败', 'Failed to apply'), 'error');
@@ -12943,10 +12981,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         <div className="absolute inset-0 z-10 bg-black/60 flex items-center justify-center flex-col gap-2">
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
                                                                             <span className="text-xs text-white/80">{t(
+                                                                                videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
                                                                                 (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                                                 '正在生成视频...',
+                                                                                videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
                                                                                 (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
@@ -13048,6 +13088,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             {t('草稿(480p)', 'Draft (480p)')}
                                                                         </label>
                                                                     )}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('Topaz 提质 2x', 'Topaz Upscale 2x'),
+                                                                        busyLabel: t('Topaz 提质中...', 'Topaz upscaling...'),
+                                                                        onClick: handleUpscaleCurrentVideo,
+                                                                        disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
+                                                                        busy: currentShotGenerating && videoStatuses[editingShot.id] === 'upscaling',
+                                                                        variant: 'success',
+                                                                    })}
                                                                     {renderDetailActionButton({
                                                                         label: t('生成视频', 'Generate Video'),
                                                                         busyLabel: t(

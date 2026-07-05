@@ -2401,7 +2401,9 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
 const requestOptions = { ...(restOptions || {}) };
     let derivedFnName = requestOptions.function_name || 'generate_videos';
     requestOptions.function_name = derivedFnName;
-    requestOptions.system_api_id = Number(localStorage.getItem('func_api_' + derivedFnName)) || null;
+    if (!Object.prototype.hasOwnProperty.call(restOptions || {}, 'system_api_id')) {
+        requestOptions.system_api_id = Number(localStorage.getItem('func_api_' + derivedFnName)) || null;
+    }
     const callbackPollingEnabled = Object.prototype.hasOwnProperty.call(options || {}, 'callback_polling')
         ? options?.callback_polling !== false
         : DEFAULT_CALLBACK_POLLING_ENABLED;
