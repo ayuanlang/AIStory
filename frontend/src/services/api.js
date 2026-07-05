@@ -3266,6 +3266,18 @@ export const updateAsset = async (id, data) => {
     return response.data;
 };
 
+export const probeAssetMetadata = async (id, { overwrite = false } = {}) => {
+    const response = await api.post(`/assets/${id}/probe-metadata`, null, {
+        params: { overwrite: overwrite ? 'true' : 'false' },
+    });
+    return response.data;
+};
+
+export const backfillAssetsMetadata = async (payload = {}) => {
+    const response = await api.post('/assets/backfill-metadata', payload);
+    return response.data;
+};
+
 export const markAssetAsCurrentProjectAsset = async (id) => {
     const response = await api.post(`/assets/${id}/mark-current`);
     return response.data;

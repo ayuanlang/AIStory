@@ -6,7 +6,7 @@ import {
     Folder, User, Film, Globe, Layers, ArrowDown, ArrowUp,
     Sparkles, Copy, Loader2, CheckCircle, Settings, Calendar, AlertTriangle, FolderOpen, Download
 } from 'lucide-react';
-import { fetchAssets, fetchProjects, fetchEpisodes, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds } from '../services/api';
+import { fetchAssets, fetchProjects, fetchEpisodes, createAsset, uploadAsset, deleteAsset, deleteAssetsBatch, updateAsset, analyzeAssetImage, fetchUnreferencedAssetIds, probeAssetMetadata, backfillAssetsMetadata } from '../services/api';
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
@@ -1089,6 +1089,31 @@ const AssetsLibrary = ({ projectId = null, currentEpisodeId = null, projectOptio
 
     const [isScanning, setIsScanning] = useState(false);
     const [scanProgress, setScanProgress] = useState(0);
+    const [isBackfillingMeta, setIsBackfillingMeta] = useState(false);
+
+    const handleBackfillMetadata = async () => {
+        if (isBackfillingMeta) return;
+        setIsBackfillingMeta(true);
+        try {
+            const payload = { limit: 200 };
+            if (scopeProjectId) payload.project_id = Number(scopeProjectId);
+            if (scopeEpisodeId) payload.episode_id = Number(scopeEpisodeId);
+            const res = await backfillAssetsMetadata(payload);
+            await loadAssets();
+            addLog(
+                t(
+                    `元数据回填完成：扫描 ${res.scanned || 0} 条，更新 ${res.updated || 0} 条，跳过 ${res.skipped || 0} 条。`,
+                    `Metadata backfill done: scanned ${res.scanned || 0}, updated ${res.updated || 0}, skipped ${res.skipped || 0}.`
+                ),
+                (res.updated || 0) > 0 ? 'success' : 'info'
+            );
+        } catch (e) {
+            console.error(e);
+            addLog(t(`元数据回填失败：${e.message}`, `Metadata backfill failed: ${e.message}`), 'error');
+        } finally {
+            setIsBackfillingMeta(false);
+        }
+    };
 
     // Batch check valid URLs
     const handleScanBroken = async () => {
@@ -1333,6 +1358,15 @@ const AssetsLibrary = ({ projectId = null, currentEpisodeId = null, projectOptio
                                      <AlertTriangle size={14} /> {t('扫描异常', 'Scan Broken')}
                                  </button>
                              )}
+                             <button
+                                 onClick={handleBackfillMetadata}
+                                 disabled={isBackfillingMeta}
+                                 className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors text-primary disabled:opacity-50"
+                                 title={t('回填缺失的分辨率/尺寸/时长', 'Backfill missing resolution/size/duration')}
+                             >
+                                 {isBackfillingMeta ? <Loader2 size={14} className="animate-spin" /> : <Info size={14} />}
+                                 {t('回填元数据', 'Backfill Metadata')}
+                             </button>
                              <button onClick={handleSelectOld} className="px-3 py-1.5 text-xs bg-card border border-white/10 hover:bg-white/5 rounded flex items-center gap-2 transition-colors" title={t('选择 7 天前的文件', 'Select files > 7 days old')}>
                                  <Calendar size={14} /> {t('选择旧文件', 'Select Old')}
                              </button>
@@ -1466,7 +1500,14 @@ const AssetsLibrary = ({ projectId = null, currentEpisodeId = null, projectOptio
                     <UploadModal onClose={() => setIsUploadOpen(false)} onUploadSuccess={() => { loadAssets(); setIsUploadOpen(false); }} />
                 )}
                 {selectedAsset && (
-                    <AssetDetailModal asset={selectedAsset} onClose={() => setSelectedAsset(null)} onUpdate={loadAssets} />
+                    <AssetDetailModal
+                        asset={selectedAsset}
+                        onClose={() => setSelectedAsset(null)}
+                        onUpdate={(patchedAsset) => {
+                            loadAssets();
+                            if (patchedAsset) setSelectedAsset(patchedAsset);
+                        }}
+                    />
                 )}
             </AnimatePresence>
         </div>
@@ -1686,21 +1727,74 @@ const UploadModal = ({ onClose, onUploadSuccess }) => {
 const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const { addLog } = useLog();
     const [remark, setRemark] = useState(asset.remark || '');
     const [isEditing, setIsEditing] = useState(false);
-    const category = getAssetCategory(asset?.type);
-    const typeLabel = String(category || asset?.type || '').toUpperCase();
+    const [probingMeta, setProbingMeta] = useState(false);
+    const [displayAsset, setDisplayAsset] = useState(asset);
+    const category = getAssetCategory(displayAsset?.type);
+    const typeLabel = String(category || displayAsset?.type || '').toUpperCase();
+    const metaMissing = !displayAsset?.meta_info?.resolution
+        && !displayAsset?.meta_info?.width
+        && !displayAsset?.meta_info?.height;
 
     useEffect(() => {
+        setDisplayAsset(asset);
         setRemark(asset.remark || '');
         setIsEditing(false);
-    }, [asset?.id, asset?.remark]);
+    }, [asset?.id, asset?.remark, asset?.meta_info]);
+
+    useEffect(() => {
+        if (!asset?.id || probingMeta) return;
+        if (!metaMissing) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                setProbingMeta(true);
+                const res = await probeAssetMetadata(asset.id);
+                if (cancelled) return;
+                if (res?.asset) {
+                    setDisplayAsset(res.asset);
+                    if (res.updated) onUpdate?.(res.asset);
+                }
+            } catch (e) {
+                if (!cancelled) {
+                    console.error(e);
+                }
+            } finally {
+                if (!cancelled) setProbingMeta(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [asset?.id]);
+
+    const handleProbeMetadata = async () => {
+        setProbingMeta(true);
+        try {
+            const res = await probeAssetMetadata(asset.id);
+            if (res?.asset) {
+                setDisplayAsset(res.asset);
+                onUpdate?.(res.asset);
+                addLog(
+                    res.updated
+                        ? t('元数据已刷新。', 'Metadata refreshed.')
+                        : t('元数据已完整，无需更新。', 'Metadata already complete.'),
+                    res.updated ? 'success' : 'info'
+                );
+            }
+        } catch (e) {
+            console.error(e);
+            addLog(t(`元数据刷新失败：${e.message}`, `Metadata refresh failed: ${e.message}`), 'error');
+        } finally {
+            setProbingMeta(false);
+        }
+    };
 
     const handleSave = async () => {
         try {
-            await updateAsset(asset.id, { remark });
+            await updateAsset(displayAsset.id, { remark });
             setIsEditing(false);
-            onUpdate();
+            onUpdate?.();
         } catch (e) {
             console.error(e);
         }
@@ -1718,9 +1812,9 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                 {/* Preview Area */}
                 <div className="flex-1 bg-black/50 flex items-center justify-center p-8 relative">
                     {category === 'image' ? (
-                        <img src={getFullUrl(asset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
+                        <img src={getFullUrl(displayAsset.url)} alt="preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
                     ) : (
-                        <video src={getFullUrl(asset.url)} controls className="w-full h-full object-contain rounded-lg shadow-2xl" />
+                        <video src={getFullUrl(displayAsset.url)} controls className="w-full h-full object-contain rounded-lg shadow-2xl" />
                     )}
                     <div className="absolute top-4 left-4 p-2 bg-black/60 backdrop-blur rounded-lg text-xs text-white/50 font-mono">
                         {typeLabel}
@@ -1730,22 +1824,33 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                 {/* Sidebar Info */}
                 <div className="w-80 bg-card border-l border-white/10 p-6 flex flex-col">
                     <div className="flex justify-between items-start mb-6">
-                        <h3 className="font-bold text-lg leading-tight break-all">{asset.filename || t('未命名素材', 'Untitled Asset')}</h3>
+                        <h3 className="font-bold text-lg leading-tight break-all">{displayAsset.filename || t('未命名素材', 'Untitled Asset')}</h3>
                         <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full ml-2"><X size={20} /></button>
                     </div>
 
                     <div className="space-y-6 flex-1 overflow-y-auto">
                         <div>
                             <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('创建时间', 'Create Date')}</label>
-                            <p className="text-sm font-mono text-white/80">{new Date(asset.created_at).toLocaleString()}</p>
+                            <p className="text-sm font-mono text-white/80">{new Date(displayAsset.created_at).toLocaleString()}</p>
                         </div>
                         
-                        {asset.meta_info && Object.keys(asset.meta_info).length > 0 && (
-                             <div>
-                                <label className="text-xs font-bold text-muted-foreground uppercase mb-2 block">{t('元数据', 'Metadata')}</label>
+                        <div>
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="text-xs font-bold text-muted-foreground uppercase block">{t('元数据', 'Metadata')}</label>
+                                <button
+                                    type="button"
+                                    onClick={handleProbeMetadata}
+                                    disabled={probingMeta}
+                                    className="text-[11px] px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-primary disabled:opacity-50 flex items-center gap-1"
+                                >
+                                    {probingMeta ? <Loader2 size={12} className="animate-spin" /> : <Info size={12} />}
+                                    {probingMeta ? t('读取中...', 'Reading...') : t('刷新元数据', 'Refresh Metadata')}
+                                </button>
+                            </div>
+                            {displayAsset.meta_info && Object.keys(displayAsset.meta_info).length > 0 ? (
                                 <div className="bg-black/30 rounded-lg p-3 space-y-1">
-                                    {Object.entries(asset.meta_info)
-                                        .map(([k, v]) => formatMetadataEntry(k, v, asset.meta_info))
+                                    {Object.entries(displayAsset.meta_info)
+                                        .map(([k, v]) => formatMetadataEntry(k, v, displayAsset.meta_info))
                                         .filter(Boolean)
                                         .map((entry) => (
                                             <div key={entry.key} className="flex justify-between text-xs gap-2">
@@ -1757,8 +1862,10 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
                                             </div>
                                         ))}
                                 </div>
-                            </div>
-                        )}
+                            ) : (
+                                <p className="text-xs text-white/40 italic">{t('暂无元数据，可点击刷新读取。', 'No metadata yet. Click refresh to probe.')}</p>
+                            )}
+                        </div>
 
                         <div>
                             <div className="flex justify-between items-center mb-2">

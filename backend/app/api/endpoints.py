@@ -63,6 +63,12 @@ from app.schemas.agent import AgentRequest, AgentResponse, AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
 from app.services.oss_storage_service import oss_storage_service
+from app.services.asset_meta_probe import (
+    asset_meta_needs_probe,
+    enrich_asset_meta_info,
+    ensure_resolution_fields,
+    probe_media_from_path,
+)
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.core.prompts.scene_analysis_feature_skills import (
@@ -29105,6 +29111,15 @@ class AssetBackfillEpisodeMediaRequest(BaseModel):
     overwrite_existing: bool = True
 
 
+class AssetBackfillMetadataRequest(BaseModel):
+    asset_ids: Optional[List[int]] = None
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    limit: int = 200
+    overwrite_existing: bool = False
+    dry_run: bool = False
+
+
 def _asset_meta_dict(raw_meta: Any) -> Dict[str, Any]:
     if isinstance(raw_meta, dict):
         meta = dict(raw_meta)
@@ -30362,6 +30377,7 @@ def get_assets(
 
     return results
 
+@router.post("/assets/", response_model=dict)
 def create_asset_url(
     asset_in: AssetCreate,
     current_user: User = Depends(get_current_user),
@@ -30369,6 +30385,11 @@ def create_asset_url(
 ):
     meta = asset_in.meta_info if asset_in.meta_info else {}
     meta['source'] = 'external_url'
+    meta = enrich_asset_meta_info(
+        meta,
+        url=asset_in.url,
+        media_kind=asset_in.type,
+    )
 
     existing_asset = _find_existing_asset_for_registration(
         db,
@@ -30378,6 +30399,13 @@ def create_asset_url(
         meta_info=meta,
     )
     if existing_asset:
+        enriched_meta = enrich_asset_meta_info(
+            _asset_meta_dict(existing_asset.meta_info),
+            url=str(existing_asset.url or asset_in.url or ""),
+            media_kind=str(existing_asset.type or asset_in.type or ""),
+        )
+        if enriched_meta != _asset_meta_dict(existing_asset.meta_info):
+            existing_asset.meta_info = enriched_meta
         _sync_asset_denormalized_fields(existing_asset)
         if existing_asset.project_id:
             _mark_asset_as_current_project_asset(db, existing_asset)
@@ -30508,17 +30536,14 @@ def upload_asset(
         meta_info['idempotency_key'] = normalized_idempotency_key
     
     try:
-        file_size = os.path.getsize(file_path)
-        meta_info['size'] = f"{file_size / 1024:.2f} KB"
-        
-        if type == 'image':
-            with Image.open(file_path) as img:
-                meta_info['width'] = img.width
-                meta_info['height'] = img.height
-                meta_info['format'] = img.format
-                meta_info['resolution'] = f"{img.width}x{img.height}"
+        probed_meta = probe_media_from_path(file_path, type)
+        if probed_meta:
+            meta_info.update(probed_meta)
+        elif os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            meta_info['size'] = f"{file_size / 1024:.2f} KB"
     except Exception as e:
-        print(f"Metadata extraction failed: {e}")
+        logger.warning("Metadata extraction failed during upload: %s", e)
 
     # Construct URL (assuming /uploads is mounted)
     # Get base URL from request ideally, but relative works for frontend
@@ -30710,6 +30735,111 @@ def update_asset(
     db.refresh(asset)
 
     return _serialize_asset_row(asset, db)
+
+
+def _probe_and_update_asset_metadata(
+    asset: Asset,
+    *,
+    overwrite: bool = False,
+) -> Tuple[Dict[str, Any], bool]:
+    current_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
+    enriched_meta = enrich_asset_meta_info(
+        current_meta,
+        url=str(getattr(asset, "url", "") or ""),
+        media_kind=str(getattr(asset, "type", "") or ""),
+        overwrite=overwrite,
+    )
+    changed = enriched_meta != current_meta
+    if changed:
+        asset.meta_info = enriched_meta
+        _sync_asset_denormalized_fields(asset)
+    return enriched_meta, changed
+
+
+@router.post("/assets/{asset_id}/probe-metadata", response_model=dict)
+def probe_asset_metadata(
+    asset_id: int,
+    overwrite: bool = Query(False),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    asset = db.query(Asset).filter(
+        Asset.id == asset_id,
+        Asset.user_id == current_user.id,
+        _active_asset_clause(),
+    ).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    _, changed = _probe_and_update_asset_metadata(asset, overwrite=overwrite)
+    if changed and asset.project_id:
+        _mark_asset_as_current_project_asset(db, asset)
+    db.commit()
+    db.refresh(asset)
+    return {
+        "ok": True,
+        "updated": changed,
+        "asset": _serialize_asset_row(asset, db),
+    }
+
+
+@router.post("/assets/backfill-metadata", response_model=dict)
+def backfill_assets_metadata(
+    payload: AssetBackfillMetadataRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    safe_limit = max(1, min(int(payload.limit or 200), 1000))
+    query = db.query(Asset).filter(Asset.user_id == current_user.id, _active_asset_clause())
+
+    if payload.asset_ids:
+        scoped_ids = [int(item) for item in payload.asset_ids if int(item) > 0][:safe_limit]
+        if not scoped_ids:
+            return {"ok": True, "dry_run": payload.dry_run, "scanned": 0, "updated": 0, "skipped": 0, "asset_ids": []}
+        query = query.filter(Asset.id.in_(scoped_ids))
+    else:
+        if payload.project_id:
+            query = query.filter(Asset.project_id == int(payload.project_id))
+        if payload.episode_id:
+            query = query.filter(Asset.episode_id == int(payload.episode_id))
+        query = query.order_by(Asset.id.desc()).limit(safe_limit)
+
+    assets = query.all()
+    updated_ids: List[int] = []
+    skipped = 0
+
+    for asset in assets:
+        media_kind = str(getattr(asset, "type", "") or "")
+        if not asset_meta_needs_probe(_asset_meta_dict(asset.meta_info), media_kind or "image") and not payload.overwrite_existing:
+            skipped += 1
+            continue
+
+        if payload.dry_run:
+            if asset_meta_needs_probe(_asset_meta_dict(asset.meta_info), media_kind or "image") or payload.overwrite_existing:
+                updated_ids.append(int(asset.id))
+            else:
+                skipped += 1
+            continue
+
+        _, changed = _probe_and_update_asset_metadata(asset, overwrite=payload.overwrite_existing)
+        if changed:
+            updated_ids.append(int(asset.id))
+            if asset.project_id:
+                _mark_asset_as_current_project_asset(db, asset)
+        else:
+            skipped += 1
+
+    if not payload.dry_run and updated_ids:
+        db.commit()
+
+    return {
+        "ok": True,
+        "dry_run": payload.dry_run,
+        "scanned": len(assets),
+        "updated": len(updated_ids),
+        "skipped": skipped,
+        "asset_ids": updated_ids,
+    }
 
 
 @router.post("/assets/{asset_id}/mark-current", response_model=dict)
@@ -34388,76 +34518,7 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
 
         provider_alias_map = _build_provider_alias_lookup(db)
         meta = _attach_provider_alias_to_dict(meta, provider_alias_map)
-
-        def _set_size(bytes_size: Optional[int]) -> None:
-            if bytes_size is None:
-                return
-            try:
-                size_val = int(bytes_size)
-            except Exception:
-                return
-            if size_val <= 0:
-                return
-            meta["size"] = size_val
-            meta["file_size_bytes"] = size_val
-            if size_val >= 1024 * 1024:
-                display = f"{size_val/1024/1024:.2f} MB"
-            else:
-                display = f"{size_val/1024:.2f} KB"
-            meta["size_display"] = display
-            meta["file_size_display"] = display
-
-        def _set_resolution(width: Optional[int], height: Optional[int]) -> None:
-            try:
-                w = int(width) if width is not None else None
-                h = int(height) if height is not None else None
-            except Exception:
-                return
-            if not w or not h or w <= 0 or h <= 0:
-                return
-            meta["width"] = w
-            meta["height"] = h
-            meta["resolution"] = f"{w}x{h}"
-            
-            # Calculate approx aspect ratio if not already provided
-            if "aspect_ratio" not in meta:
-                import math
-                gcd = math.gcd(w, h)
-                rw, rh = w // gcd, h // gcd
-                
-                # Standardize common ratios like 16:9, 9:16, 4:3, etc.
-                ratio_map = {
-                    (16, 9): "16:9",
-                    (9, 16): "9:16",
-                    (4, 3): "4:3",
-                    (3, 4): "3:4",
-                    (1, 1): "1:1",
-                    (21, 9): "21:9",
-                    (3, 2): "3:2",
-                    (2, 3): "2:3",
-                }
-                
-                # Try getting approx match if not exact
-                matched = False
-                if (rw, rh) in ratio_map:
-                    meta["aspect_ratio"] = ratio_map[(rw, rh)]
-                    matched = True
-                else:
-                    # Tolerance matching for values like 16.03:9
-                    float_ratio = w / h
-                    ratios_target = {
-                        "16:9": 16/9, "9:16": 9/16, "4:3": 4/3, "3:4": 3/4, 
-                        "1:1": 1.0, "21:9": 21/9, "3:2": 3/2, "2:3": 2/3
-                    }
-                    for r_name, r_val in ratios_target.items():
-                        if abs(float_ratio - r_val) < 0.05:
-                            meta["aspect_ratio"] = r_name
-                            matched = True
-                            break
-                            
-                if not matched:
-                    # Fallback string
-                    meta["aspect_ratio"] = f"{rw}:{rh}"
+        ensure_resolution_fields(meta)
 
         is_subject_generation = str(get_attr(req, "asset_type") or "").strip().lower() == "subject"
         if is_subject_generation:
@@ -34506,57 +34567,13 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 meta["source_asset_url"] = inferred_source_url
                 meta["source_asset_auto"] = "same_name_current_or_latest_episode"
 
-        local_exists = os.path.exists(file_path)
-        if local_exists:
-            _set_size(os.path.getsize(file_path))
-
-            try:
-                if is_image:
-                    with Image.open(file_path) as img:
-                        _set_resolution(img.width, img.height)
-                        if img.format and "format" not in meta:
-                            meta["format"] = str(img.format)
-                elif is_video:
-                    from moviepy import VideoFileClip
-                    with VideoFileClip(file_path) as clip:
-                        _set_resolution(clip.w, clip.h)
-                        if clip.duration and "duration" not in meta:
-                            meta["duration"] = float(clip.duration)
-            except Exception as e:
-                print(f"Meta extraction error: {e}")
-        else:
-            try:
-                head = requests.head(url, timeout=6, allow_redirects=True)
-                content_length = head.headers.get("Content-Length")
-                if content_length:
-                    _set_size(content_length)
-            except Exception:
-                pass
-
-            if is_image and ("width" not in meta or "height" not in meta):
-                try:
-                    max_probe_bytes = max(128 * 1024, int(os.getenv("ASSET_REMOTE_META_PROBE_MAX_BYTES", str(2 * 1024 * 1024)) or (2 * 1024 * 1024)))
-                    resp = requests.get(url, timeout=10, stream=True)
-                    content_len = int(resp.headers.get("Content-Length") or 0)
-                    if content_len and content_len > max_probe_bytes:
-                        resp.close()
-                    elif resp.ok:
-                        probe = bytearray()
-                        for chunk in resp.iter_content(chunk_size=64 * 1024):
-                            if not chunk:
-                                continue
-                            probe.extend(chunk)
-                            if len(probe) > max_probe_bytes:
-                                break
-                        resp.close()
-                        if probe:
-                            from io import BytesIO
-                            with Image.open(BytesIO(bytes(probe))) as img:
-                                _set_resolution(img.width, img.height)
-                                if img.format and "format" not in meta:
-                                    meta["format"] = str(img.format)
-                except Exception:
-                    pass
+        media_kind = "image" if is_image else ("video" if is_video else ("audio" if is_audio else None))
+        meta = enrich_asset_meta_info(
+            meta,
+            url=url,
+            media_kind=media_kind,
+            local_path=file_path if os.path.isfile(file_path) else None,
+        )
 
         remark = get_attr(req, "remark")
         if not remark:
@@ -34578,6 +34595,13 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 normalized_existing_url = _normalize_asset_url_for_dedup(getattr(existing_asset, "url", None))
                 if normalized_existing_url and str(getattr(existing_asset, "url_normalized", "") or "").strip() != normalized_existing_url:
                     existing_asset.url_normalized = normalized_existing_url
+                enriched_meta = enrich_asset_meta_info(
+                    _asset_meta_dict(existing_asset.meta_info),
+                    url=str(existing_asset.url or url or ""),
+                    media_kind=str(existing_asset.type or media_kind or ""),
+                )
+                if enriched_meta != _asset_meta_dict(existing_asset.meta_info):
+                    existing_asset.meta_info = enriched_meta
                 _sync_asset_denormalized_fields(existing_asset)
                 if existing_asset.project_id:
                     _mark_asset_as_current_project_asset(db, existing_asset)

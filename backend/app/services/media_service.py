@@ -12161,6 +12161,7 @@ class MediaGenerationService:
         is_seedance_video_model = bool(gen_type == "video" and model_lower.startswith("bytedance/seedance"))
         is_gemini_omni_video_model = bool(gen_type == "video" and model_lower == "gemini-omni-video")
         is_topaz_video_upscale = bool(gen_type == "video" and str(model_lower or "").strip() == "topaz/video-upscale")
+        is_flux2_image_model = bool(gen_type == "image" and str(model_lower or "").startswith("flux-2/"))
         # KIE market video endpoints require duration as string for compatibility across models.
         duration_string_required_model = bool(gen_type == "video" and not is_topaz_video_upscale)
 
@@ -12487,6 +12488,35 @@ class MediaGenerationService:
                 payload_input["quality"] = quality_val
 
                 payload_input.pop("image_size", None)
+            elif is_flux2_image_model:
+                # KIE Flux-2 contract: input.resolution required (1K|2K), not image_size.
+                kie_resolution = self._normalize_image_size_value(
+                    image_size or tool_conf.get("image_size") or tool_conf.get("resolution")
+                ) or "1K"
+                allowed_flux2_resolutions = [
+                    str(item or "").strip()
+                    for item in runtime_enum_catalog.get("resolution") or []
+                    if str(item or "").strip()
+                ]
+                if allowed_flux2_resolutions:
+                    mapped_resolution = self._map_resolution_to_allowed(
+                        kie_resolution,
+                        runtime_enum_catalog.get("resolution"),
+                    )
+                    if mapped_resolution:
+                        kie_resolution = str(mapped_resolution).strip()
+                    elif kie_resolution.upper() not in {v.upper() for v in allowed_flux2_resolutions}:
+                        kie_resolution = allowed_flux2_resolutions[0]
+                kie_resolution = str(kie_resolution).strip().upper()
+                if kie_resolution not in {"1K", "2K"}:
+                    kie_resolution = "1K"
+                payload_input["resolution"] = kie_resolution
+                payload_input.pop("image_size", None)
+
+                allowed_flux2_ar = {"1:1", "4:3", "3:4", "16:9", "9:16", "3:2", "2:3"}
+                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                if ar_val not in allowed_flux2_ar:
+                    payload_input["aspect_ratio"] = "1:1"
             else:
                 # Other KIE market image models may still expect image_size-style input.
                 # Use resolution tier only when an actual size tier is available.
@@ -13692,8 +13722,15 @@ class MediaGenerationService:
                         payload_input_obj["resolution"] = str(mapped_seedance_resolution).strip()
 
             if tool_conf.get("draft") or tool_conf.get("draft_mode"):
-                if not is_gemini_omni_video_model:
+                if not is_gemini_omni_video_model and not is_flux2_image_model:
                     payload_input_obj["resolution"] = "480p"
+
+            if is_flux2_image_model:
+                flux2_resolution = str(payload_input_obj.get("resolution") or "").strip().upper()
+                if flux2_resolution not in {"1K", "2K"}:
+                    flux2_resolution = "1K"
+                payload_input_obj["resolution"] = flux2_resolution
+                payload_input_obj.pop("image_size", None)
 
             # KIE gemini-omni-video does not accept generic runtime resolution enums.
             if is_gemini_omni_video_model:
