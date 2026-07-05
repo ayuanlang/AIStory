@@ -570,20 +570,24 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
     const segments = [];
     let contentCursor = 0;
     let activeStartId = '';
+    let pendingLeading = '';
 
     markers.forEach((marker) => {
         const chunk = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor, marker.pos));
         if (marker.kind === 'end') {
-            if (chunk) segments.push([marker.sceneId, chunk]);
+            let body = chunk;
+            if (pendingLeading) {
+                body = body ? `${pendingLeading}\n\n${body}`.trim() : pendingLeading;
+                pendingLeading = '';
+            }
+            if (body) segments.push([marker.sceneId, body]);
             activeStartId = '';
         } else {
             if (chunk) {
                 if (activeStartId) {
                     segments.push([activeStartId, chunk]);
-                } else if (!segments.length) {
-                    segments.push([inferPreludeSceneId(marker, segments.length), chunk]);
                 } else {
-                    segments.push([marker.sceneId, chunk]);
+                    pendingLeading = chunk;
                 }
             }
             activeStartId = marker.sceneId;
@@ -593,7 +597,21 @@ const segmentScenesByBoundaryMarkers = (blockText) => {
 
     const trailing = stripBlockLevelMarkersFromSceneText(blockText.slice(contentCursor));
     if (trailing) {
-        segments.push([inferTrailingSceneId(activeStartId, segments, markers), trailing]);
+        let trailBody = trailing;
+        if (pendingLeading) {
+            trailBody = `${pendingLeading}\n\n${trailBody}`.trim();
+            pendingLeading = '';
+        }
+        segments.push([inferTrailingSceneId(activeStartId, segments, markers), trailBody]);
+    } else if (pendingLeading) {
+        if (activeStartId) {
+            segments.push([activeStartId, pendingLeading]);
+        } else if (segments.length > 0) {
+            const last = segments[segments.length - 1];
+            segments[segments.length - 1] = [last[0], `${last[1]}\n\n${pendingLeading}`.trim()];
+        } else {
+            segments.push([inferPreludeSceneId(markers[0], segments.length), pendingLeading]);
+        }
     }
     return segments;
 };

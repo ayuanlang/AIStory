@@ -435,28 +435,42 @@ def _segment_scenes_by_boundary_markers(block_text: str) -> List[tuple[str, str]
     segments: List[tuple[str, str]] = []
     content_cursor = 0
     active_start_id: Optional[str] = None
+    pending_leading = ""
 
     for marker in markers:
         chunk = _strip_block_level_markers_from_scene_text(block_text[content_cursor : marker.pos])
         if marker.kind == "end":
-            if chunk:
-                segments.append((marker.scene_id, chunk))
+            body = chunk
+            if pending_leading:
+                body = f"{pending_leading}\n\n{body}".strip() if body else pending_leading
+                pending_leading = ""
+            if body:
+                segments.append((marker.scene_id, body))
             active_start_id = None
         else:
             if chunk:
                 if active_start_id:
                     segments.append((active_start_id, chunk))
-                elif not segments:
-                    segments.append((_infer_prelude_scene_id(marker, len(segments)), chunk))
                 else:
-                    segments.append((marker.scene_id, chunk))
+                    pending_leading = chunk
             active_start_id = marker.scene_id
         content_cursor = marker.end_pos
 
     trailing = _strip_block_level_markers_from_scene_text(block_text[content_cursor:])
     if trailing:
+        if pending_leading:
+            trailing = f"{pending_leading}\n\n{trailing}".strip()
+            pending_leading = ""
         trail_id = _infer_trailing_scene_id(active_start_id, segments, markers)
         segments.append((trail_id, trailing))
+    elif pending_leading:
+        if active_start_id:
+            segments.append((active_start_id, pending_leading))
+        elif segments:
+            last_id, last_body = segments[-1]
+            segments[-1] = (last_id, f"{last_body}\n\n{pending_leading}".strip())
+        else:
+            segments.append((_infer_prelude_scene_id(markers[0], len(segments)), pending_leading))
 
     return segments
 
