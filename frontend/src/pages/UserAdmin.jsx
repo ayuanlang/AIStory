@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
-import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage } from '../services/api';
+import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage, getFunctionApiConfigs } from '../services/api';
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
@@ -58,6 +58,82 @@ const DEFAULT_PROJECT_COST_VISUAL_CONFIG = {
     },
 };
 
+const TRANSACTION_FUNCTION_API_LABELS = {
+    generate_subjects: { zh: '文生文 (角色/道具/环境文本)', en: 'Text Gen (Character/Prop/Env)' },
+    generate_subjects_t2i: { zh: '文生图 (角色/道具/环境)', en: 'T2I (Character/Prop/Env)' },
+    generate_subjects_i2i: { zh: '图生图 (角色/道具/环境)', en: 'I2I (Character/Prop/Env)' },
+    generate_cover: { zh: '生成封面', en: 'Generate Cover' },
+    generate_shot_images: { zh: '生成分镜图片', en: 'Generate Shot Images' },
+    generate_videos: { zh: '生成视频', en: 'Generate Videos' },
+    generate_entity_reference_audio: { zh: '实体参考音频', en: 'Entity Reference Audio' },
+    generate_entity_reference_audio_audio: { zh: '实体参考音频(音频)', en: 'Entity Reference Audio (Audio)' },
+    generate_entity_reference_audio_video: { zh: '实体参考音频(视频)', en: 'Entity Reference Audio (Video)' },
+    script_analysis: { zh: '剧本分析', en: 'Script Analysis' },
+    ai_assistant: { zh: 'AI Assistant', en: 'AI Assistant' },
+    ai_shot: { zh: 'AI生成分镜(脚本)', en: 'AI Shot Generation' },
+};
+
+const TRANSACTION_FUNCTION_API_TASK_TYPES = {
+    generate_subjects: 'llm_chat',
+    generate_subjects_t2i: 'image_gen',
+    generate_subjects_i2i: 'image_gen',
+    generate_cover: 'image_gen',
+    generate_shot_images: 'image_gen',
+    generate_videos: 'video_gen',
+    generate_entity_reference_audio: 'voice_gen',
+    generate_entity_reference_audio_audio: 'voice_gen',
+    generate_entity_reference_audio_video: 'video_gen',
+    script_analysis: 'analysis',
+    ai_assistant: 'llm_chat',
+    ai_shot: 'llm_chat',
+};
+
+const resolveTransactionTaskTypeFromFunctionApi = (functionName) => {
+    const key = String(functionName || '').trim();
+    if (!key) return '';
+    return TRANSACTION_FUNCTION_API_TASK_TYPES[key] || key;
+};
+
+const getTransactionEligibleSystemApiIds = (functionApi, configs = []) => {
+    const rows = Array.isArray(configs) ? configs : [];
+    if (functionApi) {
+        const matched = rows.find((row) => String(row?.function_name || '').trim() === String(functionApi || '').trim());
+        return (matched?.api_settings || [])
+            .map((item) => Number(item?.system_api_id || 0))
+            .filter((id) => id > 0);
+    }
+    const ids = new Set();
+    rows.forEach((row) => {
+        (row?.api_settings || []).forEach((item) => {
+            const id = Number(item?.system_api_id || 0);
+            if (id > 0) ids.add(id);
+        });
+    });
+    return Array.from(ids);
+};
+
+const buildTransactionSystemApiMetaById = (systemRows = [], functionConfigs = []) => {
+    const metaById = {};
+    (systemRows || []).forEach((row) => {
+        const id = Number(row?.id || 0);
+        if (id <= 0) return;
+        metaById[id] = {
+            provider: String(row?.provider || '').trim(),
+            model: String(row?.model || '').trim(),
+            providerAlias: '',
+        };
+    });
+    (functionConfigs || []).forEach((cfg) => {
+        (cfg?.api_settings || []).forEach((item) => {
+            const id = Number(item?.system_api_id || 0);
+            if (id <= 0 || !metaById[id]) return;
+            const alias = String(item?.provider_alias || '').trim();
+            if (alias) metaById[id].providerAlias = alias;
+        });
+    });
+    return metaById;
+};
+
 const UserAdmin = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
@@ -87,7 +163,9 @@ const UserAdmin = () => {
     const [isAgentToolPolicySaving, setIsAgentToolPolicySaving] = useState(false);
     const [transactions, setTransactions] = useState([]);
     const [transactionFilterUser, setTransactionFilterUser] = useState(''); // User ID filter
-    const [transactionFilterTaskType, setTransactionFilterTaskType] = useState('');
+    const [transactionFilterFunctionApi, setTransactionFilterFunctionApi] = useState('');
+    const [transactionFunctionApiConfigs, setTransactionFunctionApiConfigs] = useState([]);
+    const [transactionSystemApiMetaById, setTransactionSystemApiMetaById] = useState({});
     const [transactionFilterProvider, setTransactionFilterProvider] = useState('');
     const [transactionFilterModel, setTransactionFilterModel] = useState('');
     const [transactionLimit, setTransactionLimit] = useState(100);
@@ -4928,12 +5006,71 @@ const UserAdmin = () => {
         }
     };
 
+    const fetchTransactionFilterOptions = async () => {
+        try {
+            const [functionApiRows, systemApiRows] = await Promise.all([
+                getFunctionApiConfigs(),
+                getSystemSettingsManage(),
+            ]);
+            const configs = Array.isArray(functionApiRows) ? functionApiRows : [];
+            const systemRows = Array.isArray(systemApiRows) ? systemApiRows : [];
+            setTransactionFunctionApiConfigs(configs);
+            setTransactionSystemApiMetaById(buildTransactionSystemApiMetaById(systemRows, configs));
+        } catch (e) {
+            console.error('Failed to load transaction filter options', e);
+            setTransactionFunctionApiConfigs([]);
+            setTransactionSystemApiMetaById({});
+        }
+    };
+
+    const transactionFunctionApiOptions = React.useMemo(() => {
+        return (transactionFunctionApiConfigs || [])
+            .map((row) => String(row?.function_name || '').trim())
+            .filter(Boolean)
+            .map((functionName) => {
+                const labelEntry = TRANSACTION_FUNCTION_API_LABELS[functionName];
+                const label = labelEntry
+                    ? tUI(uiLang, labelEntry.zh, labelEntry.en)
+                    : functionName;
+                return { functionName, label };
+            });
+    }, [transactionFunctionApiConfigs, uiLang]);
+
+    const transactionProviderOptions = React.useMemo(() => {
+        const providerMap = new Map();
+        getTransactionEligibleSystemApiIds(transactionFilterFunctionApi, transactionFunctionApiConfigs).forEach((apiId) => {
+            const meta = transactionSystemApiMetaById[apiId];
+            const provider = String(meta?.provider || '').trim();
+            if (!provider || providerMap.has(provider)) return;
+            const alias = String(meta?.providerAlias || '').trim();
+            providerMap.set(provider, alias || provider);
+        });
+        return Array.from(providerMap.entries())
+            .map(([value, label]) => ({ value, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [transactionFilterFunctionApi, transactionFunctionApiConfigs, transactionSystemApiMetaById]);
+
+    const transactionModelOptions = React.useMemo(() => {
+        const models = new Set();
+        const selectedProvider = String(transactionFilterProvider || '').trim();
+        getTransactionEligibleSystemApiIds(transactionFilterFunctionApi, transactionFunctionApiConfigs).forEach((apiId) => {
+            const meta = transactionSystemApiMetaById[apiId];
+            const provider = String(meta?.provider || '').trim();
+            const model = String(meta?.model || '').trim();
+            if (!model) return;
+            if (selectedProvider && provider !== selectedProvider) return;
+            models.add(model);
+        });
+        return Array.from(models).sort((a, b) => a.localeCompare(b));
+    }, [transactionFilterFunctionApi, transactionFilterProvider, transactionFunctionApiConfigs, transactionSystemApiMetaById]);
+
     const fetchTransactionsOnly = async () => {
         try {
+            const taskTypeFilter = resolveTransactionTaskTypeFromFunctionApi(transactionFilterFunctionApi) || null;
             const data = await getTransactions(
                 transactionLimit,
                 transactionFilterUser || null,
-                transactionFilterTaskType || null,
+                taskTypeFilter,
                 transactionFilterProvider || null,
                 transactionFilterModel || null
             );
@@ -4943,12 +5080,30 @@ const UserAdmin = () => {
         }
     };
 
+    useEffect(() => {
+        if (activeTab === 'transactions') {
+            fetchTransactionFilterOptions();
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (!transactionFilterProvider) return;
+        const providerStillValid = transactionProviderOptions.some((item) => item.value === transactionFilterProvider);
+        if (!providerStillValid) setTransactionFilterProvider('');
+    }, [transactionFilterFunctionApi, transactionProviderOptions, transactionFilterProvider]);
+
+    useEffect(() => {
+        if (!transactionFilterModel) return;
+        const modelStillValid = transactionModelOptions.includes(transactionFilterModel);
+        if (!modelStillValid) setTransactionFilterModel('');
+    }, [transactionFilterFunctionApi, transactionFilterProvider, transactionModelOptions, transactionFilterModel]);
+
     // Reload transactions when filter changes
     useEffect(() => {
         if (activeTab === 'transactions') {
             fetchTransactionsOnly();
         }
-    }, [transactionFilterUser, transactionFilterTaskType, transactionFilterProvider, transactionFilterModel, transactionLimit, activeTab]);
+    }, [transactionFilterUser, transactionFilterFunctionApi, transactionFilterProvider, transactionFilterModel, transactionLimit, activeTab]);
 
     useEffect(() => {
         if (activeTab === 'pricing' && !isPricingBootstrapLoaded) {
@@ -6375,27 +6530,45 @@ const UserAdmin = () => {
                                             </option>
                                         ))}
                                     </select>
-                                    <input
-                                        type="text"
-                                        placeholder={t('按类型 (task_type) 筛选', 'Filter by Type')}
-                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[140px]"
-                                        value={transactionFilterTaskType}
-                                        onChange={(e) => setTransactionFilterTaskType(e.target.value)}
-                                    />
-                                    <input
-                                        type="text"
-                                        placeholder={t('按渠道 (provider) 筛选', 'Filter by Provider')}
-                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[160px]"
+                                    <select
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[200px] max-w-[280px]"
+                                        value={transactionFilterFunctionApi}
+                                        onChange={(e) => setTransactionFilterFunctionApi(e.target.value)}
+                                    >
+                                        <option value="">{t('全部功能 API', 'All Function APIs')}</option>
+                                        {transactionFunctionApiOptions.map((option) => (
+                                            <option key={option.functionName} value={option.functionName}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[160px] max-w-[220px]"
                                         value={transactionFilterProvider}
-                                        onChange={(e) => setTransactionFilterProvider(e.target.value)}
-                                    />
-                                    <input
-                                        type="text"
-                                        placeholder={t('按模型 (model) 筛选', 'Filter by Model')}
-                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary w-[140px]"
+                                        onChange={(e) => {
+                                            setTransactionFilterProvider(e.target.value);
+                                            setTransactionFilterModel('');
+                                        }}
+                                    >
+                                        <option value="">{t('全部渠道', 'All Providers')}</option>
+                                        {transactionProviderOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        className="bg-gray-800 border border-gray-700 text-sm rounded p-2 text-gray-300 focus:outline-none focus:border-primary min-w-[160px] max-w-[240px]"
                                         value={transactionFilterModel}
                                         onChange={(e) => setTransactionFilterModel(e.target.value)}
-                                    />
+                                    >
+                                        <option value="">{t('全部模型', 'All Models')}</option>
+                                        {transactionModelOptions.map((model) => (
+                                            <option key={model} value={model}>
+                                                {model}
+                                            </option>
+                                        ))}
+                                    </select>
                                     <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded px-2">
                                         <span className="text-xs text-gray-400">{t('Limit:', 'Limit:')}</span>
                                         <input 

@@ -90,6 +90,7 @@ import {
     stopAllGenerationJobs,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
+    structureProjectCreativeInput,
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
@@ -225,6 +226,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             resolution: "",
             suspense: "",
             foreshadowing: "",
+            wild_creative_notes: "",
             extra_notes: "",
         },
         character_profiles: [],
@@ -259,6 +261,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         resolution: "",
         suspense: "",
         foreshadowing: "",
+        wild_creative_notes: "",
         extra_notes: "",
     });
     const [promoInput, setPromoInput] = useState({
@@ -298,6 +301,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     }, [episodes, hasSetDefaultEp]);
 
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
+    const [isStructuringCreativeInput, setIsStructuringCreativeInput] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
     const [episodeScriptsProgress, setEpisodeScriptsProgress] = useState(null);
@@ -1267,6 +1271,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     resolution: globalStoryInput.resolution,
                     suspense: globalStoryInput.suspense,
                     foreshadowing: globalStoryInput.foreshadowing,
+                    wild_creative_notes: globalStoryInput.wild_creative_notes,
                     extra_notes: globalStoryInput.extra_notes,
                 };
                 await saveProjectStoryGeneratorGlobalInput(id, payload);
@@ -1560,6 +1565,47 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
     };
 
+    const handleStructureCreativeInput = async () => {
+        const creativeText = String(globalStoryInput.wild_creative_notes || '').trim();
+        if (!creativeText) {
+            alert(t('请先在「天马行空」输入框中写下创意脑洞。', 'Please write your wild ideas in the brainstorm box first.'));
+            return;
+        }
+        if (isStructuringCreativeInput || isGeneratingGlobalStory) return;
+
+        setIsStructuringCreativeInput(true);
+        try {
+            const structured = await structureProjectCreativeInput(id, {
+                creative_text: creativeText,
+                script_mode: globalStoryInput.script_mode,
+                target_audience: globalStoryInput.target_audience,
+                type: info.type,
+                language: info.language,
+            });
+            const structureFields = [
+                'logline', 'theme', 'core_conflict', 'background', 'characters',
+                'setup', 'development', 'turning_points', 'climax', 'resolution',
+                'suspense', 'foreshadowing', 'extra_notes',
+            ];
+            setGlobalStoryInput(prev => {
+                const next = { ...prev, wild_creative_notes: prev.wild_creative_notes };
+                structureFields.forEach((key) => {
+                    if (structured && Object.prototype.hasOwnProperty.call(structured, key)) {
+                        next[key] = String(structured[key] ?? '').trim();
+                    }
+                });
+                return next;
+            });
+            alert(t('已结构化并预填 I1–I9 字段，请核对后生成全局框架。', 'Structured and prefilled I1–I9 fields. Review before generating the global framework.'));
+        } catch (e) {
+            console.error(e);
+            const readable = formatProviderModelEndpointError(e);
+            alert(`${t('结构化失败', 'Structuring failed')}:\n${readable}`);
+        } finally {
+            setIsStructuringCreativeInput(false);
+        }
+    };
+
     const handleGenerateGlobalStory = async () => {
         if (globalStoryGenerationInFlightRef.current || isGeneratingGlobalStory) return;
         globalStoryGenerationInFlightRef.current = true;
@@ -1593,6 +1639,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 resolution: globalStoryInput.resolution,
                 suspense: globalStoryInput.suspense,
                 foreshadowing: globalStoryInput.foreshadowing,
+                wild_creative_notes: globalStoryInput.wild_creative_notes,
                 extra_notes: globalStoryInput.extra_notes,
             };
             const updated = await generateProjectStoryGlobal(id, payload);
@@ -3242,6 +3289,38 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         />
                         <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
                             {t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
+                        </div>
+                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">
+                                        {t('天马行空的想法', 'Wild Ideas & Creative Prompt')}
+                                    </label>
+                                    <div className="text-[11px] text-muted-foreground/80 mt-1">
+                                        {t('先把脑海中的画面、台词、怪念头倒在这里；点「结构化预填」会调用剧本分析 LLM 拆分到下方 I1–I9。', 'Pour raw scenes, lines, and quirky ideas here; click Structure to split into I1–I9 below via script-analysis LLM.')}
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleStructureCreativeInput}
+                                    disabled={isStructuringCreativeInput || isGeneratingGlobalStory}
+                                    className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
+                                    title={t('调用剧本分析 LLM，将上方脑洞结构化并预填 I1–I9', 'Use script-analysis LLM to structure brainstorm and prefill I1–I9')}
+                                >
+                                    {isStructuringCreativeInput
+                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('结构化中...', 'Structuring...')}</>
+                                        : <><Wand2 className="w-3.5 h-3.5" /> {t('结构化预填', 'Structure & Prefill')}</>}
+                                </button>
+                            </div>
+                            <textarea
+                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-none placeholder:text-white/25"
+                                value={globalStoryInput.wild_creative_notes}
+                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, wild_creative_notes: e.target.value }))}
+                                placeholder={t(
+                                    '尽情输入，例如：绝症杀手替女儿复仇；双重人格天才杀人前必听贝多芬；开头直升机反杀；结局雨中工厂兄弟反目，「我们都回不去了」…',
+                                    'e.g. Dying assassin avenges daughter; dual-personality genius listens to Beethoven before killing; helicopter opening; rainy factory finale…'
+                                )}
+                            />
                         </div>
                         <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4">
                             <div>

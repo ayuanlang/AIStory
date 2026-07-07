@@ -7483,6 +7483,7 @@ _PROMPT_SKILL_ALIAS = {
     "story_generator_global.txt": "skill:story_generation/story_generator_global.txt",
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
+    "story_generator_structure_creative_input.txt": "skill:story_generation/story_generator_structure_creative_input.txt",
     "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
     "script_generator_episode_script.txt": "master_episode_writer.md",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
@@ -17347,6 +17348,7 @@ async def generate_project_story_dna_global(
         f"I8a Core Suspense / 核心悬念: {(req.suspense or '').strip()}\n"
         f"I8b Foreshadowing & Must-Keep / 伏笔与必留元素: {(req.foreshadowing or '').strip()}\n"
         f"I9 Raw Fragments / 自由脑洞补充: {(req.extra_notes or '').strip()}\n"
+        f"Wild Creative Notes (天马行空原文，保留溯源): {(getattr(req, 'wild_creative_notes', None) or '').strip()}\n"
     )
 
     llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
@@ -17865,6 +17867,210 @@ class AnalyzeNovelRequest(BaseModel):
     novel_text: str
     function_name: Optional[str] = None
     system_api_id: Optional[int] = None
+
+
+class StructureCreativeInputRequest(BaseModel):
+    creative_text: str
+    script_mode: Optional[str] = None
+    target_audience: Optional[str] = None
+    type: Optional[str] = None
+    language: Optional[str] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
+_CREATIVE_INPUT_STRUCTURE_KEYS = [
+    "logline",
+    "theme",
+    "core_conflict",
+    "background",
+    "characters",
+    "setup",
+    "development",
+    "turning_points",
+    "climax",
+    "resolution",
+    "suspense",
+    "foreshadowing",
+    "extra_notes",
+]
+
+
+def _normalize_llm_json_object(raw: str, *, context: str) -> Dict[str, Any]:
+    content = re.sub(r"<think>.*?</think>", "", str(raw or ""), flags=re.DOTALL).strip()
+    content = content.replace("```json", "").replace("```", "").strip()
+    start_idx = content.find("{")
+    end_idx = content.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        content = content[start_idx:end_idx + 1]
+    try:
+        data = json.loads(content)
+    except Exception as e:
+        logger.error("[%s] JSON parse failed: %s. Raw len=%s", context, e, len(raw or ""))
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="LLM JSON must be an object")
+    return data
+
+
+def _normalize_story_field_map(data: Dict[str, Any], keys: List[str]) -> Dict[str, str]:
+    normalized: Dict[str, str] = {}
+    for key in keys:
+        val = data.get(key, "")
+        if val is None:
+            normalized[key] = ""
+        elif isinstance(val, str):
+            normalized[key] = val.strip()
+        else:
+            normalized[key] = str(val).strip()
+    return normalized
+
+
+@router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
+async def structure_project_creative_input_to_story_fields(
+    project_id: int,
+    req: StructureCreativeInputRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            structure_project_creative_input_to_story_fields,
+            user_id=current_user.id,
+            kind="structure_creative_input",
+            project_id=project_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    project = _require_project_access(db, project_id, current_user)
+
+    creative_text = (req.creative_text or "").strip()
+    if not creative_text:
+        raise HTTPException(status_code=400, detail="creative_text is required")
+
+    try:
+        sys_prompt_template = _resolve_prompt_text("story_generator_structure_creative_input.txt")
+    except FileNotFoundError:
+        logger.error("Structure creative input prompt not found: story_generator_structure_creative_input.txt")
+        raise HTTPException(
+            status_code=404,
+            detail="Prompt file 'story_generator_structure_creative_input.txt' not found.",
+        )
+
+    gi_existing = dict(project.global_info or {})
+    project_title_str = str(project.title or "")
+    project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
+    language = (getattr(req, "language", None) or gi_existing.get("language") or "").strip()
+    script_mode = (getattr(req, "script_mode", None) or "").strip()
+    target_audience = (getattr(req, "target_audience", None) or "").strip()
+
+    user_prompt = (
+        f"Project Title: {project_title_str}\n"
+        f"Type: {project_type}\n"
+        f"Language: {language}\n"
+        f"Script Mode: {script_mode}\n"
+        f"Target Audience: {target_audience}\n\n"
+        f"Wild Creative Brainstorm:\n{creative_text}"
+    )
+
+    function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
+    system_api_id = getattr(req, "system_api_id", None) if req else None
+
+    llm_config = agent_service.get_active_llm_config(
+        current_user.id,
+        system_api_id=system_api_id,
+        function_name=function_name,
+    )
+    if not llm_config or not (llm_config.get("api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project.global_info,
+        context="structure_creative_input",
+    )
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_reserve_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt_template},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            current_user.id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": "structure_creative_input",
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
+
+    try:
+        sys_prompt = sys_prompt_template.format(creative_text=creative_text)
+    except Exception:
+        sys_prompt = sys_prompt_template
+
+    try:
+        _release_db_connection(db, "structure_creative_input_llm_call")
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
+        raise
+
+    raw = (resp.get("content") or "").strip()
+    if not raw:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ],
+            output_ratio=1.0,
+        )
+    billing_details = {
+        "item": "structure_creative_input",
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    billing_details["input_tokens"] = billing_details["prompt_tokens"]
+    billing_details["output_tokens"] = billing_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(billing_details, resp)
+
+    if reservation_tx:
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
+    else:
+        billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
+
+    data = _normalize_llm_json_object(raw, context="structure_creative_input")
+    return _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
 
 
 @router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])
@@ -19152,6 +19358,7 @@ class StoryGeneratorRequest(BaseModel):
     climax: Optional[str] = None
     resolution: Optional[str] = None
     suspense: Optional[str] = None
+    wild_creative_notes: Optional[str] = None
     extra_notes: Optional[str] = None
     strict_markdown: bool = True
 

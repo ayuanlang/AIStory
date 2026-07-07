@@ -1111,6 +1111,16 @@ export const analyzeProjectNovel = async (projectId, payload) => {
     return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, sysReq);
 }
 
+export const structureProjectCreativeInput = async (projectId, payload) => {
+    const fnName = 'script_analysis';
+    const sysReq = {
+        ...payload,
+        function_name: fnName,
+        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
+    };
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, sysReq);
+}
+
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
 export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
     const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);
