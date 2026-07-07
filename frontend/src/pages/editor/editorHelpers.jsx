@@ -1781,6 +1781,45 @@ export const normalizeEpisodeTitleForDisplay = (rawTitle) => {
         .trim();
 };
 
+export function resolveEntityNegativePromptEn(entity) {
+    if (!entity) return '';
+    const direct = String(entity.negative_prompt_en || '').trim();
+    if (direct) return direct;
+
+    const rawAttrs = entity.custom_attributes;
+    if (!rawAttrs) return '';
+    if (typeof rawAttrs === 'string') {
+        try {
+            const parsed = JSON.parse(rawAttrs);
+            return String(parsed?.negative_prompt_en || '').trim();
+        } catch {
+            return '';
+        }
+    }
+    if (typeof rawAttrs === 'object') {
+        return String(rawAttrs.negative_prompt_en || '').trim();
+    }
+    return '';
+}
+
+export function appendNegativePromptToImagePrompt(prompt = '', negativePrompt = '') {
+    const base = String(prompt || '').trim();
+    const neg = String(negativePrompt || '').trim();
+    if (!neg) return base;
+
+    const suffix = `Negative Prompt: ${neg}`;
+    if (!base) return suffix;
+
+    const lowerBase = base.toLowerCase();
+    const lowerNeg = neg.toLowerCase();
+    if (lowerBase.includes('negative prompt:') && lowerBase.includes(lowerNeg)) {
+        return base;
+    }
+
+    const withoutExisting = base.replace(/\n\nnegative prompt:\s*[\s\S]*$/i, '').trimEnd();
+    return `${withoutExisting}\n\n${suffix}`;
+}
+
 export function buildEntityNegativePrompt(sourceText = '', primaryEntity = null, entityPool = []) {
     const pool = Array.isArray(entityPool) ? entityPool : [];
     const negatives = [];
@@ -1791,9 +1830,7 @@ export function buildEntityNegativePrompt(sourceText = '', primaryEntity = null,
         if (!negatives.includes(text)) negatives.push(text);
     };
 
-    if (primaryEntity?.negative_prompt_en) {
-        pushNegative(primaryEntity.negative_prompt_en);
-    }
+    pushNegative(resolveEntityNegativePromptEn(primaryEntity));
 
     const resolveEntity = (tokenValue) => {
         const raw = String(tokenValue || '').trim();
@@ -1813,12 +1850,18 @@ export function buildEntityNegativePrompt(sourceText = '', primaryEntity = null,
     tokenMatches.forEach((wrapped) => {
         const inner = String(wrapped || '').replace(/^[\[【]\s*/, '').replace(/[\]】]\s*$/, '');
         const entity = resolveEntity(inner);
-        if (entity?.negative_prompt_en) {
-            pushNegative(entity.negative_prompt_en);
-        }
+        pushNegative(resolveEntityNegativePromptEn(entity));
     });
 
     return negatives.join(', ');
+}
+
+export function buildEntityImageGenerationPrompts(prompt = '', sourceText = '', primaryEntity = null, entityPool = []) {
+    const negative_prompt = buildEntityNegativePrompt(sourceText, primaryEntity, entityPool);
+    return {
+        prompt: appendNegativePromptToImagePrompt(prompt, negative_prompt),
+        negative_prompt,
+    };
 }
 
 export function normalizeImageSizeOption(value) {

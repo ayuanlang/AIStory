@@ -17330,15 +17330,23 @@ async def generate_project_story_dna_global(
         f"\n"
         f"Episodes Count: {int(episodes_count)}\n"
         f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
-        f"Foreshadowing: {req.foreshadowing or ''}\n"
-        f"Background: {req.background or ''}\n"
-        f"Setup: {req.setup or ''}\n"
-        f"Development: {req.development or ''}\n"
-        f"Turning Points: {req.turning_points or ''}\n"
-        f"Climax: {req.climax or ''}\n"
-        f"Resolution: {req.resolution or ''}\n"
-        f"Suspense: {req.suspense or ''}\n"
-        f"Extra Notes: {req.extra_notes or ''}\n"
+        f"Script Mode: {(getattr(req, 'script_mode', None) or '').strip()}\n"
+        f"Target Audience: {(getattr(req, 'target_audience', None) or '').strip()}\n"
+        f"\n"
+        f"[Creative Input — Standard Structure (脑洞标准输入)]\n"
+        f"I1 Logline / 高概念: {(getattr(req, 'logline', None) or '').strip()}\n"
+        f"I2 Theme / 主题与主控思想: {(getattr(req, 'theme', None) or '').strip()}\n"
+        f"I3 Core Conflict / 核心矛盾·赌注·Gap: {(getattr(req, 'core_conflict', None) or '').strip()}\n"
+        f"I4 World & Background / 世界与背景: {(req.background or '').strip()}\n"
+        f"I5 Characters & Relationships / 核心人物: {(getattr(req, 'characters', None) or '').strip()}\n"
+        f"I6a Opening & Inciting / 开局与激励: {(req.setup or '').strip()}\n"
+        f"I6b Mid Arc Escalation / 中段升级: {(req.development or '').strip()}\n"
+        f"I6c Turning Points / 转折与中点: {(req.turning_points or '').strip()}\n"
+        f"I7a Climax & Must-Have Scenes / 高潮与名场面: {(req.climax or '').strip()}\n"
+        f"I7b Ending & Resolution / 结局与收尾: {(req.resolution or '').strip()}\n"
+        f"I8a Core Suspense / 核心悬念: {(req.suspense or '').strip()}\n"
+        f"I8b Foreshadowing & Must-Keep / 伏笔与必留元素: {(req.foreshadowing or '').strip()}\n"
+        f"I9 Raw Fragments / 自由脑洞补充: {(req.extra_notes or '').strip()}\n"
     )
 
     llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
@@ -17619,25 +17627,60 @@ def export_project_story_generator_global_package(
         raw = str(md or "")
         if not raw.strip():
             return {}
+
+        def _first_non_empty(*pairs: tuple[str, str]) -> str:
+            for start_pat, end_pat in pairs:
+                block = _extract_between(raw, start_pat, end_pat)
+                if block:
+                    return block
+            return ""
+
         setup_block = _extract_between(raw, r"###\s*A\)", r"###\s*B\)")
-        development_block = _extract_between(raw, r"###\s*B\)\s*发展", r"###\s*C\)\s*转折")
-        turning_block = _extract_between(raw, r"###\s*C\)\s*转折", r"###\s*D\)\s*高潮")
-        climax_block = _extract_between(raw, r"###\s*D\)\s*高潮", r"###\s*E\)\s*定局")
-        resolution_block = _extract_between(raw, r"###\s*E\)\s*定局", r"##\s*5\)\s*悬念系统")
-        suspense_block = _extract_between(raw, r"##\s*5\)", r"##\s*6\)")
-        foreshadowing_block = _extract_between(raw, r"##\s*6\)", r"##\s*7\)")
-        background_block = _extract_between(raw, r"##\s*1\)", r"##\s*2\)")
+        development_block = _first_non_empty(
+            (r"###\s*B\)\s*发展", r"###\s*C\)\s*转折"),
+            (r"###\s*B\)", r"###\s*C\)"),
+        )
+        turning_block = _first_non_empty(
+            (r"###\s*C\)\s*转折", r"###\s*D\)\s*高潮"),
+            (r"###\s*C\)", r"###\s*D\)"),
+        )
+        climax_block = _first_non_empty(
+            (r"###\s*D\)\s*高潮", r"###\s*E\)\s*定局"),
+            (r"###\s*D\)", r"###\s*E\)"),
+        )
+        resolution_block = _first_non_empty(
+            (r"###\s*E\)\s*定局", r"##\s*5\)\s*[^\n]*悬念"),
+            (r"###\s*E\)", r"##\s*6\)"),
+            (r"###\s*E\)", r"##\s*5\)\s*[^\n]*悬念"),
+        )
+        suspense_block = _first_non_empty(
+            (r"##\s*6\)\s*[^\n]*悬念", r"##\s*7\)"),
+            (r"##\s*5\)\s*[^\n]*悬念", r"##\s*6\)"),
+            (r"##\s*5\)", r"##\s*6\)"),
+        )
+        foreshadowing_block = _first_non_empty(
+            (r"##\s*7\)\s*[^\n]*伏笔", r"##\s*8\)"),
+            (r"##\s*6\)\s*[^\n]*伏笔", r"##\s*7\)"),
+            (r"##\s*6\)", r"##\s*7\)"),
+        )
+        background_block = _first_non_empty(
+            (r"##\s*2\)\s*[^\n]*核心设定", r"##\s*3\)"),
+            (r"##\s*1\)", r"##\s*2\)"),
+        )
 
         hook = ""
         inciting = ""
         point_of_no_return = ""
+        hook_keys = ("开场钩子", "开场画面", "Opening Image")
+        inciting_keys = ("触发事件", "激励事件", "Inciting Incident", "催化剂", "Catalyst")
+        ponr_keys = ("不可回头", "立场选择", "越过边界", "Break into Two")
         for line in (setup_block or "").splitlines():
             s = line.strip()
-            if (not hook) and ("开场钩子" in s):
+            if (not hook) and any(k in s for k in hook_keys):
                 hook = s
-            elif (not inciting) and ("触发事件" in s):
+            elif (not inciting) and any(k in s for k in inciting_keys):
                 inciting = s
-            elif (not point_of_no_return) and ("不可回头" in s or "立场选择" in s):
+            elif (not point_of_no_return) and any(k in s for k in ponr_keys):
                 point_of_no_return = s
 
         return {
@@ -19098,6 +19141,10 @@ class StoryGeneratorRequest(BaseModel):
     base_positioning: Optional[str] = None
     Global_Style: Optional[str] = None
     foreshadowing: Optional[str] = None
+    logline: Optional[str] = None
+    theme: Optional[str] = None
+    core_conflict: Optional[str] = None
+    characters: Optional[str] = None
     background: Optional[str] = None
     setup: Optional[str] = None
     development: Optional[str] = None

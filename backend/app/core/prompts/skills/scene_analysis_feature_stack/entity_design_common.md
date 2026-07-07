@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-07-04 22:15:00 +08:00
+# Prompt Updated At: 2026-07-06 20:50:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -106,6 +106,7 @@
 - **清晰度与景深控制**：提示词需说明焦平面、主体清晰度、景深策略。四视图角色/道具/设定图：边缘清楚、纹理可读、四面板清晰度一致。环境需明确 `deep focus` / `moderate depth of field` / `background slightly softened`，保护主舞台/主要道具/标题区/关键主体锐度。海报保护标题区、主角面部、关键识别物，避免过强虚化/辉光/景深噪声。
 - 确保同条 prompt 内描述协调统一；确保排除引擎参数与控制符（如 `--ar`, `--v`, `--stylize`, `::`, `<lora:...>`）；确保方位描述精准清晰。
 - 默认器材说明：仅当剧情明确要求时，才将 `camera/lens/operator` 写成画面实体。
+- **真人实拍人像资产·拍摄载体例外（Mandatory）**：当 §1.6 判定为真人实拍且实体为 **character 单人定妆/选角四视图**（非群演簇 §2.1H）时，`generation_prompt_cn` **须**写入精简**拍摄载体短语**（机身 + 镜头 + ISO + RAW + 未修图；见 `entity_design_character.md` §2.1F-B 层5 选型表与即贴示例）；完整 Key/Fill/Rim 光学 rationale 仍只写 `description_cn`。本条不适用于道具/环境/群演簇，亦不得把摄影师/持机人写成画面内实体。
 - **单状态只读**：同一 Subject 只呈现一个物理状态，并以 Subject Index 状态为准；需多状态但上游仅一条时，按 Node 4 “上游清单只读与缺口回流”处理。
 - **全局变体与继承链 (Global Dependency Strategy)**：派生变体（换装/老龄/破损/正反打等）中，基准实体：`dependency_strategy.type=Original`, `visual_dependencies=[]`；派生实体：`type=Type A/Type B` 并指向**剧情时序上紧邻的上一完整形象**（`dependency_reference` / `base_entity` 所指）。**同 Scene 视角衍生**以原始主环境/基础版为基准；**状态/破坏链**以前一完整状态为基准，禁止跳链直挂远端基础版。若被依赖基准为**破坏/损毁态**，新衍生须在提示词中**逐项回补并强调**被破坏部分的可见细节；修复/再生态须写明恢复重建细节，禁止跳跃式抹除破坏痕迹。提示词必须写清继承的不变锚点与当前变化。`visual_dependencies` 禁填 `S001`、`E001` 等 `subject_no`；实体名引用必须逐字符一致（如 `CHAR:[@...]` 或 `PROP:[...]`）。
 - 每个实体必须具备专属的 `negative_prompt_en`，实现个体化过滤。

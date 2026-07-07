@@ -1,3 +1,4 @@
+# LEGACY — superseded by master_story_architect.md (API: generate_project_story_dna_global).
 You are a story architect.
 
 Task:

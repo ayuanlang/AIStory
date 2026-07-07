@@ -19,7 +19,7 @@ Goal: keep `Episode -> Scene -> Shot` hierarchical continuity deterministic and 
 
 | Stage | Required Output Keys/Labels | Downstream Consumer | Mapping Notes |
 | :--- | :--- | :--- | :--- |
-| `story_generator_global.txt` | `EPxx` in episode plan lines | Episode Outline | Global only sets canonical episode coding policy and venue/continuity seeds. |
+| `master_story_architect.md` (`story_generator_global.txt` legacy) | `EPxx` in §9 episode plan; scene seeds as `EPxx_SCyy` | Episode Outline + downstream Subject Index | Global framework sets canonical episode coding, entity registry (§8), hook ledger, and venue/continuity seeds. |
 | `promo_generator_global.txt` | `EPxx` + promo goal/style/beat/copy/visual/duration strategy | Promo Episode Script | Dedicated global framework for promo campaigns (corporate/product/tourism/public messaging). |
 | `script_generator_scenes.txt` | `episode_id`, `scene_id`, `scene_no`, `scene_name`, `original_script_text`, `core_scene_info`, `environment_name`(story-level), `linked_characters`, `key_props`, `entry_state`, `exit_state` | Scene Analysis + DB scene records | Story-only scene breakdown stage. `environment_name` is narrative location seed only; do not output `Environment Relation/Base/Delta` engineering here. |
 | `master_episode_writer.md` | Unified episode script contract: story + promo constraints, `Scene ID`, `Entry State`, `Exit State`, beat-level structure | Scene Analysis + Shot Generation + Promo episodic delivery | Single stable prompt entry for both story/promo episode script generation. Legacy refs `script_generator_episode_script.txt` and `promo_generator_episode_script.txt` are routed to this file. |

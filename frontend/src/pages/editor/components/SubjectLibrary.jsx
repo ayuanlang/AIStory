@@ -16,7 +16,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityImageGenerationPrompts, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
 } from '../editorHelpers';
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
@@ -3608,7 +3608,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         setStep('generating', '正在根据新提示词生成图片...', 'Generating image with new prompt...', 80);
-        const asset = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+        const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
+            finalPrompt,
+            rawPrompt,
+            analyzed || entity,
+            allEntities
+        );
+        const asset = await generateImage(submissionPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
             function_name: (deps && deps.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
             project_id: projectId,
             episode_id: currentEpisode?.id,
@@ -3620,7 +3626,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             prompt_language: resolvedPromptSubmitLang,
             asset_type: 'subject',
             ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-            negative_prompt: buildEntityNegativePrompt(rawPrompt, analyzed || entity, allEntities),
+            negative_prompt: entityNegativePrompt,
             ...(onJobCreated ? { on_job_created: onJobCreated } : {})
         });
 
@@ -5731,7 +5737,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 );
             }
 
-            const submitResult = await submitImageGenerationJob(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+            const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
+                finalPrompt,
+                promptToUse,
+                activeEntity,
+                allEntities
+            );
+
+            const submitResult = await submitImageGenerationJob(submissionPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                 function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                 project_id: projectId,
                 episode_id: currentEpisode?.id,
@@ -5743,7 +5756,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 prompt_language: effectivePromptSubmitLang,
                 asset_type: 'subject',
                 ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                negative_prompt: buildEntityNegativePrompt(finalPrompt, activeEntity, allEntities),
+                negative_prompt: entityNegativePrompt,
                 ...(extraProviderOptions || {})
             });
 
@@ -6118,7 +6131,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                 let createdJobId = '';
                 try {
-                    const res = await generateImage(finalPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
+                    const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
+                        finalPrompt,
+                        basePrompt,
+                        entity,
+                        allEntities
+                    );
+                    const res = await generateImage(submissionPrompt, null, uniqueRefs.length > 0 ? uniqueRefs : null, {
                         function_name: (uniqueRefs && uniqueRefs.length > 0) ? 'generate_subjects_i2i' : 'generate_subjects_t2i',
                         project_id: projectId,
                         episode_id: currentEpisode?.id,
@@ -6130,7 +6149,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         prompt_language: resolvedPromptSubmitLang,
                         asset_type: 'subject',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
-                        negative_prompt: buildEntityNegativePrompt(basePrompt, entity, allEntities),
+                        negative_prompt: entityNegativePrompt,
                         on_job_created: (jobId) => {
                             const stableJobId = String(jobId || '').trim();
                             if (!stableJobId) return;

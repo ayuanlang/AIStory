@@ -213,7 +213,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         story_generator_global_input: {
             episodes_count: 30,
             episode_duration_minutes: 1,
+            logline: "",
+            theme: "",
+            core_conflict: "",
             background: "",
+            characters: "",
             setup: "",
             development: "",
             turning_points: "",
@@ -243,7 +247,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         episode_duration_minutes: 1,
         script_mode: "短剧快节奏 / Short Drama",
         target_audience: "男频路线 / Male-Oriented",
+        logline: "",
+        theme: "",
+        core_conflict: "",
         background: "",
+        characters: "",
         setup: "",
         development: "",
         turning_points: "",
@@ -1247,7 +1255,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         : 1,
                     script_mode: globalStoryInput.script_mode,
                     target_audience: globalStoryInput.target_audience,
+                    logline: globalStoryInput.logline,
+                    theme: globalStoryInput.theme,
+                    core_conflict: globalStoryInput.core_conflict,
                     background: globalStoryInput.background,
+                    characters: globalStoryInput.characters,
                     setup: globalStoryInput.setup,
                     development: globalStoryInput.development,
                     turning_points: globalStoryInput.turning_points,
@@ -1569,7 +1581,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 language: info.language,
                 base_positioning: info.base_positioning,
                 Global_Style: info.Global_Style,
+                logline: globalStoryInput.logline,
+                theme: globalStoryInput.theme,
+                core_conflict: globalStoryInput.core_conflict,
                 background: globalStoryInput.background,
+                characters: globalStoryInput.characters,
                 setup: globalStoryInput.setup,
                 development: globalStoryInput.development,
                 turning_points: globalStoryInput.turning_points,
@@ -3227,19 +3243,217 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
                             {t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
                         </div>
-                        <div className="sm:col-span-2">
-                            <div className="flex justify-between items-end mb-1">
-                                <label className="text-xs text-muted-foreground uppercase font-bold block">{t('天马行空的想法', 'Wild Ideas & Creative Prompt')}</label>
-                                <span className="text-[11px] text-muted-foreground/70">
-                                    {t('💡 引导：把脑海中的画面、台词或怪念头倒出来，AI会帮你结构化三幕剧与人物弧光！', '💡 Hint: Pour out the scenes, dialogues, or quirky ideas in your mind, and AI will structure the 3-act beats and arcs!')}
-                                </span>
+                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-4">
+                            <div>
+                                <div className="text-sm font-semibold text-white">{t('脑洞标准输入（I1–I9）', 'Creative Input (I1–I9)')}</div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                    {t('先填 I1–I3 定调，再填世界、人物与剧情；未归类碎片放 I9。每栏下方有简要示例（灰色），可作 placeholder 参考。', 'Fill I1–I3 first, then world/characters/plot; fragments in I9. Each field has a brief example below.')}
+                                </div>
                             </div>
-                            <textarea
-                                className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-32 resize-none"
-                                value={globalStoryInput.extra_notes}
-                                onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
-                                placeholder={t('尽情输入，例如：\n我想写一个绝症杀手替女儿复仇的故事；\n主角是个有双重人格的天才，杀人前必听贝多芬；\n开头是一场从直升机上的反杀；\n某处大结局必须有一场雨中废弃工厂的宿命对决，兄弟反目，说“我们都回不去了”...', 'E.g.:\nA dying assassin takes revenge for his daughter;\nThe protagonist is a dual-personality genius who listens to Beethoven before killing;\nThe climax must feature a fated battle in an abandoned factory with the line "We can never go back".')}
-                            />
+                            {[
+                                {
+                                    id: 'logline',
+                                    label: t('I1 高概念 Logline', 'I1 Logline / High Concept'),
+                                    hint: t(
+                                        '高概念 = 3 秒让人懂「这是什么故事、独特在哪、为什么要看」。写独特钩子+困境/目标+变数；不写主题（I2）和矛盾细节（I3）。',
+                                        'High concept = in 3 seconds: what story, what\'s unique, why watch. Hook + dilemma/goal + twist; not theme (I2) or conflict detail (I3).'
+                                    ),
+                                    example: t(
+                                        '例：能看见「死亡倒计时」的实习律师，必须在被当成疯子之前，救下将被谋杀的上司。',
+                                        'e.g. An intern lawyer who sees death countdowns must save her boss from murder before being labeled insane.'
+                                    ),
+                                    rows: 2,
+                                },
+                                {
+                                    id: 'theme',
+                                    label: t('I2 主题与主控思想', 'I2 Theme / Controlling Idea'),
+                                    hint: t('本剧最终要证明什么价值/人性命题（Controlling Idea）', 'What value or human truth the story ultimately proves'),
+                                    example: t(
+                                        '例：当真相与忠诚冲突时，选择真相才能救人；包庇只会让系统一起崩塌。',
+                                        'e.g. When truth conflicts with loyalty, only truth saves lives; cover-ups collapse the system.'
+                                    ),
+                                    rows: 2,
+                                },
+                                {
+                                    id: 'core_conflict',
+                                    label: t('I3 核心矛盾·赌注', 'I3 Core Conflict & Stakes'),
+                                    hint: t('不可调和对立 + 失败代价 + 行动为何适得其反（Gap）', 'Irreconcilable opposition + stakes + why actions backfire'),
+                                    example: t(
+                                        '例：林一 vs 集团封口体系+真凶；赌注：职业与生命；每查一步审计逼近一步，调查本身触发灭口。',
+                                        'e.g. Lin vs corporate cover-up + killer; stakes: career and life; each probe triggers audit and retaliation.'
+                                    ),
+                                    rows: 3,
+                                },
+                                {
+                                    id: 'background',
+                                    label: t('I4 世界与背景', 'I4 World & Background'),
+                                    hint: t('时代/地点/规则/前史/视觉基调', 'Era, place, rules, backstory, visual tone'),
+                                    example: t(
+                                        '例：2026 上海跨国律所；职级门禁+24h 审计；冷峻都市写实。',
+                                        'e.g. 2026 Shanghai megafirm; tiered access + 24h audit logs; cold urban realism.'
+                                    ),
+                                    rows: 3,
+                                },
+                                {
+                                    id: 'characters',
+                                    label: t('I5 核心人物', 'I5 Characters & Relationships'),
+                                    hint: t('主角/对手/关系；可写 Ghost·Need·Want 种子', 'Protagonist, antagonist, ties; Ghost/Need/Want seeds'),
+                                    example: t(
+                                        '例：林一：实习法务，Need 边界，Want 留任。周薇：盟友→对手。',
+                                        'e.g. Lin Yi: intern, Need boundaries, Want to stay. Zhou Wei: ally→foe.'
+                                    ),
+                                    rows: 3,
+                                },
+                            ].map((field) => (
+                                <div key={field.id}>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                    <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
+                                    <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
+                                    <textarea
+                                        className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                        rows={field.rows}
+                                        placeholder={field.example}
+                                        value={globalStoryInput[field.id] || ''}
+                                        onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                    />
+                                </div>
+                            ))}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                {[
+                                    {
+                                        id: 'setup',
+                                        label: t('I6a 开局与激励', 'I6a Opening & Inciting'),
+                                        hint: t('开场画面 + 激励事件 + 打破日常', 'Opening image + inciting incident'),
+                                        example: t(
+                                            '例：晨会送文件误拿卡套→总裁电梯开门→看见未署名解雇信。',
+                                            'e.g. Wrong badge case at morning handoff → CEO elevator opens → unsigned termination letter.'
+                                        ),
+                                        rows: 3,
+                                    },
+                                    {
+                                        id: 'development',
+                                        label: t('I6b 中段升级', 'I6b Mid Arc Escalation'),
+                                        hint: t('受挫、加码、副线、压力升级', 'Setbacks, escalation, B-story'),
+                                        example: t(
+                                            '例：人事约谈假配合→暗中比对信纸→周薇暗中观察。',
+                                            'e.g. HR interview feigned compliance → secret paper match → Zhou Wei watches.'
+                                        ),
+                                        rows: 3,
+                                    },
+                                    {
+                                        id: 'turning_points',
+                                        label: t('I6c 转折与中点', 'I6c Turning Points'),
+                                        hint: t('中点反转、真相揭露、局势失控', 'Midpoint reversal, reveal, loss of control'),
+                                        example: t(
+                                            '例：中点：信纸来自总裁办；信任崩塌；保安搜身逼近。',
+                                            'e.g. Midpoint: letter paper from CEO office; trust breaks; security search closes in.'
+                                        ),
+                                        rows: 3,
+                                    },
+                                ].map((field) => (
+                                    <div key={field.id}>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
+                                        <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                            rows={field.rows}
+                                            placeholder={field.example}
+                                            value={globalStoryInput[field.id] || ''}
+                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {[
+                                    {
+                                        id: 'climax',
+                                        label: t('I7a 高潮与名场面', 'I7a Climax & Must-Have Scenes'),
+                                        hint: t('必须拍出的对决/场面/动作设计', 'Must-have confrontation or set-piece'),
+                                        example: t(
+                                            '例：雨夜天台对峙，工牌作钥，当众播放偷拍视频换生存。',
+                                            'e.g. Rainy rooftop standoff; badge as key; plays hidden video publicly to survive.'
+                                        ),
+                                        rows: 3,
+                                    },
+                                    {
+                                        id: 'resolution',
+                                        label: t('I7b 结局与收尾', 'I7b Ending & Resolution'),
+                                        hint: t('终局态、代价、新常态、续集留白', 'Final state, cost, new normal, sequel hook'),
+                                        example: t(
+                                            '例：真凶曝光但林一被行业封杀；留白：工牌权限谁开的。',
+                                            'e.g. Killer exposed but Lin blacklisted; hook: who granted badge access?'
+                                        ),
+                                        rows: 3,
+                                    },
+                                ].map((field) => (
+                                    <div key={field.id}>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
+                                        <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                            rows={field.rows}
+                                            placeholder={field.example}
+                                            value={globalStoryInput[field.id] || ''}
+                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {[
+                                    {
+                                        id: 'suspense',
+                                        label: t('I8a 核心悬念', 'I8a Core Suspense'),
+                                        hint: t('观众贯穿全剧想追问的问题（与 I3 对抗结构互补）', 'Core questions driving the season'),
+                                        example: t(
+                                            '例：谁写了解雇信？谁给了林一总裁权限？',
+                                            'e.g. Who wrote the letter? Who gave Lin CEO-level access?'
+                                        ),
+                                        rows: 2,
+                                    },
+                                    {
+                                        id: 'foreshadowing',
+                                        label: t('I8b 伏笔与必留元素', 'I8b Foreshadowing & Must-Keep'),
+                                        hint: t('必保留台词/道具/反转/回收约束', 'Must-keep lines, props, payoffs'),
+                                        example: t(
+                                            '例：镜前工牌特写；台词「这扇门认的不是我」；工牌终集再触发门禁。',
+                                            'e.g. Mirror badge shot; line "This door knows a name I haven\'t met"; badge triggers access in finale.'
+                                        ),
+                                        rows: 2,
+                                    },
+                                ].map((field) => (
+                                    <div key={field.id}>
+                                        <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{field.label}</label>
+                                        <div className="text-[11px] text-muted-foreground/80 mb-0.5">{field.hint}</div>
+                                        <div className="text-[11px] text-primary/70 mb-1.5 italic">{field.example}</div>
+                                        <textarea
+                                            className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full resize-none placeholder:text-white/25"
+                                            rows={field.rows}
+                                            placeholder={field.example}
+                                            value={globalStoryInput[field.id] || ''}
+                                            onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, [field.id]: e.target.value }))}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                            <div>
+                                <label className="text-xs text-muted-foreground uppercase font-bold mb-1 block">{t('I9 自由脑洞补充', 'I9 Raw Creative Fragments')}</label>
+                                <div className="text-[11px] text-muted-foreground/80 mb-0.5">
+                                    {t('画面/台词/怪念头等未归类碎片；可留空', 'Unsorted scenes, lines, ideas; optional')}
+                                </div>
+                                <div className="text-[11px] text-primary/70 mb-1.5 italic">
+                                    {t('例：开头倒叙工牌特写；集末保安上门断点；兄弟反目台词「我们都回不去了」。', 'e.g. Cold-open badge close-up; cliffhanger security at door; line "We can never go back".')}
+                                </div>
+                                <textarea
+                                    className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full h-24 resize-none placeholder:text-white/25"
+                                    value={globalStoryInput.extra_notes}
+                                    onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, extra_notes: e.target.value }))}
+                                    placeholder={t('例：开头倒叙工牌特写；集末保安上门断点…', 'e.g. Cold-open badge close-up; cliffhanger security at door…')}
+                                />
+                            </div>
                         </div>
                     </div>
 
