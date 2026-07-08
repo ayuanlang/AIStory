@@ -189,7 +189,7 @@ async def collect_episode_script_reference_snippets(
     queries = build_episode_script_search_queries(key_elements, episode_number=episode_number)
     bundle = await _collect_search_snippets_for_queries(
         queries,
-        limit_per_query=max(EPISODE_SCRIPT_LIMIT_PER_QUERY, min(DEFAULT_LIMIT_PER_QUERY, 3)),
+        limit_per_query=EPISODE_SCRIPT_LIMIT_PER_QUERY,
         report_kind="episode_script_reference",
     )
     reference_query = " ".join(
@@ -217,8 +217,9 @@ def build_episode_script_reference_user_prompt(
     language: str = "",
 ) -> str:
     lines = [
-        "Reference Research (Episode Script Inspiration):",
-        "Use these web snippets only as reference for trope rhythm, iconic staging, dialogue punch, and climax beats.",
+        "[EPISODE_REFERENCE_RESEARCH_START]",
+        "【分集参考检索 / Episode Reference Research】",
+        "Use these web snippets as reference for trope rhythm, iconic staging, dialogue punch, and climax beats.",
         "Localize and recombine; do NOT copy plots, character names, or verbatim lines.",
         f"Episode Number: {episode_number}",
         f"Project Title: {project_title or '(none)'}",
@@ -253,19 +254,28 @@ def build_episode_script_reference_user_prompt(
 
     lines.append("")
     lines.append(f"Web Search Snippets (max {search_bundle.get('snippet_cap', EPISODE_SCRIPT_MAX_SNIPPETS)}):")
+    rendered_snippets = 0
     for idx, item in enumerate(search_bundle.get("snippets") or [], start=1):
         if not isinstance(item, dict):
             continue
+        title = str(item.get("title") or "").strip()
         snippet = str(item.get("snippet") or "").strip()
-        if not snippet:
+        url = str(item.get("url") or "").strip()
+        summary = snippet or title or url
+        if not summary:
             continue
+        rendered_snippets += 1
         lines.extend(
             [
                 f"[{idx}] Query: {item.get('query', '')}",
-                f"Title: {item.get('title', '')}",
-                f"Summary: {snippet}",
-                f"URL: {item.get('url', '')}",
+                f"Title: {title}",
+                f"Summary: {summary[:480]}",
+                f"URL: {url}",
                 "",
             ]
         )
+    if rendered_snippets <= 0:
+        lines.append("(No usable web snippets returned; rely on Extracted Search Key Elements above.)")
+    lines.append("[EPISODE_REFERENCE_RESEARCH_END]")
+    search_bundle["rendered_snippet_count"] = rendered_snippets
     return "\n".join(lines).strip()

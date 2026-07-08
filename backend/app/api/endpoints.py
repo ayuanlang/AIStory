@@ -18303,27 +18303,29 @@ async def _prepare_episode_script_reference_block(
         return ""
 
     snippet_count = len(search_bundle.get("snippets") or [])
+    rendered_snippet_count = int(search_bundle.get("rendered_snippet_count") or 0)
+    reference_text = build_episode_script_reference_user_prompt(
+        search_bundle,
+        key_elements,
+        episode_number=episode_number,
+        episode_block=episode_block,
+        project_title=project_title,
+        language=language,
+    )
+    rendered_snippet_count = int(search_bundle.get("rendered_snippet_count") or rendered_snippet_count)
     logger.info(
-        "[generate_episode_scripts] REFERENCE_SEARCH_OK episode_number=%s episode_block_len=%s query_count=%s snippet_count=%s",
+        "[generate_episode_scripts] REFERENCE_SEARCH_OK episode_number=%s episode_block_len=%s query_count=%s snippet_count=%s rendered_snippet_count=%s reference_block_len=%s",
         episode_number,
         len(episode_block),
         len(search_bundle.get("queries") or []),
         snippet_count,
+        rendered_snippet_count,
+        len(reference_text),
     )
-    if snippet_count <= 0:
+    if not reference_text.strip():
         return ""
 
-    return (
-        build_episode_script_reference_user_prompt(
-            search_bundle,
-            key_elements,
-            episode_number=episode_number,
-            episode_block=episode_block,
-            project_title=project_title,
-            language=language,
-        )
-        + "\n\n"
-    )
+    return reference_text + "\n\n"
 
 
 @router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
@@ -21975,12 +21977,16 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"{prev_episode_block}"
-            f"{reference_search_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
-            "Write the episode script draft now."
         )
+        if reference_search_block.strip():
+            user_prompt += (
+                "Episode Reference Research (MUST consult before writing; localize, do not copy verbatim):\n"
+                f"{reference_search_block}"
+            )
+        user_prompt += "Write the episode script draft now."
 
         try:
             sys_prompt_episode = sys_prompt.format(episode_number=idx, episode_title=ep_title)
@@ -22022,7 +22028,7 @@ async def generate_project_episode_scripts_from_global_framework(
                 f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
                 f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)} "
-                f"has_reference_search_block={bool(reference_search_block)}"
+                f"has_reference_search_block={bool(reference_search_block)} reference_search_block_len={len(reference_search_block or '')}"
             )
             _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
             generated_payload = await generate_markdown_with_retry(
