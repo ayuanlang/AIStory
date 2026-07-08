@@ -306,6 +306,7 @@ def build_industry_analysis_search_queries(
     months_window: int = REPORT_MONTHS_WINDOW,
 ) -> List[str]:
     period = current_report_period_label(month_label)
+    months = resolve_report_months(month_label, window=months_window)
     queries: List[str] = []
     seen: set[str] = set()
 
@@ -315,17 +316,26 @@ def build_industry_analysis_search_queries(
             seen.add(q)
             queries.append(q)
 
-    add(f"AI短剧 行业 趋势 分析 {period}")
-    add(f"微短剧 市场 报告 AI生成 {period}")
-    add("DataEye 微短剧 AI短剧 热度榜 行业")
-    add("抖音 快手 红果 短剧 平台 对比 AI短剧")
-    add(f"AI short drama industry trends market analysis {period}")
-    add("AI generated micro drama genre trends audience preferences")
-    add("短剧 题材 热门 趋势 反转 悬疑 AI")
-    add("短剧 制作 成本 周期 AI生成 行业")
-    add(f"AI短剧 监管 政策 平台 变化 {period}")
-    add(f"短剧 商业化 投流 ROI 广告 {period}")
+    add(f"AI短剧 热榜 题材 变化 对比 {period}")
+    add(f"微短剧 热榜 题材 趋势 {period}")
+    add(f"短剧 热榜 新上榜 题材 {period}")
+    add("DataEye 微短剧 热度榜 题材 排行")
+    add("抖音 快手 红果 短剧 热榜 题材 对比")
+    add(f"AI short drama hot list genre trends {period}")
+    add("AI generated micro drama trending genres rising declining")
+    for label in months:
+        year, month_num = _month_parts(label)
+        add(f"{year}年{month_num}月 短剧 热榜 题材 热门")
+        add(f"{year}年{month_num}月 AI短剧 热榜 新题材")
+        add(f"{year}年{month_num}月 微短剧 题材 升温 降温")
+        add(f"短剧 热榜 悬疑 甜宠 复仇 逆袭 题材 {year}年{month_num}月")
+    add("短剧 题材 热门 趋势 反转 悬疑 甜宠 AI")
+    add(f"AI短剧 行业 热榜 变化 {period}")
     return queries
+
+
+TRENDING_DRAMAS_LIMIT_PER_QUERY = max(DEFAULT_LIMIT_PER_QUERY, 12)
+TRENDING_DRAMAS_MAX_QUERIES = 36
 
 
 def build_trending_dramas_search_queries(
@@ -343,15 +353,30 @@ def build_trending_dramas_search_queries(
             seen.add(q)
             queries.append(q)
 
+    def add_month_climax_pack(year: int, month_num: int) -> None:
+        ym = f"{year}年{month_num}月"
+        add(f"{ym} AI短剧 热榜 新上榜")
+        add(f"AI短剧 排行榜 {ym}")
+        add(f"微短剧 AI生成 热门 新片 {ym}")
+        add(f"红果短剧 AI短剧 新上 {ym}")
+        add(f"AI short drama trending ranking {year}-{month_num:02d}")
+        add(f"抖音 短剧 热榜 AI {ym}")
+        add(f"{ym} 短剧 热榜 名场面 高潮")
+        add(f"{ym} AI短剧 爆款 经典名场面 对白")
+        add(f"{ym} 微短剧 热榜 高潮场面 反转")
+        add(f"{ym} 短剧 热门 经典镜头 动作场面")
+        add(f"AI short drama {year}-{month_num:02d} iconic climax scene")
+
     for label in months:
         year, month_num = _month_parts(label)
-        add(f"{year}年{month_num}月 AI短剧 热榜 新上榜")
-        add(f"AI短剧 排行榜 {year}年{month_num}月")
-        add(f"微短剧 AI生成 热门 新片 {year}年{month_num}月")
-        add(f"红果短剧 AI短剧 新上 {year}年{month_num}月")
-        add(f"AI short drama trending ranking {year}-{month_num:02d}")
-        add(f"抖音 短剧 热榜 AI {year}年{month_num}月")
-    return queries
+        add_month_climax_pack(year, month_num)
+
+    period = current_report_period_label(month_label)
+    add(f"AI短剧 热榜 名场面 高潮 {period}")
+    add(f"短剧 爆款 经典对白 名场面 {period}")
+    add(f"微短剧 热门 高潮 反转 镜头 {period}")
+
+    return queries[:TRENDING_DRAMAS_MAX_QUERIES]
 
 
 def build_trending_search_queries(
@@ -808,7 +833,7 @@ async def collect_industry_analysis_search_snippets(
 async def collect_trending_dramas_search_snippets(
     *,
     month_label: Optional[str] = None,
-    limit_per_query: int = DEFAULT_LIMIT_PER_QUERY,
+    limit_per_query: int = TRENDING_DRAMAS_LIMIT_PER_QUERY,
     months_window: int = REPORT_MONTHS_WINDOW,
 ) -> Dict[str, Any]:
     queries = build_trending_dramas_search_queries(month_label, months_window=months_window)
@@ -894,7 +919,7 @@ def build_industry_analysis_user_prompt(
         search_bundle,
         project_title=project_title,
         language=language,
-        analysis_focus="Industry-wide trends, platforms, genres, audience, production/AI-tech, monetization, and creator opportunities across the full report period.",
+        analysis_focus="Hot-list churn and genre/theme shifts across the full report period: what genres rise, cool down, or newly dominate; hook/trope pattern changes; platform hot-list differences.",
     )
 
 
@@ -909,7 +934,7 @@ def build_trending_dramas_user_prompt(
         search_bundle,
         project_title=project_title,
         language=language,
-        analysis_focus="Hottest and newly-charted AI short dramas within the report period.",
+        analysis_focus="Hottest and newly-charted AI short dramas within the report period. For each title, prioritize climax and iconic scenes: visual moments, classic dialogue, action blocking, and emotional peak staging.",
         target_list_size=limit,
     )
 

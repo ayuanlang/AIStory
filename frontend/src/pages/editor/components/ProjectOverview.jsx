@@ -304,8 +304,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
     const [isGeneratingGlobalStory, setIsGeneratingGlobalStory] = useState(false);
     const [isStructuringCreativeInput, setIsStructuringCreativeInput] = useState(false);
-    const [isFetchingTrendingDramas, setIsFetchingTrendingDramas] = useState(false);
-    const [isFetchingIndustryAnalysis, setIsFetchingIndustryAnalysis] = useState(false);
+    const [isFetchingMarketResearch, setIsFetchingMarketResearch] = useState(false);
     const [trendingDramasReport, setTrendingDramasReport] = useState(null);
     const [industryAnalysisReport, setIndustryAnalysisReport] = useState(null);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
@@ -405,7 +404,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             setProjectTab('overview');
             return;
         }
-        setProjectTab((prev) => (prev === 'promo_generator' ? 'promo_generator' : 'story_generator'));
+        setProjectTab((prev) => {
+            if (prev === 'promo_generator') return 'promo_generator';
+            if (prev === 'trending_dramas') return 'market_research';
+            return prev === 'industry_analysis' ? 'market_research' : prev;
+        });
     }, [mode]);
 
     const loadProjectReviewPanel = useCallback(async () => {
@@ -1618,87 +1621,86 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         });
     };
 
-    const handleFetchIndustryAnalysis = async () => {
-        if (isFetchingIndustryAnalysis || isGeneratingGlobalStory) return;
-        setIsFetchingIndustryAnalysis(true);
+    const handleFetchMarketResearch = async () => {
+        if (isFetchingMarketResearch || isGeneratingGlobalStory) return;
+        setIsFetchingMarketResearch(true);
+        const payload = { language: info.language };
+        const errors = [];
+        let industryReport = null;
+        let trendingReport = null;
+
         try {
-            const report = await fetchIndustryAnalysisAiShortDramas(id, {
-                language: info.language,
-            });
-            setIndustryAnalysisReport(report);
-            setGlobalStoryInput(prev => ({
-                ...prev,
-                ai_short_drama_industry_report: report,
-            }));
-            try {
-                await persistStoryGeneratorInputPatch({ ai_short_drama_industry_report: report });
-            } catch (saveErr) {
-                console.warn('[Industry Analysis] save report failed:', saveErr);
+            const [industryResult, trendingResult] = await Promise.allSettled([
+                fetchIndustryAnalysisAiShortDramas(id, payload),
+                fetchTrendingAiShortDramas(id, { ...payload, limit: 12 }),
+            ]);
+
+            if (industryResult.status === 'fulfilled') {
+                industryReport = industryResult.value;
+                setIndustryAnalysisReport(industryReport);
+                setGlobalStoryInput(prev => ({
+                    ...prev,
+                    ai_short_drama_industry_report: industryReport,
+                }));
+            } else {
+                console.error(industryResult.reason);
+                errors.push(`${t('行业分析', 'Industry analysis')}: ${formatProviderModelEndpointError(industryResult.reason)}`);
             }
-        } catch (e) {
-            console.error(e);
-            const readable = formatProviderModelEndpointError(e);
-            alert(`${t('获取行业分析失败', 'Failed to fetch industry analysis')}:\n${readable}`);
+
+            if (trendingResult.status === 'fulfilled') {
+                trendingReport = trendingResult.value;
+                setTrendingDramasReport(trendingReport);
+                setGlobalStoryInput(prev => ({
+                    ...prev,
+                    trending_ai_short_dramas_report: trendingReport,
+                }));
+            } else {
+                console.error(trendingResult.reason);
+                errors.push(`${t('热门榜单', 'Trending list')}: ${formatProviderModelEndpointError(trendingResult.reason)}`);
+            }
+
+            if (industryReport || trendingReport) {
+                try {
+                    await persistStoryGeneratorInputPatch({
+                        ...(industryReport ? { ai_short_drama_industry_report: industryReport } : {}),
+                        ...(trendingReport ? { trending_ai_short_dramas_report: trendingReport } : {}),
+                    });
+                } catch (saveErr) {
+                    console.warn('[Market Research] save report failed:', saveErr);
+                }
+            }
+
+            if (errors.length > 0) {
+                alert(`${t('部分市场情报获取失败', 'Some market research requests failed')}:\n${errors.join('\n')}`);
+            }
         } finally {
-            setIsFetchingIndustryAnalysis(false);
+            setIsFetchingMarketResearch(false);
         }
     };
 
-    const handleFetchTrendingAiShortDramas = async () => {
-        if (isFetchingTrendingDramas || isGeneratingGlobalStory) return;
-        setIsFetchingTrendingDramas(true);
-        try {
-            const report = await fetchTrendingAiShortDramas(id, {
-                language: info.language,
-                limit: 12,
-            });
-            setTrendingDramasReport(report);
-            setGlobalStoryInput(prev => ({
-                ...prev,
-                trending_ai_short_dramas_report: report,
-            }));
-            try {
-                await persistStoryGeneratorInputPatch({ trending_ai_short_dramas_report: report });
-            } catch (saveErr) {
-                console.warn('[Trending AI Short Dramas] save report failed:', saveErr);
-            }
-        } catch (e) {
-            console.error(e);
-            const readable = formatProviderModelEndpointError(e);
-            alert(`${t('获取热榜失败', 'Failed to fetch trending list')}:\n${readable}`);
-        } finally {
-            setIsFetchingTrendingDramas(false);
+    const handleAppendMarketResearchToWildIdeas = () => {
+        const blocks = [];
+
+        if (industryAnalysisReport?.markdown) {
+            const period = industryAnalysisReport.report_period || industryAnalysisReport.report_month || '';
+            const header = t(
+                `【${period} AI短剧热榜题材变化参考】\n${industryAnalysisReport.summary || ''}\n`,
+                `[${period} AI Short Drama Hot-List Genre Shift Reference]\n${industryAnalysisReport.summary || ''}\n`
+            );
+            blocks.push(`${header}\n${String(industryAnalysisReport.markdown || '').trim()}`.trim());
         }
-    };
 
-    const handleAppendIndustryToWildIdeas = () => {
-        const report = industryAnalysisReport;
-        if (!report) return;
-        const period = report.report_period || report.report_month || '';
-        const header = t(
-            `【${period} AI短剧行业分析参考】\n${report.summary || ''}\n`,
-            `[${period} AI Short Drama Industry Analysis Reference]\n${report.summary || ''}\n`
-        );
-        const body = String(report.markdown || '').trim();
-        const block = `${header}\n${body}`.trim();
-        setGlobalStoryInput(prev => ({
-            ...prev,
-            wild_creative_notes: prev.wild_creative_notes
-                ? `${prev.wild_creative_notes.trim()}\n\n${block}`
-                : block,
-        }));
-    };
+        if (trendingDramasReport?.markdown) {
+            const period = trendingDramasReport.report_period || trendingDramasReport.report_month || '';
+            const header = t(
+                `【${period} AI短剧热榜参考】\n${trendingDramasReport.summary || ''}\n`,
+                `[${period} AI Short Drama Trending Reference]\n${trendingDramasReport.summary || ''}\n`
+            );
+            blocks.push(`${header}\n${String(trendingDramasReport.markdown || '').trim()}`.trim());
+        }
 
-    const handleAppendTrendingToWildIdeas = () => {
-        const report = trendingDramasReport;
-        if (!report) return;
-        const period = report.report_period || report.report_month || '';
-        const header = t(
-            `【${period} AI短剧热榜参考】\n${report.summary || ''}\n`,
-            `[${period} AI Short Drama Trending Reference]\n${report.summary || ''}\n`
-        );
-        const body = String(report.markdown || '').trim();
-        const block = `${header}\n${body}`.trim();
+        if (blocks.length === 0) return;
+        const block = blocks.join('\n\n');
         setGlobalStoryInput(prev => ({
             ...prev,
             wild_creative_notes: prev.wild_creative_notes
@@ -1740,9 +1742,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             });
             const snippetCount = structured?.prefill_meta?.search_meta?.snippet_count;
             const searchNote = Number(snippetCount) > 0
-                ? t(`（已参考 ${snippetCount} 条经典名场面/热门桥段/热门话题检索结果）`, ` (informed by ${snippetCount} reference-search snippets)`)
+                ? t(`（已参考 ${snippetCount} 条高潮/名场面/画面/对白/动作检索素材）`, ` (informed by ${snippetCount} climax/iconic-scene reference snippets)`)
                 : '';
-            alert(t('已提取关键要素、检索参考素材并预填 I1–I9 字段，请核对后生成全局框架。', 'Key elements extracted, references searched, and I1–I9 prefilled. Review before generating the global framework.') + searchNote);
+            alert(t('已提取关键要素、检索高潮与名场面参考素材并预填 I1–I9 字段，请重点核对 I7a 高潮名场面。', 'Key elements extracted, climax/iconic references searched, and I1–I9 prefilled. Review I7a climax scenes carefully.') + searchNote);
         } catch (e) {
             console.error(e);
             const readable = formatProviderModelEndpointError(e);
@@ -2426,8 +2428,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const prefix = "proj-";
     const generatorTabs = [
         { id: 'story_generator', label: t('故事生成器', 'Story Generator') },
-        { id: 'industry_analysis', label: t('行业分析', 'Industry Analysis') },
-        { id: 'trending_dramas', label: t('热门榜单', 'Trending List') },
+        { id: 'market_research', label: t('行业分析 & 热榜', 'Industry & Trending') },
         { id: 'promo_generator', label: t('宣传片生成器', 'Promo Generator') },
     ];
 
@@ -3458,7 +3459,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     onClick={handleStructureCreativeInput}
                                     disabled={isStructuringCreativeInput || isGeneratingGlobalStory}
                                     className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isStructuringCreativeInput || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-primary/20 text-primary hover:bg-primary/30'}`}
-                                    title={t('提取关键要素 → 搜索参考素材 → 预填 I1–I9', 'Extract key elements → search references → prefill I1–I9')}
+                                    title={t('提取关键要素 → 搜索高潮/名场面参考（画面·对白·动作）→ 预填 I1–I9', 'Extract key elements → search climax/iconic references (visual/dialogue/action) → prefill I1–I9')}
                                 >
                                     {isStructuringCreativeInput
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('检索分析中...', 'Researching...')}</>
@@ -3470,8 +3471,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 value={globalStoryInput.wild_creative_notes}
                                 onChange={(e) => setGlobalStoryInput(prev => ({ ...prev, wild_creative_notes: e.target.value }))}
                                 placeholder={t(
-                                    '尽情输入，例如：绝症杀手替女儿复仇；双重人格天才杀人前必听贝多芬；开头直升机反杀；结局雨中工厂兄弟反目，「我们都回不去了」…',
-                                    'e.g. Dying assassin avenges daughter; dual-personality genius listens to Beethoven before killing; helicopter opening; rainy factory finale…'
+                                    '尽情输入脑洞与名场面设想，例如：绝症杀手替女儿复仇；双重人格杀人前必听贝多芬；开头直升机反杀；高潮雨中工厂兄弟反目、经典台词「我们都回不去了」…',
+                                    'Wild ideas + iconic scenes: dying assassin avenges daughter; dual-personality killer listens to Beethoven; helicopter opening; rainy factory climax with line "We can never go back"…'
                                 )}
                             />
                         </div>
@@ -3602,7 +3603,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {
                                         id: 'climax',
                                         label: t('I7a 高潮与名场面', 'I7a Climax & Must-Have Scenes'),
-                                        hint: t('必须拍出的对决/场面/动作设计', 'Must-have confrontation or set-piece'),
+                                        hint: t('必须拍出的高潮名场面：画面构图、关键对白、动作走位', 'Must-have climax/iconic scenes: visuals, key lines, action blocking'),
                                         example: t(
                                             '例：雨夜天台对峙，工牌作钥，当众播放偷拍视频换生存。',
                                             'e.g. Rainy rooftop standoff; badge as key; plays hidden video publicly to survive.'
@@ -3735,24 +3736,24 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 </div>
                 )}
 
-                {mode === 'generator' && projectTab === 'industry_analysis' && (
+                {mode === 'generator' && projectTab === 'market_research' && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 space-y-3">
+                    <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-4">
                         <div className="flex items-start justify-between gap-3">
                             <div>
                                 <div className="text-sm font-semibold text-white flex items-center gap-2">
-                                    <Layers className="w-4 h-4 text-sky-300" />
-                                    {t('近两月 AI 短剧行业分析', 'AI Short Drama Industry Analysis (Last 2 Months)')}
+                                    <Layers className="w-4 h-4 text-violet-300" />
+                                    {t('近两月 AI 短剧市场情报', 'AI Short Drama Market Intelligence (Last 2 Months)')}
                                 </div>
                                 <div className="text-xs text-muted-foreground mt-1">
-                                    {t('独立联网检索行业信号 + 剧本分析 LLM 汇总平台、题材、受众、制作与商业化趋势（搜索结果快照，需人工核对）。', 'Dedicated web search for industry signals + script-analysis LLM synthesis of platforms, genres, audience, production, and monetization trends (snapshot; verify before use).')}
+                                    {t('一键并行拉取：热榜题材变化分析 + 热门作品榜单（含高潮/名场面·画面·对白·动作）。联网检索后由剧本分析 LLM 分别汇总（搜索结果快照，需人工核对）。', 'One-click parallel fetch: genre-shift analysis + trending list with climax/iconic scenes (visual/dialogue/action). Web search + LLM synthesis (snapshot; verify before use).')}
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                                {industryAnalysisReport?.markdown ? (
+                                {(industryAnalysisReport?.markdown || trendingDramasReport?.markdown) ? (
                                     <button
                                         type="button"
-                                        onClick={handleAppendIndustryToWildIdeas}
+                                        onClick={handleAppendMarketResearchToWildIdeas}
                                         className="px-3 py-2 rounded-lg text-xs font-bold bg-white/10 text-white hover:bg-white/20"
                                     >
                                         {t('引用到天马行空', 'Append to Wild Ideas')}
@@ -3760,79 +3761,58 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                 ) : null}
                                 <button
                                     type="button"
-                                    onClick={handleFetchIndustryAnalysis}
-                                    disabled={isFetchingIndustryAnalysis || isGeneratingGlobalStory}
-                                    className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isFetchingIndustryAnalysis || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-sky-500/20 text-sky-100 hover:bg-sky-500/30'}`}
+                                    onClick={handleFetchMarketResearch}
+                                    disabled={isFetchingMarketResearch || isGeneratingGlobalStory}
+                                    className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isFetchingMarketResearch || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-violet-500/20 text-violet-100 hover:bg-violet-500/30'}`}
                                 >
-                                    {isFetchingIndustryAnalysis
-                                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('分析中...', 'Analyzing...')}</>
-                                        : <><RefreshCw className="w-3.5 h-3.5" /> {t('获取行业分析', 'Fetch Industry Analysis')}</>}
-                                </button>
-                            </div>
-                        </div>
-                        {industryAnalysisReport?.markdown ? (
-                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[32rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">
-                                <ReactMarkdown>{industryAnalysisReport.markdown}</ReactMarkdown>
-                                {industryAnalysisReport.disclaimer ? (
-                                    <div className="text-[11px] text-muted-foreground mt-3 not-prose">{industryAnalysisReport.disclaimer}</div>
-                                ) : null}
-                            </div>
-                        ) : (
-                            <div className="text-sm text-muted-foreground">
-                                {t('点击「获取行业分析」拉取近两月 AI 短剧行业整体趋势报告。', 'Click Fetch Industry Analysis to load a 2-month AI short drama industry report.')}
-                            </div>
-                        )}
-                    </div>
-                </div>
-                )}
-
-                {mode === 'generator' && projectTab === 'trending_dramas' && (
-                <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
-                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                            <div>
-                                <div className="text-sm font-semibold text-white flex items-center gap-2">
-                                    <TrendingUp className="w-4 h-4 text-amber-300" />
-                                    {t('近两月 AI 短剧热门榜单', 'AI Short Drama Trending List (Last 2 Months)')}
-                                </div>
-                                <div className="text-xs text-muted-foreground mt-1">
-                                    {t('独立联网检索热榜与新上榜作品 + 剧本分析 LLM 汇总剧名、平台、热度与看点（搜索结果快照，需人工核对）。', 'Dedicated web search for hot/new titles + script-analysis LLM compilation of drama names, platforms, heat signals, and hooks (snapshot; verify before use).')}
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                                {trendingDramasReport?.markdown ? (
-                                    <button
-                                        type="button"
-                                        onClick={handleAppendTrendingToWildIdeas}
-                                        className="px-3 py-2 rounded-lg text-xs font-bold bg-white/10 text-white hover:bg-white/20"
-                                    >
-                                        {t('引用到天马行空', 'Append to Wild Ideas')}
-                                    </button>
-                                ) : null}
-                                <button
-                                    type="button"
-                                    onClick={handleFetchTrendingAiShortDramas}
-                                    disabled={isFetchingTrendingDramas || isGeneratingGlobalStory}
-                                    className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${(isFetchingTrendingDramas || isGeneratingGlobalStory) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'}`}
-                                >
-                                    {isFetchingTrendingDramas
+                                    {isFetchingMarketResearch
                                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('获取中...', 'Fetching...')}</>
-                                        : <><RefreshCw className="w-3.5 h-3.5" /> {t('获取热榜', 'Fetch Trending')}</>}
+                                        : <><RefreshCw className="w-3.5 h-3.5" /> {t('获取行业分析与热榜', 'Fetch Industry & Trending')}</>}
                                 </button>
                             </div>
                         </div>
-                        {trendingDramasReport?.markdown ? (
-                            <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[32rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">
-                                <ReactMarkdown>{trendingDramasReport.markdown}</ReactMarkdown>
-                                {trendingDramasReport.disclaimer ? (
-                                    <div className="text-[11px] text-muted-foreground mt-3 not-prose">{trendingDramasReport.disclaimer}</div>
-                                ) : null}
+
+                        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 space-y-3">
+                            <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                <Layers className="w-4 h-4 text-sky-300" />
+                                {t('热榜题材变化分析', 'Hot-List Genre Shift Analysis')}
                             </div>
-                        ) : (
-                            <div className="text-sm text-muted-foreground">
-                                {t('点击「获取热榜」拉取近两月最热/新上榜 AI 短剧名单与简介。', 'Click Fetch Trending to load the hottest/newly-charted AI short dramas from the last 2 months.')}
+                            {industryAnalysisReport?.markdown ? (
+                                <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[28rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">
+                                    <ReactMarkdown>{industryAnalysisReport.markdown}</ReactMarkdown>
+                                    {industryAnalysisReport.disclaimer ? (
+                                        <div className="text-[11px] text-muted-foreground mt-3 not-prose">{industryAnalysisReport.disclaimer}</div>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground">
+                                    {isFetchingMarketResearch
+                                        ? t('正在生成题材变化分析...', 'Generating genre-shift analysis...')
+                                        : t('点击上方按钮后，将在此显示热榜变化与题材趋势。', 'Genre-shift analysis will appear here after fetch.')}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
+                            <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                <TrendingUp className="w-4 h-4 text-amber-300" />
+                                {t('热门作品榜单（高潮/名场面）', 'Trending List (Climax & Iconic Scenes)')}
                             </div>
-                        )}
+                            {trendingDramasReport?.markdown ? (
+                                <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[28rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">
+                                    <ReactMarkdown>{trendingDramasReport.markdown}</ReactMarkdown>
+                                    {trendingDramasReport.disclaimer ? (
+                                        <div className="text-[11px] text-muted-foreground mt-3 not-prose">{trendingDramasReport.disclaimer}</div>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground">
+                                    {isFetchingMarketResearch
+                                        ? t('正在生成热门榜单...', 'Generating trending list...')
+                                        : t('点击上方按钮后，将在此显示最热/新上榜作品及其高潮名场面、经典对白与画面动作看点。', 'Trending dramas with climax/iconic scenes, dialogue, and visual-action highlights will appear here after fetch.')}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 )}

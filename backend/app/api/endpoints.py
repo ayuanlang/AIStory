@@ -18101,7 +18101,7 @@ async def structure_project_creative_input_to_story_fields(
     extract_user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Extract searchable key elements from the brainstorm."
+        "Extract searchable key elements from the brainstorm, with emphasis on climax moments and iconic scenes."
     )
     extract_raw = await _run_structure_llm_call(
         db=db,
@@ -18140,7 +18140,7 @@ async def structure_project_creative_input_to_story_fields(
     user_prompt = (
         f"{project_context}\n"
         f"Wild Creative Brainstorm:\n{creative_text}\n\n"
-        "Use the extracted key elements and reference search snippets to structure I1-I9."
+        "Use the extracted key elements and reference search snippets to structure I1-I9. Prioritize climax and iconic scenes (I7a) using visual, dialogue, and action reference angles."
     )
     raw = await _run_structure_llm_call(
         db=db,
@@ -18281,18 +18281,19 @@ async def _run_ai_short_drama_market_llm(
 
 def _industry_analysis_section_map() -> List[Tuple[str, str]]:
     return [
-        ("market_overview", "市场概览"),
-        ("platform_landscape", "平台格局"),
-        ("hot_genres_and_hooks", "热门题材与钩子"),
-        ("audience_and_distribution", "受众与分发"),
-        ("production_and_ai_trends", "制作与AI技术趋势"),
-        ("monetization_and_policy", "商业化与政策"),
-        ("creator_opportunities", "创作者机会"),
+        ("hot_list_overview", "热榜整体变化"),
+        ("genre_theme_shifts", "题材变化（核心）"),
+        ("rising_genres", "上升/新热题材"),
+        ("declining_genres", "降温/退潮题材"),
+        ("hook_and_trope_shifts", "钩子与桥段变化"),
+        ("platform_hot_list_diff", "平台热榜差异"),
+        ("audience_drivers", "受众驱动因素"),
+        ("creator_opportunities", "创作者选材建议"),
     ]
 
 
 def _build_industry_analysis_markdown(report_period: str, summary: str, industry_analysis: Dict[str, Any]) -> str:
-    lines = [f"## {report_period} AI短剧行业分析", "", summary.strip(), "", "## 行业整体分析", ""]
+    lines = [f"## {report_period} AI短剧热榜与题材变化分析", "", summary.strip(), "", "## 热榜与题材变化", ""]
     for key, title in _industry_analysis_section_map():
         value = str(industry_analysis.get(key) or "").strip()
         if value:
@@ -18301,7 +18302,7 @@ def _build_industry_analysis_markdown(report_period: str, summary: str, industry
 
 
 def _build_trending_dramas_markdown(report_period: str, summary: str, dramas: List[Dict[str, Any]]) -> str:
-    lines = [f"## {report_period} AI短剧热榜", "", summary.strip(), "", "## 热榜作品", ""]
+    lines = [f"## {report_period} AI短剧热榜", "", summary.strip(), "", "## 热榜作品（高潮与名场面）", ""]
     for item in dramas:
         if not isinstance(item, dict):
             continue
@@ -18310,6 +18311,15 @@ def _build_trending_dramas_markdown(report_period: str, summary: str, dramas: Li
         lines.append(f"- 新上榜：{'是' if item.get('is_new_entry') else '否'}")
         lines.append(f"- 热度：{item.get('heat_signal', '')}")
         lines.append(f"- 简介：{item.get('synopsis', '')}")
+        climax = str(item.get("climax_iconic_scenes") or "").strip()
+        if climax:
+            lines.append(f"- 高潮/名场面：{climax}")
+        dialogue = str(item.get("classic_dialogue") or "").strip()
+        if dialogue:
+            lines.append(f"- 经典对白：{dialogue}")
+        visual_action = str(item.get("visual_action_beats") or "").strip()
+        if visual_action:
+            lines.append(f"- 画面/动作：{visual_action}")
         lines.append(f"- 看点：{item.get('hook_points', '')}")
         lines.append("")
     return "\n".join(lines).strip()
@@ -18455,7 +18465,8 @@ async def fetch_trending_ai_short_dramas_report(
 
     user_prompt = (
         f"Compile the {report_period} AI short drama hot-list from the search snippets below.\n"
-        f"Return up to {list_limit} hot/new dramas only.\n\n"
+        f"Return up to {list_limit} hot/new dramas only.\n"
+        f"For each drama, analyze climax and iconic scenes from visual, dialogue, and action angles.\n\n"
         f"{search_context}"
     )
     raw = await _run_ai_short_drama_market_llm(
