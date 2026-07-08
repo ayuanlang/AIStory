@@ -1869,14 +1869,23 @@ def _validate_provider_bundle_payload(providers: List[Any]) -> Dict[str, Any]:
             model_count += 1
 
             if not model:
-                errors.append({
-                    "type": "model_missing",
-                    "provider": provider_name,
-                    "provider_index": p_idx,
-                    "model_index": m_idx,
-                    "message": "model is required",
-                })
-                continue
+                if _allows_empty_sync_model(category, model):
+                    warnings.append({
+                        "type": "provider_level_tool",
+                        "provider": provider_name,
+                        "provider_index": p_idx,
+                        "model_index": m_idx,
+                        "message": "empty model is allowed for Tools provider-level entries",
+                    })
+                else:
+                    errors.append({
+                        "type": "model_missing",
+                        "provider": provider_name,
+                        "provider_index": p_idx,
+                        "model_index": m_idx,
+                        "message": "model is required",
+                    })
+                    continue
 
             triplet = (provider_name.lower(), category.lower(), model.lower())
             if triplet in seen_triplets:
@@ -1919,6 +1928,22 @@ def _extract_provider_key_pool_from_row(row: SystemAPISetting) -> List[str]:
 
 def _normalize_system_provider_name(provider: Any) -> str:
     return str(provider or "").strip().lower()
+
+
+def _allows_empty_sync_model(category: str, model: str) -> bool:
+    """Provider-level Tools entries (e.g. serper, baidu_translate) use an empty model key."""
+    return not str(model or "").strip() and str(category or "").strip() == "Tools"
+
+
+def _system_api_sync_index_key(provider: str, category: str, model: str) -> Optional[Tuple[str, str, str]]:
+    provider_name = _normalize_system_provider_name(provider)
+    category_name = str(category or "").strip()
+    model_name = str(model or "").strip()
+    if not provider_name or not category_name:
+        return None
+    if not model_name and not _allows_empty_sync_model(category_name, model_name):
+        return None
+    return (provider_name, category_name, model_name)
 
 
 def _system_provider_case_insensitive_filter(provider: Any):
@@ -7704,7 +7729,7 @@ def import_system_provider_bundle_for_manage(
                     skipped_models += 1
                     continue
                 model = str(model_item.model or "").strip()
-                if not model:
+                if not model and not _allows_empty_sync_model(category, model):
                     skipped_models += 1
                     continue
 
@@ -8501,7 +8526,7 @@ def _import_provider_bundle_no_commit(
                 skipped_models += 1
                 continue
             model = str(getattr(model_item, "model", "") or "").strip()
-            if not model:
+            if not model and not _allows_empty_sync_model(category, model):
                 skipped_models += 1
                 continue
 
@@ -9188,11 +9213,13 @@ def import_system_config_sync_bundle_for_manage(
                 WHERE category NOT LIKE 'System_%'
             """)).mappings().all()
             for row in system_rows:
-                provider_name = _normalize_system_provider_name(row.get("provider"))
-                category_name = str(row.get("category") or "").strip()
-                model_name = str(row.get("model") or "").strip()
-                if provider_name and category_name and model_name:
-                    system_index[(provider_name, category_name, model_name)] = int(row.get("id") or 0)
+                index_key = _system_api_sync_index_key(
+                    row.get("provider"),
+                    row.get("category"),
+                    row.get("model"),
+                )
+                if index_key:
+                    system_index[index_key] = int(row.get("id") or 0)
 
             billing_created = 0
             billing_skipped = 0
@@ -9206,13 +9233,12 @@ def import_system_config_sync_bundle_for_manage(
                         continue
 
                     ref = raw_rule.get("system_api_ref") if isinstance(raw_rule.get("system_api_ref"), dict) else {}
-                    provider_name = _normalize_system_provider_name(ref.get("provider"))
-                    category_name = str(ref.get("category") or "").strip()
-                    model_name = str(ref.get("model") or "").strip()
-
-                    target_api_id = None
-                    if provider_name and category_name and model_name:
-                        target_api_id = system_index.get((provider_name, category_name, model_name))
+                    index_key = _system_api_sync_index_key(
+                        ref.get("provider"),
+                        ref.get("category"),
+                        ref.get("model"),
+                    )
+                    target_api_id = system_index.get(index_key) if index_key else None
 
                     if not target_api_id:
                         billing_skipped += 1
@@ -9540,12 +9566,12 @@ def import_system_config_sync_bundle_for_manage(
                     continue
                 task_category = normalize_task_category(raw_default.get("task_category"))
                 ref = raw_default.get("system_api_ref") if isinstance(raw_default.get("system_api_ref"), dict) else {}
-                provider_name = _normalize_system_provider_name(ref.get("provider"))
-                category_name = str(ref.get("category") or "").strip()
-                model_name = str(ref.get("model") or "").strip()
-                target_api_id = None
-                if provider_name and category_name and model_name:
-                    target_api_id = system_index.get((provider_name, category_name, model_name))
+                index_key = _system_api_sync_index_key(
+                    ref.get("provider"),
+                    ref.get("category"),
+                    ref.get("model"),
+                )
+                target_api_id = system_index.get(index_key) if index_key else None
                 if not target_api_id:
                     raw_system_api_id = int(raw_default.get("system_api_id") or 0)
                     if raw_system_api_id > 0:

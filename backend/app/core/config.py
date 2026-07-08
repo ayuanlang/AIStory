@@ -95,6 +95,11 @@ class Settings(BaseSettings):
 
     # Optional Serper fallback when not configured in Admin > 系统 API (provider=serper).
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "").strip()
+    # Cloud deploys (Render etc.) cannot reach html.duckduckgo.com reliably.
+    # Set to 1/true to skip DuckDuckGo HTML scraping; auto-enabled when RENDER is set.
+    DISABLE_DDG_HTML_SEARCH: str = os.getenv("DISABLE_DDG_HTML_SEARCH", "").strip()
+    # Optional override, comma-separated: serper,ddg_html,ddgs,bing_html,searxng
+    SEARCH_BACKENDS: str = os.getenv("SEARCH_BACKENDS", "").strip()
     
     class Config:
         env_file = ".env"

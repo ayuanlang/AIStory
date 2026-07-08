@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import re
 import time
@@ -31,7 +32,6 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
-DDG_INSTANT_URL = "https://api.duckduckgo.com/"
 BING_HTML_URL = "https://cn.bing.com/search"
 SERPER_API_URL = "https://google.serper.dev/search"
 SEARXNG_INSTANCES = (
@@ -42,14 +42,79 @@ SEARXNG_INSTANCES = (
 )
 REPORT_MONTHS_WINDOW = 2
 DEFAULT_LIMIT_PER_QUERY = 10
-DEFAULT_INSTANT_TOPIC_LIMIT = 8
 MIN_USEFUL_SNIPPET_LEN = 40
 MAX_ENRICH_PER_QUERY = 2
 SNIPPET_MAX_LEN = 480
 SEARCH_CONCURRENCY_LIMIT = 3
 SEARCH_QUERY_DELAY_SEC = 0.35
-HTML_SEARCH_RETRIES = 3
+HTML_SEARCH_RETRIES = 2
+DDG_HTML_SEARCH_TIMEOUT_SEC = 8
 DDGS_SEARCH_RETRIES = 2
+SEARCH_BACKEND_ALIASES = {
+    "serper": "serper",
+    "ddg": "ddg_html",
+    "ddg_html": "ddg_html",
+    "duckduckgo": "ddg_html",
+    "duckduckgo_html": "ddg_html",
+    "ddgs": "ddgs",
+    "bing": "bing_html",
+    "bing_html": "bing_html",
+    "searx": "searxng",
+    "searxng": "searxng",
+}
+DEFAULT_SEARCH_BACKENDS_CLOUD = ("serper", "ddgs", "bing_html", "searxng")
+DEFAULT_SEARCH_BACKENDS_LOCAL = ("serper", "ddg_html", "ddgs", "bing_html", "searxng")
+
+
+def _is_cloud_runtime() -> bool:
+    return bool(os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("FLY_APP_NAME"))
+
+
+def _ddg_html_search_enabled() -> bool:
+    explicit = str(getattr(settings, "DISABLE_DDG_HTML_SEARCH", "") or os.getenv("DISABLE_DDG_HTML_SEARCH", "") or "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return False
+    if explicit in {"0", "false", "no", "off"}:
+        return True
+    return not _is_cloud_runtime()
+
+
+def _normalize_search_backend_name(raw_name: str) -> str:
+    key = str(raw_name or "").strip().lower()
+    return SEARCH_BACKEND_ALIASES.get(key, key)
+
+
+def resolve_search_backend_chain(*, serper_api_key: str = "") -> List[str]:
+    """Return ordered search backends for the current runtime."""
+    raw = str(getattr(settings, "SEARCH_BACKENDS", "") or os.getenv("SEARCH_BACKENDS", "") or "").strip()
+    if raw:
+        chain: List[str] = []
+        seen: set[str] = set()
+        for item in raw.split(","):
+            backend = _normalize_search_backend_name(item)
+            if backend and backend not in seen:
+                seen.add(backend)
+                chain.append(backend)
+        if chain:
+            return chain
+
+    chain = list(DEFAULT_SEARCH_BACKENDS_CLOUD if _is_cloud_runtime() else DEFAULT_SEARCH_BACKENDS_LOCAL)
+    if not str(serper_api_key or "").strip():
+        chain = [backend for backend in chain if backend != "serper"]
+    if not _ddg_html_search_enabled():
+        chain = [backend for backend in chain if backend != "ddg_html"]
+    return chain
+
+
+def _fallback_snippet_text(title: str, snippet: str, url: str = "") -> str:
+    text = str(snippet or "").strip()
+    if text:
+        return text
+    title_text = str(title or "").strip()
+    if title_text:
+        return title_text
+    return str(url or "").strip()
+
 
 GENERIC_SNIPPET_MARKERS = (
     "您在查找",
@@ -572,32 +637,32 @@ def _search_serper(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
     return results
 
 
-async def _collect_backup_search_results(query: str, *, serper_api_key: str = "", limit_per_query: int) -> List[Dict[str, str]]:
+async def _collect_search_results_for_query(
+    query: str,
+    *,
+    serper_api_key: str = "",
+    limit_per_query: int,
+    backend_chain: Optional[List[str]] = None,
+) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
+    chain = list(backend_chain or resolve_search_backend_chain(serper_api_key=serper_api_key))
 
-    if str(serper_api_key or "").strip():
-        serper_results = await asyncio.to_thread(_search_serper, query, api_key=serper_api_key, limit=limit_per_query)
-        rows.extend(serper_results)
+    backend_runners = {
+        "serper": lambda: _search_serper(query, api_key=serper_api_key, limit=limit_per_query),
+        "ddg_html": lambda: _search_duckduckgo_html(query, limit=limit_per_query),
+        "ddgs": lambda: _search_ddgs_text(query, limit=limit_per_query),
+        "bing_html": lambda: _search_bing_html(query, limit=limit_per_query),
+        "searxng": lambda: _search_searxng(query, limit=limit_per_query),
+    }
+
+    for backend in chain:
+        runner = backend_runners.get(backend)
+        if not runner:
+            continue
+        batch = await asyncio.to_thread(runner)
+        rows.extend(batch)
         if _useful_result_count(_merge_result_rows(rows)) >= limit_per_query:
-            return rows
-
-    bing_results = await asyncio.to_thread(_search_bing_html, query, limit=limit_per_query)
-    rows.extend(bing_results)
-    if _useful_result_count(_merge_result_rows(rows)) >= limit_per_query:
-        return rows
-
-    ddgs_results = await asyncio.to_thread(_search_ddgs_text, query, limit=limit_per_query)
-    rows.extend(ddgs_results)
-    if _useful_result_count(_merge_result_rows(rows)) >= limit_per_query:
-        return rows
-
-    searx_results = await asyncio.to_thread(_search_searxng, query, limit=limit_per_query)
-    rows.extend(searx_results)
-    if _useful_result_count(_merge_result_rows(rows)) >= limit_per_query:
-        return rows
-
-    serper_results = await asyncio.to_thread(_search_serper, query, api_key=serper_api_key, limit=limit_per_query)
-    rows.extend(serper_results)
+            break
     return rows
 
 def _extract_html_result_item(item: Any, query: str) -> Optional[Dict[str, str]]:
@@ -625,7 +690,7 @@ def _search_duckduckgo_html(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY)
             response = requests.post(
                 DDG_HTML_URL,
                 data={"q": query},
-                timeout=25,
+                timeout=DDG_HTML_SEARCH_TIMEOUT_SEC,
                 headers=DEFAULT_HEADERS,
             )
             if response.status_code in {403, 429, 503}:
@@ -658,50 +723,23 @@ def _search_duckduckgo_html(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY)
     return results
 
 
-def _search_duckduckgo_instant(query: str, *, topic_limit: int = DEFAULT_INSTANT_TOPIC_LIMIT) -> str:
-    try:
-        response = requests.get(
-            DDG_INSTANT_URL,
-            params={
-                "q": query,
-                "format": "json",
-                "no_redirect": 1,
-                "no_html": 1,
-                "skip_disambig": 1,
-            },
-            timeout=25,
-            headers=DEFAULT_HEADERS,
-        )
-        if response.status_code != 200:
-            return ""
-        data = response.json()
-        parts: List[str] = []
-        abstract = str(data.get("AbstractText") or "").strip()
-        if abstract:
-            parts.append(abstract)
-        for item in (data.get("RelatedTopics") or [])[:topic_limit]:
-            if isinstance(item, dict) and item.get("Text"):
-                parts.append(str(item.get("Text") or "").strip())
-        return "\n".join(parts).strip()
-    except Exception as exc:
-        logger.warning("[ai_short_drama_search] Instant search failed query=%s err=%s", query, exc)
-        return ""
-
-
 def _snippet_key(item: Dict[str, str]) -> str:
     return f"{item.get('url', '').strip().lower()}|{item.get('title', '').strip().lower()}"
 
 
-async def _search_query_bundle(query: str, *, serper_api_key: str = "", limit_per_query: int) -> Tuple[List[Dict[str, str]], Optional[Dict[str, str]]]:
-    html_results, instant_text = await asyncio.gather(
-        asyncio.to_thread(_search_duckduckgo_html, query, limit=limit_per_query),
-        asyncio.to_thread(_search_duckduckgo_instant, query),
+async def _search_query_bundle(
+    query: str,
+    *,
+    serper_api_key: str = "",
+    limit_per_query: int,
+    backend_chain: Optional[List[str]] = None,
+) -> List[Dict[str, str]]:
+    combined_rows = await _collect_search_results_for_query(
+        query,
+        serper_api_key=serper_api_key,
+        limit_per_query=limit_per_query,
+        backend_chain=backend_chain,
     )
-    combined_rows = list(html_results)
-    if _useful_result_count(_merge_result_rows(combined_rows)) < limit_per_query:
-        backup_rows = await _collect_backup_search_results(query, serper_api_key=serper_api_key, limit_per_query=limit_per_query)
-        combined_rows.extend(backup_rows)
-
     merged = _rank_results_for_query(query, _merge_result_rows(combined_rows))
 
     enriched_count = 0
@@ -724,13 +762,15 @@ async def _search_query_bundle(query: str, *, serper_api_key: str = "", limit_pe
     for item in merged:
         title = str(item.get("title") or "").strip()
         snippet = str(item.get("snippet") or "").strip()[:SNIPPET_MAX_LEN]
+        url = str(item.get("url") or "").strip()
         if not title:
             continue
+        snippet = _fallback_snippet_text(title, snippet, url)[:SNIPPET_MAX_LEN]
         row = {
             "query": query,
             "title": title,
             "snippet": snippet,
-            "url": str(item.get("url") or "").strip(),
+            "url": url,
             "source": str(item.get("source") or "unknown").strip(),
         }
         if snippet and not _is_low_quality_snippet(snippet):
@@ -742,15 +782,11 @@ async def _search_query_bundle(query: str, *, serper_api_key: str = "", limit_pe
         for row in fallback:
             if row in filtered:
                 continue
-            if not row.get("snippet") and instant_text:
-                row["snippet"] = str(instant_text)[:SNIPPET_MAX_LEN]
-            if row.get("snippet"):
-                filtered.append(row)
+            filtered.append(row)
             if len(filtered) >= limit_per_query:
                 break
 
-    instant_note = {"query": query, "text": instant_text} if instant_text else None
-    return filtered[:limit_per_query], instant_note
+    return filtered[:limit_per_query]
 
 
 async def _collect_search_snippets_for_queries(
@@ -767,32 +803,50 @@ async def _collect_search_snippets_for_queries(
 
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY_LIMIT)
     serper_api_key = resolve_serper_api_key()
+    backend_chain = resolve_search_backend_chain(serper_api_key=serper_api_key)
+    if serper_api_key:
+        logger.info(
+            "[ai_short_drama_search] Serper enabled report_kind=%s backend_chain=%s",
+            report_kind,
+            backend_chain,
+        )
+    else:
+        logger.warning(
+            "[ai_short_drama_search] Serper API key not configured report_kind=%s backend_chain=%s. "
+            "Configure provider=serper in Admin or set SERPER_API_KEY on Render.",
+            report_kind,
+            backend_chain,
+        )
+    if "ddg_html" not in backend_chain:
+        logger.info(
+            "[ai_short_drama_search] DuckDuckGo HTML disabled report_kind=%s cloud_runtime=%s",
+            report_kind,
+            _is_cloud_runtime(),
+        )
 
-    async def _bounded_search(query: str) -> Tuple[List[Dict[str, str]], Optional[Dict[str, str]]]:
+    async def _bounded_search(query: str) -> List[Dict[str, str]]:
         async with semaphore:
             await asyncio.sleep(SEARCH_QUERY_DELAY_SEC)
-            return await _search_query_bundle(query, serper_api_key=serper_api_key, limit_per_query=limit_per_query)
+            return await _search_query_bundle(
+                query,
+                serper_api_key=serper_api_key,
+                limit_per_query=limit_per_query,
+                backend_chain=backend_chain,
+            )
 
     tasks = [_bounded_search(query) for query in queries]
     bundles = await asyncio.gather(*tasks)
 
     snippets: List[Dict[str, str]] = []
-    instant_notes: List[Dict[str, str]] = []
     seen_snippets: set[str] = set()
-    seen_instant: set[str] = set()
 
-    for html_results, instant_note in bundles:
+    for html_results in bundles:
         for item in html_results:
             key = _snippet_key(item)
             if key in seen_snippets:
                 continue
             seen_snippets.add(key)
             snippets.append(item)
-        if instant_note:
-            note_key = f"{instant_note.get('query', '')}|{instant_note.get('text', '')[:120]}"
-            if note_key not in seen_instant:
-                seen_instant.add(note_key)
-                instant_notes.append(instant_note)
 
     source_stats: Dict[str, int] = {}
     for item in snippets:
@@ -800,6 +854,14 @@ async def _collect_search_snippets_for_queries(
             continue
         source = str(item.get("source") or "unknown").strip() or "unknown"
         source_stats[source] = source_stats.get(source, 0) + 1
+
+    logger.info(
+        "[ai_short_drama_search] search complete report_kind=%s queries=%s snippets=%s source_stats=%s",
+        report_kind,
+        len(queries),
+        len(snippets),
+        source_stats,
+    )
 
     return {
         "report_kind": report_kind,
@@ -809,7 +871,7 @@ async def _collect_search_snippets_for_queries(
         "fetched_at": datetime.now(BJ_TZ).isoformat(),
         "queries": queries,
         "snippets": snippets,
-        "instant_notes": instant_notes,
+        "instant_notes": [],
         "source_stats": source_stats,
     }
 
