@@ -18143,7 +18143,6 @@ async def _run_structure_llm_call(
 
 async def _prepare_episode_script_reference_block(
     *,
-    db: Session,
     user_id: int,
     project_global_info: Optional[Dict[str, Any]],
     llm_config: Dict[str, Any],
@@ -18187,8 +18186,9 @@ async def _prepare_episode_script_reference_block(
     reservation_tx = None
     key_elements: Dict[str, Any] = {}
 
+    ref_db = SessionLocal()
     try:
-        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        if billing_service.is_token_pricing(ref_db, "llm_chat", provider, model):
             est = billing_service.estimate_reserve_tokens_from_messages(
                 [
                     {"role": "system", "content": extract_sys_prompt},
@@ -18196,7 +18196,7 @@ async def _prepare_episode_script_reference_block(
                 ],
             )
             reservation_tx = billing_service.reserve_credits(
-                db,
+                ref_db,
                 user_id,
                 "llm_chat",
                 provider,
@@ -18212,9 +18212,10 @@ async def _prepare_episode_script_reference_block(
                 },
             )
         else:
-            billing_service.check_balance(db, user_id, "llm_chat", provider, model)
+            billing_service.check_balance(ref_db, user_id, "llm_chat", provider, model)
 
-        _release_db_connection(db, f"episode_extract_key_elements_ep{episode_number}_llm_call")
+        _release_db_connection(ref_db, f"episode_extract_key_elements_ep{episode_number}_llm_call")
+        ref_db = None
         resp = await llm_service.generate_content_with_fallback(extract_user_prompt, extract_sys_prompt, llm_config)
         raw = (resp.get("content") or "").strip()
         if not raw:
@@ -18248,16 +18249,26 @@ async def _prepare_episode_script_reference_block(
         billing_details["output_tokens"] = billing_details["completion_tokens"]
         _apply_llm_routing_to_billing_details(billing_details, resp)
 
-        if reservation_tx:
-            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
-        else:
-            billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, billing_details)
+        settle_db = SessionLocal()
+        try:
+            if reservation_tx:
+                billing_service.settle_reservation(settle_db, _reservation_tx_id(reservation_tx), billing_details)
+            else:
+                billing_service.deduct_credits(settle_db, user_id, "llm_chat", provider, model, billing_details)
+        finally:
+            settle_db.close()
 
         key_elements = _normalize_llm_json_object(raw, context="episode_extract_key_elements")
     except Exception as exc:
         if reservation_tx:
+            cancel_db = SessionLocal()
             try:
-                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(exc))
+                billing_service.cancel_reservation(cancel_db, _reservation_tx_id(reservation_tx), str(exc))
+            finally:
+                cancel_db.close()
+        if ref_db is not None:
+            try:
+                ref_db.close()
             except Exception:
                 pass
         logger.warning(
@@ -18270,6 +18281,12 @@ async def _prepare_episode_script_reference_block(
             "iconic_scene_search_terms": [f"第{episode_number}集 短剧 名场面"],
             "climax_search_terms": [f"第{episode_number}集 高潮 反转"],
         }
+    finally:
+        if ref_db is not None:
+            try:
+                ref_db.close()
+            except Exception:
+                pass
 
     try:
         search_bundle = await collect_episode_script_reference_snippets(
@@ -21738,7 +21755,7 @@ async def generate_project_episode_scripts_from_global_framework(
 
     _persist_run_status(run_status)
 
-    llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
     llm_config = _inject_project_creativity_temperature(
@@ -21753,9 +21770,10 @@ async def generate_project_episode_scripts_from_global_framework(
     errors: List[Dict[str, Any]] = []
 
     def _safe_log_episode(action: str, payload: Dict[str, Any]) -> None:
+        log_db = SessionLocal()
         try:
             log_action(
-                db,
+                log_db,
                 user_id=user_id,
                 user_name=user_name,
                 action=action,
@@ -21763,6 +21781,8 @@ async def generate_project_episode_scripts_from_global_framework(
             )
         except Exception as e:
             logger.warning(f"[generate_episode_scripts] failed to write {action} system log: {e}")
+        finally:
+            log_db.close()
 
     for ep_data in episodes_data:
         idx = ep_data["idx"]
@@ -21936,7 +21956,6 @@ async def generate_project_episode_scripts_from_global_framework(
             project_global_info.get("language"),
         )
         reference_search_block = await _prepare_episode_script_reference_block(
-            db=db,
             user_id=user_id,
             project_global_info=project_global_info,
             llm_config=llm_config,
@@ -21977,7 +21996,7 @@ async def generate_project_episode_scripts_from_global_framework(
             )
             reservation_tx = billing_service.reserve_credits(
                 db,
-                current_user.id,
+                user_id,
                 "llm_chat",
                 provider,
                 model,
@@ -22077,51 +22096,55 @@ async def generate_project_episode_scripts_from_global_framework(
             billing_details["output_tokens"] = billing_details["completion_tokens"]
             _apply_llm_routing_to_billing_details(billing_details, generated_payload)
 
-            if reservation_tx:
-                billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
-            else:
-                billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, billing_details)
+            persist_db = SessionLocal()
+            try:
+                if reservation_tx:
+                    billing_service.settle_reservation(persist_db, _reservation_tx_id(reservation_tx), billing_details)
+                else:
+                    billing_service.deduct_credits(persist_db, user_id, "llm_chat", provider, model, billing_details)
 
-            ep_db = db.query(Episode).get(ep_id)
-            if not ep_db:
-                raise RuntimeError(f"Episode {ep_id} not found in database for update.")
-            previous_title = str(ep_db.title or "")
-            ep_db.script_content = content
-            if llm_episode_title:
-                ep_db.title = llm_episode_title
-            ep_script_content = content
-            ei = _episode_runtime_info_from_episode(ep_db)
-            ei["episode_script_generated_at"] = now_bj_iso()
-            ei["episode_script_episode_number"] = int(idx)
-            if llm_episode_title:
-                ei["episode_title"] = llm_episode_title
-            if generator_kind == "promo":
-                ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
-            else:
-                ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
-            ep_db.episode_info = ei
-            logger.info(
-                "[generate_episode_scripts] PERSIST_PREPARE episode_number=%s episode_id=%s previous_title=%r next_title=%r episode_info_title=%r script_chars=%s",
-                idx,
-                ep_id,
-                previous_title,
-                str(ep_db.title or ""),
-                str(ei.get("episode_title") or ""),
-                len(content),
-            )
-            db.add(ep_db)
-            db.commit()
-            db.refresh(ep_db)
+                ep_db = persist_db.query(Episode).get(ep_id)
+                if not ep_db:
+                    raise RuntimeError(f"Episode {ep_id} not found in database for update.")
+                previous_title = str(ep_db.title or "")
+                ep_db.script_content = content
+                if llm_episode_title:
+                    ep_db.title = llm_episode_title
+                ep_script_content = content
+                ei = _episode_runtime_info_from_episode(ep_db)
+                ei["episode_script_generated_at"] = now_bj_iso()
+                ei["episode_script_episode_number"] = int(idx)
+                if llm_episode_title:
+                    ei["episode_title"] = llm_episode_title
+                if generator_kind == "promo":
+                    ei["episode_script_source"] = "promo_global_framework_plus_project_character_canon"
+                else:
+                    ei["episode_script_source"] = "project_global_framework_plus_project_character_canon"
+                ep_db.episode_info = ei
+                logger.info(
+                    "[generate_episode_scripts] PERSIST_PREPARE episode_number=%s episode_id=%s previous_title=%r next_title=%r episode_info_title=%r script_chars=%s",
+                    idx,
+                    ep_id,
+                    previous_title,
+                    str(ep_db.title or ""),
+                    str(ei.get("episode_title") or ""),
+                    len(content),
+                )
+                persist_db.add(ep_db)
+                persist_db.commit()
+                persist_db.refresh(ep_db)
 
-            persisted_episode_info = _episode_runtime_info_from_episode(ep_db)
-            logger.info(
-                "[generate_episode_scripts] PERSISTED_READBACK episode_number=%s episode_id=%s db_title=%r episode_info_title=%r script_chars=%s",
-                idx,
-                ep_id,
-                str(ep_db.title or ""),
-                str(persisted_episode_info.get("episode_title") or ""),
-                len(str(ep_db.script_content or "")),
-            )
+                persisted_episode_info = _episode_runtime_info_from_episode(ep_db)
+                logger.info(
+                    "[generate_episode_scripts] PERSISTED_READBACK episode_number=%s episode_id=%s db_title=%r episode_info_title=%r script_chars=%s",
+                    idx,
+                    ep_id,
+                    str(ep_db.title or ""),
+                    str(persisted_episode_info.get("episode_title") or ""),
+                    len(str(ep_db.script_content or "")),
+                )
+            finally:
+                persist_db.close()
 
             logger.info(
                 f"[generate_episode_scripts] SUCCESS episode_number={idx} episode_id={ep_id} output_chars={len(content)}"
@@ -22166,11 +22189,19 @@ async def generate_project_episode_scripts_from_global_framework(
             _persist_run_status(run_status)
         except HTTPException:
             if reservation_tx:
-                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "episode generation HTTPException")
+                cancel_db = SessionLocal()
+                try:
+                    billing_service.cancel_reservation(cancel_db, _reservation_tx_id(reservation_tx), "episode generation HTTPException")
+                finally:
+                    cancel_db.close()
             raise
         except Exception as e:
             if reservation_tx:
-                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
+                cancel_db = SessionLocal()
+                try:
+                    billing_service.cancel_reservation(cancel_db, _reservation_tx_id(reservation_tx), str(e))
+                finally:
+                    cancel_db.close()
             logger.exception(f"[generate_episode_scripts] FAILED episode_number={idx} episode_id={ep_id} error={e}")
             _safe_log_episode("GENERATE_EPISODE_SCRIPT_FAILED", {
                 "project_id": project_id,
@@ -22254,13 +22285,17 @@ async def generate_project_episode_scripts_from_global_framework(
             "errors": len(errors),
             "duration_ms": duration_ms,
         }
-        log_action(
-            db,
-            user_id=user_id,
-            user_name=user_name,
-            action="GENERATE_EPISODE_SCRIPTS_END",
-            details=json.dumps(summary, ensure_ascii=False),
-        )
+        end_log_db = SessionLocal()
+        try:
+            log_action(
+                end_log_db,
+                user_id=user_id,
+                user_name=user_name,
+                action="GENERATE_EPISODE_SCRIPTS_END",
+                details=json.dumps(summary, ensure_ascii=False),
+            )
+        finally:
+            end_log_db.close()
     except Exception as e:
         logger.warning(f"[generate_episode_scripts] failed to write END system log: {e}")
 
