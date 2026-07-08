@@ -1121,6 +1121,26 @@ export const structureProjectCreativeInput = async (projectId, payload) => {
     return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, sysReq);
 }
 
+export const fetchTrendingAiShortDramas = async (projectId, payload = {}) => {
+    const fnName = 'script_analysis';
+    const sysReq = {
+        ...payload,
+        function_name: fnName,
+        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
+    };
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/trending_ai_short_dramas`, sysReq);
+}
+
+export const fetchIndustryAnalysisAiShortDramas = async (projectId, payload = {}) => {
+    const fnName = 'script_analysis';
+    const sysReq = {
+        ...payload,
+        function_name: fnName,
+        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
+    };
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/industry_analysis_ai_short_dramas`, sysReq);
+}
+
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
 export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
     const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);

@@ -1383,6 +1383,21 @@
       "tags": null
     },
     {
+      "name": "serper",
+      "category": "Tools",
+      "provider": "serper",
+      "base_url": "https://google.serper.dev",
+      "model": "",
+      "modality": null,
+      "config": {
+        "endpoint": "https://google.serper.dev/search",
+        "description": "Google search API for story generator market research"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": null
+    },
+    {
       "name": "Kie ElevenLabs Audio Isolation",
       "category": "Tools",
       "provider": "kie",

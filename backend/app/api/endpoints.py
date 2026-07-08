@@ -70,6 +70,18 @@ from app.services.asset_meta_probe import (
     probe_media_from_path,
 )
 from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
+from app.services.creative_structure_search_service import (
+    build_creative_structure_search_user_prompt,
+    collect_creative_structure_search_snippets,
+)
+from app.services.story_trend_search_service import (
+    build_industry_analysis_user_prompt,
+    build_trending_ai_short_dramas_user_prompt,
+    collect_industry_analysis_search_snippets,
+    collect_trending_dramas_search_snippets,
+    current_report_month_label,
+    current_report_period_label,
+)
 from app.core.prompts.skills_loader import get_skill_prompt_text, load_skills_registry, get_skill_meta
 from app.core.prompts.scene_analysis_feature_skills import (
     get_scene_analysis_feature_catalog,
@@ -7484,6 +7496,9 @@ _PROMPT_SKILL_ALIAS = {
     "story_generator_episode.txt": "skill:story_generation/story_generator_episode.txt",
     "story_generator_analyze_novel.txt": "skill:story_generation/story_generator_analyze_novel.txt",
     "story_generator_structure_creative_input.txt": "skill:story_generation/story_generator_structure_creative_input.txt",
+    "story_generator_structure_extract_key_elements.txt": "skill:story_generation/story_generator_structure_extract_key_elements.txt",
+    "story_generator_trending_ai_short_dramas.txt": "skill:story_generation/story_generator_trending_ai_short_dramas.txt",
+    "story_generator_industry_analysis_ai_short_dramas.txt": "skill:story_generation/story_generator_industry_analysis_ai_short_dramas.txt",
     "script_generator_scenes.txt": "skill:script_generation/script_generator_scenes.txt",
     "script_generator_episode_script.txt": "master_episode_writer.md",
     "scene_regenerate.txt": "skill:script_generation/scene_regenerate.txt",
@@ -17371,7 +17386,7 @@ async def generate_project_story_dna_global(
         )
         reservation_tx = billing_service.reserve_credits(
             db,
-            current_user.id,
+            user_id,
             "llm_chat",
             provider,
             model,
@@ -17926,6 +17941,108 @@ def _normalize_story_field_map(data: Dict[str, Any], keys: List[str]) -> Dict[st
     return normalized
 
 
+async def _run_structure_llm_call(
+    *,
+    db: Session,
+    user_id: int,
+    project_global_info: Optional[Dict[str, Any]],
+    req: "StructureCreativeInputRequest",
+    sys_prompt: str,
+    user_prompt: str,
+    billing_item: str,
+    llm_context: str,
+) -> str:
+    function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
+    system_api_id = getattr(req, "system_api_id", None) if req else None
+    llm_config = agent_service.get_active_llm_config(
+        user_id,
+        system_api_id=system_api_id,
+        function_name=function_name,
+    )
+    if not llm_config or not (llm_config.get("api_key") or "").strip():
+        raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
+    llm_config = _inject_project_creativity_temperature(
+        llm_config,
+        project_global_info,
+        context=llm_context,
+    )
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    reservation_tx = None
+    if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+        est = billing_service.estimate_reserve_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        reservation_tx = billing_service.reserve_credits(
+            db,
+            user_id,
+            "llm_chat",
+            provider,
+            model,
+            {
+                "item": billing_item,
+                "estimation_method": "prompt_tokens_ratio",
+                "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                "input_tokens": est.get("input_tokens", 0),
+                "output_tokens": est.get("output_tokens", 0),
+                "total_tokens": est.get("total_tokens", 0),
+            },
+        )
+    else:
+        billing_service.check_balance(db, user_id, "llm_chat", provider, model)
+
+    try:
+        _release_db_connection(db, f"{llm_context}_llm_call")
+        resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
+    except Exception as e:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(e))
+        raise
+
+    raw = (resp.get("content") or "").strip()
+    if not raw:
+        if reservation_tx:
+            billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), "LLM returned empty content")
+        raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    usage = resp.get("usage") or {}
+    if not usage:
+        usage = billing_service.estimate_input_output_tokens_from_messages(
+            [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ],
+            output_ratio=1.0,
+        )
+    billing_details = {
+        "item": billing_item,
+        "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+        "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+        "total_tokens": int(
+            usage.get(
+                "total_tokens",
+                int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            )
+            or 0
+        ),
+    }
+    billing_details["input_tokens"] = billing_details["prompt_tokens"]
+    billing_details["output_tokens"] = billing_details["completion_tokens"]
+    _apply_llm_routing_to_billing_details(billing_details, resp)
+
+    if reservation_tx:
+        billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
+    else:
+        billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, billing_details)
+
+    return raw
+
+
 @router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
 async def structure_project_creative_input_to_story_fields(
     project_id: int,
@@ -17950,6 +18067,62 @@ async def structure_project_creative_input_to_story_fields(
     if not creative_text:
         raise HTTPException(status_code=400, detail="creative_text is required")
 
+    gi_existing = dict(project.global_info or {})
+    user_id = int(current_user.id)
+    project_global_info = gi_existing
+    project_title_str = str(project.title or "")
+    project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
+    language = (getattr(req, "language", None) or gi_existing.get("language") or "").strip()
+    script_mode = (getattr(req, "script_mode", None) or "").strip()
+    target_audience = (getattr(req, "target_audience", None) or "").strip()
+
+    project_context = (
+        f"Project Title: {project_title_str}\n"
+        f"Type: {project_type}\n"
+        f"Language: {language}\n"
+        f"Script Mode: {script_mode}\n"
+        f"Target Audience: {target_audience}\n"
+    )
+
+    try:
+        extract_prompt_template = _resolve_prompt_text("story_generator_structure_extract_key_elements.txt")
+    except FileNotFoundError:
+        logger.error("Structure extract key elements prompt not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Prompt file 'story_generator_structure_extract_key_elements.txt' not found.",
+        )
+
+    try:
+        extract_sys_prompt = extract_prompt_template.format(creative_text=creative_text)
+    except Exception:
+        extract_sys_prompt = extract_prompt_template
+
+    extract_user_prompt = (
+        f"{project_context}\n"
+        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+        "Extract searchable key elements from the brainstorm."
+    )
+    extract_raw = await _run_structure_llm_call(
+        db=db,
+        user_id=user_id,
+        project_global_info=project_global_info,
+        req=req,
+        sys_prompt=extract_sys_prompt,
+        user_prompt=extract_user_prompt,
+        billing_item="structure_extract_key_elements",
+        llm_context="structure_extract_key_elements",
+    )
+    key_elements = _normalize_llm_json_object(extract_raw, context="structure_extract_key_elements")
+
+    search_bundle = await collect_creative_structure_search_snippets(key_elements)
+    search_context = build_creative_structure_search_user_prompt(
+        search_bundle,
+        key_elements,
+        project_title=project_title_str,
+        language=language,
+    )
+
     try:
         sys_prompt_template = _resolve_prompt_text("story_generator_structure_creative_input.txt")
     except FileNotFoundError:
@@ -17959,25 +18132,63 @@ async def structure_project_creative_input_to_story_fields(
             detail="Prompt file 'story_generator_structure_creative_input.txt' not found.",
         )
 
-    gi_existing = dict(project.global_info or {})
-    project_title_str = str(project.title or "")
-    project_type = (getattr(req, "type", None) or gi_existing.get("type") or "").strip()
-    language = (getattr(req, "language", None) or gi_existing.get("language") or "").strip()
-    script_mode = (getattr(req, "script_mode", None) or "").strip()
-    target_audience = (getattr(req, "target_audience", None) or "").strip()
+    try:
+        sys_prompt = sys_prompt_template.format(creative_text=creative_text, search_context=search_context)
+    except Exception:
+        sys_prompt = f"{sys_prompt_template}\n\n{creative_text}\n\n{search_context}"
 
     user_prompt = (
-        f"Project Title: {project_title_str}\n"
-        f"Type: {project_type}\n"
-        f"Language: {language}\n"
-        f"Script Mode: {script_mode}\n"
-        f"Target Audience: {target_audience}\n\n"
-        f"Wild Creative Brainstorm:\n{creative_text}"
+        f"{project_context}\n"
+        f"Wild Creative Brainstorm:\n{creative_text}\n\n"
+        "Use the extracted key elements and reference search snippets to structure I1-I9."
+    )
+    raw = await _run_structure_llm_call(
+        db=db,
+        user_id=user_id,
+        project_global_info=project_global_info,
+        req=req,
+        sys_prompt=sys_prompt,
+        user_prompt=user_prompt,
+        billing_item="structure_creative_input",
+        llm_context="structure_creative_input",
     )
 
+    data = _normalize_llm_json_object(raw, context="structure_creative_input")
+    normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
+    normalized["prefill_meta"] = {
+        "pipeline": "extract_key_elements -> reference_search -> structure_fill",
+        "key_elements": key_elements,
+        "search_meta": {
+            "query_count": len(search_bundle.get("queries") or []),
+            "snippet_count": len(search_bundle.get("snippets") or []),
+            "instant_note_count": len(search_bundle.get("instant_notes") or []),
+            "source_stats": search_bundle.get("source_stats") or {},
+        },
+    }
+    return normalized
+
+
+class TrendingAiShortDramasRequest(BaseModel):
+    month_label: Optional[str] = None
+    limit: Optional[int] = 12
+    language: Optional[str] = None
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
+
+
+async def _run_ai_short_drama_market_llm(
+    *,
+    db: Session,
+    current_user: User,
+    project,
+    req: TrendingAiShortDramasRequest,
+    sys_prompt: str,
+    user_prompt: str,
+    billing_item: str,
+    llm_context: str,
+) -> str:
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
-
     llm_config = agent_service.get_active_llm_config(
         current_user.id,
         system_api_id=system_api_id,
@@ -17988,15 +18199,16 @@ async def structure_project_creative_input_to_story_fields(
     llm_config = _inject_project_creativity_temperature(
         llm_config,
         project.global_info,
-        context="structure_creative_input",
+        context=llm_context,
     )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
+
     reservation_tx = None
     if billing_service.is_token_pricing(db, "llm_chat", provider, model):
         est = billing_service.estimate_reserve_tokens_from_messages(
             [
-                {"role": "system", "content": sys_prompt_template},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
@@ -18007,7 +18219,7 @@ async def structure_project_creative_input_to_story_fields(
             provider,
             model,
             {
-                "item": "structure_creative_input",
+                "item": billing_item,
                 "estimation_method": "prompt_tokens_ratio",
                 "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
                 "input_tokens": est.get("input_tokens", 0),
@@ -18019,12 +18231,7 @@ async def structure_project_creative_input_to_story_fields(
         billing_service.check_balance(db, current_user.id, "llm_chat", provider, model)
 
     try:
-        sys_prompt = sys_prompt_template.format(creative_text=creative_text)
-    except Exception:
-        sys_prompt = sys_prompt_template
-
-    try:
-        _release_db_connection(db, "structure_creative_input_llm_call")
+        _release_db_connection(db, f"{llm_context}_llm_call")
         resp = await llm_service.generate_content_with_fallback(user_prompt, sys_prompt, llm_config)
     except Exception as e:
         if reservation_tx:
@@ -18048,7 +18255,7 @@ async def structure_project_creative_input_to_story_fields(
             output_ratio=1.0,
         )
     billing_details = {
-        "item": "structure_creative_input",
+        "item": billing_item,
         "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
         "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
         "total_tokens": int(
@@ -18069,8 +18276,223 @@ async def structure_project_creative_input_to_story_fields(
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
-    data = _normalize_llm_json_object(raw, context="structure_creative_input")
-    return _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
+    return raw
+
+
+def _industry_analysis_section_map() -> List[Tuple[str, str]]:
+    return [
+        ("market_overview", "市场概览"),
+        ("platform_landscape", "平台格局"),
+        ("hot_genres_and_hooks", "热门题材与钩子"),
+        ("audience_and_distribution", "受众与分发"),
+        ("production_and_ai_trends", "制作与AI技术趋势"),
+        ("monetization_and_policy", "商业化与政策"),
+        ("creator_opportunities", "创作者机会"),
+    ]
+
+
+def _build_industry_analysis_markdown(report_period: str, summary: str, industry_analysis: Dict[str, Any]) -> str:
+    lines = [f"## {report_period} AI短剧行业分析", "", summary.strip(), "", "## 行业整体分析", ""]
+    for key, title in _industry_analysis_section_map():
+        value = str(industry_analysis.get(key) or "").strip()
+        if value:
+            lines.extend([f"### {title}", value, ""])
+    return "\n".join(lines).strip()
+
+
+def _build_trending_dramas_markdown(report_period: str, summary: str, dramas: List[Dict[str, Any]]) -> str:
+    lines = [f"## {report_period} AI短剧热榜", "", summary.strip(), "", "## 热榜作品", ""]
+    for item in dramas:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"### {item.get('rank', '')}. {item.get('title', '')}")
+        lines.append(f"- 平台：{item.get('platform', '')}")
+        lines.append(f"- 新上榜：{'是' if item.get('is_new_entry') else '否'}")
+        lines.append(f"- 热度：{item.get('heat_signal', '')}")
+        lines.append(f"- 简介：{item.get('synopsis', '')}")
+        lines.append(f"- 看点：{item.get('hook_points', '')}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+@router.post("/projects/{project_id}/story_generator/industry_analysis_ai_short_dramas", response_model=Dict[str, Any])
+async def fetch_industry_analysis_ai_short_dramas_report(
+    project_id: int,
+    req: TrendingAiShortDramasRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            fetch_industry_analysis_ai_short_dramas_report,
+            user_id=current_user.id,
+            kind="industry_analysis_ai_short_dramas",
+            project_id=project_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    project = _require_project_access(db, project_id, current_user)
+
+    month_label = (req.month_label or current_report_month_label()).strip()
+    report_period = current_report_period_label(month_label)
+
+    search_bundle = await collect_industry_analysis_search_snippets(month_label=month_label)
+    if not (search_bundle.get("snippets") or search_bundle.get("instant_notes")):
+        raise HTTPException(status_code=502, detail="Web search returned no snippets for AI short drama industry analysis")
+
+    try:
+        sys_prompt_template = _resolve_prompt_text("story_generator_industry_analysis_ai_short_dramas.txt")
+    except FileNotFoundError:
+        logger.error("Industry analysis AI short dramas prompt not found")
+        raise HTTPException(status_code=404, detail="Prompt file 'story_generator_industry_analysis_ai_short_dramas.txt' not found.")
+
+    gi_existing = dict(project.global_info or {})
+    language = (req.language or gi_existing.get("language") or "").strip()
+    search_context = build_industry_analysis_user_prompt(
+        search_bundle,
+        project_title=str(project.title or ""),
+        language=language,
+    )
+    try:
+        sys_prompt = sys_prompt_template.format(search_context=search_context)
+    except Exception:
+        sys_prompt = f"{sys_prompt_template}\n\n{search_context}"
+
+    user_prompt = (
+        f"Compile the {report_period} AI short drama industry analysis from the search snippets below.\n"
+        f"Focus on industry-wide trends only; do not rank individual dramas.\n\n"
+        f"{search_context}"
+    )
+    raw = await _run_ai_short_drama_market_llm(
+        db=db,
+        current_user=current_user,
+        project=project,
+        req=req,
+        sys_prompt=sys_prompt,
+        user_prompt=user_prompt,
+        billing_item="industry_analysis_ai_short_dramas",
+        llm_context="industry_analysis_ai_short_dramas",
+    )
+
+    data = _normalize_llm_json_object(raw, context="industry_analysis_ai_short_dramas")
+    industry_analysis = data.get("industry_analysis") if isinstance(data.get("industry_analysis"), dict) else {}
+    markdown = str(data.get("markdown") or "").strip()
+    summary = str(data.get("summary") or "").strip()
+    if not markdown and industry_analysis:
+        markdown = _build_industry_analysis_markdown(report_period, summary, industry_analysis)
+
+    return {
+        "report_month": str(data.get("report_month") or month_label),
+        "report_period": str(data.get("report_period") or report_period),
+        "fetched_at": search_bundle.get("fetched_at"),
+        "summary": summary,
+        "industry_analysis": industry_analysis,
+        "markdown": markdown,
+        "disclaimer": str(data.get("disclaimer") or "").strip(),
+        "search_meta": {
+            "report_kind": "industry_analysis",
+            "report_months": search_bundle.get("report_months") or [],
+            "query_count": len(search_bundle.get("queries") or []),
+            "snippet_count": len(search_bundle.get("snippets") or []),
+            "instant_note_count": len(search_bundle.get("instant_notes") or []),
+            "source_stats": search_bundle.get("source_stats") or {},
+        },
+    }
+
+
+@router.post("/projects/{project_id}/story_generator/trending_ai_short_dramas", response_model=Dict[str, Any])
+async def fetch_trending_ai_short_dramas_report(
+    project_id: int,
+    req: TrendingAiShortDramasRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    async_mode: str = Query("0"),
+):
+    if async_mode == "1":
+        tid = _submit_async(
+            fetch_trending_ai_short_dramas_report,
+            user_id=current_user.id,
+            kind="trending_ai_short_dramas",
+            project_id=project_id,
+            req=req,
+            async_mode="0",
+        )
+        return JSONResponse({"task_id": tid, "async": True})
+    project = _require_project_access(db, project_id, current_user)
+
+    month_label = (req.month_label or current_report_month_label()).strip()
+    report_period = current_report_period_label(month_label)
+    list_limit = 12
+    try:
+        list_limit = max(3, min(20, int(req.limit or 12)))
+    except Exception:
+        list_limit = 12
+
+    search_bundle = await collect_trending_dramas_search_snippets(month_label=month_label)
+    if not (search_bundle.get("snippets") or search_bundle.get("instant_notes")):
+        raise HTTPException(status_code=502, detail="Web search returned no snippets for trending AI short dramas")
+
+    try:
+        sys_prompt_template = _resolve_prompt_text("story_generator_trending_ai_short_dramas.txt")
+    except FileNotFoundError:
+        logger.error("Trending AI short dramas prompt not found")
+        raise HTTPException(status_code=404, detail="Prompt file 'story_generator_trending_ai_short_dramas.txt' not found.")
+
+    gi_existing = dict(project.global_info or {})
+    language = (req.language or gi_existing.get("language") or "").strip()
+    search_context = build_trending_ai_short_dramas_user_prompt(
+        search_bundle,
+        project_title=str(project.title or ""),
+        language=language,
+        limit=list_limit,
+    )
+    try:
+        sys_prompt = sys_prompt_template.format(search_context=search_context)
+    except Exception:
+        sys_prompt = f"{sys_prompt_template}\n\n{search_context}"
+
+    user_prompt = (
+        f"Compile the {report_period} AI short drama hot-list from the search snippets below.\n"
+        f"Return up to {list_limit} hot/new dramas only.\n\n"
+        f"{search_context}"
+    )
+    raw = await _run_ai_short_drama_market_llm(
+        db=db,
+        current_user=current_user,
+        project=project,
+        req=req,
+        sys_prompt=sys_prompt,
+        user_prompt=user_prompt,
+        billing_item="trending_ai_short_dramas",
+        llm_context="trending_ai_short_dramas",
+    )
+
+    data = _normalize_llm_json_object(raw, context="trending_ai_short_dramas")
+    dramas = data.get("dramas") if isinstance(data.get("dramas"), list) else []
+    markdown = str(data.get("markdown") or "").strip()
+    summary = str(data.get("summary") or "").strip()
+    if not markdown and dramas:
+        markdown = _build_trending_dramas_markdown(report_period, summary, dramas)
+
+    return {
+        "report_month": str(data.get("report_month") or month_label),
+        "report_period": str(data.get("report_period") or report_period),
+        "fetched_at": search_bundle.get("fetched_at"),
+        "summary": summary,
+        "markdown": markdown,
+        "dramas": dramas,
+        "disclaimer": str(data.get("disclaimer") or "").strip(),
+        "search_meta": {
+            "report_kind": "trending_dramas",
+            "report_months": search_bundle.get("report_months") or [],
+            "query_count": len(search_bundle.get("queries") or []),
+            "snippet_count": len(search_bundle.get("snippets") or []),
+            "instant_note_count": len(search_bundle.get("instant_notes") or []),
+            "source_stats": search_bundle.get("source_stats") or {},
+        },
+    }
 
 
 @router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])
@@ -19360,6 +19782,8 @@ class StoryGeneratorRequest(BaseModel):
     suspense: Optional[str] = None
     wild_creative_notes: Optional[str] = None
     extra_notes: Optional[str] = None
+    trending_ai_short_dramas_report: Optional[Dict[str, Any]] = None
+    ai_short_drama_industry_report: Optional[Dict[str, Any]] = None
     strict_markdown: bool = True
 
 
@@ -21239,7 +21663,7 @@ async def generate_project_episode_scripts_from_global_framework(
             )
             reservation_tx = billing_service.reserve_credits(
                 db,
-                user_id,
+                current_user.id,
                 "llm_chat",
                 provider,
                 model,

@@ -4431,6 +4431,29 @@ def _ensure_builtin_system_settings(db: Session) -> None:
                 updated_at=now_iso,
             ))
 
+    # Ensure Serper web search tool exists for story generator market research.
+    serper_existing = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("serper"),
+        SystemAPISetting.category == "Tools",
+    ).first()
+    if not serper_existing:
+        db.add(SystemAPISetting(
+            name="serper",
+            category="Tools",
+            provider="serper",
+            api_key="",
+            base_url="https://google.serper.dev",
+            model="",
+            base_model="",
+            deprecated=False,
+            config={
+                "endpoint": "https://google.serper.dev/search",
+                "description": "Google search API for story generator market research",
+            },
+            is_active=True,
+        ))
+        db.flush()
+
 DEFAULTS = {
     "openai": {
         "category": "LLM",

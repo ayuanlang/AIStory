@@ -91,7 +91,10 @@ class Settings(BaseSettings):
     WECHAT_API_V3_KEY: str = os.getenv("WECHAT_API_V3_KEY", "")
     WECHAT_PRIVATE_KEY_PATH: str = os.getenv("WECHAT_PRIVATE_KEY_PATH", "") # Path to .pem
     WECHAT_CERT_SERIAL_NO: str = os.getenv("WECHAT_CERT_SERIAL_NO", "")
-    WECHAT_NOTIFY_URL: str = os.getenv("WECHAT_NOTIFY_URL", "") 
+    WECHAT_NOTIFY_URL: str = os.getenv("WECHAT_NOTIFY_URL", "")
+
+    # Optional Serper fallback when not configured in Admin > 系统 API (provider=serper).
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "").strip()
     
     class Config:
         env_file = ".env"
