@@ -17922,12 +17922,8 @@ def _sanitize_llm_json_text(raw: str) -> str:
     if fenced:
         content = fenced.group(1).strip()
     content = content.replace("```json", "").replace("```", "").strip()
-    content = (
-        content.replace("\u201c", '"')
-        .replace("\u201d", '"')
-        .replace("\u2018", "'")
-        .replace("\u2019", "'")
-    )
+    # Keep Unicode curly quotes inside JSON string values; converting them to ASCII "
+    # breaks valid payloads like: "core_conflict": "隐藏"穿越者"身份".
     content = re.sub(r",\s*}", "}", content)
     content = re.sub(r",\s*]", "]", content)
     return content
@@ -18423,7 +18419,16 @@ async def structure_project_creative_input_to_story_fields(
         llm_context="structure_creative_input",
     )
 
-    data = _normalize_llm_json_object(raw, context="structure_creative_input")
+    structure_llm_config = agent_service.get_active_llm_config(
+        user_id,
+        system_api_id=getattr(req, "system_api_id", None),
+        function_name=(getattr(req, "function_name", None) or "script_analysis"),
+    )
+    data = await _normalize_llm_json_object_with_repair(
+        raw,
+        context="structure_creative_input",
+        llm_config=structure_llm_config,
+    )
     normalized = _normalize_story_field_map(data, _CREATIVE_INPUT_STRUCTURE_KEYS)
     normalized["prefill_meta"] = {
         "pipeline": "extract_key_elements -> reference_search -> structure_fill",
