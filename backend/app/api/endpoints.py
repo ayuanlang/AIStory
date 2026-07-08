@@ -74,6 +74,11 @@ from app.services.creative_structure_search_service import (
     build_creative_structure_search_user_prompt,
     collect_creative_structure_search_snippets,
 )
+from app.services.episode_script_reference_service import (
+    build_episode_script_reference_user_prompt,
+    collect_episode_script_reference_snippets,
+    extract_episode_block_from_global_framework,
+)
 from app.services.story_trend_search_service import (
     build_industry_analysis_user_prompt,
     build_trending_ai_short_dramas_user_prompt,
@@ -18140,6 +18145,174 @@ async def _run_structure_llm_call(
     return raw
 
 
+async def _prepare_episode_script_reference_block(
+    *,
+    db: Session,
+    user_id: int,
+    project_global_info: Optional[Dict[str, Any]],
+    llm_config: Dict[str, Any],
+    global_md: str,
+    episode_number: int,
+    project_title: str = "",
+    language: str = "",
+) -> str:
+    """Extract current-episode framework block, LLM key elements, web search (5 snippets), format for user prompt."""
+    episode_block = extract_episode_block_from_global_framework(global_md, episode_number)
+    if not episode_block.strip():
+        logger.info(
+            "[generate_episode_scripts] REFERENCE_SEARCH_SKIP episode_number=%s reason=empty_episode_block",
+            episode_number,
+        )
+        return ""
+
+    try:
+        extract_prompt_template = _resolve_prompt_text("story_generator_episode_extract_key_elements.txt")
+    except FileNotFoundError:
+        logger.warning(
+            "[generate_episode_scripts] REFERENCE_SEARCH_SKIP episode_number=%s reason=missing_extract_prompt",
+            episode_number,
+        )
+        return ""
+
+    try:
+        extract_sys_prompt = extract_prompt_template.format(episode_block=episode_block)
+    except Exception:
+        extract_sys_prompt = extract_prompt_template
+
+    extract_user_prompt = (
+        f"Project Title: {project_title or '(none)'}\n"
+        f"Episode Number: {episode_number}\n"
+        f"Preferred Language: {language or 'zh'}\n\n"
+        "Extract searchable key elements from this episode's framework block, with emphasis on climax moments, iconic scenes, golden quotes, and trope patterns."
+    )
+
+    provider = llm_config.get("provider") if llm_config else None
+    model = llm_config.get("model") if llm_config else None
+    reservation_tx = None
+    key_elements: Dict[str, Any] = {}
+
+    try:
+        if billing_service.is_token_pricing(db, "llm_chat", provider, model):
+            est = billing_service.estimate_reserve_tokens_from_messages(
+                [
+                    {"role": "system", "content": extract_sys_prompt},
+                    {"role": "user", "content": extract_user_prompt},
+                ],
+            )
+            reservation_tx = billing_service.reserve_credits(
+                db,
+                user_id,
+                "llm_chat",
+                provider,
+                model,
+                {
+                    "item": "episode_extract_key_elements",
+                    "episode_number": episode_number,
+                    "estimation_method": "prompt_tokens_ratio",
+                    "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                    "input_tokens": est.get("input_tokens", 0),
+                    "output_tokens": est.get("output_tokens", 0),
+                    "total_tokens": est.get("total_tokens", 0),
+                },
+            )
+        else:
+            billing_service.check_balance(db, user_id, "llm_chat", provider, model)
+
+        _release_db_connection(db, f"episode_extract_key_elements_ep{episode_number}_llm_call")
+        resp = await llm_service.generate_content_with_fallback(extract_user_prompt, extract_sys_prompt, llm_config)
+        raw = (resp.get("content") or "").strip()
+        if not raw:
+            raise RuntimeError("LLM returned empty content for episode key-element extraction")
+
+        usage = resp.get("usage") or {}
+        if not usage:
+            usage = billing_service.estimate_input_output_tokens_from_messages(
+                [
+                    {"role": "system", "content": extract_sys_prompt},
+                    {"role": "user", "content": extract_user_prompt},
+                    {"role": "assistant", "content": raw},
+                ],
+                output_ratio=1.0,
+            )
+        billing_details = {
+            "item": "episode_extract_key_elements",
+            "episode_number": episode_number,
+            "prompt_tokens": int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
+            "completion_tokens": int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+            "total_tokens": int(
+                usage.get(
+                    "total_tokens",
+                    int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+                    + int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+                )
+                or 0
+            ),
+        }
+        billing_details["input_tokens"] = billing_details["prompt_tokens"]
+        billing_details["output_tokens"] = billing_details["completion_tokens"]
+        _apply_llm_routing_to_billing_details(billing_details, resp)
+
+        if reservation_tx:
+            billing_service.settle_reservation(db, _reservation_tx_id(reservation_tx), billing_details)
+        else:
+            billing_service.deduct_credits(db, user_id, "llm_chat", provider, model, billing_details)
+
+        key_elements = _normalize_llm_json_object(raw, context="episode_extract_key_elements")
+    except Exception as exc:
+        if reservation_tx:
+            try:
+                billing_service.cancel_reservation(db, _reservation_tx_id(reservation_tx), str(exc))
+            except Exception:
+                pass
+        logger.warning(
+            "[generate_episode_scripts] REFERENCE_SEARCH_KEY_EXTRACT_FAILED episode_number=%s err=%s",
+            episode_number,
+            exc,
+        )
+        key_elements = {
+            "conflict_hooks": [episode_block[:240]],
+            "iconic_scene_search_terms": [f"第{episode_number}集 短剧 名场面"],
+            "climax_search_terms": [f"第{episode_number}集 高潮 反转"],
+        }
+
+    try:
+        search_bundle = await collect_episode_script_reference_snippets(
+            key_elements,
+            episode_number=episode_number,
+            max_snippets=5,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[generate_episode_scripts] REFERENCE_SEARCH_FAILED episode_number=%s err=%s",
+            episode_number,
+            exc,
+        )
+        return ""
+
+    snippet_count = len(search_bundle.get("snippets") or [])
+    logger.info(
+        "[generate_episode_scripts] REFERENCE_SEARCH_OK episode_number=%s episode_block_len=%s query_count=%s snippet_count=%s",
+        episode_number,
+        len(episode_block),
+        len(search_bundle.get("queries") or []),
+        snippet_count,
+    )
+    if snippet_count <= 0:
+        return ""
+
+    return (
+        build_episode_script_reference_user_prompt(
+            search_bundle,
+            key_elements,
+            episode_number=episode_number,
+            episode_block=episode_block,
+            project_title=project_title,
+            language=language,
+        )
+        + "\n\n"
+    )
+
+
 @router.post("/projects/{project_id}/story_generator/structure_creative_input", response_model=Dict[str, Any])
 async def structure_project_creative_input_to_story_fields(
     project_id: int,
@@ -21752,6 +21925,22 @@ async def generate_project_episode_scripts_from_global_framework(
                     "```\n\n"
                 )
 
+        episode_language = _pick_first_text(
+            gi_basic_info.get("language"),
+            gi_story_input.get("language"),
+            project_global_info.get("language"),
+        )
+        reference_search_block = await _prepare_episode_script_reference_block(
+            db=db,
+            user_id=user_id,
+            project_global_info=project_global_info,
+            llm_config=llm_config,
+            global_md=global_md,
+            episode_number=idx,
+            project_title=project_title,
+            language=episode_language,
+        )
+
         user_prompt = (
             f"Project Title: {project_title}\n"
             f"Episode Number: {idx}\n"
@@ -21762,6 +21951,7 @@ async def generate_project_episode_scripts_from_global_framework(
             f"{generation_scope_block}"
             f"{episode_title_policy_block}"
             f"{prev_episode_block}"
+            f"{reference_search_block}"
             f"Global Story DNA (Markdown):\n{global_md}\n\n"
             f"Character Canon (Markdown):\n{character_canon_md}\n\n"
             f"{relationships_block}"
@@ -21807,7 +21997,8 @@ async def generate_project_episode_scripts_from_global_framework(
             logger.info(
                 f"[generate_episode_scripts] REQUEST_PAYLOAD episode_number={idx} episode_id={ep_id} "
                 f"user_prompt_len={len(user_prompt)} sys_prompt_len={len(sys_prompt_episode)} "
-                f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)}"
+                f"has_constraints_block={bool(constraints_block)} has_relationships_block={bool(relationships_block)} "
+                f"has_reference_search_block={bool(reference_search_block)}"
             )
             _release_db_connection(db, f"generate_episode_scripts_episode_{ep_id}_llm_call")
             generated_payload = await generate_markdown_with_retry(

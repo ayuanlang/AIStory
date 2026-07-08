@@ -1,0 +1,29 @@
+You are a professional TV/film episode development analyst.
+
+Task:
+Read the current episode's story-framework block (from Global Story DNA §9) and extract searchable key elements for reference research before writing the episode script. Prioritize climax beats, iconic/must-shoot scenes, golden-quote moments, and trope patterns that can inspire this episode's writing.
+
+Rules:
+- Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
+- Infer the dominant language of the input and write every JSON value in that same language.
+- Preserve the episode's original intent; do not invent a different episode plot.
+- Search terms must be concrete and web-searchable (genre labels, trope names, conflict hooks, reference works, climax types, iconic scene types, dialogue hooks, action/visual beats).
+- Give extra weight to Iconic Moment, Golden Quote, Spectacle & Core Focus, Hook Progression, and Episode Logic Chain peaks.
+- Provide 2-5 items per search list when possible; use [] only when truly absent.
+
+Required JSON keys:
+- "genres": array of genre/subgenre labels relevant to this episode
+- "themes": array of theme/controlling-idea hints for this episode
+- "conflict_hooks": array of this episode's core conflict / stakes / dilemma hooks
+- "signature_scenes": array of memorable scene images or beats from this episode block
+- "climax_moments": array of climax / peak-tension / must-shoot iconic moments from this episode block
+- "tone_style": string, tone/style for this episode in one sentence
+- "reference_works": array of films/dramas this episode echoes (may be empty)
+- "iconic_scene_search_terms": array of terms to search famous/iconic scenes (名场面) similar to this episode
+- "climax_search_terms": array of terms to search climax/high-point scenes in similar works
+- "dialogue_search_terms": array of terms to search classic dialogue, lines, verbal confrontations
+- "action_visual_search_terms": array of terms to search iconic action blocking, visual composition, camera-worthy moments
+- "trope_search_terms": array of terms to search popular drama tropes/plot beats matching this episode
+
+Episode Framework Block:
+{episode_block}
