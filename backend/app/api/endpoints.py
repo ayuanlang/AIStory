@@ -17911,21 +17911,118 @@ _CREATIVE_INPUT_STRUCTURE_KEYS = [
 ]
 
 
-def _normalize_llm_json_object(raw: str, *, context: str) -> Dict[str, Any]:
-    content = re.sub(r"<think>.*?</think>", "", str(raw or ""), flags=re.DOTALL).strip()
+def _sanitize_llm_json_text(raw: str) -> str:
+    content = re.sub(r"<think>.*?</think>", "", str(raw or ""), flags=re.DOTALL | re.IGNORECASE).strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content, re.IGNORECASE)
+    if fenced:
+        content = fenced.group(1).strip()
     content = content.replace("```json", "").replace("```", "").strip()
-    start_idx = content.find("{")
-    end_idx = content.rfind("}")
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        content = content[start_idx:end_idx + 1]
+    content = (
+        content.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+    content = re.sub(r",\s*}", "}", content)
+    content = re.sub(r",\s*]", "]", content)
+    return content
+
+
+def _extract_llm_json_object_from_text(raw: str) -> Optional[Dict[str, Any]]:
+    text = _sanitize_llm_json_text(raw)
+    if not text:
+        return None
+
+    json5_obj = _loads_json5_if_available(text)
+    if isinstance(json5_obj, dict):
+        return json5_obj
+
     try:
-        data = json.loads(content)
-    except Exception as e:
-        logger.error("[%s] JSON parse failed: %s. Raw len=%s", context, e, len(raw or ""))
-        raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start_idx = text.find("{")
+    end_idx = text.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        candidate = text[start_idx:end_idx + 1]
+        json5_obj = _loads_json5_if_available(candidate)
+        if isinstance(json5_obj, dict):
+            return json5_obj
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(text[idx:])
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _normalize_llm_json_object(raw: str, *, context: str) -> Dict[str, Any]:
+    data = _extract_llm_json_object_from_text(raw)
     if not isinstance(data, dict):
-        raise HTTPException(status_code=500, detail="LLM JSON must be an object")
+        logger.error("[%s] JSON parse failed. Raw len=%s", context, len(raw or ""))
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
     return data
+
+
+async def _normalize_llm_json_object_with_repair(
+    raw: str,
+    *,
+    context: str,
+    llm_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    data = _extract_llm_json_object_from_text(raw)
+    if isinstance(data, dict):
+        return data
+
+    content = _sanitize_llm_json_text(raw)
+    if not content or not llm_config:
+        logger.error("[%s] JSON parse failed and repair unavailable. Raw len=%s", context, len(raw or ""))
+        raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
+
+    repair_system = (
+        "You are a strict JSON formatter. "
+        "Convert the user's text into one valid JSON object only. "
+        "The first character must be '{' and the last character must be '}'. "
+        "Escape internal double quotes inside strings as \\\". "
+        "No markdown fences, no explanation, no extra text."
+    )
+    repair_user = (
+        "Fix the following content into valid JSON while preserving fields and values as much as possible.\n\n"
+        f"{content}"
+    )
+    try:
+        repair_response = await llm_service.chat_completion_with_fallback(
+            [
+                {"role": "system", "content": repair_system},
+                {"role": "user", "content": repair_user},
+            ],
+            llm_config,
+        )
+        repair_raw = str((repair_response or {}).get("content") or "").strip()
+        repaired = _extract_llm_json_object_from_text(repair_raw)
+        if isinstance(repaired, dict):
+            logger.warning("[%s] JSON parse recovered via repair pass", context)
+            return repaired
+    except Exception as exc:
+        logger.warning("[%s] JSON repair pass failed: %s", context, exc)
+
+    logger.error("[%s] JSON parse failed after repair. Raw len=%s", context, len(raw or ""))
+    raise HTTPException(status_code=500, detail=f"Failed to parse LLM JSON for {context}")
 
 
 def _normalize_story_field_map(data: Dict[str, Any], keys: List[str]) -> Dict[str, str]:
@@ -18186,7 +18283,7 @@ async def _run_ai_short_drama_market_llm(
     user_prompt: str,
     billing_item: str,
     llm_context: str,
-) -> str:
+) -> Dict[str, Any]:
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
     llm_config = agent_service.get_active_llm_config(
@@ -18201,6 +18298,9 @@ async def _run_ai_short_drama_market_llm(
         project.global_info,
         context=llm_context,
     )
+    cfg = dict(llm_config.get("config") or {})
+    cfg.setdefault("response_format", {"type": "json_object"})
+    llm_config = {**llm_config, "config": cfg}
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
 
@@ -18276,7 +18376,7 @@ async def _run_ai_short_drama_market_llm(
     else:
         billing_service.deduct_credits(db, current_user.id, "llm_chat", provider, model, billing_details)
 
-    return raw
+    return {"raw": raw, "llm_config": llm_config}
 
 
 def _industry_analysis_section_map() -> List[Tuple[str, str]]:
@@ -18375,7 +18475,7 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         f"Focus on industry-wide trends only; do not rank individual dramas.\n\n"
         f"{search_context}"
     )
-    raw = await _run_ai_short_drama_market_llm(
+    llm_result = await _run_ai_short_drama_market_llm(
         db=db,
         current_user=current_user,
         project=project,
@@ -18385,8 +18485,12 @@ async def fetch_industry_analysis_ai_short_dramas_report(
         billing_item="industry_analysis_ai_short_dramas",
         llm_context="industry_analysis_ai_short_dramas",
     )
-
-    data = _normalize_llm_json_object(raw, context="industry_analysis_ai_short_dramas")
+    raw = str((llm_result or {}).get("raw") or "").strip()
+    data = await _normalize_llm_json_object_with_repair(
+        raw,
+        context="industry_analysis_ai_short_dramas",
+        llm_config=(llm_result or {}).get("llm_config"),
+    )
     industry_analysis = data.get("industry_analysis") if isinstance(data.get("industry_analysis"), dict) else {}
     markdown = str(data.get("markdown") or "").strip()
     summary = str(data.get("summary") or "").strip()
@@ -18469,7 +18573,7 @@ async def fetch_trending_ai_short_dramas_report(
         f"For each drama, analyze climax and iconic scenes from visual, dialogue, and action angles.\n\n"
         f"{search_context}"
     )
-    raw = await _run_ai_short_drama_market_llm(
+    llm_result = await _run_ai_short_drama_market_llm(
         db=db,
         current_user=current_user,
         project=project,
@@ -18479,8 +18583,12 @@ async def fetch_trending_ai_short_dramas_report(
         billing_item="trending_ai_short_dramas",
         llm_context="trending_ai_short_dramas",
     )
-
-    data = _normalize_llm_json_object(raw, context="trending_ai_short_dramas")
+    raw = str((llm_result or {}).get("raw") or "").strip()
+    data = await _normalize_llm_json_object_with_repair(
+        raw,
+        context="trending_ai_short_dramas",
+        llm_config=(llm_result or {}).get("llm_config"),
+    )
     dramas = data.get("dramas") if isinstance(data.get("dramas"), list) else []
     markdown = str(data.get("markdown") or "").strip()
     summary = str(data.get("summary") or "").strip()

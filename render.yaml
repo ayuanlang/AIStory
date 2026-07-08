@@ -134,6 +134,10 @@ services:
         value: "1"
       - key: SERPER_API_KEY
         sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: aistory-db

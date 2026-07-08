@@ -1398,6 +1398,36 @@
       "tags": null
     },
     {
+      "name": "brave",
+      "category": "Tools",
+      "provider": "brave",
+      "base_url": "https://api.search.brave.com",
+      "model": "",
+      "modality": null,
+      "config": {
+        "endpoint": "https://api.search.brave.com/res/v1/web/search",
+        "description": "Brave Search API for story generator market research"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": null
+    },
+    {
+      "name": "tavily",
+      "category": "Tools",
+      "provider": "tavily",
+      "base_url": "https://api.tavily.com",
+      "model": "",
+      "modality": null,
+      "config": {
+        "endpoint": "https://api.tavily.com/search",
+        "description": "Tavily AI search API for story generator market research"
+      },
+      "deprecated": false,
+      "is_active": true,
+      "tags": null
+    },
+    {
       "name": "Kie ElevenLabs Audio Isolation",
       "category": "Tools",
       "provider": "kie",

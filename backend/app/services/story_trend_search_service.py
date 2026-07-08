@@ -34,6 +34,8 @@ DEFAULT_HEADERS = {
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 BING_HTML_URL = "https://cn.bing.com/search"
 SERPER_API_URL = "https://google.serper.dev/search"
+BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search"
+TAVILY_SEARCH_API_URL = "https://api.tavily.com/search"
 SEARXNG_INSTANCES = (
     "https://searx.be",
     "https://search.inetol.net",
@@ -52,6 +54,10 @@ DDG_HTML_SEARCH_TIMEOUT_SEC = 8
 DDGS_SEARCH_RETRIES = 2
 SEARCH_BACKEND_ALIASES = {
     "serper": "serper",
+    "brave": "brave",
+    "brave_search": "brave",
+    "tavily": "tavily",
+    "tavily_ai": "tavily",
     "ddg": "ddg_html",
     "ddg_html": "ddg_html",
     "duckduckgo": "ddg_html",
@@ -62,8 +68,9 @@ SEARCH_BACKEND_ALIASES = {
     "searx": "searxng",
     "searxng": "searxng",
 }
-DEFAULT_SEARCH_BACKENDS_CLOUD = ("serper", "ddgs", "bing_html", "searxng")
-DEFAULT_SEARCH_BACKENDS_LOCAL = ("serper", "ddg_html", "ddgs", "bing_html", "searxng")
+API_KEY_SEARCH_BACKENDS = frozenset({"serper", "brave", "tavily"})
+DEFAULT_SEARCH_BACKENDS_CLOUD = ("serper", "brave", "tavily", "ddgs", "bing_html", "searxng")
+DEFAULT_SEARCH_BACKENDS_LOCAL = ("serper", "brave", "tavily", "ddg_html", "ddgs", "bing_html", "searxng")
 
 
 def _is_cloud_runtime() -> bool:
@@ -84,8 +91,9 @@ def _normalize_search_backend_name(raw_name: str) -> str:
     return SEARCH_BACKEND_ALIASES.get(key, key)
 
 
-def resolve_search_backend_chain(*, serper_api_key: str = "") -> List[str]:
+def resolve_search_backend_chain(*, search_api_keys: Optional[Dict[str, str]] = None) -> List[str]:
     """Return ordered search backends for the current runtime."""
+    keys = search_api_keys or resolve_search_api_keys()
     raw = str(getattr(settings, "SEARCH_BACKENDS", "") or os.getenv("SEARCH_BACKENDS", "") or "").strip()
     if raw:
         chain: List[str] = []
@@ -96,14 +104,21 @@ def resolve_search_backend_chain(*, serper_api_key: str = "") -> List[str]:
                 seen.add(backend)
                 chain.append(backend)
         if chain:
-            return chain
+            return _filter_search_backend_chain(chain, keys)
 
     chain = list(DEFAULT_SEARCH_BACKENDS_CLOUD if _is_cloud_runtime() else DEFAULT_SEARCH_BACKENDS_LOCAL)
-    if not str(serper_api_key or "").strip():
-        chain = [backend for backend in chain if backend != "serper"]
     if not _ddg_html_search_enabled():
         chain = [backend for backend in chain if backend != "ddg_html"]
-    return chain
+    return _filter_search_backend_chain(chain, keys)
+
+
+def _filter_search_backend_chain(chain: List[str], search_api_keys: Dict[str, str]) -> List[str]:
+    filtered: List[str] = []
+    for backend in chain:
+        if backend in API_KEY_SEARCH_BACKENDS and not str(search_api_keys.get(backend) or "").strip():
+            continue
+        filtered.append(backend)
+    return filtered
 
 
 def _fallback_snippet_text(title: str, snippet: str, url: str = "") -> str:
@@ -562,15 +577,18 @@ def _normalize_api_keys(value: Any) -> List[str]:
     return out
 
 
-def resolve_serper_api_key() -> str:
-    """Resolve Serper API key from system API settings, provider key pool, then env fallback."""
-    env_key = str(getattr(settings, "SERPER_API_KEY", "") or "").strip()
+def resolve_tools_provider_api_key(provider: str, *, env_fallback: str = "") -> str:
+    """Resolve Tools provider API key from provider key pool, system API row, then env."""
+    provider_norm = str(provider or "").strip().lower()
+    env_key = str(env_fallback or "").strip()
+    if not provider_norm:
+        return env_key
     try:
         with SessionLocal() as db:
             row = (
                 db.query(SystemAPISetting)
                 .filter(
-                    func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == "serper",
+                    func.lower(func.trim(func.coalesce(SystemAPISetting.provider, ""))) == provider_norm,
                     SystemAPISetting.category == "Tools",
                     SystemAPISetting.deprecated.is_(False),
                 )
@@ -581,7 +599,7 @@ def resolve_serper_api_key() -> str:
 
             pool_row = (
                 db.query(ProviderKeyPool)
-                .filter(func.lower(func.trim(func.coalesce(ProviderKeyPool.provider, ""))) == "serper")
+                .filter(func.lower(func.trim(func.coalesce(ProviderKeyPool.provider, ""))) == provider_norm)
                 .first()
             )
             if pool_row and pool_row.api_keys:
@@ -593,10 +611,23 @@ def resolve_serper_api_key() -> str:
                 return fallback_key
     except Exception as exc:
         logger.warning(
-            "[ai_short_drama_search] Failed to resolve Serper API key from system settings: %s",
+            "[ai_short_drama_search] Failed to resolve %s API key from system settings: %s",
+            provider_norm,
             exc,
         )
     return env_key
+
+
+def resolve_search_api_keys() -> Dict[str, str]:
+    return {
+        "serper": resolve_tools_provider_api_key("serper", env_fallback=str(getattr(settings, "SERPER_API_KEY", "") or "")),
+        "brave": resolve_tools_provider_api_key("brave", env_fallback=str(getattr(settings, "BRAVE_SEARCH_API_KEY", "") or "")),
+        "tavily": resolve_tools_provider_api_key("tavily", env_fallback=str(getattr(settings, "TAVILY_API_KEY", "") or "")),
+    }
+
+
+def resolve_serper_api_key() -> str:
+    return resolve_search_api_keys().get("serper", "")
 
 def _search_serper(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
     api_key = str(api_key or resolve_serper_api_key()).strip()
@@ -637,18 +668,126 @@ def _search_serper(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
     return results
 
 
+def _search_brave(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
+    api_key = str(api_key or resolve_search_api_keys().get("brave", "")).strip()
+    if not api_key:
+        return []
+    results: List[Dict[str, str]] = []
+    try:
+        response = requests.get(
+            BRAVE_SEARCH_API_URL,
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": api_key,
+            },
+            params={
+                "q": query,
+                "count": max(3, min(limit, 20)),
+                "search_lang": "zh-hans",
+                "country": "CN",
+                "extra_snippets": "true",
+            },
+            timeout=20,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "[ai_short_drama_search] Brave search failed query=%s status=%s",
+                query,
+                response.status_code,
+            )
+            return results
+        data = response.json()
+        web_results = data.get("web") if isinstance(data.get("web"), dict) else {}
+        for item in (web_results.get("results") or [])[:limit]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            snippet = str(item.get("description") or "").strip()
+            extra_snippets = item.get("extra_snippets") if isinstance(item.get("extra_snippets"), list) else []
+            if not snippet and extra_snippets:
+                snippet = " ".join(str(part or "").strip() for part in extra_snippets if str(part or "").strip())
+            url = str(item.get("url") or "").strip()
+            if title or snippet:
+                results.append(
+                    {
+                        "query": query,
+                        "title": title,
+                        "snippet": snippet,
+                        "url": url,
+                        "source": "brave",
+                    }
+                )
+    except Exception as exc:
+        logger.warning("[ai_short_drama_search] Brave search failed query=%s err=%s", query, exc)
+    return results
+
+
+def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
+    api_key = str(api_key or resolve_search_api_keys().get("tavily", "")).strip()
+    if not api_key:
+        return []
+    results: List[Dict[str, str]] = []
+    try:
+        response = requests.post(
+            TAVILY_SEARCH_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "max_results": max(3, min(limit, 10)),
+                "search_depth": "basic",
+                "topic": "news",
+                "include_answer": False,
+            },
+            timeout=25,
+        )
+        if response.status_code != 200:
+            logger.warning(
+                "[ai_short_drama_search] Tavily search failed query=%s status=%s",
+                query,
+                response.status_code,
+            )
+            return results
+        data = response.json()
+        for item in (data.get("results") or [])[:limit]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            snippet = str(item.get("content") or item.get("raw_content") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if title or snippet:
+                results.append(
+                    {
+                        "query": query,
+                        "title": title,
+                        "snippet": snippet,
+                        "url": url,
+                        "source": "tavily",
+                    }
+                )
+    except Exception as exc:
+        logger.warning("[ai_short_drama_search] Tavily search failed query=%s err=%s", query, exc)
+    return results
+
+
 async def _collect_search_results_for_query(
     query: str,
     *,
-    serper_api_key: str = "",
+    search_api_keys: Optional[Dict[str, str]] = None,
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
-    chain = list(backend_chain or resolve_search_backend_chain(serper_api_key=serper_api_key))
+    keys = search_api_keys or resolve_search_api_keys()
+    chain = list(backend_chain or resolve_search_backend_chain(search_api_keys=keys))
 
     backend_runners = {
-        "serper": lambda: _search_serper(query, api_key=serper_api_key, limit=limit_per_query),
+        "serper": lambda: _search_serper(query, api_key=keys.get("serper", ""), limit=limit_per_query),
+        "brave": lambda: _search_brave(query, api_key=keys.get("brave", ""), limit=limit_per_query),
+        "tavily": lambda: _search_tavily(query, api_key=keys.get("tavily", ""), limit=limit_per_query),
         "ddg_html": lambda: _search_duckduckgo_html(query, limit=limit_per_query),
         "ddgs": lambda: _search_ddgs_text(query, limit=limit_per_query),
         "bing_html": lambda: _search_bing_html(query, limit=limit_per_query),
@@ -730,13 +869,13 @@ def _snippet_key(item: Dict[str, str]) -> str:
 async def _search_query_bundle(
     query: str,
     *,
-    serper_api_key: str = "",
+    search_api_keys: Optional[Dict[str, str]] = None,
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     combined_rows = await _collect_search_results_for_query(
         query,
-        serper_api_key=serper_api_key,
+        search_api_keys=search_api_keys,
         limit_per_query=limit_per_query,
         backend_chain=backend_chain,
     )
@@ -802,26 +941,29 @@ async def _collect_search_snippets_for_queries(
     report_period = current_report_period_label(anchor)
 
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY_LIMIT)
-    serper_api_key = resolve_serper_api_key()
-    backend_chain = resolve_search_backend_chain(serper_api_key=serper_api_key)
-    if serper_api_key:
-        logger.info(
-            "[ai_short_drama_search] Serper enabled report_kind=%s backend_chain=%s",
-            report_kind,
-            backend_chain,
-        )
-    else:
+    search_api_keys = resolve_search_api_keys()
+    backend_chain = resolve_search_backend_chain(search_api_keys=search_api_keys)
+    enabled_api_backends = [name for name in API_KEY_SEARCH_BACKENDS if str(search_api_keys.get(name) or "").strip()]
+    missing_api_backends = [name for name in API_KEY_SEARCH_BACKENDS if name not in enabled_api_backends]
+    logger.info(
+        "[ai_short_drama_search] search backends report_kind=%s enabled_api=%s missing_api=%s backend_chain=%s cloud_runtime=%s",
+        report_kind,
+        enabled_api_backends,
+        missing_api_backends,
+        backend_chain,
+        _is_cloud_runtime(),
+    )
+    if missing_api_backends:
         logger.warning(
-            "[ai_short_drama_search] Serper API key not configured report_kind=%s backend_chain=%s. "
-            "Configure provider=serper in Admin or set SERPER_API_KEY on Render.",
+            "[ai_short_drama_search] API search providers missing keys report_kind=%s providers=%s. "
+            "Configure in Admin > 系统 API or set SERPER_API_KEY / BRAVE_SEARCH_API_KEY / TAVILY_API_KEY.",
             report_kind,
-            backend_chain,
+            missing_api_backends,
         )
     if "ddg_html" not in backend_chain:
         logger.info(
-            "[ai_short_drama_search] DuckDuckGo HTML disabled report_kind=%s cloud_runtime=%s",
+            "[ai_short_drama_search] DuckDuckGo HTML disabled report_kind=%s",
             report_kind,
-            _is_cloud_runtime(),
         )
 
     async def _bounded_search(query: str) -> List[Dict[str, str]]:
@@ -829,7 +971,7 @@ async def _collect_search_snippets_for_queries(
             await asyncio.sleep(SEARCH_QUERY_DELAY_SEC)
             return await _search_query_bundle(
                 query,
-                serper_api_key=serper_api_key,
+                search_api_keys=search_api_keys,
                 limit_per_query=limit_per_query,
                 backend_chain=backend_chain,
             )

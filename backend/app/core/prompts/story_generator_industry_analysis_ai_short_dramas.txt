@@ -5,6 +5,9 @@ Using ONLY the provided web search snippets, compile an industry analysis report
 
 Rules:
 - Output ONLY a valid JSON object. No markdown fences outside JSON, no explanations.
+- All JSON strings must use standard double quotes; escape internal " as \".
+- Use \n for line breaks inside string values (especially markdown); do not insert raw unescaped newlines in strings.
+- Ensure the JSON is complete: close every array/object and do not truncate fields.
 - Write values in the user preferred language when provided; default Chinese for zh.
 - Cover the full report period, not only the anchor month; compare early vs late month signals when snippets allow.
 - Prioritize hot-list and genre/theme change evidence over generic industry commentary.

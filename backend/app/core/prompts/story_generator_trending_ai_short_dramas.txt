@@ -11,6 +11,9 @@ PRIMARY focus for each drama: analyze and surface its climax and iconic scenes (
 
 Rules:
 - Output ONLY a valid JSON object. No markdown fences outside JSON, no explanations.
+- All JSON strings must use standard double quotes; escape internal " as \".
+- Use \n for line breaks inside string values (especially markdown); do not insert raw unescaped newlines in strings.
+- Ensure the JSON is complete: close every array/object and do not truncate fields.
 - Write values in the user preferred language when provided; default Chinese for zh.
 - Cover the full report period, not only the anchor month.
 - Prefer AI-generated short dramas, micro dramas, or platform AI drama entries.

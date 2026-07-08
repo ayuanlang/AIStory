@@ -4479,6 +4479,50 @@ def _ensure_builtin_system_settings(db: Session) -> None:
         ))
         db.flush()
 
+    brave_existing = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("brave"),
+        SystemAPISetting.category == "Tools",
+    ).first()
+    if not brave_existing:
+        db.add(SystemAPISetting(
+            name="brave",
+            category="Tools",
+            provider="brave",
+            api_key="",
+            base_url="https://api.search.brave.com",
+            model="",
+            base_model="",
+            deprecated=False,
+            config={
+                "endpoint": "https://api.search.brave.com/res/v1/web/search",
+                "description": "Brave Search API for story generator market research",
+            },
+            is_active=True,
+        ))
+        db.flush()
+
+    tavily_existing = db.query(SystemAPISetting).filter(
+        _system_provider_case_insensitive_filter("tavily"),
+        SystemAPISetting.category == "Tools",
+    ).first()
+    if not tavily_existing:
+        db.add(SystemAPISetting(
+            name="tavily",
+            category="Tools",
+            provider="tavily",
+            api_key="",
+            base_url="https://api.tavily.com",
+            model="",
+            base_model="",
+            deprecated=False,
+            config={
+                "endpoint": "https://api.tavily.com/search",
+                "description": "Tavily AI search API for story generator market research",
+            },
+            is_active=True,
+        ))
+        db.flush()
+
 DEFAULTS = {
     "openai": {
         "category": "LLM",
