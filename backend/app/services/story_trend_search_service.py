@@ -6,7 +6,6 @@ import os
 import random
 import re
 import time
-import warnings
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -265,18 +264,27 @@ def _merge_result_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
     return [merged[key] for key in order]
 
 
+def _load_ddgs_client():
+    try:
+        from ddgs import DDGS
+        return DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS  # legacy shim; emits rename warning
+            return DDGS
+        except ImportError:
+            return None
+
+
 def _search_ddgs_text(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
-    try:
-        from duckduckgo_search import DDGS
-    except ImportError:
+    DDGS = _load_ddgs_client()
+    if DDGS is None:
         return results
     for attempt in range(DDGS_SEARCH_RETRIES):
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                with DDGS() as ddgs:
-                    rows = list(ddgs.text(query, max_results=limit))
+            with DDGS() as ddgs:
+                rows = list(ddgs.text(query, max_results=limit))
             for row in rows:
                 title = str(row.get("title") or "").strip()
                 body = str(row.get("body") or "").strip()
@@ -773,16 +781,33 @@ def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
     return results
 
 
+def _increment_diag_counter(store: Dict[str, int], key: str, amount: int = 1) -> None:
+    store[key] = int(store.get(key, 0) or 0) + int(amount or 0)
+
+
+def _new_search_run_diagnostics() -> Dict[str, Any]:
+    return {
+        "backend_calls": {},
+        "backend_raw_rows": {},
+        "backend_useful_rows": {},
+        "queries_with_results": 0,
+        "queries_empty": 0,
+        "query_backend_traces": [],
+    }
+
+
 async def _collect_search_results_for_query(
     query: str,
     *,
     search_api_keys: Optional[Dict[str, str]] = None,
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     keys = search_api_keys or resolve_search_api_keys()
     chain = list(backend_chain or resolve_search_backend_chain(search_api_keys=keys))
+    query_trace: List[Dict[str, Any]] = []
 
     backend_runners = {
         "serper": lambda: _search_serper(query, api_key=keys.get("serper", ""), limit=limit_per_query),
@@ -798,10 +823,51 @@ async def _collect_search_results_for_query(
         runner = backend_runners.get(backend)
         if not runner:
             continue
+        useful_before = _useful_result_count(_merge_result_rows(rows))
+        started = time.perf_counter()
         batch = await asyncio.to_thread(runner)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
         rows.extend(batch)
-        if _useful_result_count(_merge_result_rows(rows)) >= limit_per_query:
+        merged_rows = _merge_result_rows(rows)
+        useful_after = _useful_result_count(merged_rows)
+        useful_added = max(0, useful_after - useful_before)
+        trace_item = {
+            "backend": backend,
+            "raw_rows": len(batch),
+            "useful_added": useful_added,
+            "total_useful": useful_after,
+            "elapsed_ms": elapsed_ms,
+            "satisfied": useful_after >= limit_per_query,
+        }
+        query_trace.append(trace_item)
+        if diagnostics is not None:
+            _increment_diag_counter(diagnostics["backend_calls"], backend)
+            _increment_diag_counter(diagnostics["backend_raw_rows"], backend, len(batch))
+            if useful_added:
+                _increment_diag_counter(diagnostics["backend_useful_rows"], backend, useful_added)
+        logger.info(
+            "[ai_short_drama_search] backend_result query=%s backend=%s raw_rows=%s useful_added=%s total_useful=%s/%s elapsed_ms=%s satisfied=%s",
+            query,
+            backend,
+            len(batch),
+            useful_added,
+            useful_after,
+            limit_per_query,
+            elapsed_ms,
+            useful_after >= limit_per_query,
+        )
+        if useful_after >= limit_per_query:
             break
+
+    if diagnostics is not None:
+        if rows:
+            _increment_diag_counter(diagnostics, "queries_with_results")
+        else:
+            _increment_diag_counter(diagnostics, "queries_empty")
+        diagnostics["query_backend_traces"].append({"query": query, "backends": query_trace})
+
+    if not rows:
+        logger.warning("[ai_short_drama_search] query_empty query=%s backends_tried=%s", query, [item["backend"] for item in query_trace])
     return rows
 
 def _extract_html_result_item(item: Any, query: str) -> Optional[Dict[str, str]]:
@@ -872,12 +938,14 @@ async def _search_query_bundle(
     search_api_keys: Optional[Dict[str, str]] = None,
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     combined_rows = await _collect_search_results_for_query(
         query,
         search_api_keys=search_api_keys,
         limit_per_query=limit_per_query,
         backend_chain=backend_chain,
+        diagnostics=diagnostics,
     )
     merged = _rank_results_for_query(query, _merge_result_rows(combined_rows))
 
@@ -943,15 +1011,17 @@ async def _collect_search_snippets_for_queries(
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY_LIMIT)
     search_api_keys = resolve_search_api_keys()
     backend_chain = resolve_search_backend_chain(search_api_keys=search_api_keys)
+    diagnostics = _new_search_run_diagnostics()
     enabled_api_backends = [name for name in API_KEY_SEARCH_BACKENDS if str(search_api_keys.get(name) or "").strip()]
     missing_api_backends = [name for name in API_KEY_SEARCH_BACKENDS if name not in enabled_api_backends]
     logger.info(
-        "[ai_short_drama_search] search backends report_kind=%s enabled_api=%s missing_api=%s backend_chain=%s cloud_runtime=%s",
+        "[ai_short_drama_search] search backends report_kind=%s enabled_api=%s missing_api=%s backend_chain=%s cloud_runtime=%s limit_per_query=%s",
         report_kind,
         enabled_api_backends,
         missing_api_backends,
         backend_chain,
         _is_cloud_runtime(),
+        limit_per_query,
     )
     if missing_api_backends:
         logger.warning(
@@ -974,10 +1044,13 @@ async def _collect_search_snippets_for_queries(
                 search_api_keys=search_api_keys,
                 limit_per_query=limit_per_query,
                 backend_chain=backend_chain,
+                diagnostics=diagnostics,
             )
 
+    started_at = time.perf_counter()
     tasks = [_bounded_search(query) for query in queries]
     bundles = await asyncio.gather(*tasks)
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
 
     snippets: List[Dict[str, str]] = []
     seen_snippets: set[str] = set()
@@ -998,10 +1071,17 @@ async def _collect_search_snippets_for_queries(
         source_stats[source] = source_stats.get(source, 0) + 1
 
     logger.info(
-        "[ai_short_drama_search] search complete report_kind=%s queries=%s snippets=%s source_stats=%s",
+        "[ai_short_drama_search] search complete report_kind=%s queries=%s snippets=%s elapsed_ms=%s "
+        "queries_with_results=%s queries_empty=%s backend_calls=%s backend_raw_rows=%s backend_useful_rows=%s source_stats=%s",
         report_kind,
         len(queries),
         len(snippets),
+        elapsed_ms,
+        int(diagnostics.get("queries_with_results", 0) or 0),
+        int(diagnostics.get("queries_empty", 0) or 0),
+        diagnostics.get("backend_calls") or {},
+        diagnostics.get("backend_raw_rows") or {},
+        diagnostics.get("backend_useful_rows") or {},
         source_stats,
     )
 
@@ -1015,6 +1095,14 @@ async def _collect_search_snippets_for_queries(
         "snippets": snippets,
         "instant_notes": [],
         "source_stats": source_stats,
+        "search_diagnostics": {
+            "elapsed_ms": elapsed_ms,
+            "queries_with_results": int(diagnostics.get("queries_with_results", 0) or 0),
+            "queries_empty": int(diagnostics.get("queries_empty", 0) or 0),
+            "backend_calls": diagnostics.get("backend_calls") or {},
+            "backend_raw_rows": diagnostics.get("backend_raw_rows") or {},
+            "backend_useful_rows": diagnostics.get("backend_useful_rows") or {},
+        },
     }
 
 

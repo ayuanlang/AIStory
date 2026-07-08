@@ -1,0 +1,29 @@
+Collecting ddgs
+  Using cached ddgs-9.14.4-py3-none-any.whl.metadata (20 kB)
+Requirement already satisfied: click>=8.1.8 in c:\as\aistory\.venv\lib\site-packages (from ddgs) (8.3.1)
+Requirement already satisfied: primp>=1.2.3 in c:\as\aistory\.venv\lib\site-packages (from ddgs) (1.3.1)
+Requirement already satisfied: lxml>=4.9.4 in c:\as\aistory\.venv\lib\site-packages (from ddgs) (6.1.1)
+Requirement already satisfied: httpx>=0.28.1 in c:\as\aistory\.venv\lib\site-packages (from httpx[brotli,http2,socks]>=0.28.1->ddgs) (0.28.1)
+Collecting fake-useragent>=2.2.0 (from ddgs)
+  Using cached fake_useragent-2.2.0-py3-none-any.whl.metadata (17 kB)
+Requirement already satisfied: colorama in c:\as\aistory\.venv\lib\site-packages (from click>=8.1.8->ddgs) (0.4.6)
+Requirement already satisfied: anyio in c:\as\aistory\.venv\lib\site-packages (from httpx>=0.28.1->httpx[brotli,http2,socks]>=0.28.1->ddgs) (4.12.1)
+Requirement already satisfied: certifi in c:\as\aistory\.venv\lib\site-packages (from httpx>=0.28.1->httpx[brotli,http2,socks]>=0.28.1->ddgs) (2026.1.4)
+Requirement already satisfied: httpcore==1.* in c:\as\aistory\.venv\lib\site-packages (from httpx>=0.28.1->httpx[brotli,http2,socks]>=0.28.1->ddgs) (1.0.9)
+Requirement already satisfied: idna in c:\as\aistory\.venv\lib\site-packages (from httpx>=0.28.1->httpx[brotli,http2,socks]>=0.28.1->ddgs) (3.11)
+Requirement already satisfied: h11>=0.16 in c:\as\aistory\.venv\lib\site-packages (from httpcore==1.*->httpx>=0.28.1->httpx[brotli,http2,socks]>=0.28.1->ddgs) (0.16.0)
+Collecting brotli (from httpx[brotli,http2,socks]>=0.28.1->ddgs)
+  Using cached brotli-1.2.0-cp313-cp313-win_amd64.whl.metadata (6.3 kB)
+Requirement already satisfied: h2<5,>=3 in c:\as\aistory\.venv\lib\site-packages (from httpx[brotli,http2,socks]>=0.28.1->ddgs) (4.3.0)
+Collecting socksio==1.* (from httpx[brotli,http2,socks]>=0.28.1->ddgs)
+  Using cached socksio-1.0.0-py3-none-any.whl.metadata (6.1 kB)
+Requirement already satisfied: hyperframe<7,>=6.1 in c:\as\aistory\.venv\lib\site-packages (from h2<5,>=3->httpx[brotli,http2,socks]>=0.28.1->ddgs) (6.1.0)
+Requirement already satisfied: hpack<5,>=4.1 in c:\as\aistory\.venv\lib\site-packages (from h2<5,>=3->httpx[brotli,http2,socks]>=0.28.1->ddgs) (4.1.0)
+Using cached ddgs-9.14.4-py3-none-any.whl (70 kB)
+Using cached fake_useragent-2.2.0-py3-none-any.whl (161 kB)
+Using cached socksio-1.0.0-py3-none-any.whl (12 kB)
+Using cached brotli-1.2.0-cp313-cp313-win_amd64.whl (369 kB)
+Installing collected packages: brotli, socksio, fake-useragent, ddgs
+
+
+Successfully installed brotli-1.2.0 ddgs-9.14.4 fake-useragent-2.2.0 socksio-1.0.0
