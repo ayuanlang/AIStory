@@ -19,6 +19,8 @@ import {
     buildShotTableHeaderMap,
     getSceneTableFallbackIndices,
     normalizeSceneTableHeaderKey,
+    sceneIdHasLetterSuffix,
+    resolveImportSceneNo,
 } from '../lib/sceneTableParser';
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../lib/llmJsonExtract';
 
@@ -2531,20 +2533,29 @@ const Editor = ({
                         .filter((v) => Number.isFinite(v));
                     if (candidates.length === 0 && candidateNums.length === 0) return null;
 
+                    const queryHasLetterSuffix = rawCandidates.some((value) => sceneIdHasLetterSuffix(value))
+                        || sceneIdHasLetterSuffix(sceneCodeRaw);
+
                     const directMatch = existingScenes.find((s) => {
                         const dbTokens = [s?.scene_no, s?.scene_id, s?.scene_code]
                             .map((v) => normalizeSceneNoToken(v))
                             .filter(Boolean);
-                        if (dbTokens.some((token) => candidates.includes(token))) return true;
-
-                        const dbSceneNums = [toSceneNumber(s?.scene_no), toSceneNumber(s?.scene_id), toSceneNumber(s?.scene_code)]
-                            .filter((v) => Number.isFinite(v));
-                        if (dbSceneNums.some((n) => candidateNums.includes(n))) return true;
-
-                        return false;
+                        return dbTokens.some((token) => candidates.includes(token));
                     }) || null;
 
                     if (directMatch) return directMatch;
+
+                    if (queryHasLetterSuffix) {
+                        return null;
+                    }
+
+                    const numericMatch = existingScenes.find((s) => {
+                        const dbSceneNums = [toSceneNumber(s?.scene_no), toSceneNumber(s?.scene_id), toSceneNumber(s?.scene_code)]
+                            .filter((v) => Number.isFinite(v));
+                        return dbSceneNums.some((n) => candidateNums.includes(n));
+                    }) || null;
+
+                    if (numericMatch) return numericMatch;
 
                     // Fallback: if we can parse scene index N but DB scene_no values are irregular,
                     // map to the Nth scene in current episode order.
@@ -2677,16 +2688,19 @@ const Editor = ({
                                 };
 
                                 const sceneIdVal = String(scData.scene_id || '').trim();
-                                const derivedFromId = toSceneNumber(sceneIdVal);
-                                if (Number.isFinite(derivedFromId) && derivedFromId > 0) {
-                                    const priorNo = String(scData.scene_no || '').trim();
-                                    scData.scene_no = String(derivedFromId);
-                                    if (priorNo && toSceneNumber(priorNo) !== derivedFromId) {
+                                const priorNo = String(scData.scene_no || '').trim();
+                                const resolvedSceneNo = resolveImportSceneNo({
+                                    sceneId: sceneIdVal,
+                                    sceneNo: priorNo,
+                                });
+                                if (resolvedSceneNo) {
+                                    if (priorNo && priorNo !== resolvedSceneNo) {
                                         addLog(
-                                            `Scene No corrected from ${priorNo} to ${derivedFromId} using Scene ID ${sceneIdVal}.`,
+                                            `Scene No corrected from ${priorNo} to ${resolvedSceneNo} using Scene ID ${sceneIdVal || '(empty)'}.`,
                                             'info'
                                         );
                                     }
+                                    scData.scene_no = resolvedSceneNo;
                                 } else if (!scData.scene_no || String(scData.scene_no).trim().length === 0) {
                                     if (sceneIdVal) {
                                         scData.scene_no = sceneIdVal;

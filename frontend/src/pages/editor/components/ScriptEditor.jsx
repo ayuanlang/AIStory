@@ -362,9 +362,22 @@ const applyCanonicalSceneIdsToUnits = (units, episodePrefix) => (
     })
 );
 
+const sceneIdHasLetterSuffix = (sceneId) => (
+    /^EP\d+_SC\d+[A-Za-z]+$/i.test(String(sceneId || '').trim())
+);
+
+const normalizeSceneIdToken = (value) => (
+    String(value || '').trim().toLowerCase().replace(/[\s_\-./]+/g, '')
+);
+
 const deriveSceneOrderFromSceneId = (sceneId) => {
     const sid = String(sceneId || '').trim();
     if (!sid) return null;
+    const suffixMatch = sid.match(/^EP\d+_SC(\d+)[A-Za-z]+$/i);
+    if (suffixMatch) {
+        const order = Number(suffixMatch[1]);
+        return Number.isFinite(order) && order > 0 ? order : null;
+    }
     const canonicalMatch = sid.match(/^EP\d+_SC(\d+)$/i);
     if (canonicalMatch) {
         const order = Number(canonicalMatch[1]);
@@ -388,9 +401,19 @@ const deriveSceneOrderFromSceneId = (sceneId) => {
 };
 
 const dbSceneMatchesPatchSceneId = (dbScenes, patchSceneId) => {
+    const patchToken = normalizeSceneIdToken(patchSceneId);
+    if (!patchToken) return false;
+    const rows = Array.isArray(dbScenes) ? dbScenes : [];
+    if (rows.some((row) => (
+        [row?.scene_no, row?.scene_id, row?.scene_code]
+            .map(normalizeSceneIdToken)
+            .some((token) => token && token === patchToken)
+    ))) {
+        return true;
+    }
     const expectedOrder = deriveSceneOrderFromSceneId(patchSceneId);
-    if (!Number.isFinite(expectedOrder)) return false;
-    return (Array.isArray(dbScenes) ? dbScenes : []).some((row) => {
+    if (!Number.isFinite(expectedOrder) || sceneIdHasLetterSuffix(patchSceneId)) return false;
+    return rows.some((row) => {
         const rowOrder = deriveSceneOrderFromSceneId(row?.scene_no) ?? Number(String(row?.scene_no || '').trim());
         return Number.isFinite(rowOrder) && Number(rowOrder) === Number(expectedOrder);
     });
@@ -4419,10 +4442,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 if (outputSceneNoIdx >= 0) {
                     while (mappedRow.length <= outputSceneNoIdx) mappedRow.push('');
-                    if (!String(mappedRow[outputSceneNoIdx] || '').trim()) {
-                        const sid = outputSceneIdIdx >= 0
-                            ? String(mappedRow[outputSceneIdIdx] || '').trim()
-                            : sceneId;
+                    const sid = outputSceneIdIdx >= 0
+                        ? String(mappedRow[outputSceneIdIdx] || '').trim()
+                        : sceneId;
+                    if (sceneIdHasLetterSuffix(sid)) {
+                        mappedRow[outputSceneNoIdx] = sid;
+                    } else if (!String(mappedRow[outputSceneNoIdx] || '').trim()) {
                         const scMatch = sid.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i)
                             || sid.match(/\b0*([0-9]{1,4})\b/);
                         const derivedNo = scMatch?.[1] ? String(parseInt(scMatch[1], 10)) : '';
@@ -5079,7 +5104,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!headerInlineRe.test(first)) return false;
         const second = lines[1];
         if (isSceneTableSeparatorLine(second)) return true;
-        if (second.startsWith('|') && /\|\s*EP\d+\s*\|\s*EP\d+_SC\d+/i.test(second)) return true;
+        if (second.startsWith('|') && /\|\s*EP\d+\s*\|\s*EP\d+_SC\d+[A-Za-z]*/i.test(second)) return true;
         if (second.startsWith('|') && /\|\s*EP\d+\s*\|/i.test(second)) return true;
         return false;
     };
@@ -5112,7 +5137,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!text.startsWith('|')) return false;
         if (isSceneTableSeparatorLine(text)) return false;
         if (/\|\s*episode\s*id\s*\|\s*scene\s*id/i.test(text)) return false;
-        return /\|\s*EP\d+\s*\|\s*EP\d+_SC\d+/i.test(text) || /\|\s*EP\d+\s*\|/i.test(text);
+        return /\|\s*EP\d+\s*\|\s*EP\d+_SC\d+[A-Za-z]*/i.test(text) || /\|\s*EP\d+\s*\|/i.test(text);
     };
 
     const tableLinesHaveDataRow = (lines) => (Array.isArray(lines) ? lines : []).some(isSceneTableDataLine);
@@ -5345,7 +5370,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 : deriveSceneOrderFromSceneId(resolvedSceneId)
         );
         if (resolvedSceneId && sceneIdIdx >= 0) row[sceneIdIdx] = resolvedSceneId;
-        if (resolvedSceneOrder != null && sceneNoIdx >= 0) {
+        if (sceneIdHasLetterSuffix(resolvedSceneId) && sceneNoIdx >= 0) {
+            row[sceneNoIdx] = resolvedSceneId;
+        } else if (resolvedSceneOrder != null && sceneNoIdx >= 0) {
             row[sceneNoIdx] = String(resolvedSceneOrder);
         } else if (resolvedSceneOrder != null && sceneIdIdx >= 0) {
             const headers = [...parsed.headers];
@@ -5384,7 +5411,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const sceneId = sceneIdIdx >= 0 ? String(row[sceneIdIdx] || '').trim() : '';
             const sceneNo = sceneNoIdx >= 0 ? String(row[sceneNoIdx] || '').trim() : '';
             const sceneName = sceneNameIdx >= 0 ? String(row[sceneNameIdx] || '').trim() : '';
-            const stableSceneId = sceneId || sceneNo || `SCENE_${index + 1}`;
+            let stableSceneId = sceneId || (sceneIdHasLetterSuffix(sceneNo) ? sceneNo : '') || sceneNo || `SCENE_${index + 1}`;
+            if (byScene[stableSceneId]) {
+                stableSceneId = sceneId || `${sceneNo || 'SCENE'}_${index + 1}`;
+            }
             const resolvedOrder = deriveSceneOrderFromSceneId(stableSceneId) ?? (index + 1);
             const singleTable = buildMarkdownTable(parsed.headers, [row]);
             byScene[stableSceneId] = {
@@ -6872,7 +6902,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        const sceneImportReport = await doImportText(patchEntry.markdown, 'scene', {
+        const importPrecheck = validateAutoSceneTableImport(patchEntry.markdown);
+        let textForImport = patchEntry.markdown;
+        if (importPrecheck?.ok && importPrecheck.tableText) {
+            textForImport = String(importPrecheck.tableText || '').includes('### Part 1')
+                ? importPrecheck.tableText
+                : `### Part 1: Scenes Table\n\n${importPrecheck.tableText}`;
+        } else if (!importPrecheck?.ok) {
+            onLog?.(
+                `[场景导入] ${stableSceneId} 场景表预检未通过：${importPrecheck?.reason || 'unknown'}`,
+                'warning'
+            );
+        }
+
+        const sceneImportReport = await doImportText(textForImport, 'scene', {
             suppressAlerts: true,
             autoSupplementSceneSubjects: false,
         });
@@ -6883,9 +6926,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneOrder,
                 errorCode: 'workspace_import_failed',
             });
+            const precheckHint = importPrecheck?.ok ? '' : ` ${importPrecheck?.reason || ''}`.trim();
             throw new Error(t(
-                `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No 或解析失败）。`,
-                `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No or parse failure).`
+                `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No、解析失败或后端不可用）。${precheckHint}`,
+                `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No, parse failure, or backend unavailable).${precheckHint ? ` ${precheckHint}` : ''}`
             ));
         }
 
@@ -6924,6 +6968,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         purgeEpisodeScenes,
         syncSceneUnitsProgress,
         t,
+        validateAutoSceneTableImport,
     ]);
 
     const ensureOrchestrationScenesInWorkspace = useCallback(async ({

@@ -941,6 +941,10 @@ def _scene_table_cell_value(cells: List[str], idx: int) -> str:
     return str(cells[idx] or "").strip()
 
 
+def _scene_id_has_letter_suffix(scene_id: str) -> bool:
+    return bool(re.match(r"^EP\d+_SC\d+[A-Za-z]+$", str(scene_id or "").strip(), re.I))
+
+
 def _build_scene_text_from_table_row(
     cells: List[str],
     *,
@@ -1155,11 +1159,16 @@ def merge_scenes_table_markdown_outputs(outputs: List[str]) -> str:
 
     normalized_merged_headers = [_normalize_scene_table_header(header) for header in merged_headers]
     scene_no_idx = _find_scene_table_col_idx(normalized_merged_headers, ["sceneno", "场次序号", "场次"])
+    scene_id_idx = _find_scene_table_col_idx(normalized_merged_headers, ["sceneid", "场景id"])
     if scene_no_idx >= 0:
         for idx, row in enumerate(merged_rows):
             while len(row) <= scene_no_idx:
                 row.append("")
-            row[scene_no_idx] = str(idx + 1)
+            scene_id = _scene_table_cell_value(row, scene_id_idx) if scene_id_idx >= 0 else ""
+            if _scene_id_has_letter_suffix(scene_id):
+                row[scene_no_idx] = str(scene_id).strip()
+            else:
+                row[scene_no_idx] = str(idx + 1)
 
     header_line = "| " + " | ".join(merged_headers) + " |"
     separator_line = "| " + " | ".join(":---" for _ in merged_headers) + " |"
@@ -1580,9 +1589,13 @@ def _scene_markdown_ids_match(expected: str, returned: str, scene_order: Optiona
         return True
     exp_norm = re.sub(r"[\s_\-./]+", "", exp.lower())
     ret_norm = re.sub(r"[\s_\-./]+", "", ret.lower())
-    if exp_norm == ret_norm or exp_norm.endswith(ret_norm) or ret_norm.endswith(exp_norm):
+    if exp_norm == ret_norm:
         return True
-    if scene_order is not None:
+    if _scene_id_has_letter_suffix(exp) or _scene_id_has_letter_suffix(ret):
+        return False
+    if exp_norm.endswith(ret_norm) or ret_norm.endswith(exp_norm):
+        return True
+    if scene_order is not None and not _scene_id_has_letter_suffix(exp):
         order_text = str(scene_order).strip()
         if ret == order_text or ret_norm == order_text:
             if exp_norm.endswith(f"sc{order_text}") or exp_norm.endswith(order_text):
@@ -1640,7 +1653,11 @@ def patch_single_scene_markdown_for_orchestration(
             if _scene_markdown_ids_match(expected, row_scene_id, scene_order):
                 selected_row = cells
                 break
-            if scene_order is not None and str(row_scene_no).strip() == str(scene_order).strip():
+            if (
+                scene_order is not None
+                and not _scene_id_has_letter_suffix(expected)
+                and str(row_scene_no).strip() == str(scene_order).strip()
+            ):
                 selected_row = cells
                 break
 
@@ -1649,8 +1666,12 @@ def patch_single_scene_markdown_for_orchestration(
             row.append("")
         if scene_id_idx >= 0:
             row[scene_id_idx] = expected
-        if scene_order is not None and scene_no_idx >= 0:
-            row[scene_no_idx] = str(scene_order)
+        has_letter_suffix = _scene_id_has_letter_suffix(expected)
+        if scene_no_idx >= 0:
+            if has_letter_suffix:
+                row[scene_no_idx] = expected
+            elif scene_order is not None:
+                row[scene_no_idx] = str(scene_order)
         if episode_id and episode_id_idx >= 0:
             row[episode_id_idx] = episode_id
         return _build_scene_markdown_from_table_row(headers, row)

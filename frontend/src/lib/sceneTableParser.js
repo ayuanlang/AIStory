@@ -39,6 +39,56 @@ export function normalizeSceneTableHeaderKey(header) {
     return String(header || '').toLowerCase().replace(/[\s_\-./()]/g, '');
 }
 
+/** EP01_SC01A-style split scenes share a numeric SC index but must stay distinct in import. */
+export function sceneIdHasLetterSuffix(sceneId) {
+    return /^EP\d+_SC\d+[A-Za-z]+$/i.test(String(sceneId || '').trim());
+}
+
+export function deriveNumericSceneOrderFromSceneId(sceneId) {
+    const sid = String(sceneId || '').trim();
+    if (!sid) return null;
+    const suffixMatch = sid.match(/^EP\d+_SC(\d+)[A-Za-z]+$/i);
+    if (suffixMatch) {
+        const order = Number(suffixMatch[1]);
+        return Number.isFinite(order) && order > 0 ? order : null;
+    }
+    const canonicalMatch = sid.match(/^EP\d+_SC(\d+)$/i);
+    if (canonicalMatch) {
+        const order = Number(canonicalMatch[1]);
+        return Number.isFinite(order) && order > 0 ? order : null;
+    }
+    const scMatch = sid.match(/(?:^|[_\-])sc(?:ene)?\s*0*([0-9]{1,4})(?:$|[_\-])/i);
+    if (scMatch?.[1]) {
+        const order = Number.parseInt(scMatch[1], 10);
+        return Number.isFinite(order) && order > 0 ? order : null;
+    }
+    if (/^\d+$/.test(sid)) {
+        const order = Number(sid);
+        return Number.isFinite(order) && order > 0 ? order : null;
+    }
+    return null;
+}
+
+/** scene_no is the DB upsert key — letter-suffix scenes must use full Scene ID. */
+export function resolveImportSceneNo({ sceneId, sceneNo } = {}) {
+    const sceneIdVal = String(sceneId || '').trim();
+    const sceneNoVal = String(sceneNo || '').trim();
+    if (sceneIdHasLetterSuffix(sceneIdVal)) {
+        return sceneIdVal;
+    }
+    const derivedOrder = deriveNumericSceneOrderFromSceneId(sceneIdVal);
+    if (Number.isFinite(derivedOrder) && derivedOrder > 0) {
+        return String(derivedOrder);
+    }
+    if (sceneNoVal) {
+        return sceneNoVal;
+    }
+    if (sceneIdVal) {
+        return sceneIdVal;
+    }
+    return '';
+}
+
 export function reconcileSceneTableRowCells(cells, headers) {
     const headerCount = Array.isArray(headers) ? headers.length : 0;
     if (!headerCount) return Array.isArray(cells) ? [...cells] : [];
