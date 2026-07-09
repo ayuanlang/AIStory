@@ -15751,6 +15751,22 @@ def _reconcile_shot_markdown_row_cells(
             vals.append("")
         return vals[:header_count]
 
+    # Common LLM artifact: an extra empty cell (spurious `|`) immediately before
+    # Video Content (CN). Dropping those empties first avoids merging into Shot Logic,
+    # which otherwise shifts Duration into Video Content and blanks Duration (s).
+    # Only consider empties from the Start Frame (CN) region onward; never the
+    # trailing Associated Entities cell.
+    cn_region_start = 9 if header_count >= 14 else max(4, header_count - 5)
+    while len(vals) > header_count:
+        dropped = False
+        for idx in range(cn_region_start, len(vals) - 1):
+            if not vals[idx] and vals[idx + 1]:
+                vals = vals[:idx] + vals[idx + 1 :]
+                dropped = True
+                break
+        if not dropped:
+            break
+
     merge_indices = list(merge_column_indices or [3])
     while len(vals) > header_count:
         overflow = len(vals) - header_count
@@ -16049,8 +16065,24 @@ _SHOT_REQUIRED_ROW_FIELDS: List[Tuple[str, List[str]]] = [
     ("Shot Name", ["Shot Name", "shot_name", "镜头名称"]),
     ("Scene ID", ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场景编号"]),
     ("Shot Logic (CN)", ["Shot Logic (CN)", "shot_logic_cn", "镜头逻辑", "镜头画面逻辑说明"]),
-    ("Associated Entities", ["Associated Entities", "associated_entities", "关联实体"]),
 ]
+
+
+def _coerce_shot_row_associated_entities_or_default(row: Dict[str, Any], *, default: str = "none") -> Tuple[bool, Optional[str]]:
+    """Normalize Associated Entities in-place when blank (import accepts empty)."""
+    if not isinstance(row, dict):
+        return False, None
+    aliases = ["Associated Entities", "associated_entities", "关联实体"]
+    current = _pick_shot_cell(row, aliases, "")
+    if current:
+        return False, None
+    entity_key = "Associated Entities"
+    for key in aliases:
+        if key in row:
+            entity_key = key
+            break
+    row[entity_key] = default
+    return True, f"Associated Entities missing; defaulted to {default}"
 
 
 _SHOT_REQUIRED_ROW_FIELD_GROUPS: List[Tuple[str, List[str]]] = [
@@ -16333,6 +16365,45 @@ def _serialize_shot_rows_to_markdown(rows: List[Dict[str, Any]]) -> str:
     return "\n".join([header_line, separator_line] + body_lines)
 
 
+def _coerce_shot_row_duration_or_default(row: Dict[str, Any], *, default: float = 2.0) -> Tuple[bool, Optional[str]]:
+    """Normalize Duration (s) in-place.
+
+    Import already defaults missing/invalid duration to 2.0; validation must match
+    that behavior so apply does not reject rows the importer would accept.
+    Returns (changed, warning_or_none).
+    """
+    if not isinstance(row, dict):
+        return False, None
+    raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
+    duration_ok = False
+    parsed: Optional[float] = None
+    if raw_duration:
+        match = re.search(r"[\d\.]+", str(raw_duration))
+        if match:
+            try:
+                parsed = float(match.group())
+                duration_ok = parsed > 0
+            except Exception:
+                duration_ok = False
+    if duration_ok and parsed is not None:
+        # Keep original cell text when already valid.
+        return False, None
+
+    # Prefer writing the canonical English header used by the shot table schema.
+    duration_key = "Duration (s)"
+    for key in ("Duration (s)", "Duration", "duration", "时长", "时长(s)"):
+        if key in row:
+            duration_key = key
+            break
+    row[duration_key] = str(default)
+    warning = (
+        f"Duration (s) missing/invalid ({raw_duration or 'empty'}); defaulted to {default}"
+        if raw_duration
+        else f"Duration (s) missing; defaulted to {default}"
+    )
+    return True, warning
+
+
 def _validate_shot_rows_or_raise(
     content: Any,
     *,
@@ -16355,19 +16426,9 @@ def _validate_shot_rows_or_raise(
 
     row_errors: List[str] = []
     for idx, row in enumerate(normalized_rows, start=1):
+        _coerce_shot_row_duration_or_default(row)
+        _coerce_shot_row_associated_entities_or_default(row)
         missing_fields = _collect_missing_shot_required_fields(row)
-
-        raw_duration = _pick_shot_cell(row, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
-        duration_ok = False
-        if raw_duration:
-            match = re.search(r"[\d\.]+", str(raw_duration))
-            if match:
-                try:
-                    duration_ok = float(match.group()) > 0
-                except Exception:
-                    duration_ok = False
-        if not duration_ok:
-            missing_fields.append("Duration (s): positive number required")
 
         if missing_fields:
             row_errors.append(f"row {idx} missing/invalid: {', '.join(missing_fields)}")
@@ -16400,19 +16461,14 @@ def _validate_shot_rows_for_apply_with_tolerance(
         if not any(str(val or "").strip() for val in item.values()):
             continue
 
-        missing_fields = _collect_missing_shot_required_fields(item)
+        _, duration_warning = _coerce_shot_row_duration_or_default(item)
+        if duration_warning:
+            skipped_errors.append(f"row {idx}: {duration_warning}")
+        _, entities_warning = _coerce_shot_row_associated_entities_or_default(item)
+        if entities_warning:
+            skipped_errors.append(f"row {idx}: {entities_warning}")
 
-        raw_duration = _pick_shot_cell(item, ["Duration (s)", "Duration", "duration", "时长", "时长(s)"], "")
-        duration_ok = False
-        if raw_duration:
-            match = re.search(r"[\d\.]+", str(raw_duration))
-            if match:
-                try:
-                    duration_ok = float(match.group()) > 0
-                except Exception:
-                    duration_ok = False
-        if not duration_ok:
-            missing_fields.append("Duration (s): positive number required")
+        missing_fields = _collect_missing_shot_required_fields(item)
 
         if missing_fields:
             skipped_errors.append(f"row {idx} missing/invalid: {', '.join(missing_fields)}")
@@ -16443,6 +16499,7 @@ def _resolve_shots_data_for_apply(
     """Prefer freshly parsed stored markdown over stale provided staging rows."""
     markdown_rows: List[Dict[str, Any]] = []
     markdown_skipped: List[str] = []
+    markdown_error: Optional[str] = None
     raw_value = str(getattr(scene, "ai_shots_result", None) or "").strip()
 
     if raw_value.startswith("{"):
@@ -16465,12 +16522,14 @@ def _resolve_shots_data_for_apply(
                 source_label=f"{source_label} (stored markdown)",
                 status_code=status_code,
             )
-        except HTTPException:
+        except HTTPException as exc:
             markdown_rows = []
             markdown_skipped = []
+            markdown_error = str(getattr(exc, "detail", None) or exc)
 
     provided_rows: List[Dict[str, Any]] = []
     provided_skipped: List[str] = []
+    provided_error: Optional[str] = None
     if provided_content is not None:
         try:
             provided_rows, provided_skipped = _validate_shot_rows_for_apply_with_tolerance(
@@ -16478,9 +16537,10 @@ def _resolve_shots_data_for_apply(
                 source_label=f"{source_label} (provided content)",
                 status_code=status_code,
             )
-        except HTTPException:
+        except HTTPException as exc:
             provided_rows = []
             provided_skipped = []
+            provided_error = str(getattr(exc, "detail", None) or exc)
 
     if markdown_rows and not provided_rows:
         return markdown_rows, markdown_skipped
@@ -16497,6 +16557,19 @@ def _resolve_shots_data_for_apply(
         return provided_rows, provided_skipped
     if markdown_rows:
         return markdown_rows, markdown_skipped
+
+    # Both sources empty: surface the real structural validation failure instead of
+    # collapsing into a generic "No shot rows" message.
+    error_parts = [part for part in (markdown_error, provided_error) if part]
+    if error_parts:
+        detail = " | ".join(dict.fromkeys(error_parts))
+        logger.warning(
+            "[apply_scene_ai_result] no valid rows after validation | source=%s detail=%s",
+            source_label,
+            detail[:800],
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
+
     return provided_rows, provided_skipped
 
 
@@ -26438,6 +26511,30 @@ async def ai_generate_shots(
                 detail="Shot generation output may have lost rows during markdown parsing; regenerate before apply.",
             )
 
+        # Reject tables that cannot be applied (same structural rules as apply_ai_result).
+        # Use tolerance so a single imperfect row does not discard an otherwise valid table;
+        # fail only when zero rows remain applyable.
+        try:
+            shots_data, generate_skipped = _validate_shot_rows_for_apply_with_tolerance(
+                shots_data,
+                source_label="Generated shot table",
+                status_code=502,
+            )
+            if generate_skipped:
+                logger.warning(
+                    "[ai_generate_shots] skipped_invalid_rows scene_id=%s skipped=%s details=%s",
+                    scene_id,
+                    len(generate_skipped),
+                    generate_skipped[:5],
+                )
+        except HTTPException as exc:
+            logger.warning(
+                "[ai_generate_shots] structural_validation_failed scene_id=%s detail=%s",
+                scene_id,
+                str(getattr(exc, "detail", None) or exc)[:800],
+            )
+            raise
+
         # 6. Persist staging result only (no DB-shot import here)
         result_wrapper = _persist_scene_shot_generation_result(
             db=db,
@@ -26447,6 +26544,13 @@ async def ai_generate_shots(
             rows=shots_data,
             usage=usage,
         )
+        if generate_skipped:
+            result_wrapper["warnings"] = list(
+                dict.fromkeys(
+                    [str(w or "").strip() for w in (result_wrapper.get("warnings") or []) if str(w or "").strip()]
+                    + [str(w or "").strip() for w in generate_skipped if str(w or "").strip()]
+                )
+            )
 
         logger.info(
             f"[ai_generate_shots] response_ready scene_id={scene_id} "
@@ -27146,6 +27250,13 @@ def apply_scene_ai_result(
         )
 
     if not shots_data:
+        logger.warning(
+            "[apply_scene_ai_result] empty_shots_data scene_id=%s has_stored=%s provided=%s skipped=%s",
+            scene_id,
+            bool(str(getattr(scene, "ai_shots_result", None) or "").strip()),
+            provided_content is not None,
+            skipped_row_errors[:5] if skipped_row_errors else [],
+        )
         raise HTTPException(status_code=400, detail="No shot rows provided or available to apply")
 
     if skipped_row_errors:
