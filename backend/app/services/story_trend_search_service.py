@@ -122,12 +122,36 @@ def _filter_search_backend_chain(chain: List[str], search_api_keys: Dict[str, st
 
 def _fallback_snippet_text(title: str, snippet: str, url: str = "") -> str:
     text = str(snippet or "").strip()
-    if text:
+    if text and not _looks_like_url_only(text):
         return text
     title_text = str(title or "").strip()
-    if title_text:
+    if title_text and not _looks_like_url_only(title_text):
         return title_text
-    return str(url or "").strip()
+    return ""
+
+
+_URL_ONLY_PATTERN = re.compile(
+    r"^(?:https?://|www\.)[\w\.-]+(?:/[^\s]*)?$",
+    re.I,
+)
+
+
+def _looks_like_url_only(text: str) -> bool:
+    text = str(text or "").strip()
+    if not text:
+        return True
+    if _URL_ONLY_PATTERN.match(text):
+        return True
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://", "www.")) and len(text.split()) <= 1:
+        return True
+    if "://" in lowered:
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+        if cjk_count < 8 and len(text) < 160:
+            return True
+    if re.fullmatch(r"[\w\.-]+(?:/[\w\.%-]+)+", text) and len(text) < 120:
+        return True
+    return False
 
 
 GENERIC_SNIPPET_MARKERS = (
@@ -136,7 +160,44 @@ GENERIC_SNIPPET_MARKERS = (
     "抖音综合搜索",
     "百度为您找到",
     "相关内容，支持在线观看",
+    "点击观看",
+    "立即播放",
+    "在线观看",
+    "视频页面",
+    "搜索结果",
+    "综合搜索",
+    "为您找到相关",
+    "bilibili.com",
+    "douyin.com",
+    "ixigua.com",
+    "v.qq.com",
+    "youku.com",
+    "mgtv.com",
 )
+
+
+def is_informative_search_snippet(snippet: str, *, title: str = "", url: str = "") -> bool:
+    """Return True when snippet carries narrative substance (not link/title-only noise)."""
+    return _is_informative_snippet(snippet, title=title, url=url)
+
+
+def _is_informative_snippet(snippet: str, *, title: str = "", url: str = "") -> bool:
+    text = str(snippet or "").strip()
+    if not text or _looks_like_url_only(text):
+        return False
+    if text == str(title or "").strip() and _looks_like_url_only(str(url or "")):
+        return False
+    if _is_low_quality_snippet(text):
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    if cjk_count >= 12:
+        return True
+    if len(text) >= MIN_USEFUL_SNIPPET_LEN and cjk_count >= 6:
+        return True
+    word_count = len(re.findall(r"[a-zA-Z]{3,}", text))
+    if len(text) >= MIN_USEFUL_SNIPPET_LEN and word_count >= 5:
+        return True
+    return len(text) >= MIN_USEFUL_SNIPPET_LEN
 
 
 DRAMA_RELEVANCE_KEYWORDS = (
@@ -189,6 +250,8 @@ def _result_relevance_score(query: str, title: str, snippet: str, url: str = "")
             score -= 12
     if _is_low_quality_snippet(snippet):
         score -= 8
+    if _looks_like_url_only(snippet):
+        score -= 20
     return score
 
 
@@ -939,6 +1002,8 @@ async def _search_query_bundle(
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
+    max_enrich_per_query: int = MAX_ENRICH_PER_QUERY,
+    require_informative_snippet: bool = False,
 ) -> List[Dict[str, str]]:
     combined_rows = await _collect_search_results_for_query(
         query,
@@ -949,18 +1014,20 @@ async def _search_query_bundle(
     )
     merged = _rank_results_for_query(query, _merge_result_rows(combined_rows))
 
+    enrich_budget = max(0, int(max_enrich_per_query or 0))
     enriched_count = 0
     for item in merged:
-        snippet = str(item.get("snippet") or "").strip()
-        if enriched_count >= MAX_ENRICH_PER_QUERY:
+        if enriched_count >= enrich_budget:
             break
-        if len(snippet) >= MIN_USEFUL_SNIPPET_LEN and not _is_low_quality_snippet(snippet):
-            continue
+        title = str(item.get("title") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
         url = str(item.get("url") or "").strip()
+        if _is_informative_snippet(snippet, title=title, url=url):
+            continue
         if not url:
             continue
         page_text = await asyncio.to_thread(_fetch_page_summary, url)
-        if page_text and len(page_text) > len(snippet):
+        if page_text and _is_informative_snippet(page_text, title=title, url=url):
             item["snippet"] = page_text
             enriched_count += 1
 
@@ -980,12 +1047,12 @@ async def _search_query_bundle(
             "url": url,
             "source": str(item.get("source") or "unknown").strip(),
         }
-        if snippet and not _is_low_quality_snippet(snippet):
+        if _is_informative_snippet(snippet, title=title, url=url):
             filtered.append(row)
-        else:
+        elif not require_informative_snippet:
             fallback.append(row)
 
-    if len(filtered) < limit_per_query:
+    if not require_informative_snippet and len(filtered) < limit_per_query:
         for row in fallback:
             if row in filtered:
                 continue
@@ -1001,6 +1068,8 @@ async def _collect_search_snippets_for_queries(
     *,
     month_label: Optional[str] = None,
     limit_per_query: int = DEFAULT_LIMIT_PER_QUERY,
+    max_enrich_per_query: int = MAX_ENRICH_PER_QUERY,
+    require_informative_snippet: bool = False,
     months_window: int = REPORT_MONTHS_WINDOW,
     report_kind: str,
 ) -> Dict[str, Any]:
@@ -1045,6 +1114,8 @@ async def _collect_search_snippets_for_queries(
                 limit_per_query=limit_per_query,
                 backend_chain=backend_chain,
                 diagnostics=diagnostics,
+                max_enrich_per_query=max_enrich_per_query,
+                require_informative_snippet=require_informative_snippet,
             )
 
     started_at = time.perf_counter()
@@ -1057,6 +1128,12 @@ async def _collect_search_snippets_for_queries(
 
     for html_results in bundles:
         for item in html_results:
+            if require_informative_snippet and not _is_informative_snippet(
+                str(item.get("snippet") or ""),
+                title=str(item.get("title") or ""),
+                url=str(item.get("url") or ""),
+            ):
+                continue
             key = _snippet_key(item)
             if key in seen_snippets:
                 continue

@@ -4,14 +4,15 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.services.story_trend_search_service import (
-    DEFAULT_LIMIT_PER_QUERY,
     _collect_search_snippets_for_queries,
     _result_relevance_score,
+    is_informative_search_snippet,
 )
 
 EPISODE_SCRIPT_MAX_SNIPPETS = 10
 EPISODE_SCRIPT_MAX_QUERIES = 12
-EPISODE_SCRIPT_LIMIT_PER_QUERY = 2
+EPISODE_SCRIPT_LIMIT_PER_QUERY = 4
+EPISODE_SCRIPT_MAX_ENRICH = 8
 
 _EPISODE_HEADING_RE = re.compile(
     r"(?im)^(?:-\s*\*\*)?\s*EP0*(\d+)\b",
@@ -126,9 +127,9 @@ def build_episode_script_search_queries(
             queries.append(q)
 
     def add_reference_pack(term: str) -> None:
-        add(f"{term} 短剧 名场面 高潮 桥段")
-        add(f"{term} 经典对白 高光场面 影视")
-        add(f"{term} iconic scene climax short drama")
+        add(f"{term} 短剧 名场面 剧情 桥段 解析")
+        add(f"{term} 经典台词 对白 高光场面 分析")
+        add(f"{term} 高潮场面 反转 场景描写")
 
     ep_prefix = f"第{int(episode_number)}集 " if episode_number else ""
 
@@ -159,6 +160,19 @@ def build_episode_script_search_queries(
     return queries[:EPISODE_SCRIPT_MAX_QUERIES]
 
 
+def _filter_informative_snippets(snippets: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for row in snippets:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        snippet = str(row.get("snippet") or "").strip()
+        url = str(row.get("url") or "").strip()
+        if is_informative_search_snippet(snippet, title=title, url=url):
+            out.append(row)
+    return out
+
+
 def _cap_snippets(
     snippets: List[Dict[str, str]],
     *,
@@ -167,8 +181,9 @@ def _cap_snippets(
 ) -> List[Dict[str, str]]:
     if not snippets:
         return []
+    usable = _filter_informative_snippets(snippets)
     ranked = sorted(
-        snippets,
+        usable,
         key=lambda row: _result_relevance_score(
             reference_query,
             str(row.get("title") or ""),
@@ -190,6 +205,8 @@ async def collect_episode_script_reference_snippets(
     bundle = await _collect_search_snippets_for_queries(
         queries,
         limit_per_query=EPISODE_SCRIPT_LIMIT_PER_QUERY,
+        max_enrich_per_query=EPISODE_SCRIPT_MAX_ENRICH,
+        require_informative_snippet=True,
         report_kind="episode_script_reference",
     )
     reference_query = " ".join(
@@ -253,29 +270,26 @@ def build_episode_script_reference_user_prompt(
             lines.append(f"- {key}: {rendered}")
 
     lines.append("")
-    lines.append(f"Web Search Snippets (max {search_bundle.get('snippet_cap', EPISODE_SCRIPT_MAX_SNIPPETS)}):")
+    lines.append(f"Web Search Snippets (max {search_bundle.get('snippet_cap', EPISODE_SCRIPT_MAX_SNIPPETS)}, text-only):")
     rendered_snippets = 0
     for idx, item in enumerate(search_bundle.get("snippets") or [], start=1):
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "").strip()
         snippet = str(item.get("snippet") or "").strip()
-        url = str(item.get("url") or "").strip()
-        summary = snippet or title or url
-        if not summary:
+        if not is_informative_search_snippet(snippet, title=title, url=str(item.get("url") or "")):
             continue
         rendered_snippets += 1
         lines.extend(
             [
                 f"[{idx}] Query: {item.get('query', '')}",
                 f"Title: {title}",
-                f"Summary: {summary[:480]}",
-                f"URL: {url}",
+                f"Summary: {snippet[:480]}",
                 "",
             ]
         )
     if rendered_snippets <= 0:
-        lines.append("(No usable web snippets returned; rely on Extracted Search Key Elements above.)")
+        lines.append("(No informative web snippets returned; rely on Extracted Search Key Elements and Episode Framework above.)")
     lines.append("[EPISODE_REFERENCE_RESEARCH_END]")
     search_bundle["rendered_snippet_count"] = rendered_snippets
     return "\n".join(lines).strip()
