@@ -1098,7 +1098,13 @@ export const importProjectBackup = async (payload) => {
 }
 
 export const generateProjectStoryGlobal = async (projectId, payload) => {
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, payload);
+    const fnName = 'script_analysis';
+    const sysReq = {
+        ...payload,
+        function_name: fnName,
+        system_api_id: resolveScriptAnalysisSystemApiId(fnName, payload?.system_api_id),
+    };
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, sysReq);
 }
 
 export const analyzeProjectNovel = async (projectId, payload) => {

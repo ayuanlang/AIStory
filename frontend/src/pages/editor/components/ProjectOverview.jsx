@@ -168,6 +168,39 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled } from '../editorConstants';
 export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onRefreshEpisodes, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const functionApiConfigs = useFunctionApis();
+    const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
+        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+    });
+    useEffect(() => {
+        const apiList = Array.isArray(functionApiConfigs?.script_analysis) ? functionApiConfigs.script_analysis : [];
+        if (apiList.length <= 0) return;
+
+        const currentId = Number(selectedScriptAnalysisApiId || 0);
+        const hasCurrent = currentId > 0 && apiList.some((item) => Number(item?.system_api_id || 0) === currentId);
+        if (hasCurrent) return;
+
+        const storageId = Number(localStorage.getItem('func_api_script_analysis') || 0);
+        const hasStorage = storageId > 0 && apiList.some((item) => Number(item?.system_api_id || 0) === storageId);
+        const fallbackId = hasStorage
+            ? storageId
+            : Number((apiList.find((item) => !item?.is_fallback) || apiList[0])?.system_api_id || 0);
+
+        if (fallbackId > 0) {
+            setSelectedScriptAnalysisApiId(fallbackId);
+            localStorage.setItem('func_api_script_analysis', String(fallbackId));
+        }
+    }, [functionApiConfigs?.script_analysis, selectedScriptAnalysisApiId]);
+
+    useEffect(() => {
+        const handleFunctionApiChanged = (event) => {
+            if (String(event?.detail?.storageKey || '') !== 'func_api_script_analysis') return;
+            const nextId = Number(event?.detail?.value || 0) || null;
+            setSelectedScriptAnalysisApiId(nextId);
+        };
+        window.addEventListener('aistory:function-api-changed', handleFunctionApiChanged);
+        return () => window.removeEventListener('aistory:function-api-changed', handleFunctionApiChanged);
+    }, []);
+
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const resolveProjectSeedFromInfo = (payload) => {
         const src = (payload && typeof payload === 'object') ? payload : {};
@@ -2500,18 +2533,28 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             ))}
                         </select>
                     </div>
-                    <div className="overflow-x-auto no-scrollbar">
-                        <div className="flex items-center gap-2 min-w-max">
-                            {generatorTabs.map((tab) => (
-                                <button
-                                    key={`generator-tab-${tab.id}`}
-                                    onClick={() => setProjectTab(tab.id)}
-                                    className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold ${projectTab === tab.id ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                                >
-                                    {tab.label}
-                                </button>
-                            ))}
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="overflow-x-auto no-scrollbar">
+                            <div className="flex items-center gap-2 min-w-max">
+                                {generatorTabs.map((tab) => (
+                                    <button
+                                        key={`generator-tab-${tab.id}`}
+                                        onClick={() => setProjectTab(tab.id)}
+                                        className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold ${projectTab === tab.id ? 'bg-white text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
+                        <FunctionApiSelector
+                            functionName="script_analysis"
+                            configs={functionApiConfigs}
+                            label={t('剧本分析 API', 'Script Analysis API')}
+                            value={selectedScriptAnalysisApiId}
+                            onChange={setSelectedScriptAnalysisApiId}
+                            className="sm:justify-end"
+                        />
                     </div>
                 </div>
             )}
