@@ -462,8 +462,6 @@
     "borrowed_films": ["电影名A", "电影名B"],
     "borrowed_films_note": "对标核心要素...",
     "tone": "风格形容词或基调短语...",
-    "lighting": "文学级光影方向（如 restrained noir practical light、温润自然窗光），",
-    "color_spectrum": "冷暖对比 — 借《银翼杀手2049》冷蓝雨夜街光与《社交网络》冷灰办公+暖台灯的 Practical 对照；主舞台偏煤灰蓝/深海军蓝，暖琥珀台灯光与木褐作 Practical 点缀，暗部略沉冷、亮部冷白高光...",
     "plot_summary": "百字剧情总结：80-120字中文，概括核心剧情、人物关系与情感走向...",
     "music_recommendation": "配乐推荐：风格+情绪基调+参考曲目/作曲家+主要使用场景..."
   }

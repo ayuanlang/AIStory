@@ -18151,7 +18151,7 @@ async def _prepare_episode_script_reference_block(
     project_title: str = "",
     language: str = "",
 ) -> str:
-    """Extract current-episode framework block, LLM key elements, web search (5 snippets), format for user prompt."""
+    """Extract current-episode framework block, LLM key elements, web search (10 snippets), format for user prompt."""
     episode_block = extract_episode_block_from_global_framework(global_md, episode_number)
     if not episode_block.strip():
         logger.info(
@@ -18292,7 +18292,6 @@ async def _prepare_episode_script_reference_block(
         search_bundle = await collect_episode_script_reference_snippets(
             key_elements,
             episode_number=episode_number,
-            max_snippets=5,
         )
     except Exception as exc:
         logger.warning(
@@ -21984,7 +21983,7 @@ async def generate_project_episode_scripts_from_global_framework(
         if reference_search_block.strip():
             user_prompt += (
                 "Episode Reference Research (MUST consult before writing; localize, do not copy verbatim):\n"
-                f"{reference_search_block}"
+                f"{reference_search_block}\n\n"
             )
         user_prompt += "Write the episode script draft now."
 

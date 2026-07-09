@@ -9,7 +9,7 @@ from app.services.story_trend_search_service import (
     _result_relevance_score,
 )
 
-EPISODE_SCRIPT_MAX_SNIPPETS = 5
+EPISODE_SCRIPT_MAX_SNIPPETS = 10
 EPISODE_SCRIPT_MAX_QUERIES = 12
 EPISODE_SCRIPT_LIMIT_PER_QUERY = 2
 
