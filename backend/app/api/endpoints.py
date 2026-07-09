@@ -859,6 +859,32 @@ def _resolve_script_analysis_dropdown_llm_config(
     return config, selected_dropdown_id, dropdown_fallback_ids, dropdown_order_ids
 
 
+def _resolve_story_generator_script_analysis_llm_config(
+    db: Session,
+    user_id: int,
+    *,
+    function_name: Any = "script_analysis",
+    system_api_id: Any = None,
+    context: str,
+    project_global_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_fn = _script_analysis_function_api_name(function_name)
+    llm_config, _, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        user_id,
+        resolved_fn,
+        system_api_id,
+        context=context,
+    )
+    if project_global_info is not None:
+        llm_config = _inject_project_creativity_temperature(
+            llm_config,
+            project_global_info,
+            context=context,
+        )
+    return llm_config
+
+
 def _normalize_analyze_scene_dedup_payload(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -17371,14 +17397,16 @@ async def generate_project_story_dna_global(
         f"Wild Creative Notes (天马行空原文，保留溯源): {(getattr(req, 'wild_creative_notes', None) or '').strip()}\n"
     )
 
-    llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        user_id,
+        function_name=(getattr(req, "function_name", None) or "script_analysis"),
+        system_api_id=getattr(req, "system_api_id", None),
+        context="generate_project_story_dna_global",
+        project_global_info=project.global_info,
+    )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    llm_config = _inject_project_creativity_temperature(
-        llm_config,
-        project.global_info,
-        context="generate_project_story_dna_global",
-    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -18052,18 +18080,16 @@ async def _run_structure_llm_call(
 ) -> str:
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
-    llm_config = agent_service.get_active_llm_config(
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
         user_id,
-        system_api_id=system_api_id,
         function_name=function_name,
+        system_api_id=system_api_id,
+        context=llm_context,
+        project_global_info=project_global_info,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    llm_config = _inject_project_creativity_temperature(
-        llm_config,
-        project_global_info,
-        context=llm_context,
-    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     reservation_tx = None
@@ -18437,10 +18463,13 @@ async def structure_project_creative_input_to_story_fields(
         llm_context="structure_creative_input",
     )
 
-    structure_llm_config = agent_service.get_active_llm_config(
+    structure_llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
         user_id,
-        system_api_id=getattr(req, "system_api_id", None),
         function_name=(getattr(req, "function_name", None) or "script_analysis"),
+        system_api_id=getattr(req, "system_api_id", None),
+        context="structure_creative_input",
+        project_global_info=project_global_info,
     )
     data = await _normalize_llm_json_object_with_repair(
         raw,
@@ -18482,18 +18511,16 @@ async def _run_ai_short_drama_market_llm(
 ) -> Dict[str, Any]:
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
-    llm_config = agent_service.get_active_llm_config(
-        current_user.id,
-        system_api_id=system_api_id,
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        int(current_user.id),
         function_name=function_name,
+        system_api_id=system_api_id,
+        context=llm_context,
+        project_global_info=project.global_info,
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    llm_config = _inject_project_creativity_temperature(
-        llm_config,
-        project.global_info,
-        context=llm_context,
-    )
     cfg = dict(llm_config.get("config") or {})
     cfg.setdefault("response_format", {"type": "json_object"})
     llm_config = {**llm_config, "config": cfg}
@@ -18840,14 +18867,16 @@ async def analyze_project_novel_to_story_generator_fields(
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
 
-    llm_config = agent_service.get_active_llm_config(current_user.id, system_api_id=system_api_id, function_name=function_name)
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        int(current_user.id),
+        function_name=function_name,
+        system_api_id=system_api_id,
+        context="analyze_project_novel",
+        project_global_info=project.global_info,
+    )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    llm_config = _inject_project_creativity_temperature(
-        llm_config,
-        project.global_info,
-        context="analyze_project_novel",
-    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
     resolved_id = ((llm_config or {}).get("config") or {}).get("__resolved_setting_id")
@@ -19925,10 +19954,13 @@ async def generate_project_character_profile(
 
     function_name = (getattr(req, "function_name", None) if req else None) or "script_analysis"
     system_api_id = getattr(req, "system_api_id", None) if req else None
-    llm_config = agent_service.get_active_llm_config(
-        current_user.id,
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        int(current_user.id),
         function_name=function_name,
         system_api_id=system_api_id,
+        context="generate_project_character_profile",
+        project_global_info=project.global_info,
     )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
@@ -20100,6 +20132,8 @@ class StoryGeneratorRequest(BaseModel):
     trending_ai_short_dramas_report: Optional[Dict[str, Any]] = None
     ai_short_drama_industry_report: Optional[Dict[str, Any]] = None
     strict_markdown: bool = True
+    function_name: Optional[str] = None
+    system_api_id: Optional[int] = None
 
 
 class ScriptScenesGenerateRequest(BaseModel):
@@ -21756,14 +21790,16 @@ async def generate_project_episode_scripts_from_global_framework(
 
     _persist_run_status(run_status)
 
-    llm_config = agent_service.get_active_llm_config(user_id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
+    llm_config = _resolve_story_generator_script_analysis_llm_config(
+        db,
+        user_id,
+        function_name=(getattr(req, "function_name", None) or "script_analysis"),
+        system_api_id=getattr(req, "system_api_id", None),
+        context="generate_episode_scripts",
+        project_global_info=project_global_info,
+    )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")
-    llm_config = _inject_project_creativity_temperature(
-        llm_config,
-        project_global_info,
-        context="generate_episode_scripts",
-    )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None
 

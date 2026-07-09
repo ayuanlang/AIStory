@@ -201,6 +201,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         return () => window.removeEventListener('aistory:function-api-changed', handleFunctionApiChanged);
     }, []);
 
+    const buildScriptAnalysisApiPayload = useCallback((payload = {}) => ({
+        ...payload,
+        function_name: 'script_analysis',
+        system_api_id: Number(selectedScriptAnalysisApiId || 0) || null,
+    }), [selectedScriptAnalysisApiId]);
+
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
     const resolveProjectSeedFromInfo = (payload) => {
         const src = (payload && typeof payload === 'object') ? payload : {};
@@ -1555,7 +1561,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 ].join('\n'),
             };
 
-            const updated = await generateProjectStoryGlobal(id, payload);
+            const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
             setProject(updated);
             const responseGlobalInfo = (updated?.global_info && typeof updated.global_info === 'object')
                 ? updated.global_info
@@ -1657,7 +1663,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const handleFetchMarketResearch = async () => {
         if (isFetchingMarketResearch || isGeneratingGlobalStory) return;
         setIsFetchingMarketResearch(true);
-        const payload = { language: info.language };
+        const payload = buildScriptAnalysisApiPayload({ language: info.language });
         const errors = [];
         let industryReport = null;
         let trendingReport = null;
@@ -1752,13 +1758,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
         setIsStructuringCreativeInput(true);
         try {
-            const structured = await structureProjectCreativeInput(id, {
+            const structured = await structureProjectCreativeInput(id, buildScriptAnalysisApiPayload({
                 creative_text: creativeText,
                 script_mode: globalStoryInput.script_mode,
                 target_audience: globalStoryInput.target_audience,
                 type: info.type,
                 language: info.language,
-            });
+            }));
             const structureFields = [
                 'logline', 'theme', 'core_conflict', 'background', 'characters',
                 'setup', 'development', 'turning_points', 'climax', 'resolution',
@@ -1823,7 +1829,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 wild_creative_notes: globalStoryInput.wild_creative_notes,
                 extra_notes: globalStoryInput.extra_notes,
             };
-            const updated = await generateProjectStoryGlobal(id, payload);
+            const updated = await generateProjectStoryGlobal(id, buildScriptAnalysisApiPayload(payload));
             setProject(updated);
             if (updated?.global_info) {
                 const merged = {
@@ -2051,7 +2057,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             if (specificEpisode) {
                 reqPayload.episode_number = Number(specificEpisode);
             }
-            const res = await generateProjectEpisodeScripts(id, reqPayload);
+            const res = await generateProjectEpisodeScripts(id, buildScriptAnalysisApiPayload(reqPayload));
 
             await pollEpisodeScriptsStatus();
             addLog?.(
@@ -2205,14 +2211,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
         setIsGeneratingCanon(true);
         try {
-            const updated = await generateProjectCharacterProfile(id, {
+            const updated = await generateProjectCharacterProfile(id, buildScriptAnalysisApiPayload({
                 name,
                 identity,
                 body_features: canonBody || '',
                 style_tags,
                 extra_notes: canonExtra || '',
-                function_name: 'generate_subjects',
-            });
+            }));
             setProject(updated);
             if (updated?.global_info) {
                 const merged = {

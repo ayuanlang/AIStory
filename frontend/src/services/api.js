@@ -1107,44 +1107,29 @@ export const generateProjectStoryGlobal = async (projectId, payload) => {
     return await asyncLLMPost(`/projects/${projectId}/story_generator/global`, sysReq);
 }
 
-export const analyzeProjectNovel = async (projectId, payload) => {
+const withScriptAnalysisApiPayload = (payload = {}) => {
     const fnName = 'script_analysis';
-    const sysReq = {
+    return {
         ...payload,
         function_name: fnName,
-        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
+        system_api_id: resolveScriptAnalysisSystemApiId(fnName, payload?.system_api_id),
     };
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, sysReq);
+};
+
+export const analyzeProjectNovel = async (projectId, payload) => {
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/analyze_novel`, withScriptAnalysisApiPayload(payload));
 }
 
 export const structureProjectCreativeInput = async (projectId, payload) => {
-    const fnName = 'script_analysis';
-    const sysReq = {
-        ...payload,
-        function_name: fnName,
-        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
-    };
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, sysReq);
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/structure_creative_input`, withScriptAnalysisApiPayload(payload));
 }
 
 export const fetchTrendingAiShortDramas = async (projectId, payload = {}) => {
-    const fnName = 'script_analysis';
-    const sysReq = {
-        ...payload,
-        function_name: fnName,
-        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
-    };
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/trending_ai_short_dramas`, sysReq);
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/trending_ai_short_dramas`, withScriptAnalysisApiPayload(payload));
 }
 
 export const fetchIndustryAnalysisAiShortDramas = async (projectId, payload = {}) => {
-    const fnName = 'script_analysis';
-    const sysReq = {
-        ...payload,
-        function_name: fnName,
-        system_api_id: Number(localStorage.getItem('func_api_' + fnName)) || null
-    };
-    return await asyncLLMPost(`/projects/${projectId}/story_generator/industry_analysis_ai_short_dramas`, sysReq);
+    return await asyncLLMPost(`/projects/${projectId}/story_generator/industry_analysis_ai_short_dramas`, withScriptAnalysisApiPayload(payload));
 }
 
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
@@ -1445,7 +1430,7 @@ export const generateEpisodeCharacterProfile = async (episodeId, payload) => {
 
 // Project Character Canon (Overview)
 export const generateProjectCharacterProfile = async (projectId, payload) => {
-    return await asyncLLMPost(`/projects/${projectId}/character_profiles/generate`, payload);
+    return await asyncLLMPost(`/projects/${projectId}/character_profiles/generate`, withScriptAnalysisApiPayload(payload));
 }
 
 // Project Character Canon draft input persistence (no LLM call)
@@ -1485,26 +1470,9 @@ export const generateEpisodeScenes = async (episodeId, payload) => {
 
 // Project Script Generator (Episodes -> Script drafts)
 export const generateProjectEpisodeScripts = async (projectId, payload) => {
-    const enrichedPayload = { ...(payload || {}) };
-    enrichedPayload.function_name = 'script_analysis';
-    if (!enrichedPayload.system_api_id) {
-        enrichedPayload.system_api_id = Number(localStorage.getItem('func_api_script_analysis')) || null;
-    }
-    const apiContextStr = localStorage.getItem('__function_api_context');
-    if (apiContextStr) {
-        try {
-            const ctx = JSON.parse(apiContextStr);
-            if (ctx['script_analysis'] && ctx['script_analysis'].system_api_id) {
-                enrichedPayload.system_api_id = ctx['script_analysis'].system_api_id;
-            }
-        } catch (e) {
-            console.warn('[API] generateProjectEpisodeScripts: Failed to parse function API context', e);
-        }
-    }
-
     return await asyncLLMPost(
         `/projects/${projectId}/script_generator/episodes/scripts`,
-        enrichedPayload,
+        withScriptAnalysisApiPayload(payload),
         { pollOptions: { timeout: 30 * 60 * 1000 } }
     );
 }
