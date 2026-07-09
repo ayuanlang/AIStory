@@ -515,36 +515,125 @@ class MediaGenerationService:
         )
 
 
+    @staticmethod
+    def _sign_volc_request_v4(
+        path: str,
+        method: str,
+        headers: Dict[str, str],
+        body: str,
+        query: Dict[str, str],
+        ak: str,
+        sk: str,
+        region: str,
+        service: str,
+        session_token: Optional[str] = None,
+    ) -> None:
+        """Volcengine Signature V4 (HMAC-SHA256). Local impl avoids volcenginesdkcore import.
+
+        Importing volcenginesdkcore.signv4 pulls endpoint/providers/default_provider.py;
+        a truncated/corrupt install of that file raises SyntaxError: '{' was never closed
+        (default_provider.py, line 65) and breaks Ark private-asset registration.
+        """
+        from urllib.parse import quote
+
+        if not path:
+            path = "/"
+        if method != "GET" and "Content-Type" not in headers:
+            headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
+
+        format_date = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        headers["X-Date"] = format_date
+        body_text = body if isinstance(body, str) else (body or "")
+        body_hash = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
+        headers["X-Content-Sha256"] = body_hash
+        if session_token:
+            headers["X-Security-Token"] = session_token
+
+        signed_headers: Dict[str, str] = {}
+        for key, value in headers.items():
+            if key in ("Content-Type", "Content-Md5", "Host") or key.startswith("X-"):
+                signed_headers[key.lower()] = value
+
+        if "host" in signed_headers:
+            host_value = signed_headers["host"]
+            if ":" in host_value:
+                host_name, port = host_value.split(":", 1)
+                if port in ("80", "443"):
+                    signed_headers["host"] = host_name
+
+        signed_str = "".join(f"{key}:{signed_headers[key]}\n" for key in sorted(signed_headers.keys()))
+        signed_headers_string = ";".join(sorted(signed_headers.keys()))
+
+        query_pairs = []
+        for key, value in (query or {}).items():
+            query_pairs.append((quote(str(key), safe="-_.~"), quote(str(value), safe="-_.~")))
+        canonical_query = "&".join(f"{k}={v}" for k, v in sorted(query_pairs))
+
+        canonical_request = "\n".join(
+            [method, path, canonical_query, signed_str, signed_headers_string, body_hash]
+        )
+        credential_scope = "/".join([format_date[:8], region, service, "request"])
+        string_to_sign = "\n".join(
+            [
+                "HMAC-SHA256",
+                format_date,
+                credential_scope,
+                hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+            ]
+        )
+
+        def _hmac_sha256(key: bytes, msg: str) -> bytes:
+            return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+        signing_key = _hmac_sha256(
+            _hmac_sha256(
+                _hmac_sha256(_hmac_sha256(sk.encode("utf-8"), format_date[:8]), region),
+                service,
+            ),
+            "request",
+        )
+        signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+        credential = f"{ak}/{credential_scope}"
+        headers["Authorization"] = (
+            f"HMAC-SHA256 Credential={credential}, "
+            f"SignedHeaders={signed_headers_string}, Signature={signature}"
+        )
+
     def _do_volc_request(self, method: str, action: str, version: str, req_body: str, service: str, ak: str, sk: str) -> dict:
-        import urllib.parse
-        from volcenginesdkcore.signv4 import SignerV4
-        import requests
-        
         host = "open.volcengineapi.com"
         headers = {
             "Content-Type": "application/json",
-            "Host": host
+            "Host": host,
         }
         query = {
             "Action": action,
-            "Version": version
+            "Version": version,
         }
-        
-        # We must use SignerV4 to inject Authorization, X-Date, etc. into headers
-        SignerV4.sign('/', method, headers, req_body, None, query, ak, sk, "cn-beijing", service)
-        
-        url = f"https://{host}/?Action={action}&Version={version}"
-        print(f"[Volcengine] Requesting: {url} | payload length: {len(req_body)}")
-        resp = requests.request(method, url, headers=headers, data=req_body.encode('utf-8'))
-        print(f"[Volcengine] Response {resp.status_code}: {resp.text[:500]}")
-        
+
+        self._sign_volc_request_v4(
+            "/",
+            method,
+            headers,
+            req_body,
+            query,
+            ak,
+            sk,
+            "cn-beijing",
+            service,
+        )
+
+        url = f"https://{host}/?Action={urllib.parse.quote(action)}&Version={urllib.parse.quote(version)}"
+        logger.info("[Volcengine] Requesting: %s | payload length: %s", url, len(req_body or ""))
+        resp = requests.request(method, url, headers=headers, data=(req_body or "").encode("utf-8"))
+        logger.info("[Volcengine] Response %s: %s", resp.status_code, (resp.text or "")[:500])
+
         if resp.status_code != 200:
             raise Exception(f"Volcengine HTTP {resp.status_code}: {resp.text}")
-            
+
         r_json = resp.json()
         if "ResponseMetadata" in r_json and "Error" in r_json["ResponseMetadata"]:
             raise Exception(f"Volcengine API Error: {r_json['ResponseMetadata']['Error']}")
-            
+
         return r_json.get("Result", r_json)
 
     async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, duration=None, aspect_ratio=None) -> dict:
