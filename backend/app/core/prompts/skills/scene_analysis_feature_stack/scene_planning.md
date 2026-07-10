@@ -128,9 +128,9 @@
 
 | subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
-| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 衍生说明... | 原名 |
-| S003 | environment | 办公室会客区 | Office Reception Area | None | None | FG/MG/BG设定。光源结构约束与舞台区。严禁混入剧情。 | 墙壁、窗户等 |
+| S001 | character | 角色中文名 | Character English Name | None | None | 28岁男性·刑侦警探·沉稳克制；阵营/身份/年龄/职业。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 左颊血痕、右肩衣料撕裂；可持续战损外观差异。 | 原名、战损 |
+| S003 | environment | 办公室会客区 | Office Reception Area | None | None | FG/MG/BG设定。光源结构约束与舞台区。 | 墙壁、窗户等 |
 | S004 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | 衍生环境空镜差异... | 主环境名、衍生环境名 |
 | S005 | prop | 关键道具名 | Prop English Name | None | None | 轮廓/材质/功能。严禁写“被某人拿在手里打人”等瞬时暂态动作。 | 剑、杯子 |
 | S006 | prop | 关键道具名_点燃态 | Prop English Name Lit | 关键道具名 | Prop English Name | 可持续状态差异... | 剑、点燃 |

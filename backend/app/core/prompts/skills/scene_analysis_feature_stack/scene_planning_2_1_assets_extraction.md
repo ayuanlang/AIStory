@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-07-09 08:00:00 +08:00
+# Prompt Updated At: 2026-07-10 17:05:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -85,7 +85,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - 持续变化：跨多个 Beat/Scene 持续，或可被后续剧集继承；单镜头/短时情绪/临时姿态/瞬时光效不算。
 - 非连续转场时，主要角色可按阶级与经济设定判定是否新增换装衍生；频率必须符合人物社会属性。
 - 先有基础版再有派生版；未过门禁时只写入基础版 `entity_attributes` 或留 Beat，禁止新增 `CHAR`。
-- 服饰信息仅在剧本原文明确提及时填写；若剧本未明确服饰，`subject_name_zh` 与 `entity_attributes` 均不得臆造或补写服饰描述。
+- 服饰信息仅在剧本原文明确提及时填写；若剧本未明确服饰，`subject_name_zh` 与 `entity_attributes` 均不得臆造或补写服饰描述——**直接省略服饰字段，禁止在输出中写「未明示服饰/不新增服装」等规则说明句**。
 - 时序断点（闪回/回忆/往事/蒙太奇时间层/多年后/重生/转世/复活/身份重置等）必须重判 `CHAR`，并同步触发 `ENV`/`PROP` 时序重识别；闪回中首次出现、当下 Scene 未覆盖的 `PROP` 同样按四维评估与硬证据规则提取，不得仅写入闪回 Beat 而不落 Index。
 - 重生/转世默认新角色；仅在文本明确“外观与身份体系无实质变化且可直接继承”时可不新建。多人时必须逐个判定，不得群体合并跳过。
 - 长时间间隔导致身份/外观体系稳定变化时必须建新衍生；若同时导致空间时代/用途/陈设/破损翻新/社会功能稳定变化，继续按 ENV 时序规则建衍生环境。
@@ -128,7 +128,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - 主环境与 Scene 边界完全继承 Stage 1；Stage 1 已声明主/衍生环境必须逐条提取并保留依赖。
 - 触发线索存在且可判空镜差异（`empty_view_delta`）时，必须补最小衍生环境，禁止并入主环境。
 - **有动作+对白触发 ENV 补位（与核心任务专节配套）**：Stage 1 Beat 环节 3–4 中，具名角色同时有主动作与画内对白，且环节 1 写观察视角切换/OTS/正反/POV/门窗内外而【衍生环境】或 Index 缺对应行 → 按「有动作+对白角色 ENV 绑定与补位」补最小衍生 ENV；`derivative_trigger_type:视角衍生`（或状态衍生若适用）；`trigger_evidence` 必填 `action_dialogue_env_bind:...`。
-- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/边界/布局 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对**直接依赖基准**的**结构/布局/边界**差异；可附**文学性**状态描述（如「地面符纹覆盖、柜体半倾、冷蓝域光压顶」），**禁止**三点布光/色温/曝光等技术参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
+- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/边界/布局 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对**直接依赖基准**的**结构/布局/边界**差异，并**具名列出受影响固定实体及其可见作用**（如「地面符纹覆盖、柜体半倾、冷蓝域光压顶」），**禁止**只写「域场展开/能量弥漫」而无实体落点；**禁止**三点布光/色温/曝光等技术参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
 - 自动补齐衍生环境最小字段：`subject_name_zh({角度}度{主环境名}[_{衍生类型/观察区域/可见方向}])`、`base_entity(主环境名)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
@@ -167,6 +167,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 ## 最终输出格式
 - 只输出 `Subject Index` 一张表；禁止寒暄、解释、思考步骤、`<think>`、JSON、额外列表或代码围栏。
+- **成稿禁推理/禁规则元话术（强制）**：表内各列（尤其 `entity_attributes`、`script_entity_coverage`）**只写实体事实属性与可核销原文关键词**；**禁止**把本文件规则、门禁结论、自检过程、省略理由写进单元格。❌「若剧本未明确服饰，不写服饰描述」「不新增剧本未明示服装」「证据不足故不建衍生」「纯空镜；严禁角色/临场道具」「四向对位归 Stage 3，本行不写」「严格禁止写入场内临时动作」｜✅ 直接写身份/外观/用途/空镜字段等事实；未达门槛或原文未提的项**静默省略**，不写否定句或规则复述。
 - 输出 `### Subject Index` 前，必须先单独输出且仅输出一行：
   `----------------*****--------------`
 - 表头固定为：
@@ -198,11 +199,11 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 | subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | None | 主角/阵营/身份/年龄/职业，严格禁止写入场内剧本临时动作。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
-| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 仅填写剧本明示且可持续的身份/外观差异；若剧本未明确服饰，不写服饰描述。 | 原名 |
-| S003 | environment | 办公室会客区 | Office Reception Area | None | None | purpose:夜间雨夜刑侦专案组案情会商与文件递交的对峙会客空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；in_out:内；time_of_day:夜；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。纯空镜；严禁角色/临场道具/动作；严禁Key/Fill/色温/焦距/生图参数；**禁止可拍机位 FG/MG/BG**。 | 主环境名、头尾双锚、俯视/仰视360、固定大件家具 |
-| S004 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | purpose:本场 Master Two Shot 建置视角，承载双人对坐会商的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:Master Two Shot 可见半空间：会议桌与椅区、百叶窗墙；机位后方不可见半开木门与门外通道；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。四向具名实体对位、FG/MG/BG 空镜层次由 Stage 3 依据主环境固定实体清单独立设计，本行不写。纯空镜；严禁角色/临场道具/动作；严禁技术光学参数。 | 0度办公室会客区、主环境名、Master Two Shot |
-| S005 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | purpose:正反打读陈医生正面口型与接文件的桌后反打观察空镜；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；derivative_base_zh:办公室会客区；view_angle_from_main:180；derivative_trigger_type:视角衍生（正反打读陈医生正面口型；OTS两步确认：①陈医生可读角0°→②反打ENV=180°）；empty_view_delta:反打后可见半开木门与门外走廊、铁皮文件柜与白板墙；机位后方不可见金属百叶窗墙段；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Standard；axis_crossing:PlannedReverse；literary_atmosphere:半开木门、门外冷蓝雨夜走廊、桌后反打半空间。四向具名实体对位、FG/MG/BG 空镜层次由 Stage 3 依据主环境固定实体清单独立设计，本行不写。纯空镜；严禁角色/临场道具/动作；严禁技术光学参数。auto_completed_derived_env:Yes；trigger_evidence:action_dialogue_env_bind:角色=陈医生;主动作=倾听/接文件;对白=把文件给我;观察视角=正反;Beat=2;Stage1证据=切至桌后反打 | 0度办公室会客区、180度办公室会客区_桌后反打、empty_view_delta、陈医生、把文件给我、桌后反打 |
+| S001 | character | 角色中文名 | Character English Name | None | None | 28岁男性·刑侦警探·沉稳克制；阵营/身份/年龄/职业。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | 左颊血痕、右肩衣料撕裂、外套沾灰；可持续战损外观差异。 | 原名、战损 |
+| S003 | environment | 办公室会客区 | Office Reception Area | None | None | purpose:夜间雨夜刑侦专案组案情会商与文件递交的对峙会客空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；in_out:内；time_of_day:夜；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 主环境名、头尾双锚、俯视/仰视360、固定大件家具 |
+| S004 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | purpose:本场 Master Two Shot 建置视角，承载双人对坐会商的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:Master Two Shot 可见半空间：会议桌与椅区、百叶窗墙；机位后方不可见半开木门与门外通道；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 0度办公室会客区、主环境名、Master Two Shot |
+| S005 | environment | 180度办公室会客区_桌后反打 | 180 Deg Office Reception Area Desk Reverse | 办公室会客区 | Office Reception Area | purpose:正反打读陈医生正面口型与接文件的桌后反打观察空镜；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；derivative_base_zh:办公室会客区；view_angle_from_main:180；derivative_trigger_type:视角衍生（正反打读陈医生正面口型；OTS两步确认：①陈医生可读角0°→②反打ENV=180°）；empty_view_delta:反打后可见半开木门与门外走廊、铁皮文件柜与白板墙；机位后方不可见金属百叶窗墙段；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Standard；axis_crossing:PlannedReverse；literary_atmosphere:半开木门、门外冷蓝雨夜走廊、桌后反打半空间。auto_completed_derived_env:Yes；trigger_evidence:action_dialogue_env_bind:角色=陈医生;主动作=倾听/接文件;对白=把文件给我;观察视角=正反;Beat=2;Stage1证据=切至桌后反打 | 0度办公室会客区、180度办公室会客区_桌后反打、empty_view_delta、陈医生、把文件给我、桌后反打 |
 | S006 | prop | 银打火机 | Silver Lighter | None | None | purpose:林医生会谈时把玩以掩饰紧张、映射冷峻对峙氛围的个人随身火机；轮廓/材质/功能。 | 银打火机 |
 | S007 | prop | 银打火机_点燃态 | Silver Lighter Lit | 银打火机 | Silver Lighter | purpose:点燃后作为视觉焦点强化林医生情绪爆发与室内冷光对照；可持续点燃状态；火焰形态与识别锚点。 | 银打火机、点燃 |
 | S008 | cover_poster | 影视级宣发海报 | Project Cover Poster | 角色中文名 | Character English Name | 单张院线级海报构图要求。明确前中后景与光影倾向、片名留白位置。禁止多图拼贴。 | 海报元素 |
