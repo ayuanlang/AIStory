@@ -429,12 +429,20 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         return Boolean(stableEntityId) && !stableShotId;
     }, [context?.disableShotFilter, context?.entityId, context?.entity_id, context?.shotId, context?.shot_id]);
 
+    const isExplicitVideoTypeHint = useCallback((value) => {
+        const raw = String(value || '').trim().toLowerCase();
+        if (!raw) return false;
+        // video_ref / *_ref are still image slots used by storyboard pickers.
+        if (raw.includes('ref')) return false;
+        return raw === 'video' || raw === 'shot_video' || raw.includes('video');
+    }, []);
+
     const contextDesiredAssetType = useMemo(() => {
         const raw = String(context?.desiredAssetType || context?.assetType || context?.type || '').trim().toLowerCase();
-        if (raw.includes('video')) return 'video';
+        if (isExplicitVideoTypeHint(raw)) return 'video';
         if (raw.includes('image')) return 'image';
         return 'all';
-    }, [context?.assetType, context?.desiredAssetType, context?.type]);
+    }, [context?.assetType, context?.desiredAssetType, context?.type, isExplicitVideoTypeHint]);
 
     const contextLockAssetType = useMemo(() => {
         const raw = context?.lockAssetType;
@@ -456,12 +464,12 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
         if (contextDesiredAssetType !== 'all') return contextDesiredAssetType;
         const stableType = String(context?.type || '').trim().toLowerCase();
         const stableFrameType = contextFrameType;
-        if (stableFrameType.includes('video')) return 'video';
-        if (stableType.includes('video')) return 'video';
+        if (isExplicitVideoTypeHint(stableFrameType) || isExplicitVideoTypeHint(stableType)) return 'video';
         if (stableType.includes('image')) return 'image';
-        if (stableFrameType) return 'image';
+        // Storyboard material pickers (start/end/keyframe/refs) should default to images.
+        if (stableFrameType || contextShotId) return 'image';
         return 'all';
-    }, [context?.type, contextDesiredAssetType, contextFrameType]);
+    }, [context?.type, contextDesiredAssetType, contextFrameType, contextShotId, isExplicitVideoTypeHint]);
 
     const preferredAssetType = useMemo(() => inferPreferredAssetType(), [inferPreferredAssetType]);
 
@@ -1409,7 +1417,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
             // Fallback: if video picker opens but scoped query returns no video-like rows,
             // fetch by shot_id directly to avoid dropping valid videos due project/episode scope mismatch.
             const shouldTryShotVideoFallback = Boolean(contextShotId)
-                && (preferredAssetType === 'video' || contextFrameType.includes('video'));
+                && (preferredAssetType === 'video' || isExplicitVideoTypeHint(contextFrameType));
             const scopedHasVideoLike = data.some((asset) => isAssetVideoLike(asset));
             if (shouldTryShotVideoFallback && !scopedHasVideoLike) {
                 const shotFallbackRows = await fetchAssetsPaged({
@@ -1514,7 +1522,7 @@ export const MediaPickerModal = ({ isOpen, onClose, onSelect, projectId, context
                 setLoading(false);
             }
         }
-    }, [availableShots, contextFrameType, contextShotId, episodeFilter, episodeId, isAssetVideoLike, logAssetPickerDebug, preferredAssetType, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
+    }, [availableShots, contextFrameType, contextShotId, episodeFilter, episodeId, isAssetVideoLike, isExplicitVideoTypeHint, logAssetPickerDebug, preferredAssetType, projectId, showHistoricalProjectAssets, summarizeAssetsForDebug]);
 
     const handleMarkAssetCurrent = useCallback(async (asset) => {
         const assetId = Number(asset?.id || 0);

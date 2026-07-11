@@ -411,7 +411,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         }, {
             ...pickContext,
             shotId: shot?.id,
-            desiredAssetType: 'video',
+            desiredAssetType: 'image',
             lockAssetType: true,
             allowMultiSelect: false,
         });
@@ -663,7 +663,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                                 } else {
                                     handleAdd(url);
                                 }
-                            }, { shotId: shot?.id, desiredAssetType: 'image', allowMultiSelect: true, ...pickContext })}
+                            }, { ...pickContext, shotId: shot?.id, desiredAssetType: 'image', allowMultiSelect: true })}
                             className={`shrink-0 ${isPortrait ? 'w-full py-4' : 'w-[50px] aspect-video'} bg-white/5 hover:bg-white/10 border border-white/10 border-dashed rounded flex flex-col items-center justify-center gap-1 text-muted-foreground hover:text-white transition-colors`}
                             title={t('从素材中选择', 'Pick from Assets')}
                         >
