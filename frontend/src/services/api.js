@@ -1132,6 +1132,16 @@ export const fetchIndustryAnalysisAiShortDramas = async (projectId, payload = {}
     return await asyncLLMPost(`/projects/${projectId}/story_generator/industry_analysis_ai_short_dramas`, withScriptAnalysisApiPayload(payload));
 }
 
+export const listMarketIntelReports = async (projectId, params = {}) => {
+    const response = await api.get(`/projects/${projectId}/market_intel/reports`, { params });
+    return response.data;
+}
+
+export const getMarketIntelReport = async (projectId, reportId) => {
+    const response = await api.get(`/projects/${projectId}/market_intel/reports/${reportId}`);
+    return response.data;
+}
+
 // Project Story Generator (Global/Project) draft input persistence (no LLM call)
 export const saveProjectStoryGeneratorGlobalInput = async (projectId, payload) => {
     const response = await api.put(`/projects/${projectId}/story_generator/global/input`, payload);

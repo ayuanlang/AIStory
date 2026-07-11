@@ -55,6 +55,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy import or_, and_, text, inspect, cast, String, func
 from app.db.session import get_db, SessionLocal, DB_POOL_CAPACITY_EFFECTIVE, engine
@@ -226,6 +227,7 @@ ScriptProgressPipelineNode = getattr(models, "ScriptProgressPipelineNode", None)
 ScriptProgressIssue = getattr(models, "ScriptProgressIssue", None)
 DeletionBatch = getattr(models, "DeletionBatch", None)
 DeletionBatchItem = getattr(models, "DeletionBatchItem", None)
+MarketIntelReport = getattr(models, "MarketIntelReport", None)
 
 _REVIEW_MODELS_AVAILABLE = all(
     model is not None
@@ -18571,6 +18573,149 @@ class TrendingAiShortDramasRequest(BaseModel):
     system_api_id: Optional[int] = None
 
 
+def _require_market_intel_model():
+    if MarketIntelReport is None:
+        raise HTTPException(status_code=503, detail="Market intel persistence is unavailable on this deployment")
+    return MarketIntelReport
+
+
+def _market_intel_report_to_dict(row, *, include_payload: bool = True) -> Dict[str, Any]:
+    payload = dict(getattr(row, "payload_json", None) or {}) if include_payload else {}
+    base = {
+        "id": int(getattr(row, "id", 0) or 0),
+        "project_id": int(getattr(row, "project_id", 0) or 0),
+        "report_kind": str(getattr(row, "report_kind", "") or "").strip(),
+        "report_month": str(getattr(row, "report_month", "") or "").strip(),
+        "report_period": str(getattr(row, "report_period", "") or "").strip(),
+        "fetched_at": str(getattr(row, "fetched_at", "") or "").strip(),
+        "summary": str(getattr(row, "summary", "") or "").strip(),
+        "markdown": str(getattr(row, "markdown", "") or "").strip() if include_payload else None,
+        "created_at": str(getattr(row, "created_at", "") or "").strip(),
+    }
+    if include_payload:
+        # Prefer full stored snapshot; fall back to row fields.
+        merged = {
+            **payload,
+            **{k: v for k, v in base.items() if v is not None and v != ""},
+            "id": base["id"],
+            "project_id": base["project_id"],
+            "report_kind": base["report_kind"],
+            "created_at": base["created_at"],
+        }
+        if not merged.get("markdown"):
+            merged["markdown"] = base.get("markdown") or ""
+        if not merged.get("summary"):
+            merged["summary"] = base.get("summary") or ""
+        return merged
+    return {k: v for k, v in base.items() if k != "markdown"}
+
+
+def _persist_market_intel_report(
+    db: Session,
+    *,
+    project: Project,
+    report_kind: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    model = _require_market_intel_model()
+    kind = str(report_kind or "").strip()
+    report_month = str((payload or {}).get("report_month") or "").strip() or current_report_month_label()
+    report_period = str((payload or {}).get("report_period") or "").strip() or current_report_period_label(report_month)
+    fetched_at = str((payload or {}).get("fetched_at") or "").strip() or now_bj_iso()
+    summary = str((payload or {}).get("summary") or "").strip()
+    markdown = str((payload or {}).get("markdown") or "").strip()
+    row = model(
+        project_id=int(project.id),
+        report_kind=kind,
+        report_month=report_month,
+        report_period=report_period,
+        fetched_at=fetched_at,
+        summary=summary,
+        markdown=markdown,
+        payload_json=dict(payload or {}),
+        created_at=now_bj_iso(),
+    )
+    db.add(row)
+
+    # Keep latest snapshot on story_generator_global_input for backward compatibility.
+    gi = dict(project.global_info or {})
+    draft = dict(gi.get("story_generator_global_input") or {})
+    if kind == "industry_analysis":
+        draft["ai_short_drama_industry_report"] = dict(payload or {})
+    elif kind == "trending_dramas":
+        draft["trending_ai_short_dramas_report"] = dict(payload or {})
+    gi["story_generator_global_input"] = draft
+    gi["story_generator_global_input_updated_at"] = now_bj_iso()
+    project.global_info = gi
+    flag_modified(project, "global_info")
+
+    db.commit()
+    db.refresh(row)
+    return _market_intel_report_to_dict(row, include_payload=True)
+
+
+def _seed_market_intel_from_global_info(db: Session, project: Project) -> int:
+    """One-time seed: copy latest global_info reports into history table when empty."""
+    model = _require_market_intel_model()
+    existing = (
+        db.query(model.id)
+        .filter(model.project_id == int(project.id))
+        .limit(1)
+        .first()
+    )
+    if existing:
+        return 0
+    gi = dict(project.global_info or {})
+    draft = dict(gi.get("story_generator_global_input") or {})
+    seeded = 0
+    industry = draft.get("ai_short_drama_industry_report")
+    if isinstance(industry, dict) and (industry.get("markdown") or industry.get("summary")):
+        payload = dict(industry)
+        payload.setdefault("report_month", current_report_month_label())
+        payload.setdefault("report_period", current_report_period_label(payload["report_month"]))
+        payload.setdefault("fetched_at", gi.get("story_generator_global_input_updated_at") or now_bj_iso())
+        row = model(
+            project_id=int(project.id),
+            report_kind="industry_analysis",
+            report_month=str(payload.get("report_month") or ""),
+            report_period=str(payload.get("report_period") or ""),
+            fetched_at=str(payload.get("fetched_at") or ""),
+            summary=str(payload.get("summary") or ""),
+            markdown=str(payload.get("markdown") or ""),
+            payload_json=payload,
+            created_at=str(payload.get("fetched_at") or now_bj_iso()),
+        )
+        db.add(row)
+        seeded += 1
+    trending = draft.get("trending_ai_short_dramas_report")
+    if isinstance(trending, dict) and (trending.get("markdown") or trending.get("summary") or trending.get("dramas")):
+        # Skip legacy combined blob that only holds industry_analysis.
+        if trending.get("industry_analysis") and not (trending.get("markdown") or trending.get("dramas")):
+            pass
+        else:
+            payload = dict(trending)
+            payload.pop("industry_analysis", None)
+            payload.setdefault("report_month", current_report_month_label())
+            payload.setdefault("report_period", current_report_period_label(payload["report_month"]))
+            payload.setdefault("fetched_at", gi.get("story_generator_global_input_updated_at") or now_bj_iso())
+            row = model(
+                project_id=int(project.id),
+                report_kind="trending_dramas",
+                report_month=str(payload.get("report_month") or ""),
+                report_period=str(payload.get("report_period") or ""),
+                fetched_at=str(payload.get("fetched_at") or ""),
+                summary=str(payload.get("summary") or ""),
+                markdown=str(payload.get("markdown") or ""),
+                payload_json=payload,
+                created_at=str(payload.get("fetched_at") or now_bj_iso()),
+            )
+            db.add(row)
+            seeded += 1
+    if seeded:
+        db.commit()
+    return seeded
+
+
 async def _run_ai_short_drama_market_llm(
     *,
     db: Session,
@@ -18793,7 +18938,7 @@ async def fetch_industry_analysis_ai_short_dramas_report(
     if not markdown and industry_analysis:
         markdown = _build_industry_analysis_markdown(report_period, summary, industry_analysis)
 
-    return {
+    result = {
         "report_month": str(data.get("report_month") or month_label),
         "report_period": str(data.get("report_period") or report_period),
         "fetched_at": search_bundle.get("fetched_at"),
@@ -18810,6 +18955,18 @@ async def fetch_industry_analysis_ai_short_dramas_report(
             "source_stats": search_bundle.get("source_stats") or {},
         },
     }
+    try:
+        return _persist_market_intel_report(
+            db,
+            project=project,
+            report_kind="industry_analysis",
+            payload=result,
+        )
+    except HTTPException:
+        raise
+    except Exception as persist_err:
+        logger.warning("Failed to persist industry analysis report: %s", persist_err)
+        return result
 
 
 @router.post("/projects/{project_id}/story_generator/trending_ai_short_dramas", response_model=Dict[str, Any])
@@ -18891,7 +19048,7 @@ async def fetch_trending_ai_short_dramas_report(
     if not markdown and dramas:
         markdown = _build_trending_dramas_markdown(report_period, summary, dramas)
 
-    return {
+    result = {
         "report_month": str(data.get("report_month") or month_label),
         "report_period": str(data.get("report_period") or report_period),
         "fetched_at": search_bundle.get("fetched_at"),
@@ -18908,6 +19065,65 @@ async def fetch_trending_ai_short_dramas_report(
             "source_stats": search_bundle.get("source_stats") or {},
         },
     }
+    try:
+        return _persist_market_intel_report(
+            db,
+            project=project,
+            report_kind="trending_dramas",
+            payload=result,
+        )
+    except HTTPException:
+        raise
+    except Exception as persist_err:
+        logger.warning("Failed to persist trending dramas report: %s", persist_err)
+        return result
+
+
+@router.get("/projects/{project_id}/market_intel/reports", response_model=Dict[str, Any])
+async def list_market_intel_reports(
+    project_id: int,
+    kind: Optional[str] = Query(None, description="industry_analysis | trending_dramas"),
+    month: Optional[str] = Query(None, description="YYYY-MM time index"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _require_project_access(db, project_id, current_user)
+    model = _require_market_intel_model()
+    try:
+        _seed_market_intel_from_global_info(db, project)
+    except Exception as seed_err:
+        logger.warning("market intel seed skipped: %s", seed_err)
+
+    q = db.query(model).filter(model.project_id == int(project_id))
+    kind_norm = str(kind or "").strip()
+    if kind_norm:
+        q = q.filter(model.report_kind == kind_norm)
+    month_norm = str(month or "").strip()
+    if month_norm:
+        q = q.filter(model.report_month == month_norm)
+    rows = q.order_by(model.created_at.desc(), model.id.desc()).limit(int(limit)).all()
+    items = [_market_intel_report_to_dict(row, include_payload=False) for row in rows]
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/projects/{project_id}/market_intel/reports/{report_id}", response_model=Dict[str, Any])
+async def get_market_intel_report(
+    project_id: int,
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_project_access(db, project_id, current_user)
+    model = _require_market_intel_model()
+    row = (
+        db.query(model)
+        .filter(model.id == int(report_id), model.project_id == int(project_id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Market intel report not found")
+    return _market_intel_report_to_dict(row, include_payload=True)
 
 
 @router.post("/projects/{project_id}/story_generator/analyze_novel", response_model=Dict[str, Any])

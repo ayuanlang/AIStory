@@ -931,3 +931,21 @@ class EntityHistory(Base):
     narrative_description = Column(Text, nullable=True)
     
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class MarketIntelReport(Base):
+    """Time-indexed industry analysis / trending hot-list snapshots per project."""
+    __tablename__ = "market_intel_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=False)
+    # industry_analysis | trending_dramas
+    report_kind = Column(String, index=True, nullable=False)
+    # YYYY-MM anchor used as the primary time index
+    report_month = Column(String, index=True, nullable=False)
+    report_period = Column(String, nullable=True)
+    fetched_at = Column(String, nullable=True, index=True)
+    summary = Column(Text, nullable=True)
+    markdown = Column(Text, nullable=True)
+    payload_json = Column(JSON, default={})
+    created_at = Column(String, default=now_bj_iso, index=True)

@@ -93,6 +93,8 @@ import {
     structureProjectCreativeInput,
     fetchTrendingAiShortDramas,
     fetchIndustryAnalysisAiShortDramas,
+    listMarketIntelReports,
+    getMarketIntelReport,
     saveProjectCharacterCanonInput,
     saveProjectCharacterCanonCategories,
     updateProjectCharacterProfiles,
@@ -346,6 +348,10 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const [isFetchingMarketResearch, setIsFetchingMarketResearch] = useState(false);
     const [trendingDramasReport, setTrendingDramasReport] = useState(null);
     const [industryAnalysisReport, setIndustryAnalysisReport] = useState(null);
+    const [marketIntelHistory, setMarketIntelHistory] = useState([]);
+    const [selectedIndustryReportId, setSelectedIndustryReportId] = useState('');
+    const [selectedTrendingReportId, setSelectedTrendingReportId] = useState('');
+    const [isLoadingMarketIntelHistory, setIsLoadingMarketIntelHistory] = useState(false);
     const [isGeneratingEpisodeScripts, setIsGeneratingEpisodeScripts] = useState(false);
     const [isStoppingEpisodeScripts, setIsStoppingEpisodeScripts] = useState(false);
     const [episodeScriptsProgress, setEpisodeScriptsProgress] = useState(null);
@@ -445,8 +451,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
         setProjectTab((prev) => {
             if (prev === 'promo_generator') return 'promo_generator';
-            if (prev === 'trending_dramas') return 'market_research';
-            return prev === 'industry_analysis' ? 'market_research' : prev;
+            // Legacy sub-tabs moved to top-level market_research menu
+            if (prev === 'trending_dramas' || prev === 'industry_analysis' || prev === 'market_research') {
+                return 'story_generator';
+            }
+            return prev;
         });
     }, [mode]);
 
@@ -1660,6 +1669,85 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         });
     };
 
+    const loadMarketIntelHistory = useCallback(async () => {
+        if (!id) return [];
+        setIsLoadingMarketIntelHistory(true);
+        try {
+            const data = await listMarketIntelReports(id, { limit: 100 });
+            const items = Array.isArray(data?.items) ? data.items : [];
+            setMarketIntelHistory(items);
+
+            const industryItems = items.filter((item) => item.report_kind === 'industry_analysis');
+            const trendingItems = items.filter((item) => item.report_kind === 'trending_dramas');
+
+            const pickLatestId = (list, currentId) => {
+                if (currentId && list.some((item) => String(item.id) === String(currentId))) {
+                    return String(currentId);
+                }
+                return list[0]?.id ? String(list[0].id) : '';
+            };
+
+            setSelectedIndustryReportId((prev) => pickLatestId(industryItems, prev));
+            setSelectedTrendingReportId((prev) => pickLatestId(trendingItems, prev));
+            return items;
+        } catch (err) {
+            console.warn('[Market Research] load history failed:', err);
+            setMarketIntelHistory([]);
+            return [];
+        } finally {
+            setIsLoadingMarketIntelHistory(false);
+        }
+    }, [id]);
+
+    const handleSelectMarketIntelReport = useCallback(async (reportId, kind) => {
+        const nextId = String(reportId || '').trim();
+        if (!id || !nextId) return;
+        if (kind === 'industry_analysis') setSelectedIndustryReportId(nextId);
+        if (kind === 'trending_dramas') setSelectedTrendingReportId(nextId);
+        try {
+            const report = await getMarketIntelReport(id, nextId);
+            if (kind === 'industry_analysis') {
+                setIndustryAnalysisReport(report);
+            } else if (kind === 'trending_dramas') {
+                setTrendingDramasReport(report);
+            }
+        } catch (err) {
+            console.warn('[Market Research] load report failed:', err);
+            alert(`${t('加载历史报告失败', 'Failed to load historical report')}: ${formatProviderModelEndpointError(err)}`);
+        }
+    }, [id, t]);
+
+    useEffect(() => {
+        if (mode !== 'market_research' || !id) return;
+        let cancelled = false;
+        (async () => {
+            const items = await loadMarketIntelHistory();
+            if (cancelled) return;
+            const industryLatest = items.find((item) => item.report_kind === 'industry_analysis');
+            const trendingLatest = items.find((item) => item.report_kind === 'trending_dramas');
+            if (industryLatest?.id && !industryAnalysisReport?.markdown) {
+                try {
+                    const report = await getMarketIntelReport(id, industryLatest.id);
+                    if (!cancelled) {
+                        setIndustryAnalysisReport(report);
+                        setSelectedIndustryReportId(String(industryLatest.id));
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            if (trendingLatest?.id && !trendingDramasReport?.markdown) {
+                try {
+                    const report = await getMarketIntelReport(id, trendingLatest.id);
+                    if (!cancelled) {
+                        setTrendingDramasReport(report);
+                        setSelectedTrendingReportId(String(trendingLatest.id));
+                    }
+                } catch (e) { /* ignore */ }
+            }
+        })();
+        return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode, id, loadMarketIntelHistory]);
+
     const handleFetchMarketResearch = async () => {
         if (isFetchingMarketResearch || isGeneratingGlobalStory) return;
         setIsFetchingMarketResearch(true);
@@ -1677,6 +1765,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             if (industryResult.status === 'fulfilled') {
                 industryReport = industryResult.value;
                 setIndustryAnalysisReport(industryReport);
+                if (industryReport?.id) setSelectedIndustryReportId(String(industryReport.id));
                 setGlobalStoryInput(prev => ({
                     ...prev,
                     ai_short_drama_industry_report: industryReport,
@@ -1689,6 +1778,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             if (trendingResult.status === 'fulfilled') {
                 trendingReport = trendingResult.value;
                 setTrendingDramasReport(trendingReport);
+                if (trendingReport?.id) setSelectedTrendingReportId(String(trendingReport.id));
                 setGlobalStoryInput(prev => ({
                     ...prev,
                     trending_ai_short_dramas_report: trendingReport,
@@ -1698,6 +1788,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 errors.push(`${t('热门榜单', 'Trending list')}: ${formatProviderModelEndpointError(trendingResult.reason)}`);
             }
 
+            // Backend already persists to market_intel_reports; keep latest pointer in story generator draft.
             if (industryReport || trendingReport) {
                 try {
                     await persistStoryGeneratorInputPatch({
@@ -1706,6 +1797,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     });
                 } catch (saveErr) {
                     console.warn('[Market Research] save report failed:', saveErr);
+                }
+                try {
+                    await loadMarketIntelHistory();
+                } catch (histErr) {
+                    console.warn('[Market Research] refresh history failed:', histErr);
                 }
             }
 
@@ -1740,12 +1836,19 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
         if (blocks.length === 0) return;
         const block = blocks.join('\n\n');
+        const nextNotes = globalStoryInput.wild_creative_notes
+            ? `${String(globalStoryInput.wild_creative_notes).trim()}\n\n${block}`
+            : block;
         setGlobalStoryInput(prev => ({
             ...prev,
-            wild_creative_notes: prev.wild_creative_notes
-                ? `${prev.wild_creative_notes.trim()}\n\n${block}`
-                : block,
+            wild_creative_notes: nextNotes,
         }));
+        void persistStoryGeneratorInputPatch({ wild_creative_notes: nextNotes }).catch((err) => {
+            console.warn('[Market Research] append to wild ideas save failed:', err);
+        });
+        if (mode === 'market_research' && typeof onTabChange === 'function') {
+            onTabChange('generator');
+        }
     };
 
     const handleStructureCreativeInput = async () => {
@@ -2466,9 +2569,16 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const prefix = "proj-";
     const generatorTabs = [
         { id: 'story_generator', label: t('故事生成器', 'Story Generator') },
-        { id: 'market_research', label: t('行业分析 & 热榜', 'Industry & Trending') },
         { id: 'promo_generator', label: t('宣传片生成器', 'Promo Generator') },
     ];
+
+    const industryHistoryOptions = marketIntelHistory.filter((item) => item.report_kind === 'industry_analysis');
+    const trendingHistoryOptions = marketIntelHistory.filter((item) => item.report_kind === 'trending_dramas');
+    const formatMarketIntelOptionLabel = (item) => {
+        const month = item.report_month || item.report_period || '';
+        const when = item.fetched_at || item.created_at || '';
+        return [month, when].filter(Boolean).join(' · ') || `#${item.id}`;
+    };
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 w-full h-full overflow-y-auto">
@@ -2480,7 +2590,13 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
             />
             <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-8">
                 <div className="flex items-center gap-4">
-                    <h2 className="text-2xl font-bold">{mode === 'generator' ? t('生成器', 'Generators') : t('项目总览', 'Project Overview')}</h2>
+                    <h2 className="text-2xl font-bold">
+                        {mode === 'generator'
+                            ? t('生成器', 'Generators')
+                            : mode === 'market_research'
+                                ? t('行业分析 & 热榜', 'Industry & Trending')
+                                : t('项目总览', 'Project Overview')}
+                    </h2>
                     {mode === 'overview' && (
                         <div className="flex items-center px-3 py-1 rounded-full bg-primary/20 border border-primary/30 text-primary text-sm font-medium">
                             {t('阶段', 'Stage')}: {
@@ -2493,11 +2609,25 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     )}
                 </div>
                 <div className="flex flex-col items-stretch sm:items-end gap-2 w-full sm:w-auto">
-                    <TabMediaRefreshButton
-                        onClick={() => onMediaRefreshRequest?.()}
-                        uiLang={uiLang}
-                        className="w-full sm:w-auto"
-                    />
+                    {mode !== 'market_research' && (
+                        <TabMediaRefreshButton
+                            onClick={() => onMediaRefreshRequest?.()}
+                            uiLang={uiLang}
+                            className="w-full sm:w-auto"
+                        />
+                    )}
+                    {mode === 'market_research' && (
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                            <FunctionApiSelector
+                                functionName="script_analysis"
+                                configs={functionApiConfigs}
+                                label={t('剧本分析 API', 'Script Analysis API')}
+                                value={selectedScriptAnalysisApiId}
+                                onChange={setSelectedScriptAnalysisApiId}
+                                className="sm:justify-end"
+                            />
+                        </div>
+                    )}
                     {mode === 'generator' && (
                         <button
                             type="button"
@@ -2508,9 +2638,11 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <Info className="w-4 h-4" /> {t('生成剧本操作手册', 'Script Generation Manual')}
                         </button>
                     )}
-                    <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
-                        <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
-                    </button>
+                    {mode !== 'market_research' && (
+                        <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90 flex items-center justify-center gap-2 w-full sm:w-auto">
+                            <SettingsIcon className="w-4 h-4" /> {t('保存修改', 'Save Changes')}
+                        </button>
+                    )}
                     {mode === 'generator' && generatorAutosaveFeedback.phase !== 'idle' && (
                         <div
                             className={`text-xs px-3 py-1 rounded-full border ${generatorAutosaveFeedback.phase === 'error' ? 'border-red-400/40 text-red-200 bg-red-500/10' : generatorAutosaveFeedback.phase === 'saved' ? 'border-emerald-400/40 text-emerald-200 bg-emerald-500/10' : 'border-white/20 text-white/80 bg-white/5'}`}
@@ -3784,7 +3916,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 </div>
                 )}
 
-                {mode === 'generator' && projectTab === 'market_research' && (
+                {(mode === 'market_research' || (mode === 'generator' && projectTab === 'market_research')) && (
                 <div className="bg-card border border-white/10 p-6 rounded-xl space-y-4 xl:col-span-2">
                     <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-4">
                         <div className="flex items-start justify-between gap-3">
@@ -3794,7 +3926,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                                     {t('近两月 AI 短剧市场情报', 'AI Short Drama Market Intelligence (Last 2 Months)')}
                                 </div>
                                 <div className="text-xs text-muted-foreground mt-1">
-                                    {t('一键并行拉取：热榜题材变化分析 + 热门作品榜单（含高潮/名场面·画面·对白·动作）。联网检索后由剧本分析 LLM 分别汇总（搜索结果快照，需人工核对）。', 'One-click parallel fetch: genre-shift analysis + trending list with climax/iconic scenes (visual/dialogue/action). Web search + LLM synthesis (snapshot; verify before use).')}
+                                    {t('一键并行拉取：热榜题材变化分析 + 热门作品榜单（含高潮/名场面·画面·对白·动作）。联网检索后由剧本分析 LLM 分别汇总，并按时间写入数据库（搜索结果快照，需人工核对）。', 'One-click parallel fetch: genre-shift analysis + trending list with climax/iconic scenes. Web search + LLM synthesis; results are time-indexed and persisted (snapshot; verify before use).')}
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
@@ -3821,9 +3953,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         </div>
 
                         <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-4 space-y-3">
-                            <div className="text-sm font-semibold text-white flex items-center gap-2">
-                                <Layers className="w-4 h-4 text-sky-300" />
-                                {t('热榜题材变化分析', 'Hot-List Genre Shift Analysis')}
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                    <Layers className="w-4 h-4 text-sky-300" />
+                                    {t('热榜题材变化分析', 'Hot-List Genre Shift Analysis')}
+                                </div>
+                                <select
+                                    value={selectedIndustryReportId}
+                                    onChange={(e) => handleSelectMarketIntelReport(e.target.value, 'industry_analysis')}
+                                    disabled={isLoadingMarketIntelHistory || industryHistoryOptions.length === 0}
+                                    className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none disabled:opacity-50"
+                                >
+                                    {industryHistoryOptions.length === 0 ? (
+                                        <option value="">{t('暂无历史', 'No history')}</option>
+                                    ) : (
+                                        industryHistoryOptions.map((item) => (
+                                            <option key={`industry-hist-${item.id}`} value={String(item.id)}>
+                                                {formatMarketIntelOptionLabel(item)}
+                                            </option>
+                                        ))
+                                    )}
+                                </select>
                             </div>
                             {industryAnalysisReport?.markdown ? (
                                 <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[28rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">
@@ -3842,9 +3992,27 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         </div>
 
                         <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
-                            <div className="text-sm font-semibold text-white flex items-center gap-2">
-                                <TrendingUp className="w-4 h-4 text-amber-300" />
-                                {t('热门作品榜单（高潮/名场面）', 'Trending List (Climax & Iconic Scenes)')}
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                <div className="text-sm font-semibold text-white flex items-center gap-2">
+                                    <TrendingUp className="w-4 h-4 text-amber-300" />
+                                    {t('热门作品榜单（高潮/名场面）', 'Trending List (Climax & Iconic Scenes)')}
+                                </div>
+                                <select
+                                    value={selectedTrendingReportId}
+                                    onChange={(e) => handleSelectMarketIntelReport(e.target.value, 'trending_dramas')}
+                                    disabled={isLoadingMarketIntelHistory || trendingHistoryOptions.length === 0}
+                                    className="rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none disabled:opacity-50"
+                                >
+                                    {trendingHistoryOptions.length === 0 ? (
+                                        <option value="">{t('暂无历史', 'No history')}</option>
+                                    ) : (
+                                        trendingHistoryOptions.map((item) => (
+                                            <option key={`trending-hist-${item.id}`} value={String(item.id)}>
+                                                {formatMarketIntelOptionLabel(item)}
+                                            </option>
+                                        ))
+                                    )}
+                                </select>
                             </div>
                             {trendingDramasReport?.markdown ? (
                                 <div className="bg-black/30 border border-white/10 rounded-md px-3 py-3 max-h-[28rem] overflow-y-auto custom-scrollbar prose prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 text-sm">

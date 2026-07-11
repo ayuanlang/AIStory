@@ -914,6 +914,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             ("script_progress_scene_units", getattr(models, "ScriptProgressSceneUnit", None)),
             ("script_progress_pipeline_nodes", getattr(models, "ScriptProgressPipelineNode", None)),
             ("script_progress_issues", getattr(models, "ScriptProgressIssue", None)),
+            ("market_intel_reports", getattr(models, "MarketIntelReport", None)),
         ]:
             try:
                 if tmodel is None:

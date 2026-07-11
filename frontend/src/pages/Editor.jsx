@@ -7,7 +7,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -189,7 +189,7 @@ const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
-const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator']);
+const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator', 'market_research']);
 
 const buildProjectReturnSnapshot = ({
     projectId,
@@ -260,6 +260,7 @@ const Editor = ({
     const [tabMediaRefreshSignals, setTabMediaRefreshSignals] = useState(() => ({
         overview: 0,
         generator: 0,
+        market_research: 0,
         script: 0,
         subjects: 0,
         scenes: 0,
@@ -3896,6 +3897,16 @@ const Editor = ({
                         
                     </button>
                     <button
+                        onClick={() => {
+                            trackMenuAction('editor.action.market_research', t('行业分析 & 热榜', 'Industry & Trending'), () => setActiveTab('market_research'));
+                        }}
+                        className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'market_research' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
+                        title={t('行业分析 & 热榜', 'Industry & Trending')}
+                    >
+                        <TrendingUp className="w-4 h-4" />
+                        <span className="text-xs font-medium hidden sm:block">{t('行业分析', 'Industry')}</span>
+                    </button>
+                    <button
                         onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
                         title={t('切换到英文界面', 'Switch to Chinese UI')}
@@ -4086,6 +4097,22 @@ const Editor = ({
                                         }
                                         jump();
                                     }}
+                                />
+                            )}
+                            {activeTab === 'market_research' && (
+                                <ProjectOverview
+                                    id={id}
+                                    project={project}
+                                    key={`market-research-${refreshKey}`}
+                                    episodes={episodes}
+                                    uiLang={uiLang}
+                                    mode="market_research"
+                                    onProjectUpdate={loadProjectData}
+                                    onRefreshEpisodes={refreshEpisodesForEditor}
+                                    onTabChange={setActiveTab}
+                                    tabMediaRefreshSignal={tabMediaRefreshSignals.market_research}
+                                    isTabActive={activeTab === 'market_research'}
+                                    onMediaRefreshRequest={() => bumpTabMediaRefresh('market_research')}
                                 />
                             )}
                             {shouldRenderScriptTab && (
