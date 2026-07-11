@@ -822,6 +822,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const editingShotRef = useRef(null);
     const jointDiptychApplyInFlightRef = useRef(new Map());
     const appliedJointDiptychResultsRef = useRef(new Map());
+    const applyMultiPanelImageResultRef = useRef(null);
+    const multiPanelPresetKeyRef = useRef('4panel');
     const generatingStateByShotRef = useRef({});
     const shotLocalBatchSessionRef = useRef('');
     const shotLocalBatchStopRequestedRef = useRef(false);
@@ -1788,6 +1790,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!stableShotId || !stableJobId) return;
         const prev = readImageJobStateStorage();
         const key = `${stableShotId}:${stableKind}`;
+        const requestedMode = String(options?.mode || '').trim();
+        const nextMode = requestedMode === 'joint_diptych'
+            ? 'joint_diptych'
+            : (requestedMode === 'multi_panel' ? 'multi_panel' : 'single');
         const next = {
             ...prev,
             [key]: {
@@ -1795,7 +1801,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 kind: stableKind,
                 jobId: stableJobId,
                 startedAt: Number(options?.startedAt || 0) || Date.now(),
-                mode: options?.mode === 'joint_diptych' ? 'joint_diptych' : 'single',
+                mode: nextMode,
                 ...buildShotJobMeta(stableShotId, stableKind, options),
             },
         };
@@ -5067,6 +5073,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 const stableKind = payload?.kind === 'end' ? 'end' : 'start';
                 const jobId = String(payload?.jobId || '').trim();
                 const isJointDiptych = payload?.mode === 'joint_diptych';
+                const isMultiPanel = payload?.mode === 'multi_panel';
                 if (!stableShotId || !jobId) {
                     clearPendingImageJob(stableShotId, stableKind);
                     continue;
@@ -5080,7 +5087,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
                 let errorStreak = 0;
                 let waitMs = 2500;
-                if (isJointDiptych) {
+                if (isJointDiptych || isMultiPanel) {
                     setShotGeneratingState(stableShotId, 'start', true);
                     setShotGeneratingState(stableShotId, 'end', true);
                 } else {
@@ -5114,11 +5121,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         }
 
                         if (resultUrl || phase === 'succeeded') {
-                            if (isJointDiptych) {
+                            if (isJointDiptych || isMultiPanel) {
                                 clearPendingJointDiptychImageJob(stableShotId);
+                                clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
-    setShotGeneratingState(stableShotId, 'cropping', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
@@ -5132,6 +5140,50 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     if (isJointDiptych) {
                                         setShotGeneratingState(stableShotId, 'cropping', true);
                                         await applyJointShotDiptychResult({ shotRecord: currentShot, compositeUrl: resultUrl });
+                                    } else if (isMultiPanel) {
+                                        setShotGeneratingState(stableShotId, 'cropping', true);
+                                        let recoveredTech = {};
+                                        try {
+                                            recoveredTech = JSON.parse(currentShot?.technical_notes || '{}');
+                                        } catch {
+                                            recoveredTech = {};
+                                        }
+                                        const recoveredPreset = normalizeMultiPanelPresetKey(
+                                            recoveredTech.multi_panel_image_preset || multiPanelPresetKeyRef.current || '4panel'
+                                        );
+                                        const nextTech = {
+                                            ...recoveredTech,
+                                            multi_panel_image_url: resultUrl,
+                                            multi_panel_image_preset: recoveredPreset,
+                                        };
+                                        const nextTechNotes = JSON.stringify(nextTech);
+                                        try {
+                                            await onUpdateShot(stableShotId, { technical_notes: nextTechNotes });
+                                        } catch (persistErr) {
+                                            console.warn('Failed to persist recovered multi-panel URL before split:', persistErr);
+                                        }
+                                        const applySplit = applyMultiPanelImageResultRef.current;
+                                        if (typeof applySplit !== 'function') {
+                                            await onUpdateShot(stableShotId, {
+                                                image_url: resultUrl,
+                                                technical_notes: nextTechNotes,
+                                            });
+                                            setEditingShot((prev) => (prev && String(prev.id) === stableShotId
+                                                ? { ...prev, image_url: resultUrl, technical_notes: nextTechNotes }
+                                                : prev));
+                                            onLog?.(t(
+                                                `已恢复多画格原图（镜头 ${stableShotId}），请点击「重新拆分」。`,
+                                                `Recovered multi-panel source for shot ${stableShotId}; click Re-split to crop panels.`
+                                            ), 'warning');
+                                        } else {
+                                            await applySplit({
+                                                shotRecord: { ...(currentShot || {}), technical_notes: nextTechNotes },
+                                                compositeUrl: resultUrl,
+                                                presetKey: recoveredPreset,
+                                                basePrompt: String(recoveredTech.video_prompt_cn || recoveredTech.video_prompt || '').trim(),
+                                                promptLanguage: resolvedPromptSubmitLang,
+                                            });
+                                        }
                                     } else if (stableKind === 'start') {
                                         try {
                                             await new Promise((resolve) => {
@@ -5164,7 +5216,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     }
                                     onLog?.(isJointDiptych
                                         ? `Recovered joint start/end generation completed for shot ${stableShotId}.`
-                                        : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`, 'success');
+                                        : (isMultiPanel
+                                            ? `Recovered multi-panel generation completed for shot ${stableShotId}.`
+                                            : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation completed for shot ${stableShotId}.`), 'success');
                                     refreshShotAssetsMeta();
                                     Promise.resolve(refreshShots()).catch((refreshErr) => {
                                         console.warn('Refresh shots after recovered image job failed:', refreshErr);
@@ -5173,18 +5227,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     console.error('Failed to apply recovered image job result:', applyErr);
                                     onLog?.(isJointDiptych
                                         ? `Failed to apply recovered joint start/end result for shot ${stableShotId}: ${applyErr.message}`
-                                        : `Failed to apply recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} result for shot ${stableShotId}: ${applyErr.message}`, 'error');
+                                        : (isMultiPanel
+                                            ? `Failed to apply recovered multi-panel result for shot ${stableShotId}: ${applyErr.message}`
+                                            : `Failed to apply recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} result for shot ${stableShotId}: ${applyErr.message}`), 'error');
+                                } finally {
+                                    if (isJointDiptych || isMultiPanel) {
+                                        setShotGeneratingState(stableShotId, 'cropping', false);
+                                    }
                                 }
                             }
                             break;
                         }
 
                         if (phase === 'failed' || phase === 'canceled') {
-                            if (isJointDiptych) {
+                            if (isJointDiptych || isMultiPanel) {
                                 clearPendingJointDiptychImageJob(stableShotId);
+                                clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, 'start', false);
                                 setShotGeneratingState(stableShotId, 'end', false);
-    setShotGeneratingState(stableShotId, 'cropping', false);
+                                setShotGeneratingState(stableShotId, 'cropping', false);
                             } else {
                                 clearPendingImageJob(stableShotId, stableKind);
                                 setShotGeneratingState(stableShotId, stableKind, false);
@@ -5193,7 +5254,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             const tone = String(phase).startsWith('cancel') ? 'warning' : 'error';
                             onLog?.(isJointDiptych
                                 ? `Recovered joint start/end generation failed for shot ${stableShotId}: ${errMsg}`
-                                : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation failed for shot ${stableShotId}: ${errMsg}`, tone);
+                                : (isMultiPanel
+                                    ? `Recovered multi-panel generation failed for shot ${stableShotId}: ${errMsg}`
+                                    : `Recovered ${stableKind === 'end' ? 'end frame' : 'start frame'} generation failed for shot ${stableShotId}: ${errMsg}`), tone);
                             break;
                         }
                     } catch (e) {
@@ -5266,11 +5329,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         onUpdateShot,
         applyJointShotDiptychResult,
         readImageJobStateStorage,
+        refreshShotAssetsMeta,
         refreshShots,
+        resolvedPromptSubmitLang,
         setPendingImageJob,
         setPendingJointDiptychImageJob,
         setEditingShot,
         setShotGeneratingState,
+        t,
     ]);
 
     useEffect(() => {
@@ -6813,12 +6879,33 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             ? directUrl
             : `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
 
-        const compositeResp = await fetch(fetchUrl);
-        if (!compositeResp.ok) {
-            throw new Error(`Failed to download multi-panel image (${compositeResp.status})`);
+        let compositeBlob = null;
+        let lastDownloadError = null;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+            try {
+                const compositeResp = await fetch(fetchUrl);
+                if (!compositeResp.ok) {
+                    throw new Error(`Failed to download multi-panel image (${compositeResp.status})`);
+                }
+                compositeBlob = await compositeResp.blob();
+                if (!compositeBlob || compositeBlob.size <= 0) {
+                    throw new Error('Failed to download multi-panel image (empty body)');
+                }
+                lastDownloadError = null;
+                break;
+            } catch (downloadError) {
+                lastDownloadError = downloadError;
+                if (attempt < 3) {
+                    await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+                }
+            }
+        }
+        if (!compositeBlob) {
+            throw (lastDownloadError instanceof Error
+                ? lastDownloadError
+                : new Error('Failed to download multi-panel image'));
         }
 
-        const compositeBlob = await compositeResp.blob();
         const compositeImage = await loadImageElementFromBlob(compositeBlob);
         const durationValue = Number(stableShot?.duration || 0);
         const effectiveDuration = Number.isFinite(durationValue) && durationValue > 0 ? durationValue : panelCount;
@@ -6937,6 +7024,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         refreshShotAssetsMeta();
         return { startUrl, endUrl, keyframes: nextList, shotPatch: nextPatch };
     }, [activeEpisode?.episode_info, activeEpisode?.id, cropGeneratedGridPanelToBlob, editingShot?.id, loadImageElementFromBlob, onUpdateShot, project?.global_info, projectId, refreshShotAssetsMeta]);
+    applyMultiPanelImageResultRef.current = applyMultiPanelImageResult;
 
     const generateAssetWithLang = async (assetType, keyframeIndex = -1, options = {}) => {
         if (!editingShot) return;
@@ -7826,6 +7914,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     ]);
 
     const [multiPanelPresetKey, setMultiPanelPresetKey] = useState('4panel');
+    multiPanelPresetKeyRef.current = multiPanelPresetKey;
     const [batchMultiPanelPresetKey, setBatchMultiPanelPresetKey] = useState('4panel');
     const [batchUsePrevEndFrameAsMultiPanelStart, setBatchUsePrevEndFrameAsMultiPanelStart] = useState(false);
     const [multiPanelPresetInstruction, setMultiPanelPresetInstruction] = useState(() => getMultiPanelPresetFallbackInstruction('4panel', 'cn'));
@@ -8036,7 +8125,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         on_job_created: (jobId) => {
                             const stableJobId = String(jobId || '').trim();
                             if (!stableJobId) return;
-                            setPendingImageJob(targetShotId, 'start', stableJobId);
+                            setPendingImageJob(targetShotId, 'start', stableJobId, { mode: 'multi_panel' });
                         },
                     });
                     const candidateUrl = resolveMultiPanelResultUrl(candidateRes);
@@ -8100,6 +8189,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 delete techNotes.multi_panel_prev_end_ref_summary;
             }
             const nextStr = JSON.stringify(techNotes);
+
+            // Persist composite URL before split so "Re-split" still works if cropping/download fails.
+            try {
+                await onUpdateShot(targetShotId, { technical_notes: nextStr });
+                setEditingShot((prev) => (prev && String(prev.id) === targetShotId
+                    ? { ...prev, technical_notes: nextStr }
+                    : prev));
+            } catch (persistErr) {
+                console.warn('Failed to persist multi-panel composite URL before split:', persistErr);
+            }
 
             setShotGeneratingState(targetShotId, 'start', false);
             setShotGeneratingState(targetShotId, 'end', false);
@@ -8177,7 +8276,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!editingShot || isResplittingMultiPanelImage) return;
         const shotSnapshot = editingShot;
         const techNotes = getEditingShotTech() || {};
-        const compositeUrl = String(techNotes.multi_panel_image_url || techNotes.storyboard_url || '').trim();
+        const explicitCompositeUrl = String(techNotes.multi_panel_image_url || techNotes.storyboard_url || '').trim();
+        const startFrameFallbackUrl = String(shotSnapshot?.image_url || '').trim();
+        // Recovery path may have written the unsplit composite into image_url only.
+        const compositeUrl = explicitCompositeUrl || startFrameFallbackUrl;
         if (!compositeUrl) {
             showNotification(t('当前没有可重新拆分的多画格图', 'No multi-panel image is available to re-split'), 'warning');
             return;
@@ -8189,10 +8291,23 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             : (getShotVideoPromptEn(shotSnapshot) || cnVideoPrompt || 'Video motion'));
 
         setIsResplittingMultiPanelImage(true);
-        onLog?.('Re-splitting multi-panel image into keyframes...', 'info');
+        onLog?.(explicitCompositeUrl
+            ? 'Re-splitting multi-panel image into keyframes...'
+            : t('未找到多画格原图记录，改用当前首帧图重新拆分...', 'No saved multi-panel source found; re-splitting from the current start frame...'), 'info');
         try {
+            // Ensure subsequent re-splits use the explicit multi-panel field even when falling back from start frame.
+            const shotForSplit = !explicitCompositeUrl
+                ? {
+                    ...shotSnapshot,
+                    technical_notes: JSON.stringify({
+                        ...techNotes,
+                        multi_panel_image_url: compositeUrl,
+                        multi_panel_image_preset: techNotes.multi_panel_image_preset || multiPanelPresetKey,
+                    }),
+                }
+                : shotSnapshot;
             await applyMultiPanelImageResult({
-                shotRecord: shotSnapshot,
+                shotRecord: shotForSplit,
                 compositeUrl,
                 presetKey: techNotes.multi_panel_image_preset || multiPanelPresetKey,
                 basePrompt: rawVideoPrompt,
@@ -11738,7 +11853,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                         try {
                                             tech = JSON.parse(editingShot.technical_notes || '{}');
                                         } catch (e) {}
-                                        const multiPanelUrl = String(tech.multi_panel_image_url || tech.storyboard_url || '').trim();
+                                        const explicitMultiPanelUrl = String(tech.multi_panel_image_url || tech.storyboard_url || '').trim();
+                                        const startFrameFallbackUrl = String(editingShot?.image_url || '').trim();
+                                        const multiPanelUrl = explicitMultiPanelUrl || startFrameFallbackUrl;
+                                        const multiPanelUrlIsStartFrameFallback = !explicitMultiPanelUrl && Boolean(startFrameFallbackUrl);
+                                        const canResplitMultiPanel = Boolean(multiPanelUrl);
                                         const currentPresetOption = getMultiPanelPresetOption(tech.multi_panel_image_preset || multiPanelPresetKey);
                                         const multiPanelStartsFromPrevEnd = tech.multi_panel_start_from_prev_end === true;
                                         const multiPanelPrevEndRefUrl = String(tech.multi_panel_prev_end_ref_url || '').trim();
@@ -11829,9 +11948,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handleResplitMultiPanelImage()}
-                                                                    disabled={!multiPanelUrl || isResplittingMultiPanelImage}
-                                                                    title={t('基于当前多画格图重新切分并重建关键帧', 'Re-split the current multi-panel image and rebuild keyframes')}
-                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${(!multiPanelUrl || isResplittingMultiPanelImage) ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                                    disabled={!canResplitMultiPanel || isResplittingMultiPanelImage}
+                                                                    title={multiPanelUrlIsStartFrameFallback
+                                                                        ? t('未保存多画格原图记录时，将用当前首帧图按所选预设重新拆分', 'If no saved multi-panel source exists, re-split using the current start frame and selected preset')
+                                                                        : t('基于当前多画格图重新切分并重建关键帧', 'Re-split the current multi-panel image and rebuild keyframes')}
+                                                                    className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${(!canResplitMultiPanel || isResplittingMultiPanelImage) ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
                                                                 >
                                                                     {isResplittingMultiPanelImage ? t('重新拆分中...', 'Re-splitting...') : t('重新拆分', 'Re-split')}
                                                                 </button>
@@ -11968,30 +12089,36 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             <div className="flex items-center gap-2 min-w-0">
                                                                 <Layers className="w-3.5 h-3.5 text-amber-200 shrink-0" />
                                                                 <span className="text-muted-foreground uppercase font-bold shrink-0">{t(`${currentPresetOption.labelZh}预设图`, `${currentPresetOption.labelEn} Preset Image`)}</span>
-                                                                <span className="text-white/60 truncate">{t('已作为关键帧拆分来源', 'Used as the split source for keyframes')}</span>
+                                                                <span className="text-white/60 truncate">
+                                                                    {multiPanelUrlIsStartFrameFallback
+                                                                        ? t('当前首帧可作为多画格拆分来源', 'Current start frame can be used as the multi-panel split source')
+                                                                        : t('已作为关键帧拆分来源', 'Used as the split source for keyframes')}
+                                                                </span>
                                                             </div>
                                                             <div className="flex flex-wrap gap-2">
                                                                 <button type="button" onClick={() => window.open(getFullUrl(multiPanelUrl), '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/80 hover:bg-white/10">
                                                                     <LinkIcon size={12} />
                                                                     {t('查看原图', 'View Source')}
                                                                 </button>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={async () => {
-                                                                        const nextTech = { ...tech };
-                                                                        delete nextTech.multi_panel_image_url;
-                                                                        delete nextTech.multi_panel_image_preset;
-                                                                        delete nextTech.multi_panel_last_split_source_url;
-                                                                        delete nextTech.storyboard_url;
-                                                                        const nextStr = JSON.stringify(nextTech);
-                                                                        setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
-                                                                        await onUpdateShot(editingShot.id, { technical_notes: nextStr });
-                                                                    }}
-                                                                    className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20"
-                                                                >
-                                                                    <Trash2 size={12} />
-                                                                    {t('删除原图记录', 'Delete Source Record')}
-                                                                </button>
+                                                                {explicitMultiPanelUrl ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={async () => {
+                                                                            const nextTech = { ...tech };
+                                                                            delete nextTech.multi_panel_image_url;
+                                                                            delete nextTech.multi_panel_image_preset;
+                                                                            delete nextTech.multi_panel_last_split_source_url;
+                                                                            delete nextTech.storyboard_url;
+                                                                            const nextStr = JSON.stringify(nextTech);
+                                                                            setEditingShot(prev => ({ ...(prev || {}), technical_notes: nextStr }));
+                                                                            await onUpdateShot(editingShot.id, { technical_notes: nextStr });
+                                                                        }}
+                                                                        className="inline-flex items-center gap-1 rounded border border-red-400/20 bg-red-500/10 px-2 py-1 text-[11px] text-red-100 hover:bg-red-500/20"
+                                                                    >
+                                                                        <Trash2 size={12} />
+                                                                        {t('删除原图记录', 'Delete Source Record')}
+                                                                    </button>
+                                                                ) : null}
                                                             </div>
                                                         </div>
                                                     </div>
