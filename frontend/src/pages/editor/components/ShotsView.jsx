@@ -4875,7 +4875,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const explicit = String(shot?.scene_code || '').trim();
             if (explicit) return explicit.toUpperCase();
             const shotId = String(shot?.shot_id || '').trim().toUpperCase();
-            const m = shotId.match(/^(EP\d{2}_SC\d{2})/);
+            const m = shotId.match(/^(EP\d{2}_SC\d{2}[A-Za-z]*)/);
             return m ? m[1] : '';
         };
         
