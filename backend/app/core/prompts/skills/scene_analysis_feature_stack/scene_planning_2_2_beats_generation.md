@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-11 17:40:00 +08:00
+# Prompt Updated At: 2026-07-12 09:40:00 +08:00
 
 # Skill 1-2-2: 资产映射与节拍落表
 
@@ -16,15 +16,16 @@
 
 **【本环节专属工作】**
 1. **资产标准表达**：Stage 1 自然语言具名主体 → `CHAR:`/`ENV:`/`PROP:` 锚点；方括号内名称**逐字**取自 Index（规则见「Index 命名铁则」）。
-2. **基础/衍生资产映射**：**严格跟随** Stage 1 已声明的环境名/角色态/道具态，**仅**将其中具名实体换为 Index 标准表达；**禁止**在本环节重判基础版/衍生版选用。
-3. **时间继承**：`{节拍时间规划}`、`{Duration Estimate Basis}`、`Equivalent Duration` **原样继承** Stage 1；**禁止**改 Beat 数/边界、改算式或改时长；仅可做一致性核对，不一致只标 `{覆盖核销}`。
-4. **场景编号落表**：为 Stage 1 每场分配并输出规范 `Episode ID`、`Scene ID`、`Scene No.`（细则见「场景编号」）；供下游 `Shot ID={Scene ID}_SHzz` 继承（含字母后缀如 `EP01_SC01B_SH01`）。
+2. **CHAR/PROP 衍生判别与择优（强制）**：凡落位角色/道具，须据 Index `base_entity`/`dependency_reference` 判别是否存在衍生关系实体；有依赖链者按**本 Beat 剧情态**选用匹配行（细则见「基础/衍生资产映射」）。
+3. **ENV 仅整体切换（强制）**：`ENV:[]` **只**标注 Index 中已登记的**整场可拍环境行**（主环境声明行或 `{N}度…`/状态衍生行）；**禁止**把环境内未升格为 `PROP` 的固定陈设/建筑构件单独切割成 `ENV:[…]`。
+4. **时间继承**：`{节拍时间规划}`、`{Duration Estimate Basis}`、`Equivalent Duration` **原样继承** Stage 1；**禁止**改 Beat 数/边界、改算式或改时长；仅可做一致性核对，不一致只标 `{覆盖核销}`。
+5. **场景编号落表**：为 Stage 1 每场分配并输出规范 `Episode ID`、`Scene ID`、`Scene No.`（细则见「场景编号」）；供下游 `Shot ID={Scene ID}_SHzz` 继承（含字母后缀如 `EP01_SC01B_SH01`）。
 
-**【允许】**继承、核销、表格化映射、Index 标准表达转换、场景编号规范化落表、排版压缩（`<br>` 分行/合并同类标签，**不得丢信息**）、时长一致性核对（不一致只标缺口）。
+**【允许】**继承、核销、表格化映射、Index 标准表达转换、**CHAR/PROP 衍生族内按剧情择行**、场景编号规范化落表、排版压缩（`<br>` 分行/合并同类标签，**不得丢信息**）、时长一致性核对（不一致只标缺口）。
 
-**【禁止】**剧情/对白/动作/心理/空间/转场/镜头方案的任何改写或补创；Beat 边界改动；推断填洞。Stage 1 或 Index 缺失**只**在 `{覆盖核销}` 标缺口，**不回填**。**【禁止】**对 Subject Index **无行**实体套用 `CHAR:`/`ENV:`/`PROP:` 或任何自创类型前缀（如 `EXTRA:`、`LOCATION:`、`SCENE:`、`ASSET:` 等）；Index 外语义**只**保留 Stage 1 自然语言且**不加**资产标准表达。
+**【禁止】**剧情/对白/动作/心理/空间/转场/镜头方案的任何改写或补创；Beat 边界改动；推断填洞。Stage 1 或 Index 缺失**只**在 `{覆盖核销}` 标缺口，**不回填**。**【禁止】**对 Subject Index **无行**实体套用 `CHAR:`/`ENV:`/`PROP:` 或任何自创类型前缀（如 `EXTRA:`、`LOCATION:`、`SCENE:`、`ASSET:` 等）；Index 外语义**只**保留 Stage 1 自然语言且**不加**资产标准表达。**【禁止】**对未升格为 `PROP` 的环境内实体写 `ENV:[…]`/`PROP:[…]`（固定陈设只随整场 ENV 整体切换，不得单切）。
 
-> **职责边界（Stage 1 / 2-1 已覆盖，本环节不执行）**：Beat 完整逻辑创作、微表情/微动作与对白拆句、**Scene 切分决策**、环境拓扑与衍生触发判定、角色占位名替换、特效/武戏/决战/宏观规划、`project_visual_backfill`、ENV/PROP 归属裁定——本环节**只读取**成稿并映射；**Scene 切分后的编号规范化落表属本环节**。
+> **职责边界（Stage 1 / 2-1 已覆盖，本环节不执行）**：Beat 完整逻辑创作、微表情/微动作与对白拆句、**Scene 切分决策**、环境拓扑与衍生触发判定、角色占位名替换、特效/武戏/决战/宏观规划、`project_visual_backfill`、ENV/PROP 归属裁定——本环节**只读取**成稿并映射；**Scene 切分后的编号规范化落表、CHAR/PROP 衍生族内择行、ENV 整体切换闭包属本环节**。
 
 ## 硬约束
 
@@ -41,22 +42,25 @@
 2. **类型前缀**：`character` → `CHAR:[@{subject_name_zh}]`；`environment` → `ENV:[{subject_name_zh}]`；`prop` → `PROP:[{subject_name_zh}]`；`cover_poster` 不进 Scene/Beat。
 3. **别名核销**：Stage 1 称呼/简称/别名**仅**经 Index `script_entity_coverage` 核销，落表一律换为 `subject_name_zh`。
 4. **双源交集**：Stage 1 与 Index 均有语义出现的实体，**必须** Index 化；**名称**冲突以 Index `subject_name_zh` 为准（仅替换实体名，不改叙述语义），标 `{覆盖核销}` `实体名不一致已按Subject Index校正`。
-5. **只读与缺口**：`entity_attributes` 仅供 Index 名称映射参考，**不得**用于重判衍生选用或抽新名称；Stage 1 已写而 Index 无行 → `资产索引缺口：缺 CHAR|ENV|PROP:[...]`；Index 有而 Stage 1 未写 → `Index未在Stage1出现:<实体名>`；**禁止**补入或自创名称。
+5. **只读与缺口**：`base_entity`/`dependency_reference`/`entity_attributes` 供 **CHAR/PROP 衍生族内择行**与名称映射；**禁止**据此抽新名称、新建 Index 行或向 Scene/Beat 补入 Stage 1 未写实体。Stage 1 已写而 Index 无行 → `资产索引缺口：缺 CHAR|ENV|PROP:[...]`；Index 有而 Stage 1 未写 → `Index未在Stage1出现:<实体名>`；**禁止**补入或自创名称。
 6. **标注格式闭包（强制）**：`CHAR:`/`ENV:`/`PROP:` 为**唯一合法**资产标准表达前缀；方括号内名称**必须**逐字等于 Index 某行 `subject_name_zh`（或列明确要求之 `subject_name_en`），且可反向追溯到 `subject_no`。**凡 Index 无对应行者，一律不得**写入任何 `TYPE:[...]` 标注——**禁止**用自创前缀「包装」未登记实体（含 `EXTRA:`、`LOCATION:`、`SCENE:`、`ASSET:`、`BG:`、`FG:` 等变体）；**禁止**凭 Stage 1 语义自行发明 Index 外名称再套 `CHAR:`/`ENV:`/`PROP:`。Index 外实体在正文**只**保留 Stage 1 自然语言原表述，并在 `{覆盖核销}` 标缺口，**不得**以任何标准表达格式冒充已登记资产。
 7. **对白台词豁免（强制）**：上述 Index 标准表达**仅**适用于叙述/工程落位字段；**不适用于**对白/OS/V.O./自白/独白的**台词正文**——台词内角色/道具/环境称呼须保持 Stage 1 原样（细则见「实体落位范围」「Beat 内容」）。
+8. **ENV 工程化闭包（强制，禁止环境内实体单切）**：`ENV:[{name}]` 的 `{name}` **必须**等于 Index 某行 `subject_type=environment` 的 `subject_name_zh`（主环境或可拍衍生/状态衍生整行）。**禁止**把留在 ENV 空镜字段、**未**升格为独立 `prop` 行的固定建筑/装修/大件家具/基础陈设（会议桌、门、窗、柜、椅等）单独写成 `ENV:[会议桌]`、`ENV:[百叶窗]` 等——此类物件**不是**可切换环境资产，只随当前整场 `ENV:[0度…]`/`ENV:[{N}度…]`/`ENV:[{主环境名}_{状态}]` **整体切换**出现；叙述中保留 Stage 1 自然语言具名即可，**不加**任何资产前缀。已升格为 `PROP` 者写 `PROP:[…]`，**禁止**再套 `ENV:`。
 
-### 基础/衍生资产映射（只读跟随 Stage 1）
+### 基础/衍生资产映射（CHAR/PROP 须衍生判别；ENV 只整体跟随）
 
-**本环节不重判**基础版/衍生版选用；Stage 1 已写的环境名、角色态、道具态、观察视角—ENV 匹配**原样保留**，**仅**将其中具名实体换为 Index 标准表达。**禁止**凭 Index 关联向 Scene/Beat 补充 Stage 1 未写实体；**禁止**擅自切换 Stage 1 未声明的衍生 ENV/角色态/道具态。
+**CHAR / PROP（强制衍生判别与剧情择优）**：落位每一个角色或道具时，**必须**先在 Index 内检索其衍生族——以 `base_entity` / `dependency_reference` 判定是否存在依赖关系（有依赖链 = 衍生关系）。若同族存在多行（基础版 + 一条或多条衍生版），须据**本 Beat / 本 Scene 剧情当前态**（外观/换装/战损/年龄态/点燃/签署/屏幕面等 Stage 1 已写证据）选用**唯一匹配**的那一行写入 `CHAR:`/`PROP:`；**禁止**无判别默认套基础版、也**禁止**套用与当前剧情态不符的衍生版。无衍生族（仅基础版一行）→ 直接映射该行。
+
+**ENV（只整体切换，跟随 Stage 1 已声明可拍环境）**：Stage 1【衍生环境】/Beat 已写的**整场**环境名 → Index 对应 `environment` 行；**禁止**凭 Index 关联向 Scene/Beat 补充 Stage 1 未写的衍生 ENV；**禁止**把环境内部件单切为 `ENV:[]`（见铁则 8）。
 
 | 类型 | 本环节动作 |
 | :--- | :--- |
-| **CHAR** | Stage 1 已写角色名/态 → 映射 Index 对应基础行或 `{原名}_{衍生标识}` 行 |
-| **ENV 主环境** | Stage 1【主环境】**原样继承**；仅环境名 Index 化；**不作** Beat 当前 ENV |
-| **ENV 可拍衍生** | Stage 1【衍生环境】/Beat 已引用之名 → 映射 Index 对应 `{N}度{主环境名}` 或状态衍生行 |
-| **PROP** | Stage 1 已写道具名/态 → 映射 Index 对应基础行或 `{原名}_{状态/面/形态}` 行 |
+| **CHAR** | ① 核销 Stage 1 角色名 → Index 同族；② 查 `base_entity`/`dependency_reference` 是否有衍生行；③ 按本 Beat 剧情态择基础版或 `{原名}_{衍生标识}`；写入 `CHAR:[@{所选 subject_name_zh}]` |
+| **PROP** | ① 核销 Stage 1 道具名 → Index 同族；② 查依赖链是否有衍生行；③ 按本 Beat 剧情态择基础版或 `{原名}_{状态/面/形态}`；写入 `PROP:[{所选 subject_name_zh}]`；**未升格为 PROP 的环境内实体不得写 PROP/ENV 前缀** |
+| **ENV 主环境** | Stage 1【主环境】**原样继承**；仅整场环境名 Index 化；**不作** Beat 当前 ENV |
+| **ENV 可拍衍生** | Stage 1【衍生环境】/Beat 已引用之**整场**名 → 映射 Index 对应 `{N}度{主环境名}` 或状态衍生行；**仅**整场切换 |
 
-**快检**：Stage 1 已写 ENV/CHAR/PROP 须在 Index 有对应行并 Index 化；Stage 1 写切换但 Index 缺行 → 标缺口；**禁止**本环节补写 Stage 1 未写的衍生环境、空间拓扑或 Beat 内容。
+**CHAR/PROP 择优快检**：同族多行时，所选行须可核销本 Beat 剧情态关键词（如「点燃」「战损」「已签署」「屏幕朝向」）；选错或漏查衍生族 → 失败。**ENV 快检**：每个 `ENV:[]` 均可反向追溯到 Index `environment` 行；无 `ENV:[固定陈设名]` 类单切；Stage 1 写切换但 Index 缺行 → 标缺口；**禁止**本环节补写 Stage 1 未写的衍生环境、空间拓扑或 Beat 内容。
 
 ### 继承边界
 
@@ -88,11 +92,15 @@
 
 Stage 1 具名 → Index 标准表达，落位于：`{Scene实体覆盖}`、`{主环境}`、`{衍生环境}`、`{登场实体}`、Beat 内 `Observer View`/空间/景深层次/环境交互/关键感知焦点/结果落位/`[环境切换声明]`（**不含**台词引号/对白正文内的称呼），及表格环境/角色/道具列。
 
+**CHAR/PROP 落位前强制步骤**：对每一个将写入 `CHAR:`/`PROP:` 的主体执行「衍生判别 → 剧情择优」（见「基础/衍生资产映射」）；同族有衍生行却未择匹配态 → 禁止输出。
+
+**ENV 落位边界（强制）**：仅当 Stage 1 写的是**整场**主环境/可拍衍生/状态衍生名，且 Index 有对应 `environment` 行时，才写 `ENV:[…]`。环境描述中的固定陈设/建筑构件若 Index **无**独立 `prop` 行 → **只保留自然语言**，**禁止**工程化为 `ENV:` 或 `PROP:`（不得把「环境整体」拆成多个局部 `ENV:[]`）。
+
 **对白台词豁免（强制）**：`voice_type=对白/OS/V.O./自白/独白` 的**台词正文**（引号内或 inline 开口后的原词）中出现的角色名、道具名、地点/环境称呼、别名等，**必须逐字保留 Stage 1 原文**，**禁止**改为 `CHAR:`/`ENV:`/`PROP:` 或任何 Index 标准表达；仅对白**外侧**叙述（说话人段落锚点、听者反应、建置落位、环境切换等）做 Index 化。
 
 ### 环境列
 
-表格环境列**从 Stage 1【衍生环境】/【观察视角与空间建置】原样提取**，仅做 Index 名称规范化；**禁止**自行推断 Stage 1 未声明的 ENV 关系或补写环境差异。
+表格环境列**从 Stage 1【衍生环境】/【观察视角与空间建置】原样提取**，仅做 Index **整场**环境名规范化；**禁止**自行推断 Stage 1 未声明的 ENV 关系或补写环境差异；**禁止**把未升格 PROP 的环境内实体填入环境列。
 
 | 列 | 规则 |
 | :--- | :--- |
@@ -114,7 +122,7 @@ Stage 1 具名 → Index 标准表达，落位于：`{Scene实体覆盖}`、`{�
 
 ### 输出前自检
 
-Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 全部【】说明块原样落入 Core Scene Info、无省略写法**｜语义 = Stage 1（叙述层仅实体 Index 化）｜**对白/OS/V.O./自白/独白台词正文无任何 `CHAR:`/`ENV:`/`PROP:`**｜**全部 `CHAR:`/`ENV:`/`PROP:` 可反向追溯到 Index `subject_no`；Index 外实体无类型前缀标注**｜时长原样继承 Stage 1｜缺口已标 `{覆盖核销}`。
+Beat 数/顺序 = Stage 1｜`Episode ID`/`Scene ID`/`Scene No.` 规范且与 Stage 1 场序一致｜**Stage 1 全部【】说明块原样落入 Core Scene Info、无省略写法**｜语义 = Stage 1（叙述层仅实体 Index 化）｜**对白/OS/V.O./自白/独白台词正文无任何 `CHAR:`/`ENV:`/`PROP:`**｜**全部 `CHAR:`/`ENV:`/`PROP:` 可反向追溯到 Index `subject_no`；Index 外实体无类型前缀标注**｜**每个 `CHAR:`/`PROP:` 已做衍生族判别，同族多行时已按本 Beat 剧情态择匹配行**｜**每个 `ENV:[]` 均为 Index `environment` 整场行；无环境内固定陈设单切为 `ENV:`/`PROP:`**｜时长原样继承 Stage 1｜缺口已标 `{覆盖核销}`。
 
 ## Core Scene Info 字段
 

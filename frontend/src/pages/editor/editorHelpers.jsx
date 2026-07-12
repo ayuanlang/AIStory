@@ -663,25 +663,30 @@ export const collectMatchedEntitiesFromPrompt = ({
     const entities = Array.isArray(entityPool) ? entityPool : [];
     if (!entities.length) return [];
 
+    // Preserve prompt appearance order (not entity-pool / id order).
+    // Pool-order matching caused @ImageN tags to disagree with image_urls
+    // (e.g. Image1 tagged 清玄 while slot 1 was actually 陆青).
     const rawMatches = [];
     if (includeAssociatedEntities && associatedEntities) {
         rawMatches.push(...extractEntityRawNamesFromPrompt(associatedEntities));
     }
-
     rawMatches.push(...extractEntityRawNamesFromPrompt(promptText));
 
-    const candidates = new Set();
-    rawMatches
-        .map((value) => String(value || '').trim())
-        .filter(Boolean)
-        .forEach((raw) => {
-            const normalized = normalizeEntityToken(raw);
-            if (normalized) candidates.add(normalized);
-        });
-
-    return entities.filter((entity) => {
-        return Array.from(candidates).some((candidate) => entityTokenMatchesName(entity, candidate));
+    const matched = [];
+    const seenKeys = new Set();
+    rawMatches.forEach((raw) => {
+        const candidate = normalizeEntityToken(raw);
+        if (!candidate) return;
+        const entity = entities.find((item) => entityTokenMatchesName(item, candidate));
+        if (!entity) return;
+        const dedupeKey = entity?.id != null
+            ? `id:${entity.id}`
+            : `name:${normalizeEntityToken(entity?.name || entity?.name_en || candidate)}`;
+        if (!dedupeKey || seenKeys.has(dedupeKey)) return;
+        seenKeys.add(dedupeKey);
+        matched.push(entity);
     });
+    return matched;
 };
 
 export const buildShotVideoRefPromptText = (shot = {}, techObj = {}) => {

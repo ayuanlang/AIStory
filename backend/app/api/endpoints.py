@@ -40384,7 +40384,7 @@ async def _run_generate_video(
         entity_lookup = _build_project_entity_lookup(db, req.project_id) if hasattr(req, 'project_id') and req.project_id else {}
         
         # Only inject the mapping prompt for entity_refs mode
-        prompt_text = _append_video_api_ref_mapping(
+        prompt_text, flat_refs = _append_video_api_ref_mapping(
             prompt_text,
             flat_refs,
             req.image_urls if uses_submit_image_urls else req.ref_image_url,
@@ -40396,6 +40396,17 @@ async def _run_generate_video(
             provider=resolved_video_provider,
             model=resolved_video_model,
         )
+        synced_image_urls, synced_ref_image_url = _sync_request_image_refs_with_aligned(
+            aligned_refs=flat_refs,
+            image_urls=req.image_urls if uses_submit_image_urls else None,
+            ref_image_url=None if uses_submit_image_urls else req.ref_image_url,
+            last_frame_url=req.last_frame_url,
+            keyframes=effective_keyframes,
+        )
+        if uses_submit_image_urls and isinstance(synced_image_urls, list):
+            req.image_urls = synced_image_urls
+        elif synced_ref_image_url is not None:
+            req.ref_image_url = synced_ref_image_url
         if isinstance(req.multi_prompt, list):
             patched_multi_prompt: List[Dict[str, Any]] = []
             for item in req.multi_prompt:
@@ -40404,7 +40415,7 @@ async def _run_generate_video(
                 patched_item = dict(item)
                 item_prompt = str(patched_item.get("prompt") or "").strip()
                 if item_prompt:
-                    patched_item["prompt"] = _append_video_api_ref_mapping(
+                    patched_item["prompt"], _ = _append_video_api_ref_mapping(
                         item_prompt,
                         flat_refs,
                         req.image_urls if uses_submit_image_urls else req.ref_image_url,
@@ -41369,7 +41380,7 @@ async def submit_generate_video_endpoint(
                             resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
 
             submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
-            req_payload["prompt"] = _append_video_api_ref_mapping(
+            req_payload["prompt"], submit_refs = _append_video_api_ref_mapping(
                 submit_prompt,
                 submit_refs,
                 submit_ref_image_url,
@@ -41381,6 +41392,17 @@ async def submit_generate_video_endpoint(
                 provider=req_payload.get("provider", ""),
                 model=req_payload.get("model", ""),
             )
+            synced_image_urls, synced_ref_image_url = _sync_request_image_refs_with_aligned(
+                aligned_refs=submit_refs,
+                image_urls=req_payload.get("image_urls") if isinstance(req_payload.get("image_urls"), list) else None,
+                ref_image_url=submit_ref_image_url if not isinstance(req_payload.get("image_urls"), list) else None,
+                last_frame_url=submit_last_frame_url,
+                keyframes=submit_keyframes,
+            )
+            if isinstance(synced_image_urls, list):
+                req_payload["image_urls"] = synced_image_urls
+            elif synced_ref_image_url is not None:
+                req_payload["ref_image_url"] = synced_ref_image_url
             if isinstance(req_payload.get("multi_prompt"), list):
                 patched_multi_prompt: List[Dict[str, Any]] = []
                 for item in req_payload.get("multi_prompt") or []:
@@ -41389,7 +41411,7 @@ async def submit_generate_video_endpoint(
                     patched_item = dict(item)
                     item_prompt = str(patched_item.get("prompt") or "").strip()
                     if item_prompt:
-                        patched_item["prompt"] = _append_video_api_ref_mapping(
+                        patched_item["prompt"], _ = _append_video_api_ref_mapping(
                             item_prompt,
                             submit_refs,
                             submit_ref_image_url,
@@ -43527,6 +43549,181 @@ def _compute_subject_ref_index_map(prompt: str, entity_lookup: Dict[str, Dict[st
     return index_map
 
 
+def _normalize_media_ref_key(url: Any) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    return text.split("?")[0].rstrip("/")
+
+
+def _lookup_entity_row_for_token(
+    normalized: str,
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    if not normalized or not entity_lookup:
+        return None
+    row = entity_lookup.get(normalized)
+    if row:
+        return row
+    if "(" in normalized:
+        base_norm = normalized.split("(")[0].strip()
+        if base_norm:
+            return entity_lookup.get(base_norm)
+    return None
+
+
+def _pick_submitted_ref_for_entity(
+    *,
+    entity_row: Dict[str, Any],
+    available_refs: List[str],
+    used_keys: set,
+) -> str:
+    """Bind a submitted ref URL to an entity by verifying image_url (name→URL audit)."""
+    preferred = str((entity_row or {}).get("image_url") or "").strip()
+    preferred_key = _normalize_media_ref_key(preferred)
+    if not preferred_key:
+        return ""
+
+    for url in available_refs:
+        key = _normalize_media_ref_key(url)
+        if not key or key in used_keys:
+            continue
+        if url == preferred or key == preferred_key:
+            return url
+    return ""
+
+
+def _reconcile_video_refs_by_entity_names(
+    prompt: str,
+    ordered_refs: List[str],
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+) -> Tuple[List[str], List[Tuple[int, str, str]], List[str]]:
+    """
+    Align image ref order to prompt entity mentions by entity name.
+
+    Primary contract: @ImageN must refer to the N-th bound entity's image.
+    Fallback audit uses entity.name → entity.image_url instead of blind index zip.
+    Returns (aligned_refs, pairs[(1-based idx, display_name, anchor)], audit_notes).
+    """
+    refs = [str(x).strip() for x in (ordered_refs or []) if str(x).strip()]
+    audit: List[str] = []
+    if not refs or not entity_lookup:
+        return refs, [], audit
+
+    allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
+    mentions: List[Tuple[str, str, Dict[str, Any]]] = []
+    seen_norms: set = set()
+    for raw_name in _extract_frontend_aligned_entity_raw_names(str(prompt or "")):
+        raw_name = str(raw_name or "").strip()
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized or normalized in seen_norms:
+            continue
+        row = _lookup_entity_row_for_token(normalized, entity_lookup)
+        if not row:
+            continue
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type and entity_type not in allowed_types:
+            continue
+        display_name = raw_name.lstrip("@").strip()
+        if not display_name:
+            continue
+        seen_norms.add(normalized)
+        mentions.append((normalized, display_name, row))
+
+    if not mentions:
+        return refs, [], audit
+
+    used_keys: set = set()
+    bound: List[Tuple[str, str, str]] = []
+    unbound: List[Tuple[str, Dict[str, Any]]] = []
+    for _norm, display_name, row in mentions:
+        matched_url = _pick_submitted_ref_for_entity(
+            entity_row=row,
+            available_refs=refs,
+            used_keys=used_keys,
+        )
+        if not matched_url:
+            unbound.append((display_name, row))
+            continue
+        key = _normalize_media_ref_key(matched_url)
+        if not key or key in used_keys:
+            unbound.append((display_name, row))
+            continue
+        used_keys.add(key)
+        chosen = matched_url
+        for url in refs:
+            if _normalize_media_ref_key(url) == key:
+                chosen = url
+                break
+        anchor = str(row.get("anchor_description") or "").strip()
+        bound.append((chosen, display_name, anchor))
+
+    # Name fallback: inject official entity image when submitted list missed it.
+    # Never blind-zip leftover URLs to leftover names (that caused Image1↔Image3 swaps).
+    for display_name, row in unbound:
+        preferred = str((row or {}).get("image_url") or "").strip()
+        preferred_key = _normalize_media_ref_key(preferred)
+        if not preferred or not preferred_key or preferred_key in used_keys:
+            audit.append(f"missing_image:{display_name}")
+            continue
+        used_keys.add(preferred_key)
+        anchor = str(row.get("anchor_description") or "").strip()
+        bound.append((preferred, display_name, anchor))
+        audit.append(f"injected_official_ref:{display_name}")
+
+    aligned = [url for url, _, _ in bound]
+    for url in refs:
+        key = _normalize_media_ref_key(url)
+        if key and key not in used_keys:
+            aligned.append(url)
+            used_keys.add(key)
+
+    pairs = [(idx, name, anchor) for idx, (_url, name, anchor) in enumerate(bound, start=1)]
+    if [_normalize_media_ref_key(u) for u in aligned] != [_normalize_media_ref_key(u) for u in refs]:
+        after_names = [name for _, name, _ in bound]
+        after_preview = ",".join(after_names[:8])
+        audit.append(f"reordered:after_names=[{after_preview}]")
+    return aligned, pairs, audit
+
+
+def _sync_request_image_refs_with_aligned(
+    *,
+    aligned_refs: List[str],
+    image_urls: Optional[List[str]],
+    ref_image_url: Optional[Union[str, List[str]]],
+    last_frame_url: Optional[str],
+    keyframes: Optional[List[str]],
+) -> Tuple[Optional[List[str]], Optional[Union[str, List[str]]]]:
+    """Keep provider image_urls / ref_image_url in the same order as @ImageN tags."""
+    exclude_keys = set()
+    for url in (keyframes or []):
+        key = _normalize_media_ref_key(url)
+        if key:
+            exclude_keys.add(key)
+    last_key = _normalize_media_ref_key(last_frame_url)
+    if last_key:
+        exclude_keys.add(last_key)
+
+    synced = [
+        str(url).strip()
+        for url in (aligned_refs or [])
+        if str(url).strip() and _normalize_media_ref_key(url) not in exclude_keys
+    ]
+
+    if isinstance(image_urls, list) and image_urls:
+        return synced, ref_image_url
+
+    if isinstance(ref_image_url, list):
+        return image_urls, synced
+    if isinstance(ref_image_url, str) and ref_image_url.strip():
+        if not synced:
+            return image_urls, None
+        if len(synced) == 1:
+            return image_urls, synced[0]
+        return image_urls, synced
+    return image_urls, ref_image_url
+
+
 def _append_video_api_ref_mapping(
     prompt: str,
     refs: List[str],
@@ -43538,50 +43735,19 @@ def _append_video_api_ref_mapping(
     use_prev_video: bool = False,
     provider: str = "",
     model: str = "",
-) -> str:
+) -> Tuple[str, List[str]]:
     is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
     original_use_prev_video = use_prev_video
     if is_seedance:
         use_prev_video = True
 
     text = str(prompt or "").strip()
+    ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not text:
-        return text
+        return text, ordered_refs
 
-    def _collect_prompt_entity_mentions(source_text: str, require_lookup: bool = True) -> List[Tuple[str, str]]:
-        mentions: List[Tuple[str, str]] = []
-        seen_entities: set[str] = set()
-        raw_names = _extract_frontend_aligned_entity_raw_names(source_text)
-        for raw_name in raw_names:
-            raw_name = str(raw_name or "").strip()
-            normalized = _normalize_entity_anchor_token(raw_name)
-            if not normalized or normalized in seen_entities:
-                continue
-            row = entity_lookup.get(normalized) if entity_lookup else None
-            
-            if not row and entity_lookup and "(" in normalized:
-                base_norm = normalized.split("(")[0].strip()
-                if base_norm:
-                    row = entity_lookup.get(base_norm)
-
-            if require_lookup and not row:
-                continue
-
-            entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
-            if entity_type and entity_type not in {"subject", "character", "char", "environment", "env", "prop", "props"}:
-                continue
-
-            entity_name = raw_name.lstrip("@").strip()
-            if not entity_name:
-                continue
-
-            seen_entities.add(normalized)
-            mentions.append((normalized, entity_name))
-
-        return mentions
-
-    # Remove legacy inline URL-index tags injected into prompt anchors (but preserve our intentional '参考@ImageX' markers).
-    text = re.sub(r"(?<!参考)@Image\d+\s*", "", text, flags=re.IGNORECASE)
+    # Strip ALL prior @ImageN markers (including 参考@ImageN); we re-inject from name audit.
+    text = re.sub(r"(?:参考)?@Image\d+\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
         "",
@@ -43614,44 +43780,21 @@ def _append_video_api_ref_mapping(
     )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
-
-    ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
     if not ordered_refs and not isinstance(reference_video_urls, list):
-        return text
+        return text, ordered_refs
 
-    index_map: Dict[str, int] = {}
-    for idx, url in enumerate(ordered_refs, start=1):
-        if url not in index_map:
-            index_map[url] = idx
-        base_url = url.split("?")[0]
-        if base_url not in index_map:
-            index_map[base_url] = idx
-
-    image_slots: List[str] = []
-    if isinstance(ref_image_url, list):
-        start_urls = [str(x).strip() for x in ref_image_url if str(x).strip()]
-    else:
-        single_start = str(ref_image_url or "").strip()
-        start_urls = [single_start] if single_start else []
-    end_url = str(last_frame_url or "").strip()
-    keyframe_urls = [str(x).strip() for x in (keyframes or []) if str(x).strip()]
-
-    for u in start_urls:
-        idx = index_map.get(u)
-        if idx is not None:
-            image_slots.append(f"图{idx}")
-    if end_url:
-        idx = index_map.get(end_url)
-        if idx is not None:
-            image_slots.append(f"图{idx}")
-    for u in keyframe_urls:
-        idx = index_map.get(u)
-        if idx is not None:
-            image_slots.append(f"图{idx}")
-
-    image_slots = [x for x in dict.fromkeys(image_slots) if x]
-    video_slots = [f"视频{i + 1}" for i, v in enumerate(reference_video_urls or []) if str(v).strip()]
-    media_slots = image_slots + video_slots
+    # Name-first reconcile: @ImageN order follows prompt entity mentions + entity.image_url audit.
+    aligned_refs, pairs, audit_notes = _reconcile_video_refs_by_entity_names(
+        text,
+        ordered_refs,
+        entity_lookup,
+    )
+    if audit_notes:
+        logger.info(
+            "[_append_video_api_ref_mapping] entity-name audit | %s",
+            "; ".join(audit_notes),
+        )
+    ordered_refs = aligned_refs
 
     def _append_reference_video_instruction(source_text: str) -> str:
         updated_source = str(source_text or "").strip()
@@ -43683,60 +43826,8 @@ def _append_video_api_ref_mapping(
 
         return updated_source
 
-    pairs: List[Tuple[int, str, str]] = []
-
-    # First, always show explicit start/end images if they are mapped and if desired?
-    # Usually this is primarily for mapping entities to reference images for API consumption.
-
-    seen_urls: set[str] = set()
-
-    mentioned_entity_map = {normalized: raw_name for normalized, raw_name in _collect_prompt_entity_mentions(text)}
-    mentioned_entity_keys = set(mentioned_entity_map.keys())
-    if entity_lookup:
-        # Relaxed matching to map any entity in ordered_refs
-        for key, row in entity_lookup.items():
-            norm_key = str(key or "").strip()
-            if not norm_key: continue
-            
-            if norm_key.lower() in {"global style", "camera movement", "action beat chain", "dynamic atmosphere", "lighting style"}:
-                continue
-
-            allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-            entity_type = str(row.get("entity_type") or "").strip().lower() if row else ""
-            if entity_type and entity_type not in allowed_types:
-                continue
-
-            image_url = str(row.get("image_url") or "").strip()
-            image_base = image_url.split("?")[0]
-            mapped_idx = index_map.get(image_url) or index_map.get(image_base)
-            if not image_url or mapped_idx is None:
-                continue
-
-            matched = norm_key in mentioned_entity_keys
-
-            if matched and image_url not in seen_urls:
-                seen_urls.add(image_url)
-                char_name = mentioned_entity_map[norm_key]
-                # Anchor injection should follow the asset-level Anchor Description for the matched entity.
-                anchor_text = str(row.get("anchor_description") or "").strip()
-                pairs.append((mapped_idx, char_name, anchor_text))
-    pairs.sort(key=lambda x: x[0])
-
-    if len(pairs) < len(ordered_refs):
-        fallback_mentions = _collect_prompt_entity_mentions(text, require_lookup=False)
-        paired_names = {name for _, name, _ in pairs}
-        used_indexes = {idx for idx, _, _ in pairs}
-        next_ref_indexes = [idx for idx in range(1, len(ordered_refs) + 1) if idx not in used_indexes]
-        
-        unpaired_mentions = [item for item in fallback_mentions if item[1] not in paired_names]
-        
-        for (_, entity_name), mapped_idx in zip(unpaired_mentions, next_ref_indexes):
-            pairs.append((mapped_idx, entity_name, ""))
-
     if not pairs:
-        return _append_reference_video_instruction(text)
-
-    pairs.sort(key=lambda x: x[0])
+        return _append_reference_video_instruction(text), ordered_refs
 
     updated_text = text
     for mapped_idx, entity_name, anchor_text in pairs:
@@ -43797,7 +43888,7 @@ def _append_video_api_ref_mapping(
         if count > 0:
             updated_text = replaced_text
 
-    return _append_reference_video_instruction(updated_text)
+    return _append_reference_video_instruction(updated_text), ordered_refs
 
 
 def _find_previous_shot_end_frame_url(db: Session, episode_id: int, shot_id: int) -> Optional[str]:
@@ -44045,7 +44136,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             if prev_video_url:
                 reference_video_urls.append(prev_video_url)
 
-        video_prompt = _append_video_api_ref_mapping(
+        video_prompt, ordered_video_refs = _append_video_api_ref_mapping(
             video_prompt,
             ordered_video_refs,
             normalized_refs,
@@ -44057,6 +44148,13 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             entity_lookup=entity_lookup,
             use_prev_video=bool(use_prev_video),
         )
+        _, normalized_refs = _sync_request_image_refs_with_aligned(
+            aligned_refs=ordered_video_refs,
+            image_urls=None,
+            ref_image_url=normalized_refs,
+            last_frame_url=normalized_last_frame_url,
+            keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
+        )
         if video_mode == "keyframes_entity_refs":
             keyframe_ref_count = 1 if keyframe_priority_refs else 0
             video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
@@ -44066,7 +44164,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         if video_prompt_cn_raw:
             video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
             video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
-            video_prompt_cn = _append_video_api_ref_mapping(
+            video_prompt_cn, ordered_video_refs = _append_video_api_ref_mapping(
                 video_prompt_cn,
                 ordered_video_refs,
                 normalized_refs,
@@ -44077,6 +44175,13 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 model=str(pre_api_cfg.get("model") or "") if getattr(locals(), "pre_api_cfg", None) else "",
                 entity_lookup=entity_lookup,
                 use_prev_video=bool(use_prev_video),
+            )
+            _, normalized_refs = _sync_request_image_refs_with_aligned(
+                aligned_refs=ordered_video_refs,
+                image_urls=None,
+                ref_image_url=normalized_refs,
+                last_frame_url=normalized_last_frame_url,
+                keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
             )
             if video_mode == "keyframes_entity_refs":
                 keyframe_ref_count = 1 if keyframe_priority_refs else 0
@@ -44790,7 +44895,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             if prev_video_url:
                                 reference_video_urls.append(prev_video_url)
 
-                        video_prompt = _append_video_api_ref_mapping(
+                        video_prompt, ordered_video_refs = _append_video_api_ref_mapping(
                             video_prompt,
                             ordered_video_refs,
                             normalized_refs,
@@ -44801,6 +44906,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                             provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
                         )
+                        _, normalized_refs = _sync_request_image_refs_with_aligned(
+                            aligned_refs=ordered_video_refs,
+                            image_urls=None,
+                            ref_image_url=normalized_refs,
+                            last_frame_url=normalized_last_frame_url,
+                            keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
+                        )
                         if video_mode == "keyframes_entity_refs":
                             keyframe_ref_count = 1 if keyframe_priority_refs else 0
                             video_prompt = _prepend_keyframe_story_progression_instruction(video_prompt, keyframe_ref_count, language="en")
@@ -44810,7 +44922,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                         if video_prompt_cn_raw:
                             video_cn_ref_index_map = _compute_subject_ref_index_map(video_prompt_cn_raw, entity_lookup)
                             video_prompt_cn = _inject_shot_prompt_anchors(video_prompt_cn_raw, entity_lookup, global_style, video_cn_ref_index_map)
-                            video_prompt_cn = _append_video_api_ref_mapping(
+                            video_prompt_cn, ordered_video_refs = _append_video_api_ref_mapping(
                                 video_prompt_cn,
                                 ordered_video_refs,
                                 normalized_refs,
@@ -44820,6 +44932,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 entity_lookup=entity_lookup,
                                 use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                                 provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
+                            )
+                            _, normalized_refs = _sync_request_image_refs_with_aligned(
+                                aligned_refs=ordered_video_refs,
+                                image_urls=None,
+                                ref_image_url=normalized_refs,
+                                last_frame_url=normalized_last_frame_url,
+                                keyframes=keyframe_priority_refs if video_mode == "keyframes_entity_refs" else None,
                             )
                             if video_mode == "keyframes_entity_refs":
                                 keyframe_ref_count = 1 if keyframe_priority_refs else 0
