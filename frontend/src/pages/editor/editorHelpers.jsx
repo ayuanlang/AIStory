@@ -1283,11 +1283,15 @@ export const resolveShotVideoActiveRefs = ({
         includeAssociatedEntities: false,
     });
 
-    let activeRefs = Array.isArray(tech.video_ref_image_urls)
+    const isManualOverride = tech.video_ref_image_urls_manual === true || tech.video_ref_image_urls_user_edited === true;
+    const storedVideoRefs = Array.isArray(tech.video_ref_image_urls)
         ? normalizeMediaRefList(tech.video_ref_image_urls)
+        : null;
+
+    let activeRefs = (storedVideoRefs !== null && (isManualOverride || storedVideoRefs.length > 0))
+        ? storedVideoRefs
         : buildAutoVideoRefList(shotLike, tech, resolvedVideoMode, promptEntityRefs);
 
-    const isManualOverride = tech.video_ref_image_urls_manual === true || tech.video_ref_image_urls_user_edited === true;
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
     activeRefs = activeRefs.filter((url) => !deletedRefSet.has(url));
     const shouldInjectAdditionalAutoRefs = Boolean(includeAdditionalAutoRefs && !isManualOverride);

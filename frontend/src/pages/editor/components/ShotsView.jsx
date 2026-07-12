@@ -8523,7 +8523,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ref_mode: effectiveVideoMode,
                     prompt_language: resolvedPromptSubmitLang,
                     asset_type: 'video',
-                    image_urls: apiSubmitImageUrls.length > 0 ? apiSubmitImageUrls : undefined,
+                    ...(apiSubmitImageUrls.length > 0
+                        ? { image_urls: apiSubmitImageUrls }
+                        : (submitRefPlan.imageUrls.length > 0 ? { ref_image_url: submitRefPlan.imageUrls } : {})),
                     entity_url_map: tech.entity_url_map || undefined,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {

@@ -40431,10 +40431,12 @@ async def _run_generate_video(
             last_frame_url=req.last_frame_url,
             keyframes=effective_keyframes,
         )
-        if uses_submit_image_urls and isinstance(synced_image_urls, list):
+        if uses_submit_image_urls and isinstance(synced_image_urls, list) and synced_image_urls:
             req.image_urls = synced_image_urls
         elif synced_ref_image_url is not None:
             req.ref_image_url = synced_ref_image_url
+            if not uses_submit_image_urls:
+                req.image_urls = None
         if isinstance(req.multi_prompt, list):
             patched_multi_prompt: List[Dict[str, Any]] = []
             for item in req.multi_prompt:
@@ -41374,85 +41376,14 @@ async def submit_generate_video_endpoint(
     explicit_idempotency_key = str(request.headers.get("X-Idempotency-Key") or "").strip()
     req_payload = req.model_dump()
 
-    # Keep queue payload prompt aligned with runtime mapping logic so UI/debug payloads
-    # show the same entity-reference relationship as the actual provider submission.
+    # Keep queue payload prompt/refs aligned with runtime mapping logic.
     try:
-        submit_prompt = str(req_payload.get("prompt") or "").strip()
-        if submit_prompt:
-            submit_ref_image_url = req_payload.get("ref_image_url")
-            submit_last_frame_url = req_payload.get("last_frame_url")
-            submit_keyframes = req_payload.get("keyframes") if isinstance(req_payload.get("keyframes"), list) else None
-            submit_ref_video_urls = req_payload.get("ref_video_urls") if isinstance(req_payload.get("ref_video_urls"), list) else None
-
-            submit_refs: List[str] = []
-            if isinstance(submit_ref_image_url, list):
-                submit_refs.extend([str(x).strip() for x in submit_ref_image_url if str(x).strip()])
-            elif isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
-                submit_refs.append(submit_ref_image_url.strip())
-            if isinstance(submit_keyframes, list):
-                submit_refs.extend([str(x).strip() for x in submit_keyframes if str(x).strip()])
-            if isinstance(submit_last_frame_url, str) and submit_last_frame_url.strip():
-                submit_refs.append(submit_last_frame_url.strip())
-            submit_refs = [x for x in dict.fromkeys([str(x).strip() for x in submit_refs if str(x).strip()]) if x]
-
-            resolved_project_id = _to_positive_int_or_none(req_payload.get("project_id"))
-            if not resolved_project_id:
-                resolved_project_id = _to_positive_int_or_none(getattr(req, "project_id", None))
-            if not resolved_project_id and _to_positive_int_or_none(getattr(req, "shot_id", None)):
-                submit_shot = db.query(Shot).filter(Shot.id == int(req.shot_id)).first()
-                if submit_shot:
-                    resolved_project_id = _to_positive_int_or_none(getattr(submit_shot, "project_id", None))
-                    if not resolved_project_id and _to_positive_int_or_none(getattr(submit_shot, "episode_id", None)):
-                        submit_episode = db.query(Episode).filter(Episode.id == int(submit_shot.episode_id)).first()
-                        if submit_episode:
-                            resolved_project_id = _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
-
-            submit_entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id)) if resolved_project_id else None
-            req_payload["prompt"], submit_refs = _append_video_api_ref_mapping(
-                submit_prompt,
-                submit_refs,
-                submit_ref_image_url,
-                submit_last_frame_url,
-                submit_keyframes,
-                submit_ref_video_urls,
-                entity_lookup=submit_entity_lookup,
-                use_prev_video=req_payload.get("use_prev_video", False),
-                provider=req_payload.get("provider", ""),
-                model=req_payload.get("model", ""),
-            )
-            synced_image_urls, synced_ref_image_url = _sync_request_image_refs_with_aligned(
-                aligned_refs=submit_refs,
-                image_urls=req_payload.get("image_urls") if isinstance(req_payload.get("image_urls"), list) else None,
-                ref_image_url=submit_ref_image_url if not isinstance(req_payload.get("image_urls"), list) else None,
-                last_frame_url=submit_last_frame_url,
-                keyframes=submit_keyframes,
-            )
-            if isinstance(synced_image_urls, list):
-                req_payload["image_urls"] = synced_image_urls
-            elif synced_ref_image_url is not None:
-                req_payload["ref_image_url"] = synced_ref_image_url
-            if isinstance(req_payload.get("multi_prompt"), list):
-                patched_multi_prompt: List[Dict[str, Any]] = []
-                for item in req_payload.get("multi_prompt") or []:
-                    if not isinstance(item, dict):
-                        continue
-                    patched_item = dict(item)
-                    item_prompt = str(patched_item.get("prompt") or "").strip()
-                    if item_prompt:
-                        patched_item["prompt"], _ = _append_video_api_ref_mapping(
-                            item_prompt,
-                            submit_refs,
-                            submit_ref_image_url,
-                            submit_last_frame_url,
-                            submit_keyframes,
-                            submit_ref_video_urls,
-                            entity_lookup=submit_entity_lookup,
-                            use_prev_video=req_payload.get("use_prev_video", False),
-                            provider=req_payload.get("provider", ""),
-                            model=req_payload.get("model", ""),
-                        )
-                    patched_multi_prompt.append(patched_item)
-                req_payload["multi_prompt"] = patched_multi_prompt
+        req_payload = _preprocess_video_submit_payload(
+            db,
+            req_payload,
+            provider=str(req_payload.get("provider") or "").strip(),
+            model=str(req_payload.get("model") or "").strip(),
+        )
     except Exception as e:
         logger.warning("[VideoSubmit] prompt mapping pre-process skipped: %s", e)
     scope_key = _build_generation_task_scope("video", current_user.id, req_payload)
@@ -43860,7 +43791,7 @@ def _sync_request_image_refs_with_aligned(
         return synced, ref_image_url
 
     if isinstance(ref_image_url, list):
-        return image_urls, synced
+        return image_urls, synced if synced else ref_image_url
     if isinstance(ref_image_url, str) and ref_image_url.strip():
         if not synced:
             return image_urls, None
@@ -43868,6 +43799,201 @@ def _sync_request_image_refs_with_aligned(
             return image_urls, synced[0]
         return image_urls, synced
     return image_urls, ref_image_url
+
+
+def _resolve_video_project_id_from_payload(db: Session, payload: Dict[str, Any]) -> Optional[int]:
+    resolved = _to_positive_int_or_none(payload.get("project_id"))
+    if resolved:
+        return resolved
+    shot_id = _to_positive_int_or_none(payload.get("shot_id"))
+    if not shot_id:
+        return None
+    submit_shot = db.query(Shot).filter(Shot.id == int(shot_id)).first()
+    if not submit_shot:
+        return None
+    resolved = _to_positive_int_or_none(getattr(submit_shot, "project_id", None))
+    if resolved:
+        return resolved
+    episode_id = _to_positive_int_or_none(getattr(submit_shot, "episode_id", None))
+    if not episode_id:
+        return None
+    submit_episode = db.query(Episode).filter(Episode.id == int(episode_id)).first()
+    if submit_episode:
+        return _to_positive_int_or_none(getattr(submit_episode, "project_id", None))
+    return None
+
+
+def _collect_video_flat_refs_from_payload(payload: Dict[str, Any]) -> List[str]:
+    refs: List[str] = []
+    image_urls = payload.get("image_urls")
+    if isinstance(image_urls, list):
+        refs.extend([str(x).strip() for x in image_urls if str(x).strip()])
+    ref_image_url = payload.get("ref_image_url")
+    if isinstance(ref_image_url, list):
+        refs.extend([str(x).strip() for x in ref_image_url if str(x).strip()])
+    elif isinstance(ref_image_url, str) and ref_image_url.strip():
+        refs.append(ref_image_url.strip())
+    keyframes = payload.get("keyframes")
+    if isinstance(keyframes, list):
+        refs.extend([str(x).strip() for x in keyframes if str(x).strip()])
+    last_frame_url = payload.get("last_frame_url")
+    if isinstance(last_frame_url, str) and last_frame_url.strip():
+        refs.append(last_frame_url.strip())
+    return [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
+
+
+def _preprocess_video_submit_payload(
+    db: Session,
+    req_payload: Dict[str, Any],
+    *,
+    provider: str = "",
+    model: str = "",
+) -> Dict[str, Any]:
+    """Align queued video job payload with runtime entity-ref merge + @Image mapping."""
+    submit_prompt = str(req_payload.get("prompt") or "").strip()
+    if not submit_prompt:
+        return req_payload
+
+    normalized_ref_mode = _normalize_video_ref_mode(req_payload.get("ref_mode"))
+    is_reference_image_mode = normalized_ref_mode in {"entity_refs", "keyframes_entity_refs"}
+    submit_image_urls = _resolve_video_submit_image_urls(SimpleNamespace(**req_payload))
+    uses_submit_image_urls = bool(submit_image_urls)
+
+    submit_ref_image_url = req_payload.get("ref_image_url")
+    submit_last_frame_url = req_payload.get("last_frame_url")
+    submit_keyframes = req_payload.get("keyframes") if isinstance(req_payload.get("keyframes"), list) else None
+    submit_ref_video_urls = req_payload.get("ref_video_urls") if isinstance(req_payload.get("ref_video_urls"), list) else None
+
+    flat_refs = _collect_video_flat_refs_from_payload(req_payload)
+    resolved_project_id = _resolve_video_project_id_from_payload(db, req_payload)
+    entity_lookup: Dict[str, Dict[str, Any]] = {}
+
+    has_explicit_visual_refs = uses_submit_image_urls
+    if not has_explicit_visual_refs and isinstance(submit_ref_image_url, list):
+        has_explicit_visual_refs = any(str(x).strip() for x in submit_ref_image_url)
+    elif not has_explicit_visual_refs and isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
+        has_explicit_visual_refs = True
+
+    if is_reference_image_mode and resolved_project_id and not uses_submit_image_urls:
+        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+        prompt_candidates: List[str] = [submit_prompt]
+        shot_for_ref: Optional[Shot] = None
+        shot_id = _to_positive_int_or_none(req_payload.get("shot_id"))
+        if shot_id:
+            shot_for_ref = db.query(Shot).filter(Shot.id == int(shot_id)).first()
+        if shot_for_ref:
+            prompt_candidates.extend([
+                str(shot_for_ref.video_content or "").strip(),
+                str(shot_for_ref.prompt or "").strip(),
+            ])
+            shot_tech = _parse_shot_tech(shot_for_ref)
+            if isinstance(shot_tech, dict):
+                prompt_candidates.append(str(shot_tech.get("video_prompt_cn") or "").strip())
+
+        existing_start_refs: List[str] = []
+        if isinstance(submit_ref_image_url, list):
+            existing_start_refs = [str(x).strip() for x in submit_ref_image_url if str(x).strip()]
+        elif isinstance(submit_ref_image_url, str) and submit_ref_image_url.strip():
+            existing_start_refs = [submit_ref_image_url.strip()]
+
+        merged_refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
+            existing_start_refs,
+            ref_mode=normalized_ref_mode,
+            prompt_candidates=prompt_candidates,
+            entity_lookup=entity_lookup,
+            manual_override=has_explicit_visual_refs,
+            associated_entities=shot_for_ref.associated_entities if shot_for_ref else None,
+        )
+        if merged_refs:
+            flat_refs = merged_refs
+            submit_ref_image_url = merged_refs
+            req_payload["ref_image_url"] = merged_refs
+        if auto_entity_refs:
+            logger.info(
+                "[VideoSubmit] merged entity refs | shot_id=%s project_id=%s ref_mode=%s explicit_refs=%s detected=%s final_refs=%s",
+                req_payload.get("shot_id"),
+                resolved_project_id,
+                normalized_ref_mode or "list_ref",
+                has_explicit_visual_refs,
+                len(auto_entity_refs),
+                len(merged_refs or []),
+            )
+    elif is_reference_image_mode and resolved_project_id:
+        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+
+    logger.info(
+        "[VideoSubmit] prompt mapping prepare | shot_id=%s ref_mode=%s refs=%s project_id=%s lookup_keys=%s",
+        req_payload.get("shot_id"),
+        normalized_ref_mode or "<empty>",
+        len(flat_refs),
+        resolved_project_id,
+        len(entity_lookup or {}),
+    )
+
+    mapped_prompt, flat_refs = _append_video_api_ref_mapping(
+        submit_prompt,
+        flat_refs,
+        submit_ref_image_url,
+        submit_last_frame_url,
+        submit_keyframes,
+        submit_ref_video_urls,
+        entity_lookup=entity_lookup if is_reference_image_mode else None,
+        use_prev_video=bool(req_payload.get("use_prev_video")),
+        provider=provider,
+        model=model,
+    )
+    req_payload["prompt"] = mapped_prompt
+
+    synced_image_urls, synced_ref_image_url = _sync_request_image_refs_with_aligned(
+        aligned_refs=flat_refs,
+        image_urls=req_payload.get("image_urls") if uses_submit_image_urls else None,
+        ref_image_url=submit_ref_image_url if not uses_submit_image_urls else None,
+        last_frame_url=submit_last_frame_url,
+        keyframes=submit_keyframes,
+    )
+    if isinstance(synced_image_urls, list) and synced_image_urls:
+        req_payload["image_urls"] = synced_image_urls
+    elif synced_ref_image_url is not None:
+        req_payload["ref_image_url"] = synced_ref_image_url
+        req_payload.pop("image_urls", None)
+    elif not uses_submit_image_urls:
+        req_payload.pop("image_urls", None)
+
+    image_tag_count = len(re.findall(r"@Image\d+", str(mapped_prompt or ""), flags=re.IGNORECASE))
+    logger.info(
+        "[VideoSubmit] prompt mapping done | shot_id=%s ref_mode=%s refs=%s lookup=%s image_tags=%s prompt_len=%s",
+        req_payload.get("shot_id"),
+        normalized_ref_mode or "<empty>",
+        len(flat_refs),
+        len(entity_lookup or {}),
+        image_tag_count,
+        len(str(mapped_prompt or "")),
+    )
+
+    if isinstance(req_payload.get("multi_prompt"), list):
+        patched_multi_prompt: List[Dict[str, Any]] = []
+        for item in req_payload.get("multi_prompt") or []:
+            if not isinstance(item, dict):
+                continue
+            patched_item = dict(item)
+            item_prompt = str(patched_item.get("prompt") or "").strip()
+            if item_prompt:
+                patched_item["prompt"], _ = _append_video_api_ref_mapping(
+                    item_prompt,
+                    flat_refs,
+                    req_payload.get("ref_image_url"),
+                    submit_last_frame_url,
+                    submit_keyframes,
+                    submit_ref_video_urls,
+                    entity_lookup=entity_lookup if is_reference_image_mode else None,
+                    use_prev_video=bool(req_payload.get("use_prev_video")),
+                    provider=provider,
+                    model=model,
+                )
+            patched_multi_prompt.append(patched_item)
+        req_payload["multi_prompt"] = patched_multi_prompt
+
+    return req_payload
 
 
 def _append_video_api_ref_mapping(
