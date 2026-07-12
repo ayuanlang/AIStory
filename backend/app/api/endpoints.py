@@ -43099,6 +43099,25 @@ def _normalize_entity_anchor_token(value: Any) -> str:
     return normalize_entity_token(value)
 
 
+def _entity_lookup_alias_keys(*raw_names: Any) -> set:
+    """Build lookup aliases aligned with frontend entityTokenMatchesName."""
+    keys: set = set()
+    for raw in raw_names:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        normalized = _normalize_entity_anchor_token(text)
+        if normalized:
+            keys.add(normalized)
+            base = normalized.split("(")[0].strip()
+            if base:
+                keys.add(base)
+        for compare_key in subject_compare_key_variants(text):
+            if compare_key:
+                keys.add(compare_key)
+    return {key for key in keys if key}
+
+
 def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict[str, Any]]:
     rows = db.query(Entity).filter(Entity.project_id == project_id).all()
     lookup: Dict[str, Dict[str, Any]] = {}
@@ -43115,6 +43134,7 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
         entity_type = str(row.type or "").strip().lower()
         payload = {
             "name": canonical_name,
+            "name_en": str(getattr(row, "name_en", None) or "").strip(),
             "anchor_description": anchor_description,
             "anchor": anchor,
             "description": str(row.description or row.narrative_description or anchor or "").strip(),
@@ -43122,14 +43142,9 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
             "entity_id": row.id,
             "entity_type": entity_type,
         }
-        keys = {
-            _normalize_entity_anchor_token(row.name),
-            _normalize_entity_anchor_token(row.name_en),
-        }
-        for key in list(keys):
-            if not key:
-                continue
-            lookup[key] = payload
+        for key in _entity_lookup_alias_keys(row.name, row.name_en, canonical_name):
+            # Prefer first writer so canonical exact keys are not overwritten by later aliases.
+            lookup.setdefault(key, payload)
     return lookup
 
 
@@ -43742,13 +43757,18 @@ def _lookup_entity_row_for_token(
 ) -> Optional[Dict[str, Any]]:
     if not normalized or not entity_lookup:
         return None
-    row = entity_lookup.get(normalized)
-    if row:
-        return row
-    if "(" in normalized:
-        base_norm = normalized.split("(")[0].strip()
-        if base_norm:
-            return entity_lookup.get(base_norm)
+    for key in _entity_lookup_alias_keys(normalized):
+        row = entity_lookup.get(key)
+        if row:
+            return row
+
+    token_keys = subject_compare_key_variants(normalized)
+    if not token_keys:
+        return None
+    for row in _iter_unique_entity_rows(entity_lookup):
+        entity_keys = _entity_lookup_alias_keys(row.get("name"), row.get("name_en"))
+        if entity_subject_keys_match(entity_keys, token_keys):
+            return row
     return None
 
 
@@ -43824,66 +43844,101 @@ def _collect_prompt_entity_mentions_for_mapping(
     text = str(prompt or "")
     mentions: List[Tuple[str, str, Dict[str, Any]]] = []
     seen_norms: set = set()
+    seen_ids: set = set()
+
+    def _append_mention(normalized: str, display_name: str, row: Dict[str, Any]) -> bool:
+        if not normalized or not display_name or not isinstance(row, dict):
+            return False
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type and entity_type not in allowed_types:
+            return False
+        entity_id = row.get("entity_id")
+        dedupe_key = f"id:{entity_id}" if entity_id is not None else f"name:{normalized}"
+        if dedupe_key in seen_ids or normalized in seen_norms:
+            return False
+        seen_ids.add(dedupe_key)
+        seen_norms.add(normalized)
+        mentions.append((normalized, display_name, row))
+        return True
 
     for raw_name in _extract_frontend_aligned_entity_raw_names(text):
         raw_name = str(raw_name or "").strip()
         normalized = _normalize_entity_anchor_token(raw_name)
-        if not normalized or normalized in seen_norms:
+        if not normalized:
             continue
         row = _lookup_entity_row_for_token(normalized, entity_lookup)
         if not row:
             continue
-        entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type and entity_type not in allowed_types:
-            continue
         display_name = raw_name.lstrip("@").strip() or str(row.get("name") or "").strip()
-        if not display_name:
-            continue
-        seen_norms.add(normalized)
-        mentions.append((normalized, display_name, row))
+        _append_mention(normalized, display_name, row)
 
-    if mentions:
-        return mentions, "structured"
+    mention_source = "structured" if mentions else "none"
 
-    if not entity_lookup or not ordered_refs:
-        return [], "none"
+    # Even when structured mentions exist, recover entities that the frontend already
+    # put into image_urls but whose prompt token failed exact-name lookup.
+    if entity_lookup and ordered_refs:
+        url_map = _build_url_to_entity_rows(entity_lookup)
+        reverse_hits: List[Tuple[int, int, str, str, Dict[str, Any]]] = []
+        for ref_idx, url in enumerate(ordered_refs):
+            row = (
+                url_map.get(str(url or "").strip())
+                or url_map.get(_normalize_media_ref_key(url))
+                or url_map.get(_media_ref_basename(url))
+            )
+            if not row:
+                continue
+            entity_id = row.get("entity_id")
+            dedupe_key = f"id:{entity_id}" if entity_id is not None else f"name:{row.get('name')}"
+            if dedupe_key in seen_ids:
+                continue
+            display_name = str(row.get("name") or "").strip()
+            normalized = _normalize_entity_anchor_token(display_name)
+            if not display_name or not normalized:
+                continue
+            # Confirm the entity actually appears in the prompt (typed token or plain name).
+            prompt_hit = False
+            row_keys = _entity_lookup_alias_keys(row.get("name"), row.get("name_en"))
+            for raw_name in _extract_frontend_aligned_entity_raw_names(text):
+                raw_norm = _normalize_entity_anchor_token(raw_name)
+                if not raw_norm:
+                    continue
+                if entity_subject_keys_match(row_keys, subject_compare_key_variants(raw_norm)) or raw_norm in row_keys:
+                    prompt_hit = True
+                    # Prefer the prompt-facing token for @Image injection regex.
+                    display_name = str(raw_name or "").lstrip("@").strip() or display_name
+                    normalized = raw_norm
+                    break
+            if not prompt_hit:
+                if text.find(display_name) < 0 and text.lower().find(normalized) < 0:
+                    continue
+            pos = text.find(display_name)
+            if pos < 0:
+                pos = text.lower().find(normalized)
+            if pos < 0:
+                pos = 10**9 + ref_idx
+            reverse_hits.append((pos, ref_idx, normalized, display_name, row))
 
-    url_map = _build_url_to_entity_rows(entity_lookup)
-    reverse_hits: List[Tuple[int, int, str, str, Dict[str, Any]]] = []
-    seen_ids: set = set()
-    for ref_idx, url in enumerate(ordered_refs):
-        row = (
-            url_map.get(str(url or "").strip())
-            or url_map.get(_normalize_media_ref_key(url))
-            or url_map.get(_media_ref_basename(url))
-        )
-        if not row:
-            continue
-        entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type and entity_type not in allowed_types:
-            continue
-        entity_id = row.get("entity_id")
-        dedupe_key = f"id:{entity_id}" if entity_id is not None else f"name:{row.get('name')}"
-        if dedupe_key in seen_ids:
-            continue
-        display_name = str(row.get("name") or "").strip()
-        normalized = _normalize_entity_anchor_token(display_name)
-        if not display_name or not normalized:
-            continue
-        # Prefer earliest appearance of the entity name in the prompt; otherwise keep ref order
-        # (matches video reference panel order the user already verified).
-        pos = text.find(display_name)
-        if pos < 0:
-            lower_text = text.lower()
-            pos = lower_text.find(normalized)
-        if pos < 0:
-            pos = 10**9 + ref_idx
-        seen_ids.add(dedupe_key)
-        reverse_hits.append((pos, ref_idx, normalized, display_name, row))
+        reverse_hits.sort(key=lambda item: (item[0], item[1]))
+        recovered = 0
+        for _pos, _ref_idx, norm, name, row in reverse_hits:
+            if _append_mention(norm, name, row):
+                recovered += 1
+        if recovered:
+            mention_source = "structured+url_reverse" if mention_source == "structured" else "url_reverse"
 
-    reverse_hits.sort(key=lambda item: (item[0], item[1]))
-    mentions = [(norm, name, row) for _pos, _ref_idx, norm, name, row in reverse_hits]
-    return mentions, ("url_reverse" if mentions else "none")
+        # Keep prompt appearance order for structured names, then append recovered by prompt pos.
+        if mention_source.startswith("structured") and recovered:
+            # Re-sort all mentions by earliest prompt appearance for stable @Image indices.
+            def _mention_pos(item: Tuple[str, str, Dict[str, Any]]) -> int:
+                _norm, name, _row = item
+                pos = text.find(name)
+                if pos < 0:
+                    pos = text.lower().find(_norm)
+                return pos if pos >= 0 else 10**9
+
+            mentions.sort(key=_mention_pos)
+
+    return mentions, mention_source
 
 
 def _reconcile_video_refs_by_entity_names(
@@ -44347,57 +44402,70 @@ def _append_video_api_ref_mapping(
     failed_names: List[str] = []
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"参考@Image{mapped_idx} "
-        escaped_entity = re.escape(entity_name)
-        anchor_patterns = [
-            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(?:(?:CHAR|ENV|PROP)\s*:\s*)?(?:(?:参考)?@Image\d+\s*)*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
-            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\{{｛]\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\}}｝](?:\([^\)]*\))?",
-            rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(@{escaped_entity})(?:\([^\)]*\))?",
-        ]
+        name_candidates: List[str] = []
+        for candidate in (
+            entity_name,
+            str(entity_name or "").split("(")[0].strip(),
+            _normalize_entity_anchor_token(entity_name),
+        ):
+            text_candidate = str(candidate or "").strip().lstrip("@").strip()
+            if text_candidate and text_candidate not in name_candidates:
+                name_candidates.append(text_candidate)
 
         replaced = False
-        for pattern in anchor_patterns:
-            def _prepend_prefix(match: re.Match[str]) -> str:
+        for name_candidate in name_candidates:
+            escaped_entity = re.escape(name_candidate)
+            anchor_patterns = [
+                rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(?:(?:CHAR|ENV|PROP)\s*:\s*)?(?:(?:参考)?@Image\d+\s*)*[\[【]\s*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+                rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\[【]\s*(?:CHAR|ENV|PROP)\s*:\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\]】](?:\([^\)]*\))?",
+                rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*[\{{｛]\s*(?:(?:参考)?@Image\d+\s*)*@?{escaped_entity}\s*[\}}｝](?:\([^\)]*\))?",
+                rf"(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*(@{escaped_entity})(?:\([^\)]*\))?",
+            ]
+
+            for pattern in anchor_patterns:
+                def _prepend_prefix(match: re.Match[str], _prefix=prefix, _anchor=anchor_text) -> str:
+                    token = str(match.group(0) or "")
+                    base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
+                    if _anchor:
+                        if "(" in base and ")" in base:
+                            base = re.sub(r"\([^\)]*\)", f"({_anchor})", base)
+                        else:
+                            base = f"{base}({_anchor})"
+                    else:
+                        base = re.sub(r"\([^\)]*\)", "", base)
+                    return f"{_prefix}{base}"
+
+                replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
+                if count > 0:
+                    updated_text = replaced_text
+                    replaced = True
+                    injected += 1
+                    break
+            if replaced:
+                break
+
+            plain_pattern = rf'(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*{escaped_entity}(?![a-zA-Z0-9_])'
+
+            def _prepend_marker(match: re.Match[str], _prefix=prefix, _anchor=anchor_text) -> str:
                 token = str(match.group(0) or "")
                 base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
-                if anchor_text:
+                if _anchor:
                     if "(" in base and ")" in base:
-                        base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
+                        base = re.sub(r"\([^\)]*\)", f"({_anchor})", base)
                     else:
-                        base = f"{base}({anchor_text})"
+                        base = f"{base}({_anchor})"
                 else:
                     base = re.sub(r"\([^\)]*\)", "", base)
-                return f"{prefix}{base}"
+                return f"{_prefix}{base}"
 
-            replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
+            replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
                 replaced = True
                 injected += 1
                 break
 
-        if replaced:
-            continue
-
-        plain_pattern = rf'(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*{escaped_entity}(?![a-zA-Z0-9_])'
-
-        def _prepend_marker(match: re.Match[str]) -> str:
-            token = str(match.group(0) or "")
-            base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
-            if anchor_text:
-                if "(" in base and ")" in base:
-                    base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
-                else:
-                    base = f"{base}({anchor_text})"
-            else:
-                base = re.sub(r"\([^\)]*\)", "", base)
-            return f"{prefix}{base}"
-
-        replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
-        if count > 0:
-            updated_text = replaced_text
-            injected += 1
-        else:
+        if not replaced:
             failed_names.append(f"{entity_name}->Image{mapped_idx}")
 
     if failed_names:
@@ -44409,16 +44477,26 @@ def _append_video_api_ref_mapping(
     # When prompt has no CHAR/ENV/PROP tokens (or names only appear as plain text
     # that regex missed), still emit an explicit ImageN↔name map so the provider
     # can bind refs. Prefer in-prompt injection; mapping line is last resort.
-    if injected <= 0 and pairs:
-        mapping_line = "实体参考图映射: " + "; ".join(
-            f"@Image{idx}={name}" for idx, name, _anchor in pairs
-        )
-        updated_text = f"{updated_text.strip()}\n\n{mapping_line}".strip()
-        injected = len(pairs)
-        logger.info(
-            "[_append_video_api_ref_mapping] appended explicit mapping line | pairs=%s",
-            len(pairs),
-        )
+    # Also append for partial misses so a single failed character (e.g. 小宝) is not silently dropped.
+    if (injected <= 0 and pairs) or failed_names:
+        mapping_pairs = pairs if injected <= 0 else [
+            (idx, name, anchor)
+            for idx, name, anchor in pairs
+            if any(f"{name}->Image{idx}" == failed for failed in failed_names)
+        ]
+        if mapping_pairs:
+            mapping_line = "实体参考图映射: " + "; ".join(
+                f"@Image{idx}={name}" for idx, name, _anchor in mapping_pairs
+            )
+            updated_text = f"{updated_text.strip()}\n\n{mapping_line}".strip()
+            if injected <= 0:
+                injected = len(pairs)
+            else:
+                injected += len(mapping_pairs)
+            logger.info(
+                "[_append_video_api_ref_mapping] appended explicit mapping line | pairs=%s",
+                len(mapping_pairs),
+            )
 
     logger.info(
         "[_append_video_api_ref_mapping] injected | pairs=%s applied=%s failed=%s sample=%s",
