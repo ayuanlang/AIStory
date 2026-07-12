@@ -13,6 +13,7 @@ Core rules:
 - Keep the framework practical, concrete, and production-ready.
 - Preserve continuity across episode planning, scene planning, and later script generation.
 - Script title rule (hard): `Script Title` must be newly coined from genre/conflict/tone, and must not copy `Project Title` or input title hints verbatim.
+- Script title machine marker (hard): in §0 / 项目概览, output an exclusive line `[SCRIPT_TITLE:{title}]` before the human-readable `Script Title:…` label so downstream can parse it into JSON `script_title`.
 
 What to emphasize:
 - Project overview normalization: turn existing project info into usable story constraints.
@@ -37,6 +38,7 @@ Output format:
 # 故事框架（全局 Story DNA）
 
 ## 0) 项目概览与全局风格
+- [SCRIPT_TITLE:...]
 - Script Title：...
 - Type：...
 - Language：...

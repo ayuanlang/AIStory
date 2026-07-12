@@ -201,7 +201,10 @@
 > 将剧作推演压缩为标签，**服务于 §9**；不在此复述分集剧情。须保留各 `## N)` 标题。
 
 ## 0) 📊 项目概览
-一行标签：`Script Title:…` · `Type:…` · `Language:…` · `Base Positioning:…` · `Global Style:…`
+**剧名（硬约束，机器可解析）**：
+- 须先独占一行输出机器标记：`[SCRIPT_TITLE:{剧名}]`（花括号勿输出；例：`[SCRIPT_TITLE:暗潮工牌]`）
+- 再输出人读标签行：`Script Title:…` · `Type:…` · `Language:…` · `Base Positioning:…` · `Global Style:…`
+- `{剧名}` 规则：据类型/冲突/基调**新造**；**禁止**照抄 `Project Title` / 输入 Script Title hint；**禁止**拼接 `Type`/实拍/真人剧/Live Action 等制式词；禁用 Untitled/未命名/第N集 等占位
 
 ## 1) 🎯 观众承诺
 `#基调:…` · `#情绪补偿:…` · `#观众获得:…`
@@ -322,7 +325,9 @@
 
 **§0–§8 片段**
 ```
-## 0) Script Title:暗潮工牌 · Type:职场悬疑 · Language:zh · Global Style:冷峻都市
+## 0) 项目概览
+[SCRIPT_TITLE:暗潮工牌]
+Script Title:暗潮工牌 · Type:职场悬疑 · Language:zh · Global Style:冷峻都市
 ## 1) #基调:冷峻悬疑 #情绪补偿:正义小胜 #观众获得:智斗爽感+身份反转
 ## 1) 名场面 #取材优先:最新短剧+经典悬疑 #密度:每集≥1 #TOP锚点:EP01/EP03 #四轴:画面(工牌镜像)+对白(「这扇门认的不是我」)+情绪(身份错位)
 ## 3) #Theme:真相与边界 | 林一(Lin Yi)|Need:边界|Want:留任|Arc:被动→主动|主角

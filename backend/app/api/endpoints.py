@@ -7163,20 +7163,48 @@ def _strip_stacked_production_title_suffixes(seed_title: Any) -> str:
     return cleaned or seed
 
 
+def _clean_extracted_script_title_candidate(raw_candidate: Any) -> str:
+    candidate = _strip_wrapping_title_punctuation(raw_candidate)
+    # Inline §0 lines often continue: Script Title:xxx · Type:yyy
+    candidate = re.split(r"\s*[·•]\s*", candidate, maxsplit=1)[0].strip()
+    candidate = re.split(
+        r"\s+(?:Type|Language|Base\s*Positioning|Global\s*Style)\s*[：:]",
+        candidate,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip()
+    return _strip_stacked_production_title_suffixes(candidate)
+
+
 def _extract_script_title_from_story_dna_markdown(markdown_text: Any) -> str:
+    """Parse Script Title from Story DNA markdown into a JSON-ready string.
+
+    Preferred machine marker (prompt contract):
+      [SCRIPT_TITLE:{title}]
+    Also accepts human-readable / legacy forms:
+      Script Title: …
+      剧名：…
+      ## 0) Script Title:… · Type:…
+    """
     raw = str(markdown_text or "")
     if not raw.strip():
         return ""
 
     patterns = [
+        # Preferred machine-parseable marker (exclusive line or inline)
+        r"(?im)\[\s*SCRIPT_TITLE\s*[：:]\s*([^\]]+?)\s*\]",
+        # Dedicated list/bullet line
         r"(?im)^\s*[-*]?\s*Script\s*Title\s*[：:]\s*(.+?)\s*$",
         r"(?im)^\s*[-*]?\s*(?:剧名|片名)\s*[：:]\s*(.+?)\s*$",
+        # Inline in §0 heading or label row
+        r"(?im)(?:^|\n)\s*(?:#+\s*\d+\)\s*)?Script\s*Title\s*[：:]\s*(.+?)(?=\s*[·•]\s*(?:Type|Language|Base|Global)|$)",
+        r"(?im)(?:^|\n)\s*(?:#+\s*\d+\)\s*)?(?:剧名|片名)\s*[：:]\s*(.+?)(?=\s*[·•]\s*|Type\s*[：:]|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, raw)
         if not match:
             continue
-        candidate = _strip_wrapping_title_punctuation(match.group(1))
+        candidate = _clean_extracted_script_title_candidate(match.group(1))
         if not _is_placeholder_script_title(candidate):
             return candidate
     return ""
@@ -17548,7 +17576,10 @@ async def generate_project_story_dna_global(
         f"- Input script title hint (reference only): {script_title or '(empty)'}\n"
         "- You MUST create a story-fitting script title based on genre, conflict, and tone.\n"
         "- The final Script Title MUST NOT be identical to the project title or the input hint above.\n"
-        "- Avoid generic placeholders like 'Untitled', 'Project Title', or 'Episode N'.\n\n"
+        "- Avoid generic placeholders like 'Untitled', 'Project Title', or 'Episode N'.\n"
+        "- In §0, output a dedicated machine-parseable line first: [SCRIPT_TITLE:{title}]\n"
+        "- Then also keep the human label: Script Title:{title} · Type:… · Language:…\n"
+        "- Do NOT append production-format words (实拍/真人剧/Live Action/Type labels) to the title.\n\n"
     )
 
     user_prompt = (
@@ -17835,7 +17866,13 @@ def export_project_story_generator_global_package(
         return []
 
     basic_information = {
-        "script_title": _pick_text(gi.get("script_title"), basic_info_nested.get("script_title"), e_global_info.get("script_title"), story_input.get("script_title")),
+        "script_title": _pick_text(
+            gi.get("script_title"),
+            basic_info_nested.get("script_title"),
+            e_global_info.get("script_title"),
+            story_input.get("script_title"),
+            _extract_script_title_from_story_dna_markdown(gi.get("story_dna_global_md") or ""),
+        ),
         "series_episode": _pick_text(gi.get("series_episode"), basic_info_nested.get("series_episode"), e_global_info.get("series_episode")),
         "type": _pick_text(gi.get("type"), basic_info_nested.get("type"), e_global_info.get("type"), story_input.get("type")),
         "country_region": _pick_text(gi.get("country_region"), basic_info_nested.get("country_region"), e_global_info.get("country_region"), story_input.get("country_region")),
@@ -17927,6 +17964,7 @@ def export_project_story_generator_global_package(
                 point_of_no_return = s
 
         return {
+            "script_title": _extract_script_title_from_story_dna_markdown(raw),
             "background": background_block,
             "setup": setup_block,
             "hook": hook,
