@@ -1923,12 +1923,22 @@ def init_system_api_settings(db):
 
         if row_category == "image":
             has_oss_id = bool(str(cfg.get("oss-id") or cfg.get("oss_id") or cfg.get("ossId") or "").strip())
-            has_oss_path = bool(str(cfg.get("oss-path") or cfg.get("oss_path") or cfg.get("ossPath") or "").strip())
+            current_oss_path = str(cfg.get("oss-path") or cfg.get("oss_path") or cfg.get("ossPath") or "").strip()
+            has_oss_path = bool(current_oss_path)
+            oss_path_changed = False
             if not has_oss_id:
                 cfg["oss-id"] = "69c890a3a0a438550965e9ff"
             if not has_oss_path:
-                cfg["oss-path"] = "file/images/{user_id}"
-            if (not has_oss_id) or (not has_oss_path):
+                cfg["oss-path"] = "file/images/{yyyymm}/{user_id}"
+                oss_path_changed = True
+            elif "{yyyymm}" not in current_oss_path and current_oss_path in {
+                "file/images",
+                "file/images/{user_id}",
+            }:
+                # Align legacy grsai direct-write paths with OSS yyyymm layout.
+                cfg["oss-path"] = "file/images/{yyyymm}/{user_id}"
+                oss_path_changed = True
+            if (not has_oss_id) or oss_path_changed:
                 row.config = cfg
                 updated_existing += 1
 
@@ -1970,7 +1980,7 @@ def init_system_api_settings(db):
                     else grsai_gpt_image_endpoint
                 ),
                 "oss-id": "69c890a3a0a438550965e9ff",
-                "oss-path": "file/images/{user_id}",
+                "oss-path": "file/images/{yyyymm}/{user_id}",
             }
         elif item["category"] == "Video" and "sora-2" in item["name"]:
             config_payload = {"endpoint": grsai_sora2_endpoint}

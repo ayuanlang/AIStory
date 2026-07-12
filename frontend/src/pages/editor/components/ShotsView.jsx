@@ -8417,14 +8417,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
             const shouldInjectContinuationPrompt = Boolean(usePrevVideo);
 
-            const activeVideoRefs = resolveShotVideoActiveRefs({
-                shotLike: shotSnapshot,
-                techObj: tech,
-                entityPool: resolvedEntities,
-                promptText: videoRefPromptText,
-                additionalAutoRefs: resolvePrevContinuationVideoRefs(targetShotId),
-                includeAdditionalAutoRefs: !hasManualVideoRefOverride,
-            });
+            const activeVideoRefs = (() => {
+                const resolved = resolveShotVideoActiveRefs({
+                    shotLike: shotSnapshot,
+                    techObj: tech,
+                    entityPool: resolvedEntities,
+                    promptText: videoRefPromptText,
+                    additionalAutoRefs: resolvePrevContinuationVideoRefs(targetShotId),
+                    includeAdditionalAutoRefs: !hasManualVideoRefOverride,
+                });
+                if (!effectiveVideoMode.includes('entity_refs') || hasManualVideoRefOverride) {
+                    return resolved;
+                }
+                const promptMatchedUrls = collectMatchedEntityImageUrlsFromPrompt({
+                    promptText: videoRefPromptText,
+                    entityPool: resolvedEntities,
+                    includeAssociatedEntities: false,
+                });
+                // entity_refs: only submit refs for entities actually referenced in the shot prompt.
+                return promptMatchedUrls.length > 0 ? promptMatchedUrls : resolved;
+            })();
             const submitRefPlan = buildShotVideoSubmitRefsFromActiveRefs({
                 activeRefs: activeVideoRefs,
                 shotLike: shotSnapshot,

@@ -40437,6 +40437,10 @@ async def _run_generate_video(
             req.ref_image_url = synced_ref_image_url
             if not uses_submit_image_urls:
                 req.image_urls = None
+        elif is_reference_image_mode and flat_refs:
+            # Trim explicit empty image_urls after entity-only reconcile.
+            req.image_urls = flat_refs
+            req.ref_image_url = flat_refs if len(flat_refs) != 1 else flat_refs[0]
         if isinstance(req.multi_prompt, list):
             patched_multi_prompt: List[Dict[str, Any]] = []
             for item in req.multi_prompt:
@@ -43411,12 +43415,15 @@ def _limit_keyframes_for_video_mode(keyframes: Optional[List[str]], ref_mode: An
 def _collect_video_prompt_entity_refs(
     prompt_candidates: List[str],
     entity_lookup: Dict[str, Dict[str, Any]],
+    *,
+    strict: bool = True,
 ) -> List[str]:
     refs: List[str] = []
+    collector = _collect_prompt_entity_ref_images if strict else _collect_prompt_entity_ref_images_relaxed
     for candidate_text in (prompt_candidates or []):
         if not str(candidate_text or "").strip():
             continue
-        refs.extend(_collect_prompt_entity_ref_images_relaxed(candidate_text, entity_lookup))
+        refs.extend(collector(candidate_text, entity_lookup))
     return _dedupe_media_ref_urls(refs)
 
 
@@ -43744,18 +43751,26 @@ def _reconcile_video_refs_by_entity_names(
         audit.append(f"injected_official_ref:{display_name}")
 
     aligned = [url for url, _, _ in bound]
-    leftover = 0
-    for url in refs:
-        key = _normalize_media_ref_key(url)
-        if key and key not in used_keys:
-            aligned.append(url)
-            used_keys.add(key)
-            leftover += 1
+    if bound:
+        bound_keys = {_normalize_media_ref_key(u) for u in aligned if _normalize_media_ref_key(u)}
+        dropped = 0
+        for url in refs:
+            key = _normalize_media_ref_key(url)
+            if key and key not in bound_keys:
+                dropped += 1
+        if dropped:
+            dropped_names = [
+                _media_ref_basename(url)
+                for url in refs
+                if _normalize_media_ref_key(url) not in bound_keys
+            ]
+            audit.append(f"dropped_unpaired_refs={dropped}")
+            audit.append(f"dropped_samples={','.join(dropped_names[:8])}")
+    else:
+        aligned = list(refs)
 
     pairs = [(idx, name, anchor) for idx, (_url, name, anchor) in enumerate(bound, start=1)]
     audit.append(f"bound={len(bound)}")
-    if leftover:
-        audit.append(f"leftover_refs={leftover}")
     if [_normalize_media_ref_key(u) for u in aligned] != [_normalize_media_ref_key(u) for u in refs]:
         after_names = [name for _, name, _ in bound]
         after_preview = ",".join(after_names[:8])
@@ -43956,6 +43971,9 @@ def _preprocess_video_submit_payload(
     elif synced_ref_image_url is not None:
         req_payload["ref_image_url"] = synced_ref_image_url
         req_payload.pop("image_urls", None)
+    elif is_reference_image_mode and flat_refs:
+        req_payload["image_urls"] = flat_refs
+        req_payload["ref_image_url"] = flat_refs if len(flat_refs) != 1 else flat_refs[0]
     elif not uses_submit_image_urls:
         req_payload.pop("image_urls", None)
 

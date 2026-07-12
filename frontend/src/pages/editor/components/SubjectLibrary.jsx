@@ -7794,7 +7794,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                     key={idx}
                                                                     tabIndex={0}
                                                                     className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group outline-none focus:border-primary/50"
-                                                                    title={depEntity?.image_url ? t('单击/双击图片可显示复用资产选项', 'Click or double-click the image to show reuse options') : undefined}
+                                                                    title={depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined}
                                                                 >
                                                                     <div className="aspect-square bg-black rounded overflow-hidden">
                                                                          {depEntity?.image_url ? (
@@ -7816,23 +7816,36 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                     
                                                                     <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
                                                                          {depEntity?.image_url ? (
-                                                                             <button
-                                                                                 title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
-                                                                                 onClick={async (e) => {
-                                                                                     e.preventDefault();
-                                                                                     e.stopPropagation();
-                                                                                     if (depEntity?.image_url) {
-                                                                                         await updateEntityImage(depEntity.image_url, false, viewingEntity, {
-                                                                                             skipAnalyze: true,
-                                                                                             extraFields: { anchor_description: depEntity.anchor_description }
-                                                                                         });
-                                                                                         setViewingEntity(null);
-                                                                                     }
-                                                                                 }}
-                                                                                 className="w-full text-[10px] py-1.5 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold"
-                                                                             >
-                                                                                 {t('复用资产', 'Reuse Asset')}
-                                                                             </button>
+                                                                             <>
+                                                                                 <button
+                                                                                     title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
+                                                                                     onClick={async (e) => {
+                                                                                         e.preventDefault();
+                                                                                         e.stopPropagation();
+                                                                                         if (depEntity?.image_url) {
+                                                                                             await updateEntityImage(depEntity.image_url, false, viewingEntity, {
+                                                                                                 skipAnalyze: true,
+                                                                                                 extraFields: { anchor_description: depEntity.anchor_description }
+                                                                                             });
+                                                                                             setViewingEntity(null);
+                                                                                         }
+                                                                                     }}
+                                                                                     className="w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold"
+                                                                                 >
+                                                                                     {t('复用资产', 'Reuse Asset')}
+                                                                                 </button>
+                                                                                 <button
+                                                                                     title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
+                                                                                     onClick={(e) => {
+                                                                                         e.preventDefault();
+                                                                                         e.stopPropagation();
+                                                                                         setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
+                                                                                     }}
+                                                                                     className="w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold"
+                                                                                 >
+                                                                                     {t('仅参考', 'Reference Only')}
+                                                                                 </button>
+                                                                             </>
                                                                          ) : (
                                                                              <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
                                                                          )}
@@ -7961,21 +7974,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             <div className="text-xs font-semibold text-white break-words leading-snug" title={getAssetDisplayName(selectedLibraryAsset)}>{getAssetDisplayName(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('分集：', 'Ep: ')}{getAssetEpisodeLabel(selectedLibraryAsset)}</div>
                                                                              <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
-                                                                             <button
-                                                                                 onClick={async () => {
-                                                                                     const depEntityId = getAssetEntityId(selectedLibraryAsset);
-                                                                                     const depEntity = allEntities?.find(e => String(e.id) === String(depEntityId));
-                                                                                     await updateEntityImage(selectedLibraryAsset.url, false, viewingEntity, {
-                                                                                         skipAnalyze: true,
-                                                                                         extraFields: { anchor_description: depEntity?.anchor_description }
-                                                                                     });
-                                                                                     setRefSelectionMode(null);
-                                                                                     setViewingEntity(null);
-                                                                                 }}
-                                                                                 className="mt-1 px-2.5 py-1 rounded text-xs font-bold bg-primary/80 hover:bg-primary text-black"
-                                                                             >
-                                                                                 {t('复用资产', 'Reuse Asset')}
-                                                                             </button>
+                                                                             <div className="flex gap-2 mt-1">
+                                                                                 <button
+                                                                                     onClick={async () => {
+                                                                                         const depEntityId = getAssetEntityId(selectedLibraryAsset);
+                                                                                         const depEntity = allEntities?.find(e => String(e.id) === String(depEntityId));
+                                                                                         await updateEntityImage(selectedLibraryAsset.url, false, viewingEntity, {
+                                                                                             skipAnalyze: true,
+                                                                                             extraFields: { anchor_description: depEntity?.anchor_description }
+                                                                                         });
+                                                                                         setRefSelectionMode(null);
+                                                                                         setViewingEntity(null);
+                                                                                     }}
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-primary/80 hover:bg-primary text-black"
+                                                                                 >
+                                                                                     {t('复用资产', 'Reuse Asset')}
+                                                                                 </button>
+                                                                                 <button
+                                                                                     title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
+                                                                                     onClick={() => {
+                                                                                         setRefImage(selectedLibraryAsset);
+                                                                                         setRefSelectionMode(null);
+                                                                                     }}
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border"
+                                                                                 >
+                                                                                     {t('仅参考', 'Reference Only')}
+                                                                                 </button>
+                                                                             </div>
                                                                          </div>
                                                                      </div>
                                                                  ) : (
@@ -8331,7 +8356,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         {t('项目：', 'Project: ')}{getAssetProjectLabel(selectedLibraryAsset)}
                                                     </div>
                                                 </div>
-                                                <div className="flex w-full">
+                                                <div className="flex gap-2 w-full">
                                                     <button
                                                         onClick={() => {
                                                             if (selectedEntityImageLocked) {
@@ -8342,9 +8367,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                         }}
                                                         disabled={selectedEntityImageLocked}
                                                         title={t('同时使用该素材的图片与其绑定的锚点来替换当前实体', 'Replace image and its associated anchor.')}
-                                                        className="w-full rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-black disabled:opacity-50 disabled:cursor-not-allowed"
                                                     >
                                                         {t('复用资产', 'Reuse Asset')}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            setRefImage(selectedLibraryAsset);
+                                                            setRefSelectionMode(null);
+                                                            setImageModalTab('generate');
+                                                        }}
+                                                        title={t('仅作为生图参考图提交，不覆盖当前实体图片与锚点', 'Submit as generation reference only; do not overwrite entity image or anchor')}
+                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border"
+                                                    >
+                                                        {t('仅参考', 'Reference Only')}
                                                     </button>
                                                 </div>
                                             </div>

@@ -6588,6 +6588,8 @@ class MediaGenerationService:
                 or "69c890a3a0a438550965e9ff"
                 or ""
             ).strip()
+            # Match OSS upload layout: .../{yyyymm}/{user_id}/...
+            yyyymm = datetime.utcnow().strftime("%Y%m")
             raw_oss_path = str(
                 tool_conf.get("oss-path")
                 or tool_conf.get("oss_path")
@@ -6596,6 +6598,8 @@ class MediaGenerationService:
                 or os.getenv("GRSAI_OSS_PATH")
                 or ""
             ).strip()
+            if "{yyyymm}" in raw_oss_path:
+                raw_oss_path = raw_oss_path.replace("{yyyymm}", yyyymm)
             if "{user_id}" in raw_oss_path:
                 oss_path = raw_oss_path.replace("{user_id}", str(request_user_id))
             elif raw_oss_path:
@@ -6606,7 +6610,18 @@ class MediaGenerationService:
                 else:
                     oss_path = f"{normalized_oss_path}{user_segment}"
             else:
-                oss_path = f"file/images/{request_user_id}"
+                oss_path = f"file/images/{yyyymm}/{request_user_id}"
+            # Ensure yyyymm segment exists before user_id (covers legacy templates).
+            path_parts = [p for p in str(oss_path).strip("/").split("/") if p]
+            user_str = str(request_user_id)
+            if path_parts and path_parts[-1] == user_str:
+                has_yyyymm_before_user = len(path_parts) >= 2 and bool(re.fullmatch(r"\d{6}", path_parts[-2] or ""))
+                if not has_yyyymm_before_user:
+                    path_parts.insert(-1, yyyymm)
+                    oss_path = "/".join(path_parts)
+            elif yyyymm not in path_parts:
+                path_parts.extend([yyyymm, user_str])
+                oss_path = "/".join(path_parts)
             grsai_extra_headers: Dict[str, str] = {}
             if oss_id:
                 grsai_extra_headers["oss-id"] = oss_id

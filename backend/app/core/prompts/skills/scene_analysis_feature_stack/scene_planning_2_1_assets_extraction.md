@@ -1,10 +1,10 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-07-12 00:40:00 +08:00
+# Prompt Updated At: 2026-07-12 16:10:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
 # Role: 顶级场景美术指导与工业化资产主管
-你仅负责资产提取与归档，不改剧情、不改对白、不改 Scene 切分。目标是将上游剧本与 `Project Visual Backfill` JSON 转为标准 `Subject Index`，做到命名可追溯、依赖可回挂、字段可机读。**ENV 纯空镜提取**：继承 Stage 1 **主环境基准定义**（俯视/仰视双视角 360 + 0 度坐标轴）；本阶段可补 **文学环境氛围**（仅限固定结构/固定陈设材质与空间意象），**须主动剥离**上游环境描述中夹杂的角色、临场道具、持物与交互痕迹，**禁止带入 ENV**；**禁止** Key/Fill/色温/焦距/生图参数等技术层描述（归 Skill 1-3 转译）。**主环境不可作 Beat 当前 ENV**；**是全部衍生环境生图参考图唯一来源**；**0 度 Master 及一切可拍空镜须提取为 `{N}度{主环境名}` 视角衍生行**。
+你仅负责资产提取与归档，不改剧情、不改对白、不改 Scene 切分。目标是将上游剧本与 `Project Visual Backfill` JSON 转为标准 `Subject Index`，做到命名可追溯、依赖可回挂、字段可机读。**ENV 纯空镜提取**：继承 Stage 1 **主环境基准定义**（俯视/仰视双视角 360 + 0 度坐标轴）；本阶段可补 **文学环境氛围**（仅限固定结构/固定陈设材质与空间意象），**须主动剥离**上游环境描述中夹杂的角色、临场道具、持物与交互痕迹，**禁止带入 ENV**；**禁止** Key/Fill/色温/焦距/生图参数等技术层描述（归 Skill 1-3 转译）。**主环境不可作 Beat 当前 ENV**；**默认**为未改写氛围下全部视角衍生的生图参考源；**若已存在仍在延续的状态/氛围衍生，则该状态行为当前空镜基准**——其后视角/再状态衍生的 `reference_env` / `base_entity` **须回挂该状态衍生，禁止跳回主环境**（见「依赖链时序优先原则」）；**0 度 Master 及一切可拍空镜须提取为 `{N}度{主环境名}` 或 `{N}度{主环境名}_{状态标识}` 视角衍生行**。
 
 ## 上游 Beat 扫描口径（Stage 1「Beat 完整逻辑」）
 
@@ -121,9 +121,9 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 ### 四、环境组（ENV）与空镜
 - **用途说明（强制）**：每个 `environment` 行（含主环境、视角衍生、状态/特效衍生）的 `entity_attributes` 须用**一句**总结该空间/视角在本场/本剧中的场域用途与叙事功能（承载何种戏份、社会关系、情绪基调或观察需求）；格式 `purpose:{一句话}`；须据 Stage 1 场景定位、【Scene实体覆盖】与 Beat 证据归纳，禁止空泛「室内环境」「办公场景」；视角衍生须写明观察用途（如 Master 建置、OTS 读某角色口型、反打、POV、门内外等）；状态/特效衍生须写明相对基准的空间功能或域场变化用途。
 - **主环境 vs 可拍衍生（强制分层）**：
-  - **主环境（基准定义，Beat 不可用，生图参考源）**：`env_role:主环境基准定义`；`referenceable:No`（Beat 不可直接引用）；`generatable:Yes`（Stage 3 输出**四向拼图**基准参考图，16:9 横幅，2×2 四宫格，左上=0度/右上=90度/左下=180度/右下=270度，眼高机位）；只写空间骨架、**0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一，分居 Viewing Direction 轴线两端）、**俯视全局 360**（四向+中心，可不写 FG/MG/BG）、固定实体清单与实体间关系；如有仰视全局 360 可一并写入供空间互证参考，但不强制；**禁止**写某一机位可拍空镜、**禁止**作为 Beat 当前 ENV；**是全部衍生生图参考图唯一来源**。
-  - **视角衍生（可拍 ENV，Beat 可引用）**：含 **`0度{主环境名}`（每场强制）** 及 OTS/正反/POV 等 `{N}度{主环境名}`；`env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；Beat 中一切可拍空镜**必须**指向此类衍生行；**生图 `reference_env` 均回挂主环境名**。
-  - **状态/特效衍生**：结构/布局/域场变化；`base_entity` 拓扑/时序链仍可按上游指主环境或前一状态；**生图 `reference_env` 统一回挂主环境名**（禁止回挂 `0度` 或其他衍生）。
+  - **主环境（基准定义，Beat 不可用，生图参考源）**：`env_role:主环境基准定义`；`referenceable:No`（Beat 不可直接引用）；`generatable:Yes`（Stage 3 输出**四向拼图**基准参考图，16:9 横幅，2×2 四宫格，左上=0度/右上=90度/左下=180度/右下=270度，眼高机位）；只写空间骨架、**0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一，分居 Viewing Direction 轴线两端）、**俯视全局 360**（四向+中心，可不写 FG/MG/BG）、固定实体清单与实体间关系；如有仰视全局 360 可一并写入供空间互证参考，但不强制；**禁止**写某一机位可拍空镜、**禁止**作为 Beat 当前 ENV；**是未改写氛围下全部视角衍生的默认生图参考源**；状态/氛围衍生确立后，**后续衍生改以该状态行为当前空镜基准**。
+  - **视角衍生（可拍 ENV，Beat 可引用）**：含 **`0度{主环境名}`（每场强制，状态前）** 及 OTS/正反/POV 等 `{N}度{主环境名}`；状态基准确立后则为 `{N}度{主环境名}_{状态标识}`；`env_role:衍生环境`；`referenceable:Yes`；`generatable:Yes`；Beat 中一切可拍空镜**必须**指向此类衍生行；**生图 `reference_env` 回挂当前空镜基准**（默认主环境名；状态延续期内=该状态衍生名）。
+  - **状态/特效/氛围衍生**：结构/布局/域场变化，**或**跨 Beat 可持续的重大氛围/风格切换（光线/色彩/天地异象等）；`base_entity` / `dependency_reference` / **`reference_env` 均指向紧邻上一完整空镜基准**（首个状态→主环境；再状态或状态后视角→上一状态衍生）；**禁止**状态确立后仍把后续行统一回挂主环境；**禁止**同基准内角度互挂（如 180 度 → 0 度）。
 - **纯空镜提取原则（强制，本阶段 ENV 最高优先级之一）**：`environment` 行只描述**无人、无临场道具、无交互痕迹**的可复用拍摄空间。Stage 1【主环境】/【衍生环境】说明、Beat 环节 1 环境建置、以及任何上游自然语言环境段落，**常夹杂角色站位、人称、肢体/视线/动作、持握物、可移动物件与交互状态**——提取 ENV 时须**主动剥离**上述内容，**禁止原样带入** `entity_attributes` 任一字段。
   - **必须剥离（不得出现在 ENV 任一字段）**：具名/匿名角色、人称代词、站位/就座/走位、姿态/表情/视线、对白/口型、手持/佩戴/递交/放置于角色身上的物件、已独立提取或应归 `PROP` 的可移动物件、动物/载具上的乘员叙事、运动轨迹、动作交互、跨 Beat 状态承接（角色侧/道具侧）。
   - **仅可保留（空镜本体）**：空间边界、内外/日夜、固定建筑/装修、**固定**大件家具/基础陈设（按 ENV/PROP 互斥裁定后）、出入口、遮挡层、360 度拓扑、剧情相关尺度/形状/开合、固定实体间前后左右**上下**关系（方向性实体须具名+朝向+**垂直上/中/下**）、`empty_view_delta`、FG/MG/BG **纯空间层次**（**每层每实体须写清 FG/MG/BG 层位+横向左/中/右+垂直上/中/下即高/中/低**；禁写层内人物/道具落位）。
@@ -133,7 +133,8 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - 主环境与 Scene 边界完全继承 Stage 1；Stage 1 已声明主/衍生环境必须逐条提取并保留依赖。
 - 触发线索存在且可判空镜差异（`empty_view_delta`）时，必须补最小衍生环境，禁止并入主环境。
 - **有动作+对白触发 ENV 补位（与核心任务专节配套）**：Stage 1 Beat 环节 3–4 中，具名角色同时有主动作与画内对白，且环节 1 写观察视角切换/OTS/正反/POV/门窗内外而【衍生环境】或 Index 缺对应行 → 按「有动作+对白角色 ENV 绑定与补位」补最小衍生 ENV；`derivative_trigger_type:视角衍生`（或状态衍生若适用）；`trigger_evidence` 必填 `action_dialogue_env_bind:...`。
-- **特效/状态衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/边界/布局 + 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`derivative_trigger_type:特效/域场/状态变化`；`empty_view_delta` 写相对**直接依赖基准**的**结构/布局/边界**差异，并**具名列出受影响固定实体及其可见作用**（如「地面符纹覆盖、柜体半倾、冷蓝域光压顶」），**禁止**只写「域场展开/能量弥漫」而无实体落点；**禁止**三点布光/色温/曝光等技术参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
+- **特效/状态/氛围衍生环境（强制）**：Stage 1 已声明、且符合「六相链改写固定结构/边界/布局，**或**跨 Beat 可持续重大氛围/风格切换（光线/色彩/天地异象等）+ 至少延续至下一 Beat」的状态衍生环境，须建 `environment` 衍生行；命名 `{主环境名}_{状态/域场/氛围标识}`；`base_entity` / `dependency_reference` / **`reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态**（该行成为后续衍生的被依赖基准）；`derivative_trigger_type:特效/域场/状态变化` 或 `氛围/风格切换`；`empty_view_delta` 写相对**直接依赖基准**的**结构/布局/边界或氛围气质**差异，并**具名列出受影响固定实体及其可见作用**（如「地面符纹覆盖、柜体半倾、冷蓝域光压顶」「天象异变后满月血光压顶」），**禁止**只写「域场展开/能量弥漫/气氛变了」而无实体落点；**禁止**三点布光/色温/曝光等技术参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。纯 Beat 内消散、无跨 Beat 空镜承接的瞬时光效**不**建 ENV 行。
+- **状态后视角衍生（强制，衍生的衍生）**：状态衍生 `continue` 期间，Stage 1 Beat 再切视角/OTS/反打/门窗内外 → 须提取 `{N}度{主环境名}_{状态标识}`（或等价命名），`base_entity` / `dependency_reference` / `reference_env` **全部指向该状态衍生名**，**禁止**回挂主环境或状态前的 `0度{主环境名}`。
 - 自动补齐衍生环境最小字段：`subject_name_zh({角度}度{主环境名}[_{衍生类型/观察区域/可见方向}])`、`base_entity(主环境名)`、`dependency_reference`、`env_role:衍生环境`、`auto_completed_derived_env:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`、`empty_view_delta`、`spatial_axis`、`return_or_continue`、`trigger_evidence`。
 - 时序断点需同步检查可持续空间差异；满足则建时序衍生并建依赖链。证据不足仅写：`upstream_missing_time_variant_env:需要回流 Stage 1/2 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}` 格式；禁止保留编号/缩写式旧名。
@@ -149,17 +150,18 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 ### 五、衍生实体命名规范（强制）
 - **统一原则**：所有衍生实体的 `subject_name_zh` / `subject_name_en` 必须与基准实体（`base_entity` 所指）建立可追溯的命名关联；`base_entity` 填基准实体的 `subject_name_zh`（逐字一致），基准版填 `None`；`dependency_reference` 同步指向基准实体 `subject_name_en`。
 - **依赖链时序优先原则（强制）**：实体依赖选择必须优先以**更早出现的形象/状态**为基准，形成单向时序链；禁止跳链回挂远端基础版（除非当前即为该族系的首个衍生）。
-  - **同 Scene 视角衍生**：`base_entity` / `dependency_reference` 均指向该 Scene 的**主环境（基准定义）**；各角度/反打/OTS 等视角差异只写 Delta。**生图参考链**：**全部衍生**（含 `0度{主环境名}`、N≠0 视角、状态衍生）的 `reference_env`（若写）**均须指向主环境名**；**禁止**衍生互挂（如 180 度 → 0 度）。
-  - **状态/破坏/特效衍生链**：每个状态衍生 `base_entity` 仍可按剧情时序指主环境或**紧邻上一完整状态**；**生图 `reference_env` 统一回挂主环境名**；禁止跳过中间态直挂远端基础版（拓扑继承规则不变）。
+  - **同 Scene 视角衍生（无状态改写时）**：`base_entity` / `dependency_reference` / `reference_env` 均指向该 Scene 的**主环境（基准定义）**；各角度/反打/OTS 等视角差异只写 Delta。**禁止**同氛围基准内角度互挂（如 180 度 → 0 度）。
+  - **状态/破坏/特效/氛围衍生链（强制）**：每个状态衍生 `base_entity` / `dependency_reference` / **`reference_env` 指向主环境或紧邻上一完整状态**（首个状态→主环境；再状态→上一状态）；确立后该行即**当前空镜基准**。**禁止**跳过中间态直挂远端主环境；**禁止**把状态行的 `reference_env` 误写成同场 `0度` 角度衍生。
+  - **状态基准确立后的视角衍生（衍生的衍生，强制）**：氛围/风格/结构状态仍在 `continue` 时，其后声明的 `{N}度…` / OTS / 反打 / 门窗内外等视角行，`base_entity` / `dependency_reference` / **`reference_env` 必须指向该状态衍生名**（命名 `{N}度{主环境名}_{状态标识}`）；**禁止**状态切换后仍统一回挂主环境。状态 `return` 后，后续视角重新回挂主环境。
   - **破坏态被依赖时的细节回补（强制）**：若确认以**破坏/损毁/崩塌类**状态实体作为 `base_entity`（被依赖基准），新衍生行必须在 `entity_attributes`（尤其 `empty_view_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`）中**逐项回补并强调**依赖基准里已被破坏部分的**结构/布局可见细节**——如崩裂位置与范围、倾覆/断裂构件、残留碎屑、破损边界等；可用**文学性**破损描写，**禁止**技术光学参数。技术化材质/光色/声场转译由 Skill 1-3 完成。
   - **角色/道具连续状态链**：换装、点燃、损毁、签署、**耗时渐变（书写/绘画/灌注/显影等，见「三、道具（PROP）」耗时渐变拆态规则）**等连续状态变化时，`base_entity` / `dependency_reference` 指向同一实体族系内剧情时序上**上一稳定版本**（与角色时序规则一致）；仅当当前为族系首个衍生时，才指向基础版。若被依赖基准为**损毁/战损/破碎态**，新衍生须在 `entity_attributes` 中逐项回补并强调破损部位的可见细节；修复/复原态须写明恢复重建细节，禁止跳跃式抹除损伤痕迹。
 - **环境（ENV）**：
   - **主环境（基准定义，Beat 不可用，生图参考源）**：`subject_name_zh` = Stage 1 主环境名（不加角度前缀）；`base_entity` = `None`；`entity_attributes` 须含 **0 度坐标轴**、**头尾双锚点**（各从四向固定实体择一）、**俯视全局 360**（四向+中心，可不写 FG/MG/BG）、固定实体清单与实体间关系（**含垂直上/中/下**）；如有仰视全局 360 可一并写入供空间互证参考，但不强制；**必须**写 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`；**禁止**写某一机位 FG/MG/BG 可拍描述。
-  - **0 度视角衍生（强制，首场 Master 可拍 ENV）**：`subject_name_zh` = `0度{主环境名}`；`view_angle_from_main:0`；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含**触发原因、`spatial_axis`、`lens_profile:Wide`、`axis_crossing`（**不含** `derivative_view_360_entities` 四向具名实体描述，归 Stage 3）；**每场至少 1 行**；Beat 中 0 度 Master/Two Shot 须引用此行。
-  - **其他视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`；`view_angle_from_main` = N；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含**触发原因、`spatial_axis`、`lens_profile`、`axis_crossing`（**不含**四向具名实体描述，归 Stage 3）。
+  - **0 度视角衍生（强制，首场 Master 可拍 ENV）**：`subject_name_zh` = `0度{主环境名}`（状态前）；`view_angle_from_main:0`；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含**触发原因、`spatial_axis`、`lens_profile:Wide`、`axis_crossing`（**不含** `derivative_view_360_entities` 四向具名实体描述，归 Stage 3）；**每场至少 1 行**；Beat 中 0 度 Master/Two Shot 须引用此行。状态基准确立后的 Master 写 `0度{主环境名}_{状态标识}`，`reference_env`/`base_entity` 指向该状态衍生。
+  - **其他视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`（状态前）或 `{观察角度}度{主环境名}_{状态标识}`（状态后）；`view_angle_from_main` = N；`referenceable:Yes`；`generatable:Yes`；`reference_env` = **当前空镜基准**（主环境或状态衍生）；**须含**触发原因、`spatial_axis`、`lens_profile`、`axis_crossing`（**不含**四向具名实体描述，归 Stage 3）。
   - **OTS/反打角两步确认（强制，适用于 N≠0 视角衍生）**：**① N_对手 → ② (N_对手±180)%360**（细则 Stage 1 §12，不重述）。同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`。
-  - **状态/特效衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场标识}`；`base_entity` / `dependency_reference` 按「依赖链时序优先原则」：拓扑继承仍指主环境或紧邻上一完整状态；**生图 `reference_env` 统一回挂主环境名**。
-  - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀。
+  - **状态/特效/氛围衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场/氛围标识}`；`base_entity` / `dependency_reference` / **`reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态**；该行成为后续视角/再状态的被依赖基准。
+  - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀；状态后视角追加状态英文标识。
 - **角色（CHAR）**：
   - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
   - **衍生版**：`subject_name_zh` = `{基准角色名}_{衍生标识}`，衍生标识写可持续变化类型，如 `战损版`、`正装版`、`老年版`、`特效形态`；`subject_name_en` = `{Base Character English Name} {Variant Descriptor}`，如 `Lin Yue Formal`。
@@ -184,8 +186,8 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - `subject_type` 仅允许：`character`、`prop`、`environment`、`cover_poster`。
 - `cover_poster` 规则：必须且仅能 1 行，且必须置于整表最后一行；任一缺失/重复/未置尾/拼写错误均判失败。
 - `cover_poster` 不得省列；`subject_name_zh`、`subject_name_en`、`base_entity`、`dependency_reference`、`entity_attributes`、`script_entity_coverage` 必须有效填写；基准版 `base_entity` 为 `None`，衍生版不得用 `None` 回避。
-- `environment` 行必须遵守**纯空镜边界**（无人、无临场道具、无交互；上游环境段落中的角色/道具信息须剥离）；**主环境（基准定义，`referenceable:No`，`generatable:Yes`）与视角衍生（含强制 `0度{主环境名}`，`referenceable:Yes`）分行**；**视角衍生**行 `base_entity` 与 `dependency_reference` 均指向主环境；**全部衍生** `reference_env` **统一回挂主环境名**；**状态/特效衍生**行 `base_entity` 仍可按时序指主环境或紧邻上一完整状态；衍生环境命名统一为 `{角度}度{主环境名}`（冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
-- 衍生环境至少包含：`env_role:衍生环境`、`referenceable:Yes`、`generatable:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`（触发原因，一句话）、`empty_view_delta`（可选一句话语义提示）、**`spatial_axis`（共同锚点，强制）**、**`lens_profile:Wide|Standard`（强制）**、**`axis_crossing:None|PlannedReverse|MotivatedCross`（强制）**、`return_or_continue`；**不含** `derivative_view_360_entities`（四向具名实体描述，完整归 Stage 3 依据主环境固定实体清单独立设计，本阶段不提取、不代做）；**全部衍生**建议含 `reference_env:{主环境名}`；**`0度{主环境名}` 强制行**须含 `view_angle_from_main:0`、`lens_profile:Wide`；**OTS/正反/反打行**须 `lens_profile:Standard`；**180° 反打行**须 `axis_crossing:PlannedReverse`；主环境行须含 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`；主/衍生 ENV 建议含 `literary_atmosphere`（文学环境氛围，非技术参数）；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
+- `environment` 行必须遵守**纯空镜边界**（无人、无临场道具、无交互；上游环境段落中的角色/道具信息须剥离）；**主环境（基准定义，`referenceable:No`，`generatable:Yes`）与视角衍生（含强制 `0度{主环境名}`，`referenceable:Yes`）分行**；**无状态改写时**视角衍生行 `base_entity` / `dependency_reference` / `reference_env` 均指向主环境；**状态/氛围衍生**行及其**后续视角/再状态**须按时序回挂紧邻上一完整空镜基准（状态确立后禁止跳回主环境）；衍生环境命名统一为 `{角度}度{主环境名}`（状态后为 `{角度}度{主环境名}_{状态标识}`；冲突时追加 `_{衍生类型/观察区域/可见方向}`）；主环境名逐字继承 Stage 1。
+- 衍生环境至少包含：`env_role:衍生环境`、`referenceable:Yes`、`generatable:Yes`、`derivative_base_zh/en`、`view_angle_from_main`、`derivative_trigger_type`（触发原因，一句话）、`empty_view_delta`（可选一句话语义提示）、**`spatial_axis`（共同锚点，强制）**、**`lens_profile:Wide|Standard`（强制）**、**`axis_crossing:None|PlannedReverse|MotivatedCross`（强制）**、`return_or_continue`；**不含** `derivative_view_360_entities`（四向具名实体描述，完整归 Stage 3 依据主环境固定实体清单独立设计，本阶段不提取、不代做）；**`reference_env` 指向当前空镜基准**（默认主环境名；状态延续期=状态衍生名）；**`0度{主环境名}` 强制行**须含 `view_angle_from_main:0`、`lens_profile:Wide`；**OTS/正反/反打行**须 `lens_profile:Standard`；**180° 反打行**须 `axis_crossing:PlannedReverse`；主环境行须含 `referenceable:No`、`generatable:Yes`、`env_role:主环境基准定义`；主/衍生 ENV 建议含 `literary_atmosphere`（文学环境氛围，非技术参数）；自动补齐另含 `auto_completed_derived_env` 与触发证据；无法安全建依赖时写 `upstream_missing_derived_env` 回流标记。
 - 时序衍生环境补充：`time_break_type`、`stable_space_delta`、`fixed_architecture_and_finish_delta`、`fixed_furniture_and_set_dressing_delta`、`inheritance_reason`（结构/布局延续说明；光声变化由 Skill 1-3 细化，Index 不写 `light_sound_*`）。
 - 任一实体涉可见文字或隐含字段时，`entity_attributes` 必须完整写入文字内容、承载位置、排版要求、标记状态、可读性；`script_entity_coverage` 必须覆盖对应原文关键词。原文明示文字必须与剧本完全一致（字词、数字、大小写、标点、空格）。
 - **`purpose` 用途终检（强制）**：输出前逐 `prop`/`environment` 行核对——`entity_attributes` 均须含 `purpose:` 且为**一句**可核销的叙事/场域用途总结；缺项、空泛占位或多句堆砌须补写或压缩为一句后再输出。
