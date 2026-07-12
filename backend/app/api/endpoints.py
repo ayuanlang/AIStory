@@ -7083,6 +7083,86 @@ def _is_placeholder_script_title(title: Any) -> bool:
     return False
 
 
+def _strip_wrapping_title_punctuation(value: Any) -> str:
+    """Strip only balanced outer wrappers; do not peel unmatched trailing ）/] etc."""
+    text = str(value or "").strip()
+    pairs = {
+        "'": "'",
+        '"': '"',
+        "`": "`",
+        "“": "”",
+        "‘": "’",
+        "《": "》",
+        "【": "】",
+        "[": "]",
+        "(": ")",
+        "（": "）",
+        "<": ">",
+    }
+    while len(text) >= 2:
+        left, right = text[0], text[-1]
+        if left in pairs and pairs[left] == right:
+            text = text[1:-1].strip()
+            continue
+        break
+    return text
+
+
+_PRODUCTION_FORMAT_MOTIF_RE = re.compile(
+    r"(?:"
+    r"实拍|真人|真人剧|真人电影|真人剧集|真人短剧|真人写实|"
+    r"live\s*action|photoreal|cinematic|电影感|"
+    r"三维动画|二维动画|3d\s*animation|2d\s*animation|cgi|"
+    r"8k|4k"
+    r")",
+    re.IGNORECASE,
+)
+
+# Stacked production suffixes from older buggy motif appends, e.g. ·实拍（真人剧·实拍（真人剧
+_STACKED_PRODUCTION_TITLE_SUFFIX_RE = re.compile(
+    r"(?:·\s*实拍\s*（\s*真人剧[^·]*)+$",
+    re.IGNORECASE,
+)
+
+
+def _extract_title_motif_token(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    # Bilingual UI values use "中文 / English"; keep the primary side only.
+    text = re.split(r"\s+/\s+", text, maxsplit=1)[0].strip()
+    text = re.split(r"[，,。.!！？;；|\\\n]", text)[0].strip()
+    # Drop parenthetical qualifiers: 实拍（真人剧/电影感8K） → 实拍
+    text = re.sub(r"[（(][^）)]*[）)]?", "", text).strip()
+    text = re.sub(r"\s+", "", text)
+    if len(text) > 12:
+        text = text[:12].rstrip("·-—_ ")
+    return text
+
+
+def _is_production_format_motif(token: Any) -> bool:
+    compact = _normalize_title_for_compare(token)
+    if not compact:
+        return True
+    if _PRODUCTION_FORMAT_MOTIF_RE.search(str(token or "")):
+        # Format labels alone (or almost alone) are not story motifs.
+        remainder = _PRODUCTION_FORMAT_MOTIF_RE.sub("", str(token or ""))
+        remainder_compact = _normalize_title_for_compare(remainder)
+        if not remainder_compact or len(remainder_compact) <= 2:
+            return True
+    return False
+
+
+def _strip_stacked_production_title_suffixes(seed_title: Any) -> str:
+    seed = str(seed_title or "").strip()
+    if not seed:
+        return ""
+    cleaned = _STACKED_PRODUCTION_TITLE_SUFFIX_RE.sub("", seed).strip()
+    # Also collapse any exact repeated ·token suffix: ·暗潮·暗潮 → ·暗潮 (then caller may re-decide)
+    cleaned = re.sub(r"(·[^·]{1,20})\1+$", r"\1", cleaned).strip()
+    return cleaned or seed
+
+
 def _extract_script_title_from_story_dna_markdown(markdown_text: Any) -> str:
     raw = str(markdown_text or "")
     if not raw.strip():
@@ -7096,9 +7176,7 @@ def _extract_script_title_from_story_dna_markdown(markdown_text: Any) -> str:
         match = re.search(pattern, raw)
         if not match:
             continue
-        candidate = str(match.group(1) or "").strip()
-        candidate = re.sub(r"^[\s'\"“”‘’《》【】\[\]()（）]+", "", candidate)
-        candidate = re.sub(r"[\s'\"“”‘’《》【】\[\]()（）]+$", "", candidate)
+        candidate = _strip_wrapping_title_punctuation(match.group(1))
         if not _is_placeholder_script_title(candidate):
             return candidate
     return ""
@@ -7110,21 +7188,30 @@ def _build_non_literal_script_title(
     global_style: Any,
     base_positioning: Any,
 ) -> str:
-    seed = str(seed_title or "").strip()
-    t = str(project_type or "").strip()
-    s = str(global_style or "").strip()
-    b = str(base_positioning or "").strip()
-
-    motif_source = next((x for x in [s, t, b] if str(x or "").strip()), "")
-    motif = str(motif_source).strip()
-    if motif:
-        motif = re.split(r"[，,。.!！？;；/|\\\n]", motif)[0].strip()
+    seed = _strip_stacked_production_title_suffixes(seed_title)
+    # Prefer creative fields; project `type` is a production format label and must not become a title motif.
+    motif = ""
+    for source in (global_style, base_positioning, project_type):
+        token = _extract_title_motif_token(source)
+        if not token:
+            continue
+        if _is_production_format_motif(token):
+            continue
+        motif = token
+        break
     if not motif:
         motif = "暗潮"
 
     if seed:
+        seed_norm = _normalize_title_for_compare(seed)
+        motif_norm = _normalize_title_for_compare(motif)
+        # Already differentiated with this motif (or a previous append of it).
+        if motif_norm and seed_norm.endswith(motif_norm):
+            return seed
+        if motif_norm and f"·{motif}" in seed:
+            return seed
         candidate = f"{seed}·{motif}"
-        if _normalize_title_for_compare(candidate) != _normalize_title_for_compare(seed):
+        if _normalize_title_for_compare(candidate) != seed_norm:
             return candidate
 
     return f"{motif}纪事"
@@ -17558,7 +17645,9 @@ async def generate_project_story_dna_global(
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
-    generated_script_title = _extract_script_title_from_story_dna_markdown(generated_md)
+    generated_script_title = _strip_stacked_production_title_suffixes(
+        _extract_script_title_from_story_dna_markdown(generated_md)
+    )
     if not generated_script_title:
         generated_script_title = _build_non_literal_script_title(
             seed_title=literal_input_title,
@@ -17566,13 +17655,15 @@ async def generate_project_story_dna_global(
             global_style=global_style,
             base_positioning=base_positioning,
         )
-    if _normalize_title_for_compare(generated_script_title) == _normalize_title_for_compare(literal_input_title):
+    literal_input_title_clean = _strip_stacked_production_title_suffixes(literal_input_title)
+    if _normalize_title_for_compare(generated_script_title) == _normalize_title_for_compare(literal_input_title_clean):
         generated_script_title = _build_non_literal_script_title(
             seed_title=generated_script_title,
             project_type=project_type,
             global_style=global_style,
             base_positioning=base_positioning,
         )
+    generated_script_title = _strip_stacked_production_title_suffixes(generated_script_title)
 
     if not usage:
         usage = billing_service.estimate_input_output_tokens_from_messages(
@@ -21461,8 +21552,8 @@ async def generate_project_episode_scripts_from_global_framework(
     project_global_info = dict(project.global_info or {})
     gi_story_input = project_global_info.get("story_generator_global_input") if isinstance(project_global_info.get("story_generator_global_input"), dict) else {}
     gi_basic_info = project_global_info.get("basic_information") if isinstance(project_global_info.get("basic_information"), dict) else {}
-    req_script_title_hint = str(req.script_title or "").strip()
-    project_title = str(
+    req_script_title_hint = _strip_stacked_production_title_suffixes(req.script_title)
+    project_title = _strip_stacked_production_title_suffixes(
         project_global_info.get("script_title")
         or gi_story_input.get("script_title")
         or gi_basic_info.get("script_title")
@@ -21470,7 +21561,7 @@ async def generate_project_episode_scripts_from_global_framework(
         or req_script_title_hint
         or project.title
         or ""
-    ).strip()
+    )
     if req_script_title_hint and _normalize_title_for_compare(project_title) == _normalize_title_for_compare(req_script_title_hint):
         project_title = _build_non_literal_script_title(
             seed_title=project_title,

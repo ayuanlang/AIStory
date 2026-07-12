@@ -168,6 +168,15 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint, resolveProjectVideoSoundEnabled } from '../editorConstants';
+
+/** Collapse buggy stacked production motifs: 天逆·实拍（真人剧·实拍（真人剧… → 天逆 */
+const stripStackedProductionScriptTitleSuffixes = (title) => {
+    const raw = String(title || '').trim();
+    if (!raw) return '';
+    const cleaned = raw.replace(/(?:·\s*实拍\s*（\s*真人剧[^·]*)+$/g, '').trim();
+    return cleaned || raw;
+};
+
 export const ProjectOverview = ({ id, project: initialProject = null, onProjectUpdate, onRefreshEpisodes, onJumpToEpisode, onTabChange, episodes = [], uiLang = 'en', mode = 'overview', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const functionApiConfigs = useFunctionApis();
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
@@ -1027,6 +1036,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                              merged.script_title = String(data.title).trim();
                          }
                      }
+                     merged.script_title = stripStackedProductionScriptTitleSuffixes(merged.script_title);
                      merged.type = normalizeProjectEpisodeType(merged.type);
                      merged.language = normalizeProjectEpisodeLanguage(merged.language);
                      merged.base_positioning = normalizeProjectEpisodeBasePositioning(merged.base_positioning);
@@ -1473,6 +1483,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
 
             const global_info = {
                 ...info,
+                script_title: stripStackedProductionScriptTitleSuffixes(info.script_title),
                 project_share_users: normalizeUserListValues(info.project_share_users),
                 project_reviewer_users: normalizeUserListValues(info.project_reviewer_users),
                 video_sound: resolvedVideoSound,
@@ -1951,6 +1962,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 merged.Global_Style = normalizeProjectEpisodeGlobalStyle(merged.Global_Style);
                 merged.tone = normalizeProjectEpisodeTone(merged.tone);
                 merged.lighting = normalizeProjectEpisodeLighting(merged.lighting);
+                merged.script_title = stripStackedProductionScriptTitleSuffixes(merged.script_title);
                 if (merged.tech_params?.visual_standard) {
                     merged.tech_params.visual_standard.quality = normalizeProjectEpisodeQuality(merged.tech_params.visual_standard.quality);
                 }
