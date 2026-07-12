@@ -92,7 +92,7 @@ const RefineControl = ({ originalText, onUpdate, type = 'image', currentImage = 
                     : (url ? [url] : []);
                 if (picked.length === 0) return;
                 setExtraRefs(prev => [...prev, ...picked]);
-            }, { desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true });
+            }, { desiredAssetType: 'image', lockAssetType: false, allowMultiSelect: true });
         }
     };
 

@@ -11205,7 +11205,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             // Auto-save user selection to ensure it counts as "latest selected"
                                                             await onUpdateShot(editingShot.id, newData);
                                                             onLog?.('Start Frame Image set', 'success');
-                                                        }, { shotId: editingShot.id, shotFrameType: 'start', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: false });
+                                                        }, { shotId: editingShot.id, shotFrameType: 'start', desiredAssetType: 'image', lockAssetType: false, allowMultiSelect: false });
                                                     }}
                                                     disabled={isShotFrameActionLocked('start')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -11379,7 +11379,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                             tech.end_frame_url = url;
                                                             const updates = { technical_notes: JSON.stringify(tech) };
                                                             await persistEditingShotUpdates(updates);
-                                                        }, { shotId: editingShot.id, shotFrameType: 'end', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: false });
+                                                        }, { shotId: editingShot.id, shotFrameType: 'end', desiredAssetType: 'image', lockAssetType: false, allowMultiSelect: false });
                                                     }}
                                                     disabled={isShotFrameActionLocked('end')}
                                                     className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -11559,7 +11559,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         onUpdateShot(editingShot.id, changes).catch((e) => {
                                                             console.error('Manual video apply failed:', e);
                                                         });
-                                                    }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: true, allowMultiSelect: false })}
+                                                    }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: false, allowMultiSelect: false })}
                                                     className="bg-white/10 hover:bg-white/20 text-[10px] px-2 py-0.5 rounded flex items-center gap-1 transition-colors"
                                                     title={t('选择或上传视频', 'Select or Upload Video')}
                                                 >
@@ -11755,7 +11755,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 await onUpdateShot(editingShot.id, changes);
                                                                 setEditingShot(prev => ({...prev, ...changes}));
                                                                 onLog?.('Video changed', 'success');
-                                                            }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: true, allowMultiSelect: false });
+                                                            }, { type: 'video', shotId: editingShot.id, shotFrameType: 'video', desiredAssetType: 'video', lockAssetType: false, allowMultiSelect: false });
                                                         }}
                                                         className="p-1.5 bg-black/60 hover:bg-sky-500/80 text-white rounded-md transition-all shadow"
                                                         title={t('选择或上传视频以替换或回填', 'Select or Upload Video')}
@@ -12230,7 +12230,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                 });
                                                                 setLocalKeyframes(updated);
                                                                 reconstructKeyframes(updated);
-                                                            }, { shotId: editingShot?.id, shotFrameType: 'keyframe', desiredAssetType: 'image', lockAssetType: true, allowMultiSelect: true })}
+                                                            }, { shotId: editingShot?.id, shotFrameType: 'keyframe', desiredAssetType: 'image', lockAssetType: false, allowMultiSelect: true })}
                                                             className="bg-black/60 hover:bg-white/20 text-white text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 backdrop-blur-sm"
                                                         >
                                                             <Upload className="w-2.5 h-2.5"/> Set

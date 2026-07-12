@@ -405,15 +405,17 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
 
     const handleOpenReplacePicker = (currentUrl) => {
         if (!onPickMedia || !currentUrl) return;
+        const replacingVideo = isVideoRefUrl(currentUrl);
         onPickMedia((pickedUrl, _type, selectedItems) => {
             const nextUrl = selectedItems?.[0]?.url || pickedUrl;
             handleReplace(currentUrl, nextUrl);
         }, {
             ...pickContext,
             shotId: shot?.id,
-            desiredAssetType: 'image',
-            lockAssetType: true,
+            desiredAssetType: replacingVideo ? 'video' : 'image',
+            lockAssetType: false,
             allowMultiSelect: false,
+            ...(replacingVideo ? { shotFrameType: 'video', type: 'video' } : {}),
         });
     };
 
