@@ -40381,8 +40381,26 @@ async def _run_generate_video(
             len(flat_refs),
             ref_names,
         )
-        entity_lookup = _build_project_entity_lookup(db, req.project_id) if hasattr(req, 'project_id') and req.project_id else {}
-        
+        # Must use resolved_project_id (same as ref merge). req.project_id is often
+        # missing on submit; empty lookup → pairs=0 → @Image stripped and never re-injected.
+        mapping_project_id = _to_positive_int_or_none(resolved_project_id) or _to_positive_int_or_none(
+            getattr(req, "project_id", None)
+        )
+        entity_lookup = (
+            _build_project_entity_lookup(db, int(mapping_project_id))
+            if mapping_project_id and is_reference_image_mode
+            else {}
+        )
+        logger.info(
+            "[GenerateVideo] prompt mapping prepare | shot_id=%s ref_mode=%s refs=%s project_id_req=%s project_id_resolved=%s lookup_keys=%s",
+            req.shot_id,
+            normalized_ref_mode or "<empty>",
+            len(flat_refs),
+            getattr(req, "project_id", None),
+            mapping_project_id,
+            len(entity_lookup or {}),
+        )
+
         # Only inject the mapping prompt for entity_refs mode
         prompt_text, flat_refs = _append_video_api_ref_mapping(
             prompt_text,
@@ -40391,10 +40409,20 @@ async def _run_generate_video(
             req.last_frame_url,
             effective_keyframes,
             req.ref_video_urls,
-            entity_lookup=entity_lookup if is_reference_image_mode else None,
+            entity_lookup=entity_lookup or None,
             use_prev_video=getattr(req, "use_prev_video", False),
             provider=resolved_video_provider,
             model=resolved_video_model,
+        )
+        image_tag_count = len(re.findall(r"@Image\d+", str(prompt_text or ""), flags=re.IGNORECASE))
+        logger.info(
+            "[GenerateVideo] prompt mapping done | shot_id=%s ref_mode=%s refs=%s lookup=%s image_tags=%s prompt_len=%s",
+            req.shot_id,
+            normalized_ref_mode or "<empty>",
+            len(flat_refs),
+            len(entity_lookup or {}),
+            image_tag_count,
+            len(str(prompt_text or "")),
         )
         synced_image_urls, synced_ref_image_url = _sync_request_image_refs_with_aligned(
             aligned_refs=flat_refs,
@@ -40422,7 +40450,7 @@ async def _run_generate_video(
                         req.last_frame_url,
                         effective_keyframes,
                         req.ref_video_urls,
-                        entity_lookup=entity_lookup if is_reference_image_mode else None,
+                        entity_lookup=entity_lookup or None,
                         use_prev_video=getattr(req, "use_prev_video", False),
                         provider=resolved_video_provider,
                         model=resolved_video_model,
@@ -43556,6 +43584,13 @@ def _normalize_media_ref_key(url: Any) -> str:
     return text.split("?")[0].rstrip("/")
 
 
+def _media_ref_basename(url: Any) -> str:
+    key = _normalize_media_ref_key(url)
+    if not key:
+        return ""
+    return key.rsplit("/", 1)[-1].strip().lower()
+
+
 def _lookup_entity_row_for_token(
     normalized: str,
     entity_lookup: Optional[Dict[str, Dict[str, Any]]],
@@ -43581,16 +43616,129 @@ def _pick_submitted_ref_for_entity(
     """Bind a submitted ref URL to an entity by verifying image_url (name→URL audit)."""
     preferred = str((entity_row or {}).get("image_url") or "").strip()
     preferred_key = _normalize_media_ref_key(preferred)
-    if not preferred_key:
+    preferred_base = _media_ref_basename(preferred)
+    if not preferred_key and not preferred_base:
         return ""
 
     for url in available_refs:
         key = _normalize_media_ref_key(url)
         if not key or key in used_keys:
             continue
-        if url == preferred or key == preferred_key:
+        if preferred and (url == preferred or key == preferred_key):
+            return url
+        if preferred_base and _media_ref_basename(url) == preferred_base:
             return url
     return ""
+
+
+def _iter_unique_entity_rows(
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for row in (entity_lookup or {}).values():
+        if not isinstance(row, dict):
+            continue
+        entity_id = row.get("entity_id")
+        dedupe_key = f"id:{entity_id}" if entity_id is not None else f"url:{_normalize_media_ref_key(row.get('image_url'))}:{row.get('name')}"
+        if dedupe_key in seen_ids:
+            continue
+        seen_ids.add(dedupe_key)
+        rows.append(row)
+    return rows
+
+
+def _build_url_to_entity_rows(
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, Dict[str, Any]]:
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for row in _iter_unique_entity_rows(entity_lookup):
+        image_url = str(row.get("image_url") or "").strip()
+        if not image_url:
+            continue
+        for key in (
+            image_url,
+            _normalize_media_ref_key(image_url),
+            _media_ref_basename(image_url),
+        ):
+            if key and key not in mapping:
+                mapping[key] = row
+    return mapping
+
+
+def _collect_prompt_entity_mentions_for_mapping(
+    prompt: str,
+    entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+    ordered_refs: Optional[List[str]] = None,
+) -> Tuple[List[Tuple[str, str, Dict[str, Any]]], str]:
+    """
+    Collect (normalized, display_name, row) for @Image mapping.
+    Prefer structured CHAR/ENV/PROP tokens; fall back to URL→entity reverse + name appearance.
+    """
+    allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
+    text = str(prompt or "")
+    mentions: List[Tuple[str, str, Dict[str, Any]]] = []
+    seen_norms: set = set()
+
+    for raw_name in _extract_frontend_aligned_entity_raw_names(text):
+        raw_name = str(raw_name or "").strip()
+        normalized = _normalize_entity_anchor_token(raw_name)
+        if not normalized or normalized in seen_norms:
+            continue
+        row = _lookup_entity_row_for_token(normalized, entity_lookup)
+        if not row:
+            continue
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type and entity_type not in allowed_types:
+            continue
+        display_name = raw_name.lstrip("@").strip() or str(row.get("name") or "").strip()
+        if not display_name:
+            continue
+        seen_norms.add(normalized)
+        mentions.append((normalized, display_name, row))
+
+    if mentions:
+        return mentions, "structured"
+
+    if not entity_lookup or not ordered_refs:
+        return [], "none"
+
+    url_map = _build_url_to_entity_rows(entity_lookup)
+    reverse_hits: List[Tuple[int, int, str, str, Dict[str, Any]]] = []
+    seen_ids: set = set()
+    for ref_idx, url in enumerate(ordered_refs):
+        row = (
+            url_map.get(str(url or "").strip())
+            or url_map.get(_normalize_media_ref_key(url))
+            or url_map.get(_media_ref_basename(url))
+        )
+        if not row:
+            continue
+        entity_type = str(row.get("entity_type") or "").strip().lower()
+        if entity_type and entity_type not in allowed_types:
+            continue
+        entity_id = row.get("entity_id")
+        dedupe_key = f"id:{entity_id}" if entity_id is not None else f"name:{row.get('name')}"
+        if dedupe_key in seen_ids:
+            continue
+        display_name = str(row.get("name") or "").strip()
+        normalized = _normalize_entity_anchor_token(display_name)
+        if not display_name or not normalized:
+            continue
+        # Prefer earliest appearance of the entity name in the prompt; otherwise keep ref order
+        # (matches video reference panel order the user already verified).
+        pos = text.find(display_name)
+        if pos < 0:
+            lower_text = text.lower()
+            pos = lower_text.find(normalized)
+        if pos < 0:
+            pos = 10**9 + ref_idx
+        seen_ids.add(dedupe_key)
+        reverse_hits.append((pos, ref_idx, normalized, display_name, row))
+
+    reverse_hits.sort(key=lambda item: (item[0], item[1]))
+    mentions = [(norm, name, row) for _pos, _ref_idx, norm, name, row in reverse_hits]
+    return mentions, ("url_reverse" if mentions else "none")
 
 
 def _reconcile_video_refs_by_entity_names(
@@ -43607,30 +43755,23 @@ def _reconcile_video_refs_by_entity_names(
     """
     refs = [str(x).strip() for x in (ordered_refs or []) if str(x).strip()]
     audit: List[str] = []
-    if not refs or not entity_lookup:
+    if not refs:
+        audit.append("skip:no_refs")
+        return refs, [], audit
+    if not entity_lookup:
+        audit.append("skip:no_entity_lookup")
         return refs, [], audit
 
-    allowed_types = {"subject", "character", "char", "environment", "env", "prop", "props"}
-    mentions: List[Tuple[str, str, Dict[str, Any]]] = []
-    seen_norms: set = set()
-    for raw_name in _extract_frontend_aligned_entity_raw_names(str(prompt or "")):
-        raw_name = str(raw_name or "").strip()
-        normalized = _normalize_entity_anchor_token(raw_name)
-        if not normalized or normalized in seen_norms:
-            continue
-        row = _lookup_entity_row_for_token(normalized, entity_lookup)
-        if not row:
-            continue
-        entity_type = str(row.get("entity_type") or "").strip().lower()
-        if entity_type and entity_type not in allowed_types:
-            continue
-        display_name = raw_name.lstrip("@").strip()
-        if not display_name:
-            continue
-        seen_norms.add(normalized)
-        mentions.append((normalized, display_name, row))
-
+    mentions, mention_source = _collect_prompt_entity_mentions_for_mapping(
+        prompt,
+        entity_lookup,
+        ordered_refs=refs,
+    )
+    audit.append(f"mention_source={mention_source}")
+    audit.append(f"mentions={len(mentions)}")
     if not mentions:
+        sample_keys = list(entity_lookup.keys())[:6]
+        audit.append(f"skip:no_mentions lookup_keys_sample={sample_keys}")
         return refs, [], audit
 
     used_keys: set = set()
@@ -43652,7 +43793,7 @@ def _reconcile_video_refs_by_entity_names(
         used_keys.add(key)
         chosen = matched_url
         for url in refs:
-            if _normalize_media_ref_key(url) == key:
+            if _normalize_media_ref_key(url) == key or _media_ref_basename(url) == _media_ref_basename(matched_url):
                 chosen = url
                 break
         anchor = str(row.get("anchor_description") or "").strip()
@@ -43672,13 +43813,18 @@ def _reconcile_video_refs_by_entity_names(
         audit.append(f"injected_official_ref:{display_name}")
 
     aligned = [url for url, _, _ in bound]
+    leftover = 0
     for url in refs:
         key = _normalize_media_ref_key(url)
         if key and key not in used_keys:
             aligned.append(url)
             used_keys.add(key)
+            leftover += 1
 
     pairs = [(idx, name, anchor) for idx, (_url, name, anchor) in enumerate(bound, start=1)]
+    audit.append(f"bound={len(bound)}")
+    if leftover:
+        audit.append(f"leftover_refs={leftover}")
     if [_normalize_media_ref_key(u) for u in aligned] != [_normalize_media_ref_key(u) for u in refs]:
         after_names = [name for _, name, _ in bound]
         after_preview = ",".join(after_names[:8])
@@ -43741,12 +43887,18 @@ def _append_video_api_ref_mapping(
     if is_seedance:
         use_prev_video = True
 
-    text = str(prompt or "").strip()
+    original_text = str(prompt or "").strip()
     ordered_refs = [str(x).strip() for x in (refs or []) if str(x).strip()]
-    if not text:
-        return text, ordered_refs
+    if not original_text:
+        logger.info(
+            "[_append_video_api_ref_mapping] skip empty prompt | refs=%s lookup=%s",
+            len(ordered_refs),
+            len(entity_lookup or {}),
+        )
+        return original_text, ordered_refs
 
-    # Strip ALL prior @ImageN markers (including 参考@ImageN); we re-inject from name audit.
+    # Working copy: strip prior markers only when we successfully rebuild pairs.
+    text = original_text
     text = re.sub(r"(?:参考)?@Image\d+\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(
         r"\(\s*ref_image_url\s*:\s*#\d+\s*\)",
@@ -43781,19 +43933,22 @@ def _append_video_api_ref_mapping(
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     if not ordered_refs and not isinstance(reference_video_urls, list):
-        return text, ordered_refs
+        logger.info("[_append_video_api_ref_mapping] skip no refs/videos | prompt_len=%s", len(original_text))
+        return original_text, ordered_refs
 
-    # Name-first reconcile: @ImageN order follows prompt entity mentions + entity.image_url audit.
     aligned_refs, pairs, audit_notes = _reconcile_video_refs_by_entity_names(
         text,
         ordered_refs,
         entity_lookup,
     )
-    if audit_notes:
-        logger.info(
-            "[_append_video_api_ref_mapping] entity-name audit | %s",
-            "; ".join(audit_notes),
-        )
+    logger.info(
+        "[_append_video_api_ref_mapping] reconcile | refs_in=%s refs_out=%s pairs=%s lookup=%s audit=%s",
+        len(ordered_refs),
+        len(aligned_refs),
+        len(pairs),
+        len(entity_lookup or {}),
+        "; ".join(audit_notes) if audit_notes else "-",
+    )
     ordered_refs = aligned_refs
 
     def _append_reference_video_instruction(source_text: str) -> str:
@@ -43827,9 +43982,18 @@ def _append_video_api_ref_mapping(
         return updated_source
 
     if not pairs:
-        return _append_reference_video_instruction(text), ordered_refs
+        # Critical: do NOT return the stripped working copy — that wiped @Image tags
+        # when name reconcile failed (some scenes ended with zero injection).
+        logger.warning(
+            "[_append_video_api_ref_mapping] no pairs; preserve original prompt markers | refs=%s audit=%s",
+            len(ordered_refs),
+            "; ".join(audit_notes) if audit_notes else "-",
+        )
+        return _append_reference_video_instruction(original_text), ordered_refs
 
     updated_text = text
+    injected = 0
+    failed_names: List[str] = []
     for mapped_idx, entity_name, anchor_text in pairs:
         prefix = f"参考@Image{mapped_idx} "
         escaped_entity = re.escape(entity_name)
@@ -43844,10 +44008,7 @@ def _append_video_api_ref_mapping(
         for pattern in anchor_patterns:
             def _prepend_prefix(match: re.Match[str]) -> str:
                 token = str(match.group(0) or "")
-                
-                # Clean out existing @Image tags to prevent duplicate accumulation
                 base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
-                
                 if anchor_text:
                     if "(" in base and ")" in base:
                         base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
@@ -43857,23 +44018,21 @@ def _append_video_api_ref_mapping(
                     base = re.sub(r"\([^\)]*\)", "", base)
                 return f"{prefix}{base}"
 
-            # Replace ALL occurrences instead of just 1
             replaced_text, count = re.subn(pattern, _prepend_prefix, updated_text, flags=re.IGNORECASE)
             if count > 0:
                 updated_text = replaced_text
                 replaced = True
+                injected += 1
                 break
 
         if replaced:
             continue
 
-        # Fallback: prepend marker directly before plain entity mentions.
         plain_pattern = rf'(?<![a-zA-Z0-9_])(?:(?:参考)?@Image\d+\s*)*{escaped_entity}(?![a-zA-Z0-9_])'
 
         def _prepend_marker(match: re.Match[str]) -> str:
             token = str(match.group(0) or "")
             base = re.sub(r"(?:参考)?@Image\d+\s*", "", token, flags=re.IGNORECASE)
-            
             if anchor_text:
                 if "(" in base and ")" in base:
                     base = re.sub(r"\([^\)]*\)", f"({anchor_text})", base)
@@ -43883,10 +44042,48 @@ def _append_video_api_ref_mapping(
                 base = re.sub(r"\([^\)]*\)", "", base)
             return f"{prefix}{base}"
 
-        # Replace ALL occurrences instead of just 1
         replaced_text, count = re.subn(plain_pattern, _prepend_marker, updated_text, flags=re.IGNORECASE)
         if count > 0:
             updated_text = replaced_text
+            injected += 1
+        else:
+            failed_names.append(f"{entity_name}->Image{mapped_idx}")
+
+    if failed_names:
+        logger.warning(
+            "[_append_video_api_ref_mapping] inject pattern miss | failed=%s",
+            ",".join(failed_names[:12]),
+        )
+
+    # When prompt has no CHAR/ENV/PROP tokens (or names only appear as plain text
+    # that regex missed), still emit an explicit ImageN↔name map so the provider
+    # can bind refs. Prefer in-prompt injection; mapping line is last resort.
+    if injected <= 0 and pairs:
+        mapping_line = "实体参考图映射: " + "; ".join(
+            f"@Image{idx}={name}" for idx, name, _anchor in pairs
+        )
+        updated_text = f"{updated_text.strip()}\n\n{mapping_line}".strip()
+        injected = len(pairs)
+        logger.info(
+            "[_append_video_api_ref_mapping] appended explicit mapping line | pairs=%s",
+            len(pairs),
+        )
+
+    logger.info(
+        "[_append_video_api_ref_mapping] injected | pairs=%s applied=%s failed=%s sample=%s",
+        len(pairs),
+        injected,
+        len(failed_names),
+        ",".join(f"Image{idx}:{name}" for idx, name, _ in pairs[:6]),
+    )
+
+    # If nothing could be written into the prompt, keep original markers.
+    if injected <= 0:
+        logger.warning(
+            "[_append_video_api_ref_mapping] zero applied; preserve original prompt | pairs=%s",
+            len(pairs),
+        )
+        return _append_reference_video_instruction(original_text), ordered_refs
 
     return _append_reference_video_instruction(updated_text), ordered_refs
 
