@@ -3104,8 +3104,11 @@ def _resolve_video_bind_url(
         return None, False, meta
 
     if _is_provider_direct_oss_url(source, meta, db):
-        # Provider-side direct OSS links are stable; do not mark ephemeral/retry.
-        return source, False, meta
+        # Provider-side direct OSS links are durable object keys, but often private.
+        # Return a freshly signed URL so bind/proxy/clients can fetch immediately.
+        meta["provider_direct_oss_url"] = True
+        accessible = _ensure_accessible_media_result_url(source, meta)
+        return accessible or source, False, meta
 
     if source.lower().startswith(("http://", "https://")) or _is_ephemeral_provider_media_url(source):
         meta["ephemeral_binding"] = True
@@ -5151,6 +5154,25 @@ def _normalize_generation_status(value: Any) -> str:
     return status
 
 
+def _ensure_accessible_media_result_url(url: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+    """Sign managed / provider-direct private OSS URLs so clients and /assets/proxy can fetch them."""
+    raw = str(url or "").strip()
+    if not raw.lower().startswith(("http://", "https://")):
+        return raw
+    try:
+        if oss_storage_service.is_managed_url(raw) or _is_provider_direct_oss_url(raw, metadata):
+            refreshed = str(oss_storage_service.refresh_url(raw) or "").strip()
+            if refreshed:
+                return refreshed
+    except Exception as exc:
+        logger.warning(
+            "[MediaUrlAccess] refresh failed | url=%s err=%s",
+            raw.split("?", 1)[0],
+            exc,
+        )
+    return raw
+
+
 def _build_result_from_provider_callback(
     payload: Dict[str, Any],
     *,
@@ -5164,6 +5186,11 @@ def _build_result_from_provider_callback(
     if not result_url:
         return None
 
+    # Grsai writes directly to private Qiniu; callback URLs are often unsigned (401 without token).
+    result_url = _ensure_accessible_media_result_url(
+        result_url,
+        {"provider": str(payload.get("provider") or fallback_provider or "").strip() or None},
+    )
     result: Dict[str, Any] = {"url": result_url}
     results = payload.get("results")
     first_result = results[0] if isinstance(results, list) and results else None
@@ -31217,9 +31244,29 @@ async def proxy_asset(url: str, request: Request):
 
     from urllib.parse import urlparse
 
-    parsed = urlparse(url)
+    # Private Qiniu / managed OSS URLs often arrive without (or with stale) download tokens.
+    # Refresh before fetch so proxy clients (multi-panel split, canvas, assets library) get 200.
+    fetch_url = str(url or "").strip()
+    try:
+        refreshed = str(oss_storage_service.refresh_url(fetch_url) or "").strip()
+        if refreshed and refreshed != fetch_url:
+            fetch_url = refreshed
+    except Exception as refresh_exc:
+        logger.warning(
+            "[AssetProxy] refresh_url failed | url=%s err=%s",
+            url,
+            refresh_exc,
+        )
+
+    parsed = urlparse(fetch_url)
     host = (parsed.hostname or "").strip().lower()
-    bypass_env_proxy = host == "qn.woola.fun" or host.endswith(".clouddn.com") or host.endswith(".qiniucs.com") or host.endswith(".qiniu.com")
+    bypass_env_proxy = (
+        host == "qn.woola.fun"
+        or host.endswith(".woola.fun")
+        or host.endswith(".clouddn.com")
+        or host.endswith(".qiniucs.com")
+        or host.endswith(".qiniu.com")
+    )
 
     forward_headers: Dict[str, str] = {}
     for header_name in ("range", "if-none-match", "if-modified-since"):
@@ -31231,11 +31278,12 @@ async def proxy_asset(url: str, request: Request):
 
     timeout = (10, 90)
     last_error: Optional[Exception] = None
+    last_upstream_status: Optional[int] = None
 
-    def _fetch_upstream() -> requests.Response:
+    def _fetch_upstream(target_url: str) -> requests.Response:
         if not bypass_env_proxy:
             return requests.get(
-                url,
+                target_url,
                 headers=forward_headers,
                 timeout=timeout,
                 allow_redirects=True,
@@ -31246,7 +31294,7 @@ async def proxy_asset(url: str, request: Request):
         session.trust_env = False
         try:
             return session.get(
-                url,
+                target_url,
                 headers=forward_headers,
                 timeout=timeout,
                 allow_redirects=True,
@@ -31257,12 +31305,27 @@ async def proxy_asset(url: str, request: Request):
 
     for attempt in range(1, 4):
         try:
-            upstream = await asyncio.to_thread(
-                _fetch_upstream,
-            )
+            upstream = await asyncio.to_thread(_fetch_upstream, fetch_url)
 
             status_code = int(upstream.status_code or 502)
+            last_upstream_status = status_code
             if status_code >= 400:
+                # One retry with a freshly signed URL when private OSS auth fails.
+                if status_code in {401, 403} and attempt < 3:
+                    try:
+                        retried = str(oss_storage_service.refresh_url(url) or "").strip()
+                        if retried and retried != fetch_url:
+                            fetch_url = retried
+                            continue
+                    except Exception:
+                        pass
+                logger.warning(
+                    "[AssetProxy] upstream error | attempt=%s status=%s host=%s url=%s",
+                    attempt,
+                    status_code,
+                    host,
+                    fetch_url.split("?", 1)[0],
+                )
                 raise HTTPException(status_code=502, detail=f"Upstream returned status {status_code}")
 
             passthrough_headers: Dict[str, str] = {}
@@ -31291,7 +31354,12 @@ async def proxy_asset(url: str, request: Request):
             if attempt < 3:
                 continue
 
-    logger.error("Failed to proxy asset %s after retries: %s", url, last_error)
+    logger.error(
+        "Failed to proxy asset %s after retries: %s (last_upstream_status=%s)",
+        url.split("?", 1)[0],
+        last_error,
+        last_upstream_status,
+    )
     raise HTTPException(status_code=502, detail=f"Failed to proxy asset: {last_error}")
 
 @router.get("/assets/thumb/{filename:path}")
@@ -38683,6 +38751,16 @@ def get_generate_image_job_status(
             owner_id,
         )
 
+    public_result = job.get("result")
+    if isinstance(public_result, dict):
+        public_result = dict(public_result)
+        accessible_url = _ensure_accessible_media_result_url(
+            _extract_job_result_url(public_result),
+            public_result.get("metadata") if isinstance(public_result.get("metadata"), dict) else None,
+        )
+        if accessible_url:
+            public_result["url"] = accessible_url
+
     return {
         "job_id": job.get("job_id"),
         "status": job.get("status"),
@@ -38690,7 +38768,7 @@ def get_generate_image_job_status(
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error": job.get("error"),
-        "result": job.get("result"),
+        "result": public_result,
     }
 
 

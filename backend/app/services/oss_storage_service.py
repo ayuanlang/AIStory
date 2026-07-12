@@ -905,7 +905,13 @@ class OSSStorageService:
             if self._is_qiniu_provider(pool):
                 host = str(parsed.netloc or "").strip().lower()
                 root_prefix = str(getattr(pool, "root_prefix", "") or "").strip().strip("/")
-                if host and (host.endswith("clouddn.com") or host.endswith("qiniucs.com") or ".bkt." in host):
+                # Include custom CDN domains (e.g. qn.woola.fun) used by provider-direct OSS writes.
+                if host and (
+                    host.endswith("clouddn.com")
+                    or host.endswith("qiniucs.com")
+                    or host.endswith("woola.fun")
+                    or ".bkt." in host
+                ):
                     if not root_prefix or path == root_prefix or path.startswith(f"{root_prefix}/"):
                         return pool, path
 
