@@ -12178,6 +12178,51 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     _estimate_tokens(reuse_block),
                 )
 
+        # Stage 3 entity design: inject prior same-type/same-name generation_prompt_cn
+        # from project entities (highest episode wins). Poster/cover excluded.
+        if is_entity_design_phase and getattr(request, "project_id", None):
+            prior_prompt_types = {
+                _normalize_prior_entity_design_type(item)
+                for item in (subject_index_allowed_types_for_request or _PRIOR_ENTITY_DESIGN_TYPES)
+            }
+            prior_prompt_types = {item for item in prior_prompt_types if item in _PRIOR_ENTITY_DESIGN_TYPES}
+            if not prior_prompt_types and (
+                "entity_design_character" in prompt_file_lower
+                or "entity_design_prop" in prompt_file_lower
+                or "entity_design_environment" in prompt_file_lower
+                or mode_lower.startswith("2_pass_generate_assets")
+            ):
+                # Fallback when target types were not inferred: allow all non-poster design types.
+                prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
+
+            if prior_prompt_types:
+                subject_index_for_prior_lookup = (
+                    persisted_subject_index_for_prompt
+                    or sanitize_subject_index_text(getattr(request, "text", None))
+                    or sanitize_subject_index_text(user_content)
+                )
+                try:
+                    prior_prompts_block = _build_prior_entity_generation_prompts_block(
+                        db,
+                        int(request.project_id),
+                        subject_index_for_prior_lookup,
+                        allowed_types=prior_prompt_types,
+                    )
+                except Exception as prior_prompt_err:
+                    logger.warning(
+                        "[analyze_scene] failed building prior entity generation prompts: %s",
+                        prior_prompt_err,
+                    )
+                    prior_prompts_block = ""
+                if prior_prompts_block:
+                    user_content = f"{prior_prompts_block}\n\n{user_content}"
+                    logger.info(
+                        "[analyze_scene] injected prior entity generation prompts project_id=%s types=%s chars=%s",
+                        getattr(request, "project_id", None),
+                        sorted(prior_prompt_types),
+                        len(prior_prompts_block),
+                    )
+
         # Construct messages
         messages = [
             {"role": "system", "content": system_instruction},
@@ -23098,6 +23143,258 @@ def _format_project_subject_inventory_block(inventory: Dict[str, List[Dict[str, 
         "[Project Existing Subject Index]\n"
         f"{wrap_injection_section('项目既有Subject Index', inventory_body)}"
     )
+
+
+_PRIOR_ENTITY_DESIGN_TYPES = frozenset({"character", "prop", "environment"})
+
+
+def _normalize_prior_entity_design_type(raw_type: Any) -> str:
+    """Normalize entity/subject type for prior-prompt reuse; posters/covers excluded."""
+    t = str(raw_type or "").strip().lower()
+    t = re.sub(r"[\s_\-]+", "", t)
+    if t in {"character", "characters", "char", "人物", "角色"}:
+        return "character"
+    if t in {"prop", "props", "item", "items", "道具", "物件"}:
+        return "prop"
+    if t in {"environment", "environments", "env", "scene", "scenes", "场景", "环境"}:
+        return "environment"
+    return ""
+
+
+def _parse_subject_index_entries_for_prior_prompts(
+    subject_index_text: Any,
+    allowed_types: Optional[set] = None,
+) -> List[Dict[str, str]]:
+    """Extract (type, name_zh, name_en) rows from Subject Index for prior-prompt lookup."""
+    text = sanitize_subject_index_text(subject_index_text)
+    if not text:
+        return []
+
+    allowed = {
+        _normalize_prior_entity_design_type(item)
+        for item in (allowed_types or _PRIOR_ENTITY_DESIGN_TYPES)
+    }
+    allowed = {item for item in allowed if item in _PRIOR_ENTITY_DESIGN_TYPES}
+    if not allowed:
+        return []
+
+    entries: List[Dict[str, str]] = []
+    seen_keys: set = set()
+
+    def _push(entity_type: str, name_zh: str, name_en: str = "") -> None:
+        normalized_type = _normalize_prior_entity_design_type(entity_type)
+        if normalized_type not in allowed:
+            return
+        zh = str(name_zh or "").strip()
+        en = str(name_en or "").strip()
+        canonical = zh or en
+        if not canonical:
+            return
+        compare_key = subject_compare_key(canonical)
+        if not compare_key:
+            return
+        dedupe_key = f"{normalized_type}:{compare_key}"
+        if dedupe_key in seen_keys:
+            return
+        seen_keys.add(dedupe_key)
+        entries.append({
+            "type": normalized_type,
+            "name_zh": zh,
+            "name_en": en,
+            "name": canonical,
+        })
+
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "").replace("\ufeff", "").strip()
+        if not line:
+            continue
+        line = re.sub(r"^\s*>\s*", "", line)
+        line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
+
+        key_value_type_match = re.search(r"\bsubject_type\s*=\s*([^|`\n]+)", line, flags=re.IGNORECASE)
+        if key_value_type_match:
+            name_zh_match = re.search(r"\bsubject_name_(?:zh|exact)\s*=\s*([^|`\n]+)", line, flags=re.IGNORECASE)
+            name_en_match = re.search(r"\bsubject_name_en\s*=\s*([^|`\n]+)", line, flags=re.IGNORECASE)
+            if name_zh_match or name_en_match:
+                _push(
+                    key_value_type_match.group(1),
+                    (name_zh_match.group(1) if name_zh_match else ""),
+                    (name_en_match.group(1) if name_en_match else ""),
+                )
+                continue
+
+        normalized_line = line.strip("|").strip()
+        parts = [p.strip() for p in normalized_line.split("|")]
+        if len(parts) >= 4 and re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE):
+            _push(parts[1], parts[2], parts[3] if len(parts) > 3 else "")
+
+    return entries
+
+
+def _build_prior_entity_generation_prompts_block(
+    db: Session,
+    project_id: int,
+    subject_index_text: Any,
+    allowed_types: Optional[set] = None,
+) -> str:
+    """Look up same-type/same-name project entities and inject generation_prompt_cn.
+
+    When multiple matches exist, prefer the entity from the highest episode number.
+    Poster/cover entities are never included.
+    """
+    try:
+        project_id_int = int(project_id)
+    except Exception:
+        return ""
+    if project_id_int <= 0:
+        return ""
+
+    subject_entries = _parse_subject_index_entries_for_prior_prompts(
+        subject_index_text,
+        allowed_types=allowed_types,
+    )
+    if not subject_entries:
+        return ""
+
+    entities = (
+        db.query(Entity)
+        .filter(
+            Entity.project_id == project_id_int,
+            _active_entity_clause(),
+        )
+        .all()
+    )
+    if not entities:
+        return ""
+
+    episode_ids = {
+        int(ep_id)
+        for ep_id in (getattr(ent, "episode_id", None) for ent in entities)
+        if ep_id is not None
+    }
+    episode_by_id: Dict[int, Episode] = {}
+    if episode_ids:
+        episode_rows = db.query(Episode).filter(Episode.id.in_(list(episode_ids))).all()
+        episode_by_id = {
+            int(getattr(ep, "id", 0) or 0): ep
+            for ep in episode_rows
+            if getattr(ep, "id", None) is not None
+        }
+
+    def _entity_episode_sort_tuple(ent: Entity) -> Tuple[int, int, int]:
+        """Higher episode number wins; fall back to episode_id then entity id."""
+        ep_id = getattr(ent, "episode_id", None)
+        try:
+            ep_id_int = int(ep_id) if ep_id is not None else 0
+        except Exception:
+            ep_id_int = 0
+        episode = episode_by_id.get(ep_id_int) if ep_id_int else None
+        resolved_number = _resolve_episode_sort_number(episode) if episode else None
+        entity_id = int(getattr(ent, "id", 0) or 0)
+        if resolved_number is not None:
+            return (2, int(resolved_number), entity_id)
+        if ep_id_int > 0:
+            return (1, ep_id_int, entity_id)
+        return (0, 0, entity_id)
+
+    # Index project entities by type + compare-key for O(1) name matching.
+    entities_by_type_key: Dict[str, List[Entity]] = {}
+    for ent in entities:
+        normalized_type = _normalize_prior_entity_design_type(getattr(ent, "type", None))
+        if normalized_type not in _PRIOR_ENTITY_DESIGN_TYPES:
+            continue
+        if not str(getattr(ent, "generation_prompt_cn", None) or "").strip():
+            continue
+        alias_keys: set = set()
+        for alias in (getattr(ent, "name", None), getattr(ent, "name_en", None)):
+            alias_keys.update(subject_compare_key_variants(alias))
+        for key in alias_keys:
+            if not key:
+                continue
+            bucket_key = f"{normalized_type}:{key}"
+            entities_by_type_key.setdefault(bucket_key, []).append(ent)
+
+    prompt_lines: List[str] = []
+    seen_refs: set = set()
+    for entry in subject_entries:
+        entity_type = entry.get("type") or ""
+        candidate_keys: set = set()
+        for alias in (entry.get("name_zh"), entry.get("name_en"), entry.get("name")):
+            candidate_keys.update(subject_compare_key_variants(alias))
+        matched: List[Entity] = []
+        seen_entity_ids: set = set()
+        for key in candidate_keys:
+            if not key:
+                continue
+            for ent in entities_by_type_key.get(f"{entity_type}:{key}", []):
+                ent_id = int(getattr(ent, "id", 0) or 0)
+                if ent_id in seen_entity_ids:
+                    continue
+                seen_entity_ids.add(ent_id)
+                matched.append(ent)
+        if not matched:
+            continue
+        best = max(matched, key=_entity_episode_sort_tuple)
+        prompt_cn = re.sub(r"\s+", " ", str(getattr(best, "generation_prompt_cn", None) or "")).strip()
+        if not prompt_cn:
+            continue
+
+        canonical_name = str(
+            entry.get("name")
+            or getattr(best, "name", None)
+            or getattr(best, "name_en", None)
+            or ""
+        ).strip()
+        if not canonical_name:
+            continue
+        if entity_type == "character":
+            subject_ref = f"CHAR:[@{canonical_name}]"
+        elif entity_type == "prop":
+            subject_ref = f"PROP:[{canonical_name}]"
+        else:
+            subject_ref = f"ENV:[{canonical_name}]"
+        if subject_ref in seen_refs:
+            continue
+        seen_refs.add(subject_ref)
+
+        ep_id = getattr(best, "episode_id", None)
+        try:
+            ep_id_int = int(ep_id) if ep_id is not None else 0
+        except Exception:
+            ep_id_int = 0
+        episode = episode_by_id.get(ep_id_int) if ep_id_int else None
+        episode_number = _resolve_episode_sort_number(episode) if episode else None
+        episode_label = (
+            f"EP{int(episode_number):02d}"
+            if episode_number is not None
+            else (f"episode_id={ep_id_int}" if ep_id_int > 0 else "episode=project")
+        )
+        prompt_lines.append(
+            f"- {subject_ref} | source={episode_label} | entity_id={getattr(best, 'id', '')} | generation_prompt_cn={prompt_cn}"
+        )
+
+    if not prompt_lines:
+        return ""
+
+    body = (
+        "# Prior Entity Image Prompts (Design Baseline)\n"
+        "The following Chinese image-generation prompts come from existing same-type / same-name "
+        "entities already stored in this project. When multiple matches exist, the entity from the "
+        "highest episode number is selected. Poster/cover entities are excluded.\n"
+        "Use each matched prompt as the visual design baseline for the corresponding Subject Index "
+        "row: preserve identity, appearance anchors, materials, palette, silhouette, and recognition "
+        "features; adapt only as required by current Subject Index attributes and this episode's "
+        "story context. Do NOT invent a conflicting redesign when a prior prompt already covers the entity.\n"
+        + "\n".join(prompt_lines)
+        + "\n"
+    )
+    logger.info(
+        "[analyze_scene] built prior entity generation prompts project_id=%s subjects=%s matched=%s",
+        project_id_int,
+        len(subject_entries),
+        len(prompt_lines),
+    )
+    return wrap_injection_section("既有实体中文生图提示词", body)
 
 
 def _normalize_scene_header(value: Any) -> str:

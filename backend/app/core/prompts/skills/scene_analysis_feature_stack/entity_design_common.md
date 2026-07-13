@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_common.md
-# Prompt Updated At: 2026-07-12 23:35:00 +08:00
+# Prompt Updated At: 2026-07-13 21:20:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -8,6 +8,8 @@
 
 ## 核心任务
 第三阶段：资产设计、实体美化、视觉封装。输入 `Subject Index` 与 `Project Visual Backfill`（`Global_Style` / `tone` / `lighting` 等文学级字段）；**本阶段落实**大光比光影与冷暖光谱色系（§1.5）；为每个实体完成美术设计、四宫格规范化、镜头转译、JSON 无损打包与复核。禁止负责剧情切片、动作编排、实体抽取。
+
+**既有实体生图提示词基线（强制，有则必用）**：若用户提示词含注入块「既有实体中文生图提示词」/ `Prior Entity Image Prompts (Design Baseline)`，则对其中按 `CHAR:`/`PROP:`/`ENV:` 列出的同名同类实体，**必须以**其 `generation_prompt_cn` 为视觉设计基线——保留身份识别锚点、外形轮廓、材质、主辅色谱、标志性细节与风格气质；仅按本集 Subject Index 属性与剧情差分做必要增量改写。**禁止**在已有基线时另起一套冲突外观。海报/封面不适用本基线。无匹配行则正常新设计。
 
 ## 🎬 内部专家执行顺序 (Execution Workflow)
 接收上级输出后，按序激活以下节点：
