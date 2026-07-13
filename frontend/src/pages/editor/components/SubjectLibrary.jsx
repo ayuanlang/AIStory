@@ -16,7 +16,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityImageGenerationPrompts, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, clearBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityImageGenerationPrompts, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, entityImageNeedsOssPersist, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick
 } from '../editorHelpers';
 
 import { generateEntityFromText, generateEntityFromImage, generateEntityDerived } from '../../../services/api';
@@ -457,6 +457,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const [imageModalTab, setImageModalTab] = useState('library'); // library, upload, generate
     const [generating, setGenerating] = useState(false);
     const [uploadState, setUploadState] = useState('idle'); // idle, uploading, analyzing, completed
+    const [assetReuseBusy, setAssetReuseBusy] = useState(false);
     const [prompt, setPrompt] = useState('');
     const [promptDrafts, setPromptDrafts] = useState({ cn: '', en: '' });
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
@@ -916,15 +917,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     }, [subjectAnalyzingStorageKey]);
 
     const persistAnalyzingEntities = useCallback((nextState) => {
-        setAnalyzingEntities(nextState);
-        if (!subjectAnalyzingStorageKey) return;
-        try {
-            if (Object.keys(nextState).length === 0) {
-                localStorage.removeItem(subjectAnalyzingStorageKey);
-            } else {
-                localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(nextState));
-            }
-        } catch { }
+        setAnalyzingEntities((prev) => {
+            const resolved = typeof nextState === 'function' ? nextState(prev) : nextState;
+            const nextMap = (resolved && typeof resolved === 'object') ? resolved : {};
+            if (!subjectAnalyzingStorageKey) return nextMap;
+            try {
+                if (Object.keys(nextMap).length === 0) {
+                    localStorage.removeItem(subjectAnalyzingStorageKey);
+                } else {
+                    localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(nextMap));
+                }
+            } catch { /* ignore storage failures */ }
+            return nextMap;
+        });
     }, [subjectAnalyzingStorageKey]);
 
     const analyzingEntitiesRef = useRef(analyzingEntities);
@@ -2198,8 +2203,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         const stableImageUrl = String(imageUrl || '').trim();
         if (!stableEntityId || !stableImageUrl || !isMountedRef.current) return;
 
-        brokenMediaUrls.delete(stableImageUrl);
-        rememberWarmMediaUrl(stableImageUrl);
+        // Clear both the Set and timestamp map so SafeImage will attempt load again
+        // even if a speculative preload briefly 404'd during OSS propagation.
+        // Do not rememberWarmMediaUrl here — wait for SafeImage onLoad so we don't flash
+        // a "loaded" empty frame while the object is still propagating.
+        clearBrokenMediaUrl(stableImageUrl);
         recentlyCompletedSubjectImageUrlsRef.current = {
             ...(recentlyCompletedSubjectImageUrlsRef.current || {}),
             [stableEntityId]: {
@@ -2758,8 +2766,21 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
     }, [fetchSubjectGenerationHistory, selectedEntity?.id, subjectImageJobs, viewingEntity?.id]);
 
+    // Restart the poll loop only when jobs are added/removed/replaced or enter persisting —
+    // not on every lastPolledAt / statusFailureCount patch.
+    const subjectImageJobWatchKey = useMemo(() => {
+        return Object.entries(subjectImageJobs || {})
+            .map(([entityId, job]) => {
+                const status = String(job?.status || '').trim().toLowerCase();
+                const persistFlag = status === 'persisting' ? 'p' : 'a';
+                return `${entityId}:${String(job?.jobId || '')}:${persistFlag}`;
+            })
+            .sort()
+            .join('|');
+    }, [subjectImageJobs]);
+
     useEffect(() => {
-        if (Object.keys(subjectImageJobs || {}).length === 0) return;
+        if (!subjectImageJobWatchKey) return;
 
         let disposed = false;
         const pollToken = subjectImageJobPollTokenRef.current + 1;
@@ -2859,6 +2880,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         if (!currentJob) {
                             continue;
                         }
+                        // Show the provider result immediately while OSS bind/persist catches up.
+                        // Waiting for durable URL alone left cards blank/"Persisting" for many seconds.
+                        if (!currentJob?.previewApplied) {
+                            applySubjectEntityImageLocally(entityId, generatedUrl);
+                        }
                         const canPersistGeneratedUrl = !isEphemeralProviderMediaUrl(generatedUrl);
                         if (canPersistGeneratedUrl) {
                             try {
@@ -2914,6 +2940,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
                         statusUpdates[String(entityId)] = {
                             status: 'persisting',
+                            previewApplied: true,
                             lastPolledAt: now,
                             statusFailureCount: 0,
                             lastStatusError: '',
@@ -3050,9 +3077,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         };
 
         void pollOnce();
+        // Poll faster while waiting on OSS bind so durable URLs replace optimistic previews sooner.
+        const hasPersistingJob = Object.values(subjectImageJobsRef.current || {}).some(
+            (job) => String(job?.status || '').trim().toLowerCase() === 'persisting'
+        );
         const timer = setInterval(() => {
             void pollOnce();
-        }, 2500);
+        }, hasPersistingJob ? 1200 : 2500);
 
         return () => {
             disposed = true;
@@ -3061,7 +3092,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
             clearInterval(timer);
         };
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, subjectImageJobs, t]);
+        // Depend on job identity (entityId:jobId), not every status patch — otherwise each poll
+        // tears down and recreates the interval and can skip ticks under the polling lock.
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, subjectImageJobWatchKey, t]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
@@ -3091,13 +3124,24 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     && recentUpdatedAt > 0
                     && (Date.now() - recentUpdatedAt) < RECENT_SUBJECT_IMAGE_URL_TTL_MS
                 );
+                const backendIsDurable = Boolean(
+                    backendImageUrl
+                    && !entityImageNeedsOssPersist({ ...item, image_url: backendImageUrl })
+                );
 
                 if (backendImageUrl && recentImageUrl && backendImageUrl === recentImageUrl) {
                     delete recentlyCompletedSubjectImageUrlsRef.current[stableEntityId];
+                } else if (backendIsDurable && recentStillValid) {
+                    // Prefer durable backend over optimistic temp preview; keep retry window.
+                    recentlyCompletedSubjectImageUrlsRef.current[stableEntityId] = {
+                        imageUrl: backendImageUrl,
+                        updatedAt: Date.now(),
+                    };
                 }
 
                 const keepRecentImage = Boolean(
                     recentStillValid
+                    && !backendIsDurable
                     && (
                         !backendImageUrl
                         || backendImageUrl !== recentImageUrl
@@ -3108,6 +3152,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                 ).trim();
                 const keepPrevLocalImage = Boolean(
                     recentStillValid
+                    && !backendIsDurable
                     && !backendImageUrl
                     && prevLocalImageUrl
                     && prevLocalImageUrl === recentImageUrl
@@ -5573,7 +5618,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     // Image Handlers
     const handleSelectAsset = async (asset, replaceAnchor = true) => {
         const selectedUrl = String(asset?.url || '').trim();
-        if (!selectedUrl) return;
+        if (!selectedUrl) {
+            showSubjectNotification(t('该素材没有可用图片地址。', 'This asset has no usable image URL.'), 'warning');
+            return null;
+        }
+        if (assetReuseBusy) return null;
 
         let extraFields = {};
         if (replaceAnchor) {
@@ -5586,26 +5635,32 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             }
         }
 
-        const isHistoricalAssetSelected = Boolean(asset) && !Boolean(asset.is_current_project_asset);
-        const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
-            // Selecting a historical-version asset should only replace binding without triggering reverse analysis.
-            skipAnalyze: imageSelectAction === 'rewrite_and_regenerate' || isHistoricalAssetSelected,
-            extraFields
-        });
-        if (!updatedEntity) return;
+        setAssetReuseBusy(true);
+        try {
+            // Library reuse only rebinds image (+ optional anchor). Reverse analysis is for upload/URL import.
+            const updatedEntity = await updateEntityImage(selectedUrl, false, null, {
+                skipAnalyze: true,
+                extraFields,
+                notify: true,
+            });
+            if (!updatedEntity) return null;
 
-        if (imageSelectAction === 'sync_prompt') {
+            if (imageSelectAction === 'sync_prompt') {
+                setShowImageModal(false);
+                return updatedEntity;
+            }
+
+            if (imageSelectAction === 'rewrite_and_regenerate') {
+                setShowImageModal(false);
+                await handleReconstructEntityAsset(updatedEntity);
+                return updatedEntity;
+            }
+
             setShowImageModal(false);
-            return;
+            return updatedEntity;
+        } finally {
+            setAssetReuseBusy(false);
         }
-
-        if (imageSelectAction === 'rewrite_and_regenerate') {
-            setShowImageModal(false);
-            await handleReconstructEntityAsset(updatedEntity);
-            return;
-        }
-
-        setShowImageModal(false);
     };
 
     const handleUpload = async (e) => {
@@ -5868,39 +5923,86 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
     const updateEntityImage = async (url, closeModal = true, entityOverride = null, options = {}) => {
         const targetEntity = entityOverride || selectedEntity;
-        if (!targetEntity) return null;
+        if (!targetEntity) {
+            showSubjectNotification(t('未选中主体，无法复用图片。', 'No subject selected; cannot reuse image.'), 'warning');
+            return null;
+        }
         if (isSubjectImageActionLocked(targetEntity)) {
             notifySubjectImageActionLocked(targetEntity);
             return null;
         }
         const targetUrl = String(url || '').trim();
-        if (!targetUrl) return;
+        if (!targetUrl) {
+            showSubjectNotification(t('没有可用的图片地址。', 'No usable image URL.'), 'warning');
+            return null;
+        }
+        const stableEntityId = String(targetEntity.id || '').trim();
         try {
             const updates = { image_url: targetUrl, ...(options?.extraFields || {}) };
             await updateEntity(targetEntity.id, updates);
             const updatedEntity = { ...targetEntity, ...updates };
-            if (selectedEntity && String(selectedEntity.id) === String(updatedEntity.id)) {
-                setSelectedEntity(updatedEntity);
+
+            // Clear broken-cache + mark recent so grid SafeImage retries instead of staying blank.
+            clearBrokenMediaUrl(targetUrl);
+            recentlyCompletedSubjectImageUrlsRef.current = {
+                ...(recentlyCompletedSubjectImageUrlsRef.current || {}),
+                [stableEntityId]: {
+                    imageUrl: targetUrl,
+                    updatedAt: Date.now(),
+                },
+            };
+
+            if (selectedEntity && String(selectedEntity.id) === stableEntityId) {
+                setSelectedEntity((prev) => ({ ...(prev || {}), ...updates }));
             }
-            setViewingEntity(prev => (String(prev?.id || '') === String(updatedEntity.id) ? { ...prev, ...updates } : prev));
-            setEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, ...updates } : ent));
-            setAllEntities(prev => prev.map(ent => String(ent?.id || '') === String(updatedEntity.id) ? { ...ent, ...updates } : ent));
+            setViewingEntity((prev) => (String(prev?.id || '') === stableEntityId ? { ...prev, ...updates } : prev));
+            setEntities((prev) => prev.map((ent) => (
+                String(ent?.id || '') === stableEntityId ? { ...ent, ...updates } : ent
+            )));
+            setAllEntities((prev) => prev.map((ent) => (
+                String(ent?.id || '') === stableEntityId ? { ...ent, ...updates } : ent
+            )));
             if (closeModal) {
                 setShowImageModal(false);
             }
 
             if (options?.skipAnalyze !== true) {
-                persistAnalyzingEntities({ ...analyzingEntities, [String(updatedEntity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(updatedEntity) } });
-                const analyzedEntity = await analyzeEntityImage(updatedEntity.id, 'script_analysis', null, { background: true });
-                if (analyzedEntity) {
-                    persistAnalyzingEntities(prev => ({ ...prev, [String(updatedEntity.id)]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(analyzedEntity) } }));
+                persistAnalyzingEntities((prev) => ({
+                    ...(prev || {}),
+                    [stableEntityId]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(updatedEntity) },
+                }));
+                try {
+                    const analyzedEntity = await analyzeEntityImage(updatedEntity.id, 'script_analysis', null, { background: true });
+                    if (analyzedEntity) {
+                        persistAnalyzingEntities((prev) => ({
+                            ...(prev || {}),
+                            [stableEntityId]: { startedAt: Date.now(), initialAnalysisTime: getEntityAnalysisTime(analyzedEntity) },
+                        }));
+                    }
+                } catch (analyzeErr) {
+                    console.warn('Background analyze after image bind failed', analyzeErr);
+                    onLog?.(
+                        t(
+                            `图片已绑定，但自动分析启动失败：${targetEntity?.name || stableEntityId}`,
+                            `Image bound, but auto-analysis failed to start: ${targetEntity?.name || stableEntityId}`
+                        ),
+                        'warning'
+                    );
                 }
-                return analyzedEntity || updatedEntity;
             }
 
+            if (options?.notify === true) {
+                showSubjectNotification(
+                    t(`已复用图片到「${targetEntity?.name || stableEntityId}」`, `Reused image onto "${targetEntity?.name || stableEntityId}"`),
+                    'success'
+                );
+            }
             return updatedEntity;
         } catch (e) {
             console.error(e);
+            const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
+            showSubjectNotification(`${t('复用图片失败', 'Failed to reuse image')}: ${detail}`, 'error');
+            onLog?.(t(`复用图片失败：${detail}`, `Failed to reuse image: ${detail}`), 'error');
             return null;
         }
     };
@@ -6435,9 +6537,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
 
     useEffect(() => {
+        const recentUrlSet = new Set(
+            Object.values(recentlyCompletedSubjectImageUrlsRef.current || {})
+                .map((entry) => String(entry?.imageUrl || '').trim())
+                .filter(Boolean)
+        );
         const preloadTargets = (Array.isArray(entities) ? entities : [])
             .map((item) => String(item?.image_url || '').trim())
             .filter(Boolean)
+            // Skip freshly completed URLs — they can 404 briefly while OSS propagates;
+            // SafeImage already retries those with retryOnError.
+            .filter((url) => !recentUrlSet.has(url))
             .slice(0, 18);
 
         if (!preloadTargets.length) return;
@@ -6451,7 +6561,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     img.decoding = 'async';
                     img.src = getFullUrl(url);
                     img.onload = () => rememberWarmMediaUrl(url);
-                    img.onerror = () => rememberBrokenMediaUrl(url);
+                    // Never poison the shared broken-URL cache from speculative preload.
+                    // A single early 404 here used to mark the URL broken globally, so grid
+                    // SafeImage instances initialized as failed until a manual Reload Media.
+                    img.onerror = () => {};
                 } catch {
                     // Ignore preload failures and let normal rendering continue.
                 }
@@ -6810,12 +6923,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             })()}
                             {entity.image_url ? (
                                 <SafeImage
+                                    key={`${entity.image_url}:${mediaReloadTick}:${isRecentlyCompletedImage ? recentUpdatedAt : 0}`}
                                     src={entity.image_url}
                                     alt={entity.name}
                                     className="absolute inset-0 object-contain object-center w-full h-full"
                                     loading={entityIndex < 8 ? 'eager' : 'lazy'}
                                     fetchpriority={entityIndex < 4 ? 'high' : 'auto'}
-                                    retryOnError={isRecentlyCompletedImage}
+                                    retryOnError={isRecentlyCompletedImage || String(trackedJob?.status || '').toLowerCase() === 'persisting'}
                                     retryDelays={[800, 1800, 3500, 6500, 10000]}
                                     fallback={<div className="absolute inset-0 flex items-center justify-center bg-white/5"><Users className="text-white/20" size={48} /></div>}
                                 />
@@ -7814,34 +7928,44 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         </div>
                                                                     )}
                                                                     
-                                                                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
+                                                                    <div className="absolute inset-0 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
                                                                          {depEntity?.image_url ? (
                                                                              <>
                                                                                  <button
+                                                                                     type="button"
                                                                                      title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
+                                                                                     disabled={assetReuseBusy || viewingEntityImageLocked}
                                                                                      onClick={async (e) => {
                                                                                          e.preventDefault();
                                                                                          e.stopPropagation();
-                                                                                         if (depEntity?.image_url) {
-                                                                                             await updateEntityImage(depEntity.image_url, false, viewingEntity, {
+                                                                                         if (!depEntity?.image_url || assetReuseBusy) return;
+                                                                                         setAssetReuseBusy(true);
+                                                                                         try {
+                                                                                             const updated = await updateEntityImage(depEntity.image_url, false, viewingEntity, {
                                                                                                  skipAnalyze: true,
-                                                                                                 extraFields: { anchor_description: depEntity.anchor_description }
+                                                                                                 notify: true,
+                                                                                                 extraFields: { anchor_description: depEntity.anchor_description },
                                                                                              });
-                                                                                             setViewingEntity(null);
+                                                                                             if (updated) setViewingEntity(null);
+                                                                                         } finally {
+                                                                                             setAssetReuseBusy(false);
                                                                                          }
                                                                                      }}
-                                                                                     className="w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold"
+                                                                                     className="w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1"
                                                                                  >
-                                                                                     {t('复用资产', 'Reuse Asset')}
+                                                                                     {assetReuseBusy ? <Loader2 className="animate-spin" size={10} /> : null}
+                                                                                     {assetReuseBusy ? t('复用中...', 'Reusing...') : t('复用资产', 'Reuse Asset')}
                                                                                  </button>
                                                                                  <button
+                                                                                     type="button"
                                                                                      title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
+                                                                                     disabled={assetReuseBusy}
                                                                                      onClick={(e) => {
                                                                                          e.preventDefault();
                                                                                          e.stopPropagation();
                                                                                          setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
                                                                                      }}
-                                                                                     className="w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold"
+                                                                                     className="w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold disabled:opacity-50"
                                                                                  >
                                                                                      {t('仅参考', 'Reference Only')}
                                                                                  </button>
@@ -7976,27 +8100,41 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                              <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
                                                                              <div className="flex gap-2 mt-1">
                                                                                  <button
+                                                                                     type="button"
+                                                                                     disabled={assetReuseBusy || viewingEntityImageLocked}
                                                                                      onClick={async () => {
-                                                                                         const depEntityId = getAssetEntityId(selectedLibraryAsset);
-                                                                                         const depEntity = allEntities?.find(e => String(e.id) === String(depEntityId));
-                                                                                         await updateEntityImage(selectedLibraryAsset.url, false, viewingEntity, {
-                                                                                             skipAnalyze: true,
-                                                                                             extraFields: { anchor_description: depEntity?.anchor_description }
-                                                                                         });
-                                                                                         setRefSelectionMode(null);
-                                                                                         setViewingEntity(null);
+                                                                                         if (assetReuseBusy) return;
+                                                                                         setAssetReuseBusy(true);
+                                                                                         try {
+                                                                                             const depEntityId = getAssetEntityId(selectedLibraryAsset);
+                                                                                             const depEntity = allEntities?.find(e => String(e.id) === String(depEntityId));
+                                                                                             const updated = await updateEntityImage(selectedLibraryAsset.url, false, viewingEntity, {
+                                                                                                 skipAnalyze: true,
+                                                                                                 notify: true,
+                                                                                                 extraFields: { anchor_description: depEntity?.anchor_description },
+                                                                                             });
+                                                                                             if (updated) {
+                                                                                                 setRefSelectionMode(null);
+                                                                                                 setViewingEntity(null);
+                                                                                             }
+                                                                                         } finally {
+                                                                                             setAssetReuseBusy(false);
+                                                                                         }
                                                                                      }}
-                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-primary/80 hover:bg-primary text-black"
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-primary/80 hover:bg-primary text-black disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                                                                                  >
-                                                                                     {t('复用资产', 'Reuse Asset')}
+                                                                                     {assetReuseBusy ? <Loader2 className="animate-spin" size={10} /> : null}
+                                                                                     {assetReuseBusy ? t('复用中...', 'Reusing...') : t('复用资产', 'Reuse Asset')}
                                                                                  </button>
                                                                                  <button
+                                                                                     type="button"
+                                                                                     disabled={assetReuseBusy}
                                                                                      title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
                                                                                      onClick={() => {
                                                                                          setRefImage(selectedLibraryAsset);
                                                                                          setRefSelectionMode(null);
                                                                                      }}
-                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border"
+                                                                                     className="px-2 py-1 rounded text-[10px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border disabled:opacity-50"
                                                                                  >
                                                                                      {t('仅参考', 'Reference Only')}
                                                                                  </button>
@@ -8358,27 +8496,31 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                 </div>
                                                 <div className="flex gap-2 w-full">
                                                     <button
-                                                        onClick={() => {
+                                                        type="button"
+                                                        onClick={async () => {
                                                             if (selectedEntityImageLocked) {
                                                                 notifySubjectImageActionLocked(selectedEntity);
                                                                 return;
                                                             }
-                                                            handleSelectAsset(selectedLibraryAsset, true);
+                                                            await handleSelectAsset(selectedLibraryAsset, true);
                                                         }}
-                                                        disabled={selectedEntityImageLocked}
+                                                        disabled={selectedEntityImageLocked || assetReuseBusy}
                                                         title={t('同时使用该素材的图片与其绑定的锚点来替换当前实体', 'Replace image and its associated anchor.')}
-                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-primary/80 hover:bg-primary text-black disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
                                                     >
-                                                        {t('复用资产', 'Reuse Asset')}
+                                                        {assetReuseBusy ? <Loader2 className="animate-spin" size={14} /> : null}
+                                                        {assetReuseBusy ? t('复用中...', 'Reusing...') : t('复用资产', 'Reuse Asset')}
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => {
                                                             setRefImage(selectedLibraryAsset);
                                                             setRefSelectionMode(null);
                                                             setImageModalTab('generate');
                                                         }}
+                                                        disabled={assetReuseBusy}
                                                         title={t('仅作为生图参考图提交，不覆盖当前实体图片与锚点', 'Submit as generation reference only; do not overwrite entity image or anchor')}
-                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border"
+                                                        className="flex-1 rounded-md px-3 py-2 text-xs font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border disabled:opacity-50"
                                                     >
                                                         {t('仅参考', 'Reference Only')}
                                                     </button>

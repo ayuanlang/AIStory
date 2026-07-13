@@ -40768,7 +40768,9 @@ async def _run_generate_video(
 
         auto_entity_refs: List[str] = []
         if is_reference_image_mode and resolved_project_id and not uses_submit_image_urls:
-            entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+            entity_lookup = _build_project_entity_lookup(
+                db, int(resolved_project_id), episode_id=resolved_episode_id
+            )
             prompt_candidates: List[str] = [prompt_text]
             shot_for_ref: Optional[Shot] = None
             shot_tech: Dict[str, Any] = {}
@@ -40891,7 +40893,7 @@ async def _run_generate_video(
             getattr(req, "project_id", None)
         )
         entity_lookup = (
-            _build_project_entity_lookup(db, int(mapping_project_id))
+            _build_project_entity_lookup(db, int(mapping_project_id), episode_id=resolved_episode_id)
             if mapping_project_id and is_reference_image_mode
             else {}
         )
@@ -40917,6 +40919,8 @@ async def _run_generate_video(
             use_prev_video=getattr(req, "use_prev_video", False),
             provider=resolved_video_provider,
             model=resolved_video_model,
+            # Frontend Ref panel / explicit image_urls is source of truth.
+            preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
         )
         image_tag_count = len(re.findall(r"@Image\d+", str(prompt_text or ""), flags=re.IGNORECASE))
         logger.info(
@@ -40964,6 +40968,7 @@ async def _run_generate_video(
                         use_prev_video=getattr(req, "use_prev_video", False),
                         provider=resolved_video_provider,
                         model=resolved_video_model,
+                        preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
                     )
                 patched_multi_prompt.append(patched_item)
             req.multi_prompt = patched_multi_prompt
@@ -41000,7 +41005,9 @@ async def _run_generate_video(
         )
 
         if is_kie_kling3_video and resolved_project_id:
-            entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+            entity_lookup = _build_project_entity_lookup(
+                db, int(resolved_project_id), episode_id=resolved_episode_id
+            )
             kling_prompt_candidates: List[str] = [prompt_text]
             if isinstance(req.multi_prompt, list):
                 for item in req.multi_prompt:
@@ -43415,10 +43422,47 @@ def _entity_lookup_alias_keys(*raw_names: Any) -> set:
     return {key for key in keys if key}
 
 
-def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict[str, Any]]:
-    rows = db.query(Entity).filter(Entity.project_id == project_id).all()
+def _build_project_entity_lookup(
+    db: Session,
+    project_id: int,
+    episode_id: Optional[int] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Build name→entity lookup for video/image ref resolution.
+
+    When episode_id is provided, prefer entities from that episode, then project-global
+    (episode_id IS NULL), then other episodes. This prevents same-name subjects from
+    earlier episodes winning via first-insert setdefault.
+    """
+    rows = (
+        db.query(Entity)
+        .filter(Entity.project_id == project_id, _active_entity_clause())
+        .all()
+    )
+    preferred_episode_id = _to_positive_int_or_none(episode_id)
+
+    def _preference_score(row: Entity) -> Tuple[int, int, int]:
+        raw_ep = getattr(row, "episode_id", None)
+        try:
+            ep_id_int = int(raw_ep) if raw_ep is not None else 0
+        except Exception:
+            ep_id_int = 0
+        entity_id = int(getattr(row, "id", 0) or 0)
+        if preferred_episode_id:
+            if ep_id_int == int(preferred_episode_id):
+                return (3, ep_id_int, entity_id)
+            if raw_ep is None:
+                return (2, 0, entity_id)
+            # Other episodes: prefer nearer (higher) episode as weak fallback only.
+            return (1, ep_id_int, entity_id)
+        if ep_id_int > 0:
+            return (2, ep_id_int, entity_id)
+        return (1, 0, entity_id)
+
+    # Highest preference first so setdefault keeps the best row per alias.
+    ordered_rows = sorted(rows, key=_preference_score, reverse=True)
+
     lookup: Dict[str, Dict[str, Any]] = {}
-    for row in rows:
+    for row in ordered_rows:
         canonical_name = str(row.name or row.name_en or "").strip()
         anchor_description = str(row.anchor_description or "").strip()
         anchor = str(
@@ -43438,9 +43482,10 @@ def _build_project_entity_lookup(db: Session, project_id: int) -> Dict[str, Dict
             "image_url": image_url,
             "entity_id": row.id,
             "entity_type": entity_type,
+            "episode_id": getattr(row, "episode_id", None),
         }
         for key in _entity_lookup_alias_keys(row.name, row.name_en, canonical_name):
-            # Prefer first writer so canonical exact keys are not overwritten by later aliases.
+            # Prefer first writer after preference sort (current episode / best fallback).
             lookup.setdefault(key, payload)
     return lookup
 
@@ -44242,6 +44287,8 @@ def _reconcile_video_refs_by_entity_names(
     prompt: str,
     ordered_refs: List[str],
     entity_lookup: Optional[Dict[str, Dict[str, Any]]],
+    *,
+    preserve_submitted_refs: bool = False,
 ) -> Tuple[List[str], List[Tuple[int, str, str]], List[str]]:
     """
     Align image ref order to prompt entity mentions by entity name.
@@ -44249,6 +44296,11 @@ def _reconcile_video_refs_by_entity_names(
     Primary contract: @ImageN must refer to the N-th bound entity's image.
     Fallback audit uses entity.name → entity.image_url instead of blind index zip.
     Returns (aligned_refs, pairs[(1-based idx, display_name, anchor)], audit_notes).
+
+    When preserve_submitted_refs=True (explicit UI / image_urls submit):
+    - Keep submitted ref order and count as source of truth
+    - Keep unpaired / user-added images as additional refs
+    - Do not re-inject official entity images the panel omitted
     """
     refs = [str(x).strip() for x in (ordered_refs or []) if str(x).strip()]
     audit: List[str] = []
@@ -44257,6 +44309,13 @@ def _reconcile_video_refs_by_entity_names(
         return refs, [], audit
     if not entity_lookup:
         audit.append("skip:no_entity_lookup")
+        if preserve_submitted_refs:
+            pairs = [
+                (idx, f"附加参考{idx}", "")
+                for idx, _url in enumerate(refs, start=1)
+            ]
+            audit.append("preserve_submitted:no_lookup")
+            return refs, pairs, audit
         return refs, [], audit
 
     mentions, mention_source = _collect_prompt_entity_mentions_for_mapping(
@@ -44266,7 +44325,10 @@ def _reconcile_video_refs_by_entity_names(
     )
     audit.append(f"mention_source={mention_source}")
     audit.append(f"mentions={len(mentions)}")
-    if not mentions:
+    if preserve_submitted_refs:
+        audit.append("preserve_submitted=1")
+
+    if not mentions and not preserve_submitted_refs:
         sample_keys = list(entity_lookup.keys())[:6]
         audit.append(f"skip:no_mentions lookup_keys_sample={sample_keys}")
         return refs, [], audit
@@ -44274,6 +44336,7 @@ def _reconcile_video_refs_by_entity_names(
     used_keys: set = set()
     bound: List[Tuple[str, str, str]] = []
     unbound: List[Tuple[str, Dict[str, Any]]] = []
+    bound_by_key: Dict[str, Tuple[str, str]] = {}
     for _norm, display_name, row in mentions:
         matched_url = _pick_submitted_ref_for_entity(
             entity_row=row,
@@ -44295,6 +44358,40 @@ def _reconcile_video_refs_by_entity_names(
                 break
         anchor = str(row.get("anchor_description") or "").strip()
         bound.append((chosen, display_name, anchor))
+        bound_by_key[key] = (display_name, anchor)
+
+    if preserve_submitted_refs:
+        # Panel / explicit image_urls win: never drop extras, never resurrect omitted official refs.
+        for display_name, _row in unbound:
+            audit.append(f"omitted_by_panel:{display_name}")
+
+        url_map = _build_url_to_entity_rows(entity_lookup)
+        pairs: List[Tuple[int, str, str]] = []
+        extra_count = 0
+        for idx, url in enumerate(refs, start=1):
+            key = _normalize_media_ref_key(url)
+            if key and key in bound_by_key:
+                display_name, anchor = bound_by_key[key]
+                pairs.append((idx, display_name, anchor))
+                continue
+            row = (
+                url_map.get(str(url or "").strip())
+                or url_map.get(key)
+                or url_map.get(_media_ref_basename(url))
+            )
+            if isinstance(row, dict):
+                display_name = str(row.get("name") or row.get("name_en") or "").strip() or f"附加参考{idx}"
+                anchor = str(row.get("anchor_description") or "").strip()
+                pairs.append((idx, display_name, anchor))
+                continue
+            extra_count += 1
+            pairs.append((idx, f"附加参考{idx}", ""))
+
+        if extra_count:
+            audit.append(f"kept_additional_refs={extra_count}")
+        audit.append(f"bound={len(bound_by_key)}")
+        audit.append(f"preserved_count={len(refs)}")
+        return refs, pairs, audit
 
     # Name fallback: inject official entity image when submitted list missed it.
     # Never blind-zip leftover URLs to leftover names (that caused Image1↔Image3 swaps).
@@ -44316,15 +44413,12 @@ def _reconcile_video_refs_by_entity_names(
         for url in refs:
             key = _normalize_media_ref_key(url)
             if key and key not in bound_keys:
+                # Keep user-added / unpaired images as trailing additional refs.
+                aligned.append(url)
+                bound.append((url, f"附加参考{len(bound) + 1}", ""))
                 dropped += 1
         if dropped:
-            dropped_names = [
-                _media_ref_basename(url)
-                for url in refs
-                if _normalize_media_ref_key(url) not in bound_keys
-            ]
-            audit.append(f"dropped_unpaired_refs={dropped}")
-            audit.append(f"dropped_samples={','.join(dropped_names[:8])}")
+            audit.append(f"kept_unpaired_refs={dropped}")
     else:
         aligned = list(refs)
 
@@ -44441,6 +44535,11 @@ def _preprocess_video_submit_payload(
     flat_refs = _collect_video_flat_refs_from_payload(req_payload)
     resolved_project_id = _resolve_video_project_id_from_payload(db, req_payload)
     entity_lookup: Dict[str, Dict[str, Any]] = {}
+    resolved_episode_id = _to_positive_int_or_none(req_payload.get("episode_id"))
+    shot_id_for_episode = _to_positive_int_or_none(req_payload.get("shot_id"))
+    if not resolved_episode_id and shot_id_for_episode:
+        shot_for_episode = db.query(Shot).filter(Shot.id == int(shot_id_for_episode)).first()
+        resolved_episode_id = _to_positive_int_or_none(getattr(shot_for_episode, "episode_id", None)) if shot_for_episode else None
 
     has_explicit_visual_refs = uses_submit_image_urls
     if not has_explicit_visual_refs and isinstance(submit_ref_image_url, list):
@@ -44449,7 +44548,9 @@ def _preprocess_video_submit_payload(
         has_explicit_visual_refs = True
 
     if is_reference_image_mode and resolved_project_id and not uses_submit_image_urls:
-        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+        entity_lookup = _build_project_entity_lookup(
+            db, int(resolved_project_id), episode_id=resolved_episode_id
+        )
         prompt_candidates: List[str] = [submit_prompt]
         shot_for_ref: Optional[Shot] = None
         shot_id = _to_positive_int_or_none(req_payload.get("shot_id"))
@@ -44493,7 +44594,9 @@ def _preprocess_video_submit_payload(
                 len(merged_refs or []),
             )
     elif is_reference_image_mode and resolved_project_id:
-        entity_lookup = _build_project_entity_lookup(db, int(resolved_project_id))
+        entity_lookup = _build_project_entity_lookup(
+            db, int(resolved_project_id), episode_id=resolved_episode_id
+        )
 
     logger.info(
         "[VideoSubmit] prompt mapping prepare | shot_id=%s ref_mode=%s refs=%s project_id=%s lookup_keys=%s",
@@ -44515,6 +44618,7 @@ def _preprocess_video_submit_payload(
         use_prev_video=bool(req_payload.get("use_prev_video")),
         provider=provider,
         model=model,
+        preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
     )
     req_payload["prompt"] = mapped_prompt
 
@@ -44566,6 +44670,7 @@ def _preprocess_video_submit_payload(
                     use_prev_video=bool(req_payload.get("use_prev_video")),
                     provider=provider,
                     model=model,
+                    preserve_submitted_refs=bool(uses_submit_image_urls or has_explicit_visual_refs),
                 )
             patched_multi_prompt.append(patched_item)
         req_payload["multi_prompt"] = patched_multi_prompt
@@ -44584,6 +44689,7 @@ def _append_video_api_ref_mapping(
     use_prev_video: bool = False,
     provider: str = "",
     model: str = "",
+    preserve_submitted_refs: bool = False,
 ) -> Tuple[str, List[str]]:
     is_seedance = "seedance" in str(provider or "").lower() or "seedance" in str(model or "").lower()
     original_use_prev_video = use_prev_video
@@ -44643,13 +44749,15 @@ def _append_video_api_ref_mapping(
         text,
         ordered_refs,
         entity_lookup,
+        preserve_submitted_refs=preserve_submitted_refs,
     )
     logger.info(
-        "[_append_video_api_ref_mapping] reconcile | refs_in=%s refs_out=%s pairs=%s lookup=%s audit=%s",
+        "[_append_video_api_ref_mapping] reconcile | refs_in=%s refs_out=%s pairs=%s lookup=%s preserve=%s audit=%s",
         len(ordered_refs),
         len(aligned_refs),
         len(pairs),
         len(entity_lookup or {}),
+        int(bool(preserve_submitted_refs)),
         "; ".join(audit_notes) if audit_notes else "-",
     )
     ordered_refs = aligned_refs
@@ -44965,7 +45073,9 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
         episode_info = _episode_info_from_episode(episode)
         e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
         global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
-        entity_lookup = _build_project_entity_lookup(item_db, int(episode.project_id))
+        entity_lookup = _build_project_entity_lookup(
+            item_db, int(episode.project_id), episode_id=int(episode_id)
+        )
 
         video_prompt_raw = str(shot.video_content or shot.prompt or "").strip() or "Video motion"
         video_ref_index_map = _compute_subject_ref_index_map(video_prompt_raw, entity_lookup)
@@ -45005,12 +45115,13 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 if shot_mode == "start_end" and end_frame_url:
                     explicit_last_frame_url = end_frame_url
 
+        preserve_panel_video_refs = isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls"))
         refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
             refs,
             ref_mode=video_mode,
             prompt_candidates=video_prompt_candidates,
             entity_lookup=entity_lookup,
-            manual_override=isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls")),
+            manual_override=preserve_panel_video_refs,
             associated_entities=shot.associated_entities,
         )
 
@@ -45070,6 +45181,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
             model=str(pre_api_cfg.get("model") or "") if getattr(locals(), "pre_api_cfg", None) else "",
             entity_lookup=entity_lookup,
             use_prev_video=bool(use_prev_video),
+            preserve_submitted_refs=preserve_panel_video_refs,
         )
         _, normalized_refs = _sync_request_image_refs_with_aligned(
             aligned_refs=ordered_video_refs,
@@ -45098,6 +45210,7 @@ def _run_shot_media_video_batch_item(episode_id: int, shot_id: int, user_id: int
                 model=str(pre_api_cfg.get("model") or "") if getattr(locals(), "pre_api_cfg", None) else "",
                 entity_lookup=entity_lookup,
                 use_prev_video=bool(use_prev_video),
+                preserve_submitted_refs=preserve_panel_video_refs,
             )
             _, normalized_refs = _sync_request_image_refs_with_aligned(
                 aligned_refs=ordered_video_refs,
@@ -45223,7 +45336,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
         episode_info = _episode_info_from_episode(episode)
         e_global_info = episode_info.get("e_global_info", {}) if isinstance(episode_info, dict) else {}
         global_style = str((e_global_info or {}).get("Global_Style") or "").strip()
-        entity_lookup = _build_project_entity_lookup(db, int(episode.project_id))
+        entity_lookup = _build_project_entity_lookup(
+            db, int(episode.project_id), episode_id=int(episode.id) if getattr(episode, "id", None) else None
+        )
 
         mode = str((request_payload or {}).get("mode") or "keyframes").strip().lower()
         overwrite_existing = bool((request_payload or {}).get("overwrite_existing"))
@@ -45778,12 +45893,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 if shot_mode == "start_end" and end_frame_url:
                                     explicit_last_frame_url = end_frame_url
 
+                        preserve_panel_video_refs = isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls"))
                         refs, auto_entity_refs = _merge_entity_refs_for_video_mode(
                             refs,
                             ref_mode=video_mode,
                             prompt_candidates=video_prompt_candidates,
                             entity_lookup=entity_lookup,
-                            manual_override=isinstance(tech.get("video_ref_image_urls"), list) and bool(tech.get("video_ref_image_urls")),
+                            manual_override=preserve_panel_video_refs,
                             associated_entities=shot.associated_entities,
                         )
 
@@ -45828,6 +45944,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                             entity_lookup=entity_lookup,
                             use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                             provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
+                            preserve_submitted_refs=preserve_panel_video_refs,
                         )
                         _, normalized_refs = _sync_request_image_refs_with_aligned(
                             aligned_refs=ordered_video_refs,
@@ -45855,6 +45972,7 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 entity_lookup=entity_lookup,
                                 use_prev_video=bool((request_payload or {}).get("use_prev_video")),
                                 provider="seedance" if getattr(locals(), 'is_seedance_batch', False) else None,
+                                preserve_submitted_refs=preserve_panel_video_refs,
                             )
                             _, normalized_refs = _sync_request_image_refs_with_aligned(
                                 aligned_refs=ordered_video_refs,

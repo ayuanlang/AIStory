@@ -32,7 +32,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -550,9 +550,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [tunePromptModalConfig, setTunePromptModalConfig] = useState({ open: false, targetField: null, initialValue: "" });
     const [projectEntities, setProjectEntities] = useState([]);
     
-    // Auto-filter: Only recognize global entities or entities belonging to this episode
+    // Prefer current-episode entities over project-global / other-episode same-name rows.
     const entities = useMemo(() => {
-        return projectEntities.filter(e => !e?.episode_id || String(e.episode_id) === String(activeEpisode?.id));
+        const preferred = String(activeEpisode?.id || '').trim();
+        const scoped = projectEntities.filter((e) => !e?.episode_id || String(e.episode_id) === preferred);
+        if (!preferred) return scoped;
+        return [...scoped].sort((a, b) => {
+            const aEp = String(a?.episode_id || '').trim() === preferred ? 0 : 1;
+            const bEp = String(b?.episode_id || '').trim() === preferred ? 0 : 1;
+            return aEp - bEp;
+        });
     }, [projectEntities, activeEpisode?.id]);
 
     const [entityListLoading, setEntityListLoading] = useState(false);
@@ -3709,6 +3716,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 associatedEntities: '',
                 entityPool: Array.isArray(resolvedEntities) ? resolvedEntities : entities,
                 includeAssociatedEntities: false,
+                preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
             });
             const autoMatches = matchedEntities
                 .map((entity) => String(entity?.image_url || '').trim())
@@ -3775,10 +3783,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             techObj: tech,
             entityPool,
             includeAdditionalAutoRefs: false,
+            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
         });
 
         return normalizeImageRefList(activeRefs);
-    }, [entities]);
+    }, [activeEpisode?.id, entities]);
 
     const mergeVideoImageRefs = useCallback((shotSnapshot, fallbackRefs = [], resolvedEntities = null) => {
         return normalizeImageRefList([
@@ -3794,12 +3803,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
             includeAssociatedEntities: false,
+            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
         });
         const endPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
             promptText: rawEndPrompt,
             associatedEntities: shotSnapshot?.associated_entities || '',
             entityPool,
             includeAssociatedEntities: false,
+            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
         });
 
         return normalizeMediaRefList([
@@ -3807,7 +3818,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             ...startPromptEntityRefs,
             ...endPromptEntityRefs,
         ]);
-    }, [entities, resolveShotVideoImageRefs]);
+    }, [activeEpisode?.id, entities, resolveShotVideoImageRefs]);
 
     const cropGeneratedPanelToBlob = useCallback(async ({
         image,
@@ -4687,6 +4698,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     promptText: videoRefPromptText,
                     entityPool: entities,
                     includeAssociatedEntities: false,
+                    preferredEpisodeId: activeEpisode?.id ?? editingShot?.episode_id ?? null,
                 });
                 techObj.video_ref_image_urls = normalizeMediaRefList(promptEntityRefs);
 
@@ -4694,6 +4706,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     promptText: videoRefPromptText,
                     entityPool: entities,
                     includeAssociatedEntities: false,
+                    preferredEpisodeId: activeEpisode?.id ?? editingShot?.episode_id ?? null,
                 });
                 const eMap = {};
                 matchedEntities.forEach((entity) => {
@@ -4710,6 +4723,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     promptText: buildShotVideoRefPromptText(editingShot, techObj),
                     entityPool: entities,
                     includeAssociatedEntities: false,
+                    preferredEpisodeId: activeEpisode?.id ?? editingShot?.episode_id ?? null,
                 });
                 techObj.video_ref_image_urls = buildAutoVideoRefList(editingShot, techObj, mode, promptEntityRefs);
                 
@@ -6562,8 +6576,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             associatedEntities: strictMode ? '' : (shot?.associated_entities || ''),
             entityPool: entList,
             includeAssociatedEntities: !strictMode,
+            preferredEpisodeId: activeEpisode?.id ?? shot?.episode_id ?? null,
         });
-    }, [entities]);
+    }, [activeEpisode?.id, entities]);
 
     const getPromptMatchedEntities = useCallback((shot, sourceText = '', entitySource = null) => {
         const entityPool = Array.isArray(entitySource) ? entitySource : entities;
@@ -7153,7 +7168,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         };
 
         const resolveEntityByToken = (cleanKey) => {
-            return (Array.isArray(entList) ? entList : []).find((entity) => entityTokenMatchesName(entity, cleanKey));
+            return pickBestEntityMatch(entList, cleanKey, activeEpisode?.id ?? null);
         };
 
         const computeSubjectRefIndexMap = (sourceText = '') => {
@@ -8393,6 +8408,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         promptText: videoRefPromptText,
                         entityPool: resolvedEntities,
                         includeAssociatedEntities: false,
+                        preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
                     })
                 );
                 if (missingEntityRefSlots.length > 0) {
@@ -8417,26 +8433,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
             const shouldInjectContinuationPrompt = Boolean(usePrevVideo);
 
-            const activeVideoRefs = (() => {
-                const resolved = resolveShotVideoActiveRefs({
-                    shotLike: shotSnapshot,
-                    techObj: tech,
-                    entityPool: resolvedEntities,
-                    promptText: videoRefPromptText,
-                    additionalAutoRefs: resolvePrevContinuationVideoRefs(targetShotId),
-                    includeAdditionalAutoRefs: !hasManualVideoRefOverride,
-                });
-                if (!effectiveVideoMode.includes('entity_refs') || hasManualVideoRefOverride) {
-                    return resolved;
-                }
-                const promptMatchedUrls = collectMatchedEntityImageUrlsFromPrompt({
-                    promptText: videoRefPromptText,
-                    entityPool: resolvedEntities,
-                    includeAssociatedEntities: false,
-                });
-                // entity_refs: only submit refs for entities actually referenced in the shot prompt.
-                return promptMatchedUrls.length > 0 ? promptMatchedUrls : resolved;
-            })();
+            // Always submit the same list as the Refs (Video) panel (WYSIWYG).
+            // Do not re-derive from prompt entity matches — that ignored manual adds/removes.
+            const activeVideoRefs = resolveShotVideoActiveRefs({
+                shotLike: shotSnapshot,
+                techObj: tech,
+                entityPool: resolvedEntities,
+                promptText: videoRefPromptText,
+                additionalAutoRefs: resolvePrevContinuationVideoRefs(targetShotId),
+                includeAdditionalAutoRefs: !hasManualVideoRefOverride,
+                preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
+            });
             const submitRefPlan = buildShotVideoSubmitRefsFromActiveRefs({
                 activeRefs: activeVideoRefs,
                 shotLike: shotSnapshot,
@@ -8527,6 +8534,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             try {
                 videoTaskPromise = generateVideo(finalPrompt, null, null, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
+                    episode_id: activeEpisode?.id ?? shotSnapshot?.episode_id ?? undefined,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
                     use_prev_video: shouldInjectContinuationPrompt,

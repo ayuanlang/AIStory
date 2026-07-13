@@ -434,8 +434,11 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const containerRef = useRef(null);
     const requestedLoading = String(imgProps.loading || '').trim().toLowerCase();
     const eagerLoad = requestedLoading === 'eager' || requestedLoading === 'auto';
+    const { onLoad: userOnLoad, onError: userOnError, retryOnError = false, retryDelays = null, retryMaxTotalMs = null, ...restImgProps } = imgProps;
     const [shouldLoad, setShouldLoad] = useState(() => eagerLoad || isWarmMediaUrl(rawSrc));
-    const [failed, setFailed] = useState(() => !rawSrc || isBrokenMediaUrl(rawSrc));
+    // When retryOnError is requested (freshly generated assets), do not honor a prior
+    // broken-cache hit as a terminal failure — OSS propagation 404s must be retriable.
+    const [failed, setFailed] = useState(() => !rawSrc || (isBrokenMediaUrl(rawSrc) && !retryOnError));
     const [isLoaded, setIsLoaded] = useState(() => isWarmMediaUrl(rawSrc));
     const [useProxy, setUseProxy] = useState(false);
     const [retryToken, setRetryToken] = useState(0);
@@ -443,7 +446,6 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     const retryTimerRef = useRef(null);
     const retryStartedAtRef = useRef(0);
 
-    const { onLoad: userOnLoad, onError: userOnError, retryOnError = false, retryDelays = null, retryMaxTotalMs = null, ...restImgProps } = imgProps;
     const retryDelayList = Array.isArray(retryDelays) && retryDelays.length > 0
         ? retryDelays.map((value) => Math.max(250, Number(value) || 0)).filter(Boolean)
         : [1000, 2500, 5000, 9000];
@@ -464,10 +466,13 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
         retryAttemptRef.current = 0;
         retryStartedAtRef.current = 0;
         setRetryToken(0);
-        setFailed(!rawSrc || isBrokenMediaUrl(rawSrc));
+        if (retryOnError && rawSrc) {
+            clearBrokenMediaUrl(rawSrc);
+        }
+        setFailed(!rawSrc || (isBrokenMediaUrl(rawSrc) && !retryOnError));
         setIsLoaded(isWarmMediaUrl(rawSrc));
         setUseProxy(false);
-        if (isWarmMediaUrl(rawSrc)) {
+        if (isWarmMediaUrl(rawSrc) || retryOnError) {
             setShouldLoad(true);
         }
         return () => {
@@ -476,7 +481,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
                 retryTimerRef.current = null;
             }
         };
-    }, [rawSrc]);
+    }, [rawSrc, retryOnError]);
 
     useEffect(() => {
         if (eagerLoad) {
@@ -654,11 +659,29 @@ export const areMediaRefListsEqual = (left, right) => {
     return a.every((item, idx) => item === b[idx]);
 };
 
+export const pickBestEntityMatch = (entityPool = [], candidate = '', preferredEpisodeId = null) => {
+    const entities = Array.isArray(entityPool) ? entityPool : [];
+    if (!entities.length || !candidate) return null;
+
+    const matches = entities.filter((item) => entityTokenMatchesName(item, candidate));
+    if (!matches.length) return null;
+
+    const preferred = String(preferredEpisodeId || '').trim();
+    if (preferred) {
+        const episodeMatch = matches.find((item) => String(item?.episode_id || '').trim() === preferred);
+        if (episodeMatch) return episodeMatch;
+        const globalMatch = matches.find((item) => !String(item?.episode_id || '').trim());
+        if (globalMatch) return globalMatch;
+    }
+    return matches[0];
+};
+
 export const collectMatchedEntitiesFromPrompt = ({
     promptText = '',
     associatedEntities = '',
     entityPool = [],
     includeAssociatedEntities = true,
+    preferredEpisodeId = null,
 }) => {
     const entities = Array.isArray(entityPool) ? entityPool : [];
     if (!entities.length) return [];
@@ -677,7 +700,7 @@ export const collectMatchedEntitiesFromPrompt = ({
     rawMatches.forEach((raw) => {
         const candidate = normalizeEntityToken(raw);
         if (!candidate) return;
-        const entity = entities.find((item) => entityTokenMatchesName(item, candidate));
+        const entity = pickBestEntityMatch(entities, candidate, preferredEpisodeId);
         if (!entity) return;
         const dedupeKey = entity?.id != null
             ? `id:${entity.id}`
@@ -703,6 +726,7 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
     associatedEntities = '',
     entityPool = [],
     includeAssociatedEntities = true,
+    preferredEpisodeId = null,
 }) => {
     return normalizeMediaRefList(
         collectMatchedEntitiesFromPrompt({
@@ -710,6 +734,7 @@ export const collectMatchedEntityImageUrlsFromPrompt = ({
             associatedEntities,
             entityPool,
             includeAssociatedEntities,
+            preferredEpisodeId,
         }).map((entity) => entity?.image_url)
     );
 };
@@ -719,12 +744,14 @@ export const buildShotVideoEntityRefSlots = ({
     associatedEntities = '',
     entityPool = [],
     includeAssociatedEntities = true,
+    preferredEpisodeId = null,
 } = {}) => {
     return collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities,
         entityPool,
         includeAssociatedEntities,
+        preferredEpisodeId,
     }).map((entity) => {
         const imageUrl = String(entity?.image_url || '').trim();
         return {
@@ -752,13 +779,23 @@ export const buildShotVideoRefDisplayItems = ({
     includeEntityPlaceholders = true,
     manualOverride = false,
     deletedRefUrls = [],
+    preferredEpisodeId = null,
 } = {}) => {
     const refs = normalizeMediaRefList(activeRefs);
     const deletedSet = new Set(normalizeMediaRefList(deletedRefUrls));
     const entityPoolArr = Array.isArray(entityPool) ? entityPool : [];
-    const findEntityByUrl = (url) => entityPoolArr.find(
-        (entity) => String(entity?.image_url || '').trim() === String(url || '').trim()
-    );
+    const preferred = String(preferredEpisodeId || '').trim();
+    const findEntityByUrl = (url) => {
+        const matches = entityPoolArr.filter(
+            (entity) => String(entity?.image_url || '').trim() === String(url || '').trim()
+        );
+        if (!matches.length) return null;
+        if (preferred) {
+            const episodeMatch = matches.find((entity) => String(entity?.episode_id || '').trim() === preferred);
+            if (episodeMatch) return episodeMatch;
+        }
+        return matches[0];
+    };
 
     if (manualOverride) {
         return refs
@@ -780,6 +817,7 @@ export const buildShotVideoRefDisplayItems = ({
         associatedEntities,
         entityPool,
         includeAssociatedEntities,
+        preferredEpisodeId,
     });
     const items = [];
     const usedUrls = new Set();
@@ -1273,6 +1311,7 @@ export const resolveShotVideoActiveRefs = ({
     promptText = null,
     additionalAutoRefs = [],
     includeAdditionalAutoRefs = true,
+    preferredEpisodeId = null,
 } = {}) => {
     const tech = techObj && typeof techObj === 'object' ? techObj : {};
     const resolvedVideoMode = resolveUnifiedVideoMode(tech);
@@ -1281,6 +1320,7 @@ export const resolveShotVideoActiveRefs = ({
         promptText: effectivePromptText,
         entityPool,
         includeAssociatedEntities: false,
+        preferredEpisodeId,
     });
 
     const isManualOverride = tech.video_ref_image_urls_manual === true || tech.video_ref_image_urls_user_edited === true;
@@ -1288,12 +1328,27 @@ export const resolveShotVideoActiveRefs = ({
         ? normalizeMediaRefList(tech.video_ref_image_urls)
         : null;
 
-    let activeRefs = (storedVideoRefs !== null && (isManualOverride || storedVideoRefs.length > 0))
-        ? storedVideoRefs
+    // Only stick to stored URLs after explicit manual edits.
+    // Auto mode always rebuilds from the current episode entity pool so
+    // earlier-episode image URLs do not remain sticky in technical_notes.
+    const usingStoredVideoRefs = Boolean(isManualOverride && storedVideoRefs);
+    let activeRefs = usingStoredVideoRefs
+        ? [...storedVideoRefs]
         : buildAutoVideoRefList(shotLike, tech, resolvedVideoMode, promptEntityRefs);
 
     const deletedRefSet = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
     activeRefs = activeRefs.filter((url) => !deletedRefSet.has(url));
+
+    // Manual panel is source of truth, but newly prompt-matched entity images still join
+    // as additional refs unless the user explicitly deleted that URL.
+    if (usingStoredVideoRefs) {
+        for (const url of promptEntityRefs) {
+            const ref = String(url || '').trim();
+            if (!ref || deletedRefSet.has(ref) || activeRefs.includes(ref)) continue;
+            activeRefs.push(ref);
+        }
+    }
+
     const shouldInjectAdditionalAutoRefs = Boolean(includeAdditionalAutoRefs && !isManualOverride);
     if (shouldInjectAdditionalAutoRefs && Array.isArray(additionalAutoRefs)) {
         for (let i = additionalAutoRefs.length - 1; i >= 0; i -= 1) {

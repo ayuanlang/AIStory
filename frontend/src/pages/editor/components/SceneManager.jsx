@@ -188,18 +188,21 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     );
     const isManualRefOverride = isVideoRefManager ? isVideoManualOverride : isUserEdited;
     const isVideoRefUrl = (url) => /\.(mp4|mov|mkv|webm|avi|m4v)(\?.*)?$/i.test(String(url || '').trim());
+    const preferredEpisodeId = shot?.episode_id ?? null;
 
     const getEntityMatches = () => collectMatchedEntitiesFromPrompt({
         promptText,
         associatedEntities: shot?.associated_entities || '',
         entityPool: entities,
         includeAssociatedEntities: isVideoRefManager ? false : !strictPromptOnly,
+        preferredEpisodeId,
     });
 
     const getVideoPromptEntityRefs = () => collectMatchedEntityImageUrlsFromPrompt({
         promptText,
         entityPool: entities,
         includeAssociatedEntities: false,
+        preferredEpisodeId,
     });
 
     useEffect(() => {
@@ -211,6 +214,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             entityPool: entities,
             promptText,
             includeAdditionalAutoRefs: false,
+            preferredEpisodeId,
         });
         const existingRefs = normalizeMediaRefList(tech[storageKey]);
         if (areMediaRefListsEqual(existingRefs, seededRefs)) return;
@@ -220,7 +224,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             [storageKey]: seededRefs,
         };
         onUpdate({ technical_notes: JSON.stringify(seededTech) });
-    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, shot?.technical_notes, storageKey, shot?.id, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly]);
+    }, [useSequenceLogic, isVideoRefManager, isVideoManualOverride, shot?.technical_notes, storageKey, shot?.id, shot?.episode_id, resolvedVideoMode, onUpdate, promptText, entities, strictPromptOnly, preferredEpisodeId]);
 
     let activeRefs = [];
     
@@ -243,6 +247,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             promptText,
             additionalAutoRefs,
             includeAdditionalAutoRefs: !isVideoManualOverride,
+            preferredEpisodeId,
         });
     } else {
         // Standard entity/manual ref logic
@@ -420,7 +425,14 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
     };
 
     const getEntityInfo = (url) => {
-        return entities.find(e => e.image_url === url);
+        const matches = (Array.isArray(entities) ? entities : []).filter((e) => e.image_url === url);
+        if (!matches.length) return null;
+        const preferred = String(preferredEpisodeId || '').trim();
+        if (preferred) {
+            const episodeMatch = matches.find((e) => String(e?.episode_id || '').trim() === preferred);
+            if (episodeMatch) return episodeMatch;
+        }
+        return matches[0];
     };
 
     const shouldShowEntityRefPlaceholders = isVideoRefManager && resolvedVideoMode.includes('entity_refs');
@@ -433,6 +445,7 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
             includeEntityPlaceholders: !isVideoManualOverride,
             manualOverride: isVideoManualOverride,
             deletedRefUrls: tech.deleted_ref_urls || [],
+            preferredEpisodeId,
         })
         : activeRefs.map((url, idx) => ({
             key: `ref-${url}-${idx}`,
