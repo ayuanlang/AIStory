@@ -56,7 +56,7 @@ import smtplib
 from email.message import EmailMessage
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
-from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.exc import OperationalError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError, IntegrityError
 from sqlalchemy import or_, and_, text, inspect, cast, String, func
 from app.db.session import get_db, SessionLocal, DB_POOL_CAPACITY_EFFECTIVE, engine
 from app.models import all_models as models
@@ -29020,13 +29020,107 @@ def update_entity(
         if resolved_image_url:
             update_data["image_url"] = resolved_image_url
     entity_attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
-    _assert_allowed_persisted_media_url(
-        update_data.get("image_url"),
-        field_label="entity.image_url",
-        metadata=entity_attrs,
-        db=db,
-    )
-    
+    proposed_image_url = update_data.get("image_url")
+    if "image_url" in update_data and proposed_image_url is not None:
+        proposed_raw = str(proposed_image_url or "").strip()
+        # Library reuse: if this URL is already a registered asset (or another project entity
+        # already points at it), allow the bind even when OSS assert would otherwise reject
+        # relative /uploads or cross-entity ephemeral copies.
+        reuse_asset = None
+        proposed_normalized = _normalize_asset_url_for_dedup(proposed_raw) if proposed_raw else ""
+        if proposed_raw:
+            reuse_asset = _find_existing_asset_for_registration(
+                db,
+                current_user.id,
+                url=proposed_raw,
+                meta_info={"project_id": getattr(project, "id", None)},
+            )
+            if not reuse_asset and proposed_normalized:
+                try:
+                    reuse_asset = (
+                        db.query(Asset)
+                        .filter(
+                            Asset.user_id == current_user.id,
+                            Asset.url_normalized == proposed_normalized,
+                            _active_asset_clause(),
+                        )
+                        .order_by(Asset.id.desc())
+                        .first()
+                    )
+                except Exception:
+                    reuse_asset = (
+                        db.query(Asset)
+                        .filter(Asset.user_id == current_user.id, Asset.url == proposed_raw)
+                        .first()
+                    )
+        is_shared_project_url = False
+        if proposed_raw and not reuse_asset:
+            shared_q = db.query(Entity.id).filter(
+                Entity.project_id == project.id,
+                Entity.id != entity.id,
+                _active_entity_clause(),
+            )
+            # Match either exact signed URL or same normalized base URL.
+            shared_hit = shared_q.filter(Entity.image_url == proposed_raw).first()
+            if not shared_hit and proposed_normalized:
+                siblings = (
+                    db.query(Entity)
+                    .filter(
+                        Entity.project_id == project.id,
+                        Entity.id != entity.id,
+                        Entity.image_url.isnot(None),
+                        _active_entity_clause(),
+                    )
+                    .limit(500)
+                    .all()
+                )
+                for sibling in siblings:
+                    if _normalize_asset_url_for_dedup(getattr(sibling, "image_url", None)) == proposed_normalized:
+                        shared_hit = sibling
+                        break
+            is_shared_project_url = shared_hit is not None
+        if reuse_asset or is_shared_project_url:
+            if _is_ephemeral_provider_media_url(proposed_raw):
+                entity_attrs = {
+                    **(entity_attrs if isinstance(entity_attrs, dict) else {}),
+                    "ephemeral_binding": True,
+                    "needs_persistence_retry": True,
+                }
+        else:
+            try:
+                _assert_allowed_persisted_media_url(
+                    proposed_raw,
+                    field_label="entity.image_url",
+                    metadata=entity_attrs,
+                    db=db,
+                )
+            except HTTPException as assert_exc:
+                # Last-chance: persist the source into managed OSS, then bind the durable URL.
+                detail = str(getattr(assert_exc, "detail", "") or "")
+                if proposed_raw and (
+                    "persist" in detail.lower()
+                    or "temporary" in detail.lower()
+                    or "oss" in detail.lower()
+                ):
+                    persist_result = _persist_entity_image(
+                        db,
+                        current_user,
+                        project,
+                        entity,
+                        source_url_override=proposed_raw,
+                    )
+                    durable_url = str(
+                        (persist_result or {}).get("persisted_url")
+                        or getattr(entity, "image_url", None)
+                        or ""
+                    ).strip()
+                    if not durable_url:
+                        raise
+                    update_data["image_url"] = durable_url
+                    entity_attrs = _asset_meta_to_dict(getattr(entity, "custom_attributes", None))
+                else:
+                    raise
+
     # Separate standard columns from custom attributes
     standard_columns = {c.name for c in Entity.__table__.columns}
     
@@ -29040,6 +29134,10 @@ def update_entity(
                 custom_attrs = {}
         except Exception:
             pass
+    if isinstance(entity_attrs, dict):
+        for meta_key in ("ephemeral_binding", "needs_persistence_retry"):
+            if meta_key in entity_attrs:
+                custom_attrs[meta_key] = entity_attrs.get(meta_key)
     
     for field, value in update_data.items():
         if field == "image_url" and value != entity.image_url:
@@ -29057,22 +29155,63 @@ def update_entity(
                  image_diag.get("upload_suffix"),
                  image_diag.get("local_path"),
              )
-             # Auto-register as Asset if valid URL
+             # Auto-register as Asset if valid URL.
+             # Match by url_normalized (ignore signed query tokens); never let asset
+             # registration UniqueViolation roll back the entity image bind itself.
              if value:
-                 # Check existing to avoid dupes
-                 existing_asset = db.query(Asset).filter(Asset.url == value, Asset.user_id == current_user.id).first()
-                 if not existing_asset:
-                     # Use helper to register with metadata
-                     req_data = {
-                         "project_id": project.id,
-                         "entity_id": entity.id,
-                         "entity_name": entity.name,
-                         "category": entity.type,
-                         "remark": f"Auto-registered from Entity: {entity.name}"
-                     }
-                     # Ensure _register_asset_helper is available
-                     if "_register_asset_helper" in globals():
-                        _register_asset_helper(db, current_user.id, value, req_data)
+                 try:
+                     with db.begin_nested():
+                         existing_asset = _find_existing_asset_for_registration(
+                             db,
+                             current_user.id,
+                             url=value,
+                             meta_info={
+                                 "project_id": project.id,
+                                 "entity_id": entity.id,
+                                 "entity_name": entity.name,
+                                 "category": entity.type,
+                             },
+                         )
+                         if existing_asset:
+                             # Keep newest signed URL on the shared asset row.
+                             if str(getattr(existing_asset, "url", "") or "").strip() != str(value).strip():
+                                 existing_asset.url = value
+                             existing_meta = _asset_meta_to_dict(getattr(existing_asset, "meta_info", None))
+                             if entity.id:
+                                 existing_meta["entity_id"] = entity.id
+                             if entity.name:
+                                 existing_meta["entity_name"] = entity.name
+                             if entity.type:
+                                 existing_meta["category"] = entity.type
+                             existing_asset.meta_info = existing_meta
+                             db.add(existing_asset)
+                         else:
+                             # Lightweight insert without _register_asset_helper (that helper
+                             # calls db.commit() and can poison this request on conflict).
+                             asset = Asset(
+                                 user_id=current_user.id,
+                                 type="image",
+                                 url=value,
+                                 url_normalized=_normalize_asset_url_for_dedup(value),
+                                 filename=os.path.basename(urllib.parse.urlparse(str(value)).path) or None,
+                                 project_id=int(project.id) if getattr(project, "id", None) is not None else None,
+                                 episode_id=_asset_optional_int(getattr(entity, "episode_id", None)),
+                                 meta_info={
+                                     "project_id": project.id,
+                                     "entity_id": entity.id,
+                                     "entity_name": entity.name,
+                                     "category": entity.type,
+                                 },
+                                 remark=f"Auto-registered from Entity: {entity.name}",
+                             )
+                             db.add(asset)
+                             db.flush()
+                 except Exception as reg_exc:
+                     logger.warning(
+                         "[EntityImageUpdate] asset auto-register skipped | entity_id=%s err=%s",
+                         getattr(entity, "id", None),
+                         reg_exc,
+                     )
         
         elif field in standard_columns:
             setattr(entity, field, value)
@@ -36273,6 +36412,22 @@ def _find_existing_asset_for_registration(
             for candidate in normalized_candidates:
                 if _asset_meta_matches_registration_context(candidate.meta_info, normalized_meta):
                     return candidate
+            # Unique constraint is on (user, type, project, episode, url_normalized).
+            # Reusing the same image onto another entity must hit this row even when
+            # entity_id / shot_id meta differs — otherwise INSERT races into UniqueViolation
+            # and poisons the parent Session.
+            expected_project_id = _asset_optional_int(normalized_meta.get("project_id"))
+            expected_episode_id = _asset_optional_int(normalized_meta.get("episode_id"))
+            for candidate in normalized_candidates:
+                candidate_project_id = _asset_optional_int(getattr(candidate, "project_id", None))
+                candidate_episode_id = _asset_optional_int(getattr(candidate, "episode_id", None))
+                if candidate_project_id != expected_project_id:
+                    continue
+                if candidate_episode_id != expected_episode_id:
+                    continue
+                return candidate
+            if normalized_candidates and expected_project_id is None and expected_episode_id is None:
+                return normalized_candidates[0]
         except Exception:
             # Backward-compatible fallback for old schemas before url_normalized exists.
             pass
@@ -36595,13 +36750,28 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 meta_info=meta,
                 remark=remark
             )
-            db.add(asset)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    db.add(asset)
+                    db.flush()
+            except IntegrityError:
+                # Concurrent / signed-URL duplicate of uq_assets_user_type_scope_url_norm.
+                existing_after_conflict = _find_existing_asset_for_registration(
+                    db,
+                    user_id,
+                    url=url,
+                    idempotency_key=meta.get("idempotency_key"),
+                    meta_info=meta,
+                )
+                if existing_after_conflict:
+                    return existing_after_conflict
+                raise
             _mark_asset_as_current_project_asset(db, asset)
             db.commit()
             return asset
     except Exception as e:
-        print(f"Asset reg failed: {e}")
+        logger.warning("[AssetRegister] failed | user_id=%s url=%s err=%s", user_id, str(url or "")[:180], e)
+        return None
 
 
 def _extract_provider_model_from_result(result: Any, req: Any) -> Tuple[Optional[str], Optional[str]]:

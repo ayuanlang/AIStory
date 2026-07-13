@@ -2220,10 +2220,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setEntities(prev => prev.map(item => String(item?.id) === stableEntityId ? { ...item, image_url: stableImageUrl } : item));
         setViewingEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
         setSelectedEntity(prev => (String(prev?.id || '') === stableEntityId ? { ...prev, image_url: stableImageUrl } : prev));
-        if (showImageModal && String(selectedEntity?.id || '') === stableEntityId) {
-            setShowImageModal(false);
-        }
-    }, [selectedEntity?.id, showImageModal]);
+        // Do not auto-close the image picker — callers decide (reuse / upload / generate).
+    }, []);
 
     // Freshly generated subject images can briefly 404 while the provider's OSS object propagates,
     // even though the generation job already reports success. Any SafeImage instance that fails
@@ -4706,7 +4704,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         setIncludeHistoricalEpisodeAssets(false);
         setAssetNameFilter('');
         loadAssets({ includeHistoricalEpisodeAssets: false });
-    }, [activeAssetLibraryEntity, allEntities, currentEpisode?.id, refSelectionMode, showImageModal, loadAssets, subTab]);
+        // Intentionally depend on entity id, not the whole allEntities array — otherwise every
+        // image bind rewrites filters and reloads assets while the card is trying to refresh.
+    }, [activeAssetLibraryEntity?.id, activeAssetLibraryEntity?.episode_id, activeAssetLibraryEntity?.type, currentEpisode?.id, refSelectionMode, showImageModal, loadAssets]);
 
     useEffect(() => {
         if (refSelectionMode !== 'assets') return;
@@ -5937,30 +5937,83 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return null;
         }
         const stableEntityId = String(targetEntity.id || '').trim();
-        try {
-            const updates = { image_url: targetUrl, ...(options?.extraFields || {}) };
-            await updateEntity(targetEntity.id, updates);
-            const updatedEntity = { ...targetEntity, ...updates };
+        const isPersistRequiredError = (error) => {
+            const detail = String(error?.response?.data?.detail || error?.message || '').toLowerCase();
+            return detail.includes('persist') || detail.includes('temporary') || detail.includes('oss');
+        };
 
-            // Clear broken-cache + mark recent so grid SafeImage retries instead of staying blank.
-            clearBrokenMediaUrl(targetUrl);
-            recentlyCompletedSubjectImageUrlsRef.current = {
-                ...(recentlyCompletedSubjectImageUrlsRef.current || {}),
-                [stableEntityId]: {
-                    imageUrl: targetUrl,
-                    updatedAt: Date.now(),
-                },
+        const bindImage = async (imageUrl) => {
+            const updates = { image_url: imageUrl, ...(options?.extraFields || {}) };
+            const saved = await updateEntity(targetEntity.id, updates);
+            const persistedUrl = String(saved?.image_url || imageUrl || '').trim();
+            const mergedCustomAttributes = saved?.custom_attributes ?? targetEntity?.custom_attributes;
+            return {
+                ...(targetEntity || {}),
+                ...(saved && typeof saved === 'object' ? saved : {}),
+                ...updates,
+                image_url: persistedUrl,
+                custom_attributes: mergedCustomAttributes,
             };
+        };
 
-            if (selectedEntity && String(selectedEntity.id) === stableEntityId) {
-                setSelectedEntity((prev) => ({ ...(prev || {}), ...updates }));
+        try {
+            let updatedEntity = null;
+            try {
+                updatedEntity = await bindImage(targetUrl);
+            } catch (firstErr) {
+                if (!isPersistRequiredError(firstErr)) throw firstErr;
+                onLog?.(
+                    t(
+                        `图片地址需先落库，正在补传后绑定：${targetEntity?.name || stableEntityId}`,
+                        `Image URL needs persistence; uploading then binding: ${targetEntity?.name || stableEntityId}`
+                    ),
+                    'process'
+                );
+                const persistResult = await persistEntityMedia(Number(stableEntityId), { source_url: targetUrl });
+                const durableUrl = String(
+                    persistResult?.persisted_url
+                    || persistResult?.entity?.image_url
+                    || ''
+                ).trim();
+                if (!durableUrl) throw firstErr;
+                // persist-media already wrote image_url; still merge optional anchor fields.
+                if (options?.extraFields && Object.keys(options.extraFields).length > 0) {
+                    updatedEntity = await bindImage(durableUrl);
+                } else {
+                    updatedEntity = {
+                        ...(targetEntity || {}),
+                        ...(persistResult?.entity && typeof persistResult.entity === 'object' ? persistResult.entity : {}),
+                        image_url: durableUrl,
+                    };
+                }
             }
-            setViewingEntity((prev) => (String(prev?.id || '') === stableEntityId ? { ...prev, ...updates } : prev));
+
+            const finalUrl = String(updatedEntity?.image_url || targetUrl).trim();
+            if (!finalUrl) {
+                throw new Error(t('绑定后仍未获得可用图片地址', 'No usable image URL after bind'));
+            }
+
+            // Force local grid/detail refresh from the server-confirmed URL.
+            applySubjectEntityImageLocally(stableEntityId, finalUrl);
+            const localPatch = {
+                image_url: finalUrl,
+                ...(options?.extraFields || {}),
+                ...(updatedEntity?.custom_attributes !== undefined
+                    ? { custom_attributes: updatedEntity.custom_attributes }
+                    : {}),
+                ...(updatedEntity?.anchor_description !== undefined
+                    ? { anchor_description: updatedEntity.anchor_description }
+                    : {}),
+            };
+            if (selectedEntity && String(selectedEntity.id) === stableEntityId) {
+                setSelectedEntity((prev) => ({ ...(prev || {}), ...localPatch }));
+            }
+            setViewingEntity((prev) => (String(prev?.id || '') === stableEntityId ? { ...prev, ...localPatch } : prev));
             setEntities((prev) => prev.map((ent) => (
-                String(ent?.id || '') === stableEntityId ? { ...ent, ...updates } : ent
+                String(ent?.id || '') === stableEntityId ? { ...ent, ...localPatch } : ent
             )));
             setAllEntities((prev) => prev.map((ent) => (
-                String(ent?.id || '') === stableEntityId ? { ...ent, ...updates } : ent
+                String(ent?.id || '') === stableEntityId ? { ...ent, ...localPatch } : ent
             )));
             if (closeModal) {
                 setShowImageModal(false);
@@ -5993,16 +6046,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
             if (options?.notify === true) {
                 showSubjectNotification(
-                    t(`已复用图片到「${targetEntity?.name || stableEntityId}」`, `Reused image onto "${targetEntity?.name || stableEntityId}"`),
+                    t(`已绑定图片到「${targetEntity?.name || stableEntityId}」`, `Bound image onto "${targetEntity?.name || stableEntityId}"`),
                     'success'
                 );
             }
-            return updatedEntity;
+            return { ...updatedEntity, image_url: finalUrl };
         } catch (e) {
             console.error(e);
             const detail = e?.response?.data?.detail || e?.message || t('未知错误', 'Unknown error');
-            showSubjectNotification(`${t('复用图片失败', 'Failed to reuse image')}: ${detail}`, 'error');
-            onLog?.(t(`复用图片失败：${detail}`, `Failed to reuse image: ${detail}`), 'error');
+            showSubjectNotification(`${t('绑定图片失败', 'Failed to bind image')}: ${detail}`, 'error');
+            onLog?.(t(`绑定图片失败：${detail}`, `Failed to bind image: ${detail}`), 'error');
             return null;
         }
     };
