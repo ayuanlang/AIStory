@@ -7,7 +7,7 @@ import { API_URL } from '@/config';
 import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink, getScriptAnalysisFlowConfigManage, updateScriptAnalysisFlowConfigManage } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
-import { fetchGroups, createGroup, addGroupMember } from '../services/api';
+import { fetchGroups, createGroup, addGroupMember, fetchGroupMembers } from '../services/api';
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
 
@@ -256,6 +256,9 @@ const Settings = () => {
     const [showCreateGroup, setShowCreateGroup] = useState(false);
     const [addingMemberToGroupId, setAddingMemberToGroupId] = useState(null);
     const [newMemberUsername, setNewMemberUsername] = useState('');
+    const [viewingMembersGroup, setViewingMembersGroup] = useState(null);
+    const [groupMembers, setGroupMembers] = useState([]);
+    const [isLoadingGroupMembers, setIsLoadingGroupMembers] = useState(false);
 
     useEffect(() => {
         if (activeTab === 'groups') {
@@ -276,6 +279,20 @@ const Settings = () => {
         }
     };
 
+    const handleViewMembers = async (group) => {
+        setViewingMembersGroup(group);
+        setGroupMembers([]);
+        setIsLoadingGroupMembers(true);
+        try {
+            const members = await fetchGroupMembers(group.group_id);
+            setGroupMembers(Array.isArray(members) ? members : []);
+        } catch (e) {
+            console.error(e);
+            setGroupMembers([]);
+        } finally {
+            setIsLoadingGroupMembers(false);
+        }
+    };
 
     // Account Management
     const handleAddMember = async (groupId) => {
@@ -2208,6 +2225,7 @@ const Settings = () => {
                                       <tr className="border-b border-white/10 text-muted-foreground">
                                           <th className="p-3">{t('组名', 'Group Name')}</th>
                                           <th className="p-3">{t('身份权限', 'Role / Level')}</th>
+                                          <th className="p-3 text-right">{t('成员数', 'Members')}</th>
                                           <th className="p-3 text-right">{t('当前组积分', 'Group Credits')}</th>
                                           <th className="p-3 text-right">{t('操作', 'Actions')}</th>
                                       </tr>
@@ -2222,10 +2240,18 @@ const Settings = () => {
                                               <td className="p-3">
                                                   {g.permission_level === 2 ? t('管理员', 'Admin') : t('成员', 'Member')}
                                               </td>
+                                              <td className="p-3 text-right tabular-nums">{g.member_count ?? 0}</td>
                                               <td className="p-3 text-right font-medium text-primary">{g.credits}</td>
                                               <td className="p-3 text-right">
-                                                  {g.permission_level === 2 && (
-                                                        <div className="flex items-center justify-end gap-2">
+                                                        <div className="flex items-center justify-end gap-2 flex-wrap">
+                                                            <button
+                                                                onClick={() => handleViewMembers(g)}
+                                                                className="text-xs px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded transition-colors"
+                                                            >
+                                                                {t('查看成员', 'Members')}
+                                                            </button>
+                                                            {g.permission_level === 2 && (
+                                                                <>
                                                             <button 
                                                                 onClick={() => setAddingMemberToGroupId(g.group_id)}
                                                                 className="text-xs px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded transition-colors"
@@ -2242,14 +2268,15 @@ const Settings = () => {
                                                             >
                                                                 <Coins className="w-3 h-3" /> {t('充值', 'Top-up')}
                                                             </button>
+                                                                </>
+                                                            )}
                                                         </div>
-                                                    )}
                                               </td>
                                           </tr>
                                       ))}
                                       {userGroups.length === 0 && (
                                           <tr>
-                                              <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                                              <td colSpan={5} className="p-8 text-center text-muted-foreground">
                                                   {t('暂无群组', 'No Groups')}
                                               </td>
                                           </tr>
@@ -2298,6 +2325,74 @@ const Settings = () => {
                             >
                                 {t('确认添加', 'Add')}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {viewingMembersGroup && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+                    <div className="bg-[#1a1b26] border border-white/10 rounded-xl p-6 w-full max-w-lg shadow-2xl relative" style={{ zIndex: 101 }}>
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                            <div>
+                                <h3 className="text-xl font-bold">{t('成员列表', 'Members')}</h3>
+                                <p className="text-sm text-muted-foreground mt-1">
+                                    {viewingMembersGroup.name}
+                                    <span className="ml-2 text-white/50">
+                                        ({groupMembers.length || viewingMembersGroup.member_count || 0})
+                                    </span>
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setViewingMembersGroup(null);
+                                    setGroupMembers([]);
+                                }}
+                                className="px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-sm"
+                            >
+                                {t('关闭', 'Close')}
+                            </button>
+                        </div>
+                        <div className="rounded-lg border border-white/10 overflow-hidden bg-black/40 max-h-[50vh] overflow-y-auto">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead className="sticky top-0 bg-[#1a1b26]">
+                                    <tr className="border-b border-white/10 text-muted-foreground">
+                                        <th className="p-3">{t('用户名', 'Username')}</th>
+                                        <th className="p-3">{t('邮箱', 'Email')}</th>
+                                        <th className="p-3">{t('角色', 'Role')}</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {isLoadingGroupMembers && (
+                                        <tr>
+                                            <td colSpan={3} className="p-6 text-center text-muted-foreground">
+                                                {t('加载中…', 'Loading…')}
+                                            </td>
+                                        </tr>
+                                    )}
+                                    {!isLoadingGroupMembers && groupMembers.map((m) => (
+                                        <tr key={m.user_id} className="border-b border-white/5">
+                                            <td className="p-3">
+                                                {m.username || '-'}
+                                                {m.full_name ? (
+                                                    <span className="ml-2 text-xs text-white/40">{m.full_name}</span>
+                                                ) : null}
+                                            </td>
+                                            <td className="p-3 text-muted-foreground">{m.email || '-'}</td>
+                                            <td className="p-3">
+                                                {m.permission_level >= 2 ? t('管理员', 'Admin') : t('成员', 'Member')}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {!isLoadingGroupMembers && groupMembers.length === 0 && (
+                                        <tr>
+                                            <td colSpan={3} className="p-6 text-center text-muted-foreground">
+                                                {t('暂无成员', 'No members')}
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>

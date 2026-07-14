@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-07-13 21:56:00 +08:00
+# Prompt Updated At: 2026-07-14 15:25:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -76,7 +76,8 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 ### 二、角色（CHAR）
 - **群演簇提取（强制）**：Stage 1 以**簇/阵/列/若干/数名**描述的匿名背景人群（如「村民」「路人」「士兵群」「办公人员簇」「侍从簇」「群众」「背景人群」「龙套甲/乙/丙」等），**无具名个体、无独立画内对白/OS/V.O.、无跨 Beat/Scene 可持续身份**时，须按簇提取为 **一条** collective `character` 行；`subject_name_zh` 与 Stage 1 簇称呼**逐字一致**（如「办公人员簇」）；`entity_attributes` 须写 `crowd_role:群演簇`、数量区间、FG/MG/BG 分布区段、统一/随机反馈模式、远景/虚化景别约束、时代/阶层/职业服饰倾向（须服项目语境）。同 Scene 内语义相同的簇复用同一基础版；跨 Scene 可复用或按场景区分。**禁止**为同一簇拆成多条 filler 个体、批量新取姓名或编号个体（如「办公人员A/B/C」）；**禁止**将具名叙事角色合并为群演簇；**禁止**为有独立对白/OS/V.O. 或跨 Beat/Scene 可持续身份的个体使用群演簇替代。群演簇已入 Index 时，**ENV** 的 `literary_atmosphere` **不得**重复写同名簇的人群密度。
 - **可提取 CHAR 的最低门槛**：**具名叙事角色**须同时满足——① Stage 1 **具名**（真实姓名或经 §19 合法替换后的具名）；② 有**独立**叙事功能（对白/OS/V.O.、跨 Beat 主动作、跨 Scene 身份延续、可被后续继承的外观/身份态）；③ **非**纯背景氛围的单次出现者。**群演簇**须满足 Stage 1 簇描述可核销（数量+分布+反馈模式），不要求具名与独立对白。
-- **身份角色说明继承（强制，供下游配音音色匹配）**：**具名叙事角色**基础版 `entity_attributes` 须完整继承 Stage 1 Part 1【角色命名】中该角色的**身份角色说明**（年龄段/性别/社会身份或职业/性格气质关键词），逐条写入（如「28岁男性·刑侦警探·沉稳克制」），不得省略或简化为空泛「主角/配角」；该说明随身份体系变化衍生行（§「身份体系变化」触发新衍生）须同步更新对应新身份，不得沿用旧身份态。**群演簇**沿用簇身份共性即可，不要求逐一分述。
+- **身份角色说明继承（强制，供下游配音音色匹配）**：**具名叙事角色**基础版 `entity_attributes` 须完整继承 Stage 1 Part 1【角色命名】中该角色的**身份角色说明**（年龄层次/性别/社会身份或职业/性格气质关键词），逐条写入（如「age_tier:青年；约28岁男性·刑侦警探·沉稳克制」），不得省略或简化为空泛「主角/配角」；该说明随身份体系变化衍生行（§「身份体系变化」触发新衍生）须同步更新对应新身份，不得沿用旧身份态。**群演簇**沿用簇身份共性即可，不要求逐一分述。
+- **年龄层次判定（强制）**：抽取每个 `character` 行（含具名叙事角色与群演簇、基础版与年龄态衍生）时，须**主动判定并明示年龄层次**，写入 `entity_attributes`，格式 `age_tier:{层次}`（可与具体岁数并存，如 `age_tier:青年；约28岁`）。层次闭集：`幼童`｜`儿童`｜`少年`｜`青年`｜`中年`｜`老年`。判定证据优先序：① Stage 1【角色命名】/身份说明已写年龄或层次；② 称呼/辈分/关系强信号（幼年/少年/大叔/老太/爷爷/学生/退休等）；③ 职业与剧情时序态可合理推断。闪回/时序衍生若年龄态不同，衍生行须写**该态**层次（如 `林医生_幼年版` → `age_tier:儿童`）。**原文或上游已明示**→ 映射到对应层次，禁止忽略；**证据不足、无法确认**→ **默认 `age_tier:青年`**，禁止留空、写「年龄不明/待定/未知」或整项省略。群演簇写簇内主导或统一层次（跨段可用 `age_tier:青年至中年`）；仍不确定时默认 `青年`。
 - **新 Scene 角色重评估（强制）**：每个新 Scene 开场前，须对该 Scene 涉及的全部人物重判是否复用基础版/衍生版或新建；**禁止**因同名同姓、同一叙事线索而跳过 Scene 级重检直接沿用。
 - **主动识别为不同角色/衍生的触发条件**（满足其一且变化可持续时须建 CHAR 衍生或独立实体，不得默认复用）：① **时间跨度较大**（跨日/跨季/多年后/闪回童年/前后时序层等）；② **身份体系变化**（职级/阵营/社会角色/公开身份/伪装身份切换）；③ **性情表现体系变化**（长期性格弧光导致的稳定气质/行为模式差异，非单场瞬时情绪）；④ **任务/职能差异**（所执行使命、职业职责、行动目标体系与上一 Scene 实质不同）。
 - 每个实体族（CHAR/PROP/ENV）至少一条基础版；基础版名称必须与上游原名逐字一致，不加后缀。
@@ -198,6 +199,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - **剧情实体完整覆盖终检（强制）**：输出前逐 Scene 核对 Stage 1【主环境】固定实体清单中的**每一个**实体，均已在本次输出中**恰好一侧**落点——要么升格为独立 `PROP` 行（且 ENV 已剥离），要么保留在对应 `environment` 行的固定陈设字段（且无同名 `PROP`）；**禁止**双写，也**禁止**因未达 `PROP` 门槛而在两侧同时消失、也不得只字未提。**一次消耗品**按「一次消耗品禁止提取为 PROP」处理：禁止误建 `PROP`；已作 ENV 氛围陈设者保留 ENV；仅动作消耗、无氛围陈设者允许仅留 Beat。
 - **ENV/PROP 互斥终检（强制，XOR）**：输出前逐 `prop` 行反查全部 `ENV` 空镜字段——若 ENV 仍含该物件（同名/同义/可识别同一物）→ 失败，须删 ENV 残留或撤销该 `PROP`；再逐 ENV 固定陈设物件核对不得另有同物 `PROP`。**禁止**同物双归属。**一次消耗品禁入 PROP 终检**：输出前扫描全部 `prop` 行，若存在纸巾/瓜子等一次消耗品且非「关键证据/信物/可复现载体」例外 → 必须删除该 `PROP` 行后再输出。
 - **六环节覆盖终检（强制）**：输出前逐 Scene 核对——【Scene实体覆盖】与各 Beat 环节 2 **具名**可见主体均在 Index 中有对应行或可追溯衍生链；**【Scene实体覆盖】中的群演簇均已按簇落表为 collective `character`，且未拆成编号个体；具名叙事角色未误合并为群演簇**；环节 1 视角衍生/状态衍生 ENV 均已落表；**有动作+对白角色**的建置 Beat 与各对白落点所需主/衍生 ENV 均已落表或已 `auto_completed_derived_env` 补位，`trigger_evidence` 可核销；环节 3 硬证据物件未漏提为 `PROP`（**一次消耗品除外，禁止因“使用/拿起”误提**）；环节 5 微表演未误升格为 CHAR/PROP。
+- **年龄层次终检（强制）**：输出前逐 `character` 行核对——`entity_attributes` 均须含 `age_tier:` 且取值 ∈ `幼童|儿童|少年|青年|中年|老年`（群演簇允许 `青年至中年` 等闭集内区间）；缺项、写「不明/待定」或留空 → 补写（无证据则填 `青年`）后再输出。
 - **闪回/回忆覆盖终检（强制）**：完整闪回 Scene 与快速闪回切片中 Stage 1 已具名可见主体均须在 Index 中有对应行或衍生链。
 
 ----------------*****--------------
@@ -208,7 +210,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 | subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | None | 28岁男性·刑侦警探·沉稳克制；阵营/身份/年龄/职业。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S001 | character | 角色中文名 | Character English Name | None | None | age_tier:青年；约28岁男性·刑侦警探·沉稳克制；阵营/身份/职业。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
 | S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | clothing_env:灾难/战损现场态；左颊血痕、右肩衣料撕裂、外套沾灰烬尘土；可持续战损外观差异。 | 原名、战损、灾难现场 |
 | S003 | environment | 办公室会客区 | Office Reception Area | None | None | purpose:夜间雨夜刑侦专案组案情会商与文件递交的对峙会客空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；in_out:内；time_of_day:夜；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 主环境名、头尾双锚、俯视/仰视360、固定大件家具 |
 | S004 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | purpose:本场 Master Two Shot 建置视角，承载双人对坐会商的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:Master Two Shot 可见半空间：会议桌与椅区、百叶窗墙；机位后方不可见半开木门与门外通道；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 0度办公室会客区、主环境名、Master Two Shot |

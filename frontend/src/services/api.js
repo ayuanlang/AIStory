@@ -3701,6 +3701,30 @@ export const updateBillingDefaultApiPricing = async (defaultApiPricing, contentF
 export const getAdminUsersPage = async (page = 1, pageSize = 20) => (
     await api.get(`/users/page?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`)
 ).data;
+
+export const getAdminGroupsPage = async (page = 1, pageSize = 20) => (
+    await api.get(`/groups/page?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}&t=${Date.now()}`)
+).data;
+
+export const updateAdminGroup = async (groupId, data) => (
+    await api.put(`/groups/${groupId}`, data)
+).data;
+
+export const updateAdminGroupCredits = async (groupId, credits, mode = 'set') => (
+    await api.post(`/groups/${groupId}/credits`, { amount: credits, mode })
+).data;
+
+export const deleteAdminGroup = async (groupId) => (
+    await api.delete(`/groups/${groupId}`)
+).data;
+
+export const updateGroupMember = async (groupId, userId, data) => (
+    await api.put(`/groups/${groupId}/members/${userId}`, data)
+).data;
+
+export const removeGroupMember = async (groupId, userId) => (
+    await api.delete(`/groups/${groupId}/members/${userId}`)
+).data;
 export const getAgentToolPolicy = async () => (await api.get('/settings/system/agent/tools-policy')).data;
 export const updateAgentToolPolicy = async (payload = {}) => (await api.put('/settings/system/agent/tools-policy', payload || {})).data;
 export const getBillingRuleResetConfigManage = async () => (await api.get('/settings/system/manage/billing-rules/reset-config')).data;
@@ -3837,6 +3861,11 @@ export const fetchGroups = async () => {
 
 export const createGroup = async (data) => {
     const response = await api.post('/groups/', data);
+    return response.data;
+};
+
+export const fetchGroupMembers = async (groupId) => {
+    const response = await api.get('/groups/' + groupId + '/members?t=' + Date.now());
     return response.data;
 };
 

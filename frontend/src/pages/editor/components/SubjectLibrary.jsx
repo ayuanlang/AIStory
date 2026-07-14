@@ -7981,7 +7981,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                         </div>
                                                                     )}
                                                                     
-                                                                    <div className="absolute inset-0 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
+                                                                    <div className="absolute inset-0 z-30 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
                                                                          {depEntity?.image_url ? (
                                                                              <>
                                                                                  <button

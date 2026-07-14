@@ -5,8 +5,9 @@ import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingF
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
+import GroupsAdmin from '../components/GroupsAdmin';
 import UserEditModal from '../components/UserEditModal';
-import { Shield, User, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
+import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -5286,6 +5287,7 @@ const UserAdmin = () => {
 
     const adminTabs = [
         { id: 'users', label: t('用户', 'Users'), icon: User },
+        { id: 'groups', label: t('用户组', 'Groups'), icon: Users },
         { id: 'function_api_config', label: t('功能API配置', 'Function APIs'), icon: Settings },
         { id: 'pricing', label: t('定价', 'Pricing'), icon: DollarSign },
         { id: 'transactions', label: t('记录', 'History'), icon: Activity },
@@ -5888,6 +5890,9 @@ const UserAdmin = () => {
 
                     {/* QUEUE TAB */}
                     {activeTab === 'queue' && <QueueAdmin />}
+
+                    {/* GROUPS TAB */}
+                    {activeTab === 'groups' && <GroupsAdmin />}
 
                     {/* USERS TAB */}
                     {activeTab === 'users' && (

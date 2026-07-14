@@ -533,7 +533,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
                 </div>
             )}
             
-            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4 pointer-events-none">
+            <div className="absolute inset-0 z-30 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4 pointer-events-none">
                 <div className="flex justify-between items-end pointer-events-auto">
                     <div>
                         <div className="text-xs text-white/70 truncate w-24">{asset.filename || t('未命名', 'Untitled')}</div>
