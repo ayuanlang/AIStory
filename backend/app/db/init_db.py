@@ -561,6 +561,163 @@ def create_default_superuser():
         logger.error(f"Failed to create default superuser: {e}")
 
 
+def _ensure_user_group_schema(*, is_postgres: bool) -> dict:
+    """
+    Ensure user-group tables/columns exist on both SQLite and Postgres.
+    Safe to call repeatedly; used by critical startup bootstrap and /fix-db-schema.
+    """
+    status = {
+        "user_groups": False,
+        "user_group_memberships": False,
+        "project_group_credit_allocations": False,
+        "users.current_group_id": False,
+        "transaction_history.target_group_id": False,
+        "payment_orders.target_group_id": False,
+        "invoice_profiles.group_id": False,
+        "actions": [],
+        "errors": [],
+    }
+
+    def _note(action: str) -> None:
+        status["actions"].append(action)
+        logger.info(action)
+
+    def _fail(msg: str) -> None:
+        status["errors"].append(msg)
+        logger.error(msg)
+
+    try:
+        inspector = inspect(engine)
+
+        # 1) Create group tables first (users.current_group_id FKs to user_groups).
+        if hasattr(models, "UserGroup"):
+            if not inspector.has_table("user_groups"):
+                models.UserGroup.__table__.create(bind=engine, checkfirst=True)
+                _note("Created user_groups table")
+            else:
+                status["actions"].append("user_groups already exists")
+            _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
+            status["user_groups"] = inspect(engine).has_table("user_groups")
+
+        if hasattr(models, "UserGroupMembership"):
+            if not inspect(engine).has_table("user_group_memberships"):
+                models.UserGroupMembership.__table__.create(bind=engine, checkfirst=True)
+                _note("Created user_group_memberships table")
+            else:
+                status["actions"].append("user_group_memberships already exists")
+            _ensure_missing_table_columns(
+                "user_group_memberships",
+                models.UserGroupMembership,
+                is_postgres=is_postgres,
+            )
+            status["user_group_memberships"] = inspect(engine).has_table("user_group_memberships")
+
+        if hasattr(models, "ProjectGroupCreditAllocation"):
+            if not inspect(engine).has_table("project_group_credit_allocations"):
+                models.ProjectGroupCreditAllocation.__table__.create(bind=engine, checkfirst=True)
+                _note("Created project_group_credit_allocations table")
+            else:
+                status["actions"].append("project_group_credit_allocations already exists")
+            _ensure_missing_table_columns(
+                "project_group_credit_allocations",
+                models.ProjectGroupCreditAllocation,
+                is_postgres=is_postgres,
+            )
+            status["project_group_credit_allocations"] = inspect(engine).has_table(
+                "project_group_credit_allocations"
+            )
+
+        # 2) Optional FK columns on existing tables (no hard REFERENCES in ALTER for portability).
+        column_specs = [
+            ("users", "current_group_id", "INTEGER", "users.current_group_id"),
+            ("transaction_history", "target_group_id", "INTEGER", "transaction_history.target_group_id"),
+            ("payment_orders", "target_group_id", "INTEGER", "payment_orders.target_group_id"),
+            ("invoice_profiles", "group_id", "INTEGER", "invoice_profiles.group_id"),
+        ]
+        for table_name, column_name, column_type, status_key in column_specs:
+            try:
+                insp = inspect(engine)
+                if not insp.has_table(table_name):
+                    status[status_key] = False
+                    continue
+                cols = {c["name"] for c in insp.get_columns(table_name)}
+                if column_name not in cols:
+                    with engine.begin() as conn:
+                        if is_postgres:
+                            conn.execute(
+                                text(
+                                    f"ALTER TABLE {table_name} "
+                                    f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                                )
+                            )
+                        else:
+                            conn.execute(
+                                text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+                            )
+                    _note(f"Added {table_name}.{column_name}")
+                status[status_key] = column_name in {
+                    c["name"] for c in inspect(engine).get_columns(table_name)
+                }
+            except Exception as col_exc:
+                _fail(f"Failed to ensure {table_name}.{column_name}: {col_exc}")
+
+        # 3) Membership uniqueness to avoid duplicate inserts under concurrency.
+        if status.get("user_group_memberships"):
+            try:
+                with engine.begin() as conn:
+                    if is_postgres:
+                        conn.execute(
+                            text(
+                                """
+                                CREATE UNIQUE INDEX IF NOT EXISTS uq_user_group_memberships_user_group
+                                ON user_group_memberships (user_id, group_id)
+                                """
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                """
+                                CREATE UNIQUE INDEX IF NOT EXISTS uq_user_group_memberships_user_group
+                                ON user_group_memberships (user_id, group_id)
+                                """
+                            )
+                        )
+                status["actions"].append("Ensured unique index on user_group_memberships(user_id, group_id)")
+            except Exception as idx_exc:
+                # Duplicate historical rows may block unique index creation; keep serving traffic.
+                _fail(f"Failed to ensure membership unique index: {idx_exc}")
+
+    except Exception as exc:
+        _fail(f"Failed to ensure user group schema: {exc}")
+
+    return status
+
+
+def inspect_user_group_schema() -> dict:
+    """Read-only snapshot of user-group related schema for diagnostics."""
+    inspector = inspect(engine)
+    result = {
+        "dialect": getattr(engine.dialect, "name", None),
+        "tables": {},
+        "columns": {},
+    }
+    for table_name in (
+        "user_groups",
+        "user_group_memberships",
+        "project_group_credit_allocations",
+        "users",
+        "transaction_history",
+        "payment_orders",
+        "invoice_profiles",
+    ):
+        exists = inspector.has_table(table_name)
+        result["tables"][table_name] = exists
+        if exists:
+            result["columns"][table_name] = sorted(c["name"] for c in inspector.get_columns(table_name))
+    return result
+
+
 def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
     if is_postgres:
         user_columns_pg = [
@@ -573,7 +730,8 @@ def _ensure_user_runtime_schema(*, is_postgres: bool) -> None:
             ("is_authorized", "BOOLEAN DEFAULT FALSE"),
             ("is_system", "BOOLEAN DEFAULT FALSE"),
             ("credits", "INTEGER DEFAULT 0"),
-            ("avatar_url", "VARCHAR")
+            ("avatar_url", "VARCHAR"),
+            ("current_group_id", "INTEGER"),
         ]
         with engine.begin() as conn:
             for col_name, col_type in user_columns_pg:
@@ -779,6 +937,7 @@ def _ensure_minimum_runtime_schema(*, is_postgres: bool) -> None:
 
     _ensure_review_workflow_schema(is_postgres=is_postgres, apply_backfills=False)
     _ensure_user_runtime_schema(is_postgres=is_postgres)
+    _ensure_user_group_schema(is_postgres=is_postgres)
 
     logger.info("Critical schema migration: complete")
 
@@ -942,21 +1101,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             logger.error(f"Failed to ensure script progress pipeline scoped unique index: {e}")
 
         try:
-            if hasattr(models, "UserGroup"):
-                if not inspector.has_table("user_groups"):
-                    models.UserGroup.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created user_groups table")
-                _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
-            if hasattr(models, "UserGroupMembership"):
-                if not inspector.has_table("user_group_memberships"):
-                    models.UserGroupMembership.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created user_group_memberships table")
-                _ensure_missing_table_columns("user_group_memberships", models.UserGroupMembership, is_postgres=is_postgres)
-            if hasattr(models, "ProjectGroupCreditAllocation"):
-                if not inspector.has_table("project_group_credit_allocations"):
-                    models.ProjectGroupCreditAllocation.__table__.create(bind=engine, checkfirst=True)
-                    logger.info("Created project_group_credit_allocations table")
-                _ensure_missing_table_columns("project_group_credit_allocations", models.ProjectGroupCreditAllocation, is_postgres=is_postgres)
+            _ensure_user_group_schema(is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure user group columns/tables: {e}")
 

@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, joinedload
 from app.api.deps import get_current_user
 from app.core.time_utils import now_bj_iso
-from app.db.session import get_db
+from app.db.session import get_db, engine
+from app.db.init_db import check_and_migrate_tables, _ensure_user_group_schema
 from app.models.all_models import (
     User,
     UserGroup,
@@ -16,8 +18,43 @@ from app.models.all_models import (
 )
 from pydantic import BaseModel
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/groups", tags=["groups"])
+
+
+def _is_schema_compat_error(exc: Exception) -> bool:
+    raw = str(getattr(exc, "orig", exc) or exc).strip().lower()
+    if not raw:
+        return False
+    markers = (
+        "undefinedcolumn",
+        "undefinedtable",
+        "does not exist",
+        "no such column",
+        "no such table",
+        "relation",
+    )
+    return any(marker in raw for marker in markers)
+
+
+def _run_with_schema_self_heal(db: Session, operation, *, context: str):
+    try:
+        return operation()
+    except (OperationalError, ProgrammingError) as exc:
+        if not _is_schema_compat_error(exc):
+            raise
+        logger.warning("[%s] detected schema mismatch, ensuring user-group schema and retrying once: %s", context, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        is_postgres = getattr(engine.dialect, "name", "") == "postgresql"
+        _ensure_user_group_schema(is_postgres=is_postgres)
+        check_and_migrate_tables()
+        return operation()
 
 class GroupCreate(BaseModel):
     name: str
@@ -122,36 +159,71 @@ def _serialize_member(m: UserGroupMembership) -> dict:
     }
 
 
+@router.get("/schema-status", response_model=dict)
+def get_group_schema_status(
+    current_user: User = Depends(get_current_user),
+):
+    _require_superuser(current_user)
+    from app.db.init_db import inspect_user_group_schema
+    snapshot = inspect_user_group_schema()
+    required_tables = (
+        "user_groups",
+        "user_group_memberships",
+        "project_group_credit_allocations",
+    )
+    missing_tables = [name for name in required_tables if not snapshot["tables"].get(name)]
+    required_columns = {
+        "users": ["current_group_id"],
+        "user_groups": ["id", "name", "credits", "owner_id"],
+        "user_group_memberships": ["user_id", "group_id", "permission_level"],
+    }
+    missing_columns = {}
+    for table_name, cols in required_columns.items():
+        existing = set(snapshot["columns"].get(table_name) or [])
+        absent = [c for c in cols if c not in existing]
+        if absent:
+            missing_columns[table_name] = absent
+    return {
+        "ok": not missing_tables and not missing_columns,
+        "missing_tables": missing_tables,
+        "missing_columns": missing_columns,
+        "snapshot": snapshot,
+    }
+
+
 @router.post("/", response_model=dict)
 def create_group(
     group_in: GroupCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    new_group = UserGroup(
-        name=group_in.name,
-        description=group_in.description,
-        owner_id=current_user.id
-    )
-    db.add(new_group)
-    db.flush()  # to get id
+    def _persist():
+        new_group = UserGroup(
+            name=group_in.name,
+            description=group_in.description,
+            owner_id=current_user.id
+        )
+        db.add(new_group)
+        db.flush()  # to get id
 
-    membership = UserGroupMembership(
-        user_id=current_user.id,
-        group_id=new_group.id,
-        permission_level=2  # Owner
-    )
-    db.add(membership)
-    current_user.current_group_id = new_group.id
+        membership = UserGroupMembership(
+            user_id=current_user.id,
+            group_id=new_group.id,
+            permission_level=2  # Owner
+        )
+        db.add(membership)
+        current_user.current_group_id = new_group.id
 
-    # Actually update DB user
-    real_user = db.query(User).filter(User.id == current_user.id).first()
-    if real_user:
-        real_user.current_group_id = new_group.id
-    db.commit()
-    db.refresh(new_group)
+        # Actually update DB user
+        real_user = db.query(User).filter(User.id == current_user.id).first()
+        if real_user:
+            real_user.current_group_id = new_group.id
+        db.commit()
+        db.refresh(new_group)
 
-    return {"id": new_group.id, "name": new_group.name}
+        return {"id": new_group.id, "name": new_group.name}
+
+    return _run_with_schema_self_heal(db, _persist, context="create_group")
 
 
 @router.get("/page", response_model=dict)
@@ -390,30 +462,33 @@ def add_member(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    _require_group_admin_or_superuser(db, group_id, current_user)
+    def _persist():
+        _require_group_admin_or_superuser(db, group_id, current_user)
 
-    group = db.query(UserGroup).filter(UserGroup.id == group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
+        group = db.query(UserGroup).filter(UserGroup.id == group_id).first()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
 
-    target_user = _resolve_target_user(db, member_in)
+        target_user = _resolve_target_user(db, member_in)
 
-    existing = db.query(UserGroupMembership).filter(
-        UserGroupMembership.group_id == group_id,
-        UserGroupMembership.user_id == target_user.id
-    ).first()
+        existing = db.query(UserGroupMembership).filter(
+            UserGroupMembership.group_id == group_id,
+            UserGroupMembership.user_id == target_user.id
+        ).first()
 
-    if existing:
-        raise HTTPException(status_code=400, detail="User already in group.")
+        if existing:
+            raise HTTPException(status_code=400, detail="User already in group.")
 
-    new_membership = UserGroupMembership(
-        user_id=target_user.id,
-        group_id=group_id,
-        permission_level=member_in.permission_level
-    )
-    db.add(new_membership)
-    db.commit()
-    return {"message": "Success"}
+        new_membership = UserGroupMembership(
+            user_id=target_user.id,
+            group_id=group_id,
+            permission_level=member_in.permission_level
+        )
+        db.add(new_membership)
+        db.commit()
+        return {"message": "Success"}
+
+    return _run_with_schema_self_heal(db, _persist, context="add_group_member")
 
 
 @router.put("/{group_id}/members/{user_id}", response_model=dict)

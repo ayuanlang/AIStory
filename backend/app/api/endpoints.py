@@ -6854,9 +6854,23 @@ def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
              # pass # Loose check for now as we are desperate
              pass
 
+        from app.db.init_db import (
+            check_and_migrate_tables,
+            _ensure_user_group_schema,
+            inspect_user_group_schema,
+        )
+        from app.db.session import engine as db_engine
+
         logger.info(f"Manual DB Fix triggered by {current_user.username}")
         check_and_migrate_tables()
-        return {"message": "Migration script executed successfully. Check logs for details."}
+        is_postgres = getattr(db_engine.dialect, "name", "") == "postgresql"
+        group_ensure = _ensure_user_group_schema(is_postgres=is_postgres)
+        group_snapshot = inspect_user_group_schema()
+        return {
+            "message": "Migration script executed successfully. Check logs for details.",
+            "user_group_schema": group_snapshot,
+            "user_group_ensure": group_ensure,
+        }
     except Exception as e:
         logger.error(f"Manual DB Fix failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
