@@ -458,6 +458,76 @@ const sceneUnitIdsMatch = (leftId, rightId, sceneOrder, episodePrefix) => (
     === canonicalizeSceneUnitId(rightId, sceneOrder, episodePrefix)
 );
 
+/** Align script-marker units with Stage 2 scene_markdown display (id / order / name). */
+const alignSceneBeatsCandidatesWithStage2 = (scriptCandidates, stage2ByScene, episodePrefix) => {
+    const units = Array.isArray(scriptCandidates) ? scriptCandidates : [];
+    const byScene = stage2ByScene && typeof stage2ByScene === 'object' ? stage2ByScene : {};
+    const stage2Entries = Object.entries(byScene)
+        .map(([rawId, entry]) => {
+            const sceneId = String(entry?.scene_id || rawId || '').trim();
+            if (!sceneId) return null;
+            const sceneOrder = Number(entry?.scene_order) || deriveSceneOrderFromSceneId(sceneId) || 0;
+            const sceneName = String(entry?.scene_name || '').trim();
+            return { sceneId, sceneOrder, sceneName };
+        })
+        .filter(Boolean)
+        .sort((left, right) => {
+            if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
+                return (left.sceneOrder || 0) - (right.sceneOrder || 0);
+            }
+            return String(left.sceneId).localeCompare(String(right.sceneId));
+        });
+
+    if (!stage2Entries.length || !units.length) {
+        return units;
+    }
+
+    const used = new Set();
+    const takeMatch = (predicate) => {
+        const index = units.findIndex((unit, idx) => !used.has(idx) && predicate(unit, idx));
+        if (index < 0) return null;
+        used.add(index);
+        return units[index];
+    };
+
+    const aligned = stage2Entries.map((entry) => {
+        let match = takeMatch((unit) => sceneUnitIdsMatch(
+            unit?.sceneId,
+            entry.sceneId,
+            entry.sceneOrder || unit?.sceneOrder,
+            episodePrefix
+        ));
+        if (!match && entry.sceneOrder > 0) {
+            match = takeMatch((unit) => Number(unit?.sceneOrder) === Number(entry.sceneOrder));
+        }
+        const displayLabel = entry.sceneName
+            ? `${entry.sceneId} · ${entry.sceneName}`
+            : (match?.displayLabel || entry.sceneId);
+        if (match) {
+            return {
+                ...match,
+                sceneId: entry.sceneId,
+                sceneOrder: entry.sceneOrder || match.sceneOrder,
+                displayLabel,
+                stage2Aligned: true,
+            };
+        }
+        return {
+            sceneId: entry.sceneId,
+            sceneOrder: entry.sceneOrder || 0,
+            sceneText: '',
+            displayLabel,
+            markerStartToken: `[SCENE_START:${entry.sceneId}]`,
+            markerEndToken: `[SCENE_END:${entry.sceneId}]`,
+            stage2Aligned: true,
+            unmatchedScriptUnit: true,
+        };
+    });
+
+    // When Stage 2 results exist, the selectable list must match Phase 2 cards exactly.
+    return aligned;
+};
+
 const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
     const ids = new Set();
     (Array.isArray(units) ? units : []).forEach((unit, idx) => {
@@ -7971,6 +8041,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     analysisAttentionNotes,
                     selectedReuseSubjectAssets,
                     {
+                        subjectIndexText: subjectIndexForStage2_2,
                         onTaskCreated: (taskId) => {
                             const stableTaskId = String(taskId || '').trim();
                             if (stableTaskId) {
@@ -8869,13 +8940,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     return awaitAnalyzeSceneWithRecovery(
                         () => runScriptAnalysisFlowAnalyzeNode(
                             pData.nodeKey || (pData.key === 'characters' ? 'asset_design_character' : (pData.key === 'props' ? 'asset_design_prop' : 'asset_design_environment')),
-                            specificSubjectIndexText,  
-                            pData.content, 
-                            null, 
+                            specificSubjectIndexText,
+                            pData.content,
+                            null,
                             isPrimary ? (activeEpisode?.id || null) : null, // Only bind episode ID on the first one to avoid DB overwrite race conditions
-                            analysisAttentionNotes, 
-                            selectedReuseSubjectAssets, 
+                            analysisAttentionNotes,
+                            selectedReuseSubjectAssets,
                             {
+                                subjectIndexText: specificSubjectIndexText,
                                 onTaskCreated: (taskId) => {
                                     const stableTaskId = String(taskId || '').trim();
                                     onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${stableTaskId}`, 'info');
@@ -13327,21 +13399,55 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return String(currentStageOutputs?.stages?.[stageKey]?.inputs?.[inputKey]?.content || '').trim();
     }, [currentStageOutputs]);
 
+    const resolveStage1AdaptedScriptText = useCallback(() => {
+        // Scene beats / Stage 2 must use the optimized script only — never episode.script_content.
+        const isSceneMarkdownTableText = (candidateText) => {
+            const candidate = String(candidateText || '');
+            if (!candidate.trim()) return false;
+            return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
+                || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
+        };
+
+        const fromStageOutput = String(getStageOutputContent('stage1', 'adapted_script') || '').trim();
+        if (fromStageOutput && !isSceneMarkdownTableText(fromStageOutput)) {
+            return { text: fromStageOutput, source: 'stage1.adapted_script' };
+        }
+
+        const fromEpisodeField = String(activeEpisode?.ai_scene_analysis_adaptation || '').trim();
+        if (fromEpisodeField && !isSceneMarkdownTableText(fromEpisodeField)) {
+            const extracted = String(extractStage1AdaptedScriptBody(
+                /(?:###?\s*)?(?:第二部分[:：]?\s*修改后的剧本|Second\s*Part[:：]?\s*Adapted\s*Script)/i.test(fromEpisodeField)
+                    ? fromEpisodeField
+                    : `### 第二部分：修改后的剧本\n${fromEpisodeField}`
+            ) || '').trim() || fromEpisodeField;
+            if (extracted && !isSceneMarkdownTableText(extracted)) {
+                return { text: extracted, source: 'ai_scene_analysis_adaptation' };
+            }
+        }
+
+        const stage1RawText = String(getStageOutputContent('stage1', 'raw_text') || '').trim();
+        if (stage1RawText) {
+            const extracted = String(extractStage1AdaptedScriptBody(stage1RawText) || '').trim();
+            if (extracted && !isSceneMarkdownTableText(extracted)) {
+                return { text: extracted, source: 'stage1.raw_text' };
+            }
+        }
+
+        return { text: '', source: '' };
+    }, [activeEpisode?.ai_scene_analysis_adaptation, extractStage1AdaptedScriptBody, getStageOutputContent]);
+
     const buildStage1RestartSourceText = useCallback(() => {
-        const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
+        const { text: adaptedScript } = resolveStage1AdaptedScriptText();
         const visualBackfillJson = getStageOutputContent('stage1', 'project_visual_backfill');
         const parts = [];
         if (adaptedScript) {
             parts.push(`### 第二部分：修改后的剧本\n${adaptedScript}`);
-        } else {
-            const rawText = getStageOutputContent('stage1', 'raw_text');
-            if (rawText) return rawText;
         }
         if (visualBackfillJson) {
             parts.push(`### Project Visual Backfill\n\n\`\`\`json\n${visualBackfillJson}\n\`\`\``);
         }
         return parts.join('\n\n').trim();
-    }, [getStageOutputContent]);
+    }, [getStageOutputContent, resolveStage1AdaptedScriptText]);
 
     const handleImportStageArtifact = useCallback(async ({ content = '', importType = 'auto', label = 'stage output', importOptions = {} } = {}) => {
         const text = String(content || '').trim();
@@ -13355,13 +13461,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [doImportText, onLog]);
 
     const handleRestoreAdaptedScript = useCallback(async () => {
-        const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
+        const adaptedScript = resolveStage1AdaptedScriptText().text || getStageOutputContent('stage1', 'adapted_script');
         if (!adaptedScript || !activeEpisode?.id || typeof onUpdateScript !== 'function') return;
         await onUpdateScript(activeEpisode.id, adaptedScript);
         setRawContent(adaptedScript);
         setIsRawMode(true);
         onLog?.('Restored Stage 1 adapted script back into the episode script editor.', 'success');
-    }, [activeEpisode?.id, getStageOutputContent, onLog, onUpdateScript]);
+    }, [activeEpisode?.id, getStageOutputContent, onLog, onUpdateScript, resolveStage1AdaptedScriptText]);
 
     const handleRestartStage2 = async () => {
         if (!activeEpisode?.id || isAnalyzing) return;
@@ -13705,41 +13811,76 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const resolveSceneBeatsRerunCandidates = useCallback(() => {
+        const { text: adaptedScriptText, source: adaptedScriptSource } = resolveStage1AdaptedScriptText();
         const stage1SourceText = buildStage1RestartSourceText();
-        const adaptedScriptText = extractStage1AdaptedScriptBody(stage1SourceText);
         if (!String(adaptedScriptText || '').trim()) {
-            return { stage1SourceText, candidates: [], error: 'missing_adapted_script' };
+            return { stage1SourceText, candidates: [], error: 'missing_adapted_script', adaptedScriptSource };
         }
+
+        const resolveStage2BySceneMap = () => {
+            const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
+            const parsed = parseSceneMarkdownBySceneMap(rawJson);
+            if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                return parsed;
+            }
+            const merged = String(
+                getStageOutputContent('stage2', 'scene_markdown')
+                || activeEpisode?.ai_scene_analysis_scene_markdown
+                || ''
+            ).trim();
+            return merged ? splitSceneMarkdownTableBySceneId(merged) : {};
+        };
+
         try {
             const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
-            const candidates = applyCanonicalSceneIdsToUnits(
+            let candidates = applyCanonicalSceneIdsToUnits(
                 parseSceneUnitsFromScriptMarkers(adaptedScriptText).map((unit) => ({
                     ...unit,
                     displayLabel: extractSceneDisplayLabel(unit),
                 })),
                 episodePrefix
             );
-            return { stage1SourceText, candidates, error: '' };
+            candidates = alignSceneBeatsCandidatesWithStage2(
+                candidates,
+                resolveStage2BySceneMap(),
+                episodePrefix
+            );
+            return { stage1SourceText, candidates, error: '', adaptedScriptSource };
         } catch (error) {
             const fallbackUnit = buildSingleSceneUnitFromText(adaptedScriptText);
             if (fallbackUnit) {
                 const episodePrefix = resolveEpisodeSceneIdPrefix(activeEpisode, adaptedScriptText);
-                const candidates = applyCanonicalSceneIdsToUnits(
+                let candidates = applyCanonicalSceneIdsToUnits(
                     [{
                         ...fallbackUnit,
                         displayLabel: extractSceneDisplayLabel(fallbackUnit),
                     }],
                     episodePrefix
                 );
-                return { stage1SourceText, candidates, error: '' };
+                candidates = alignSceneBeatsCandidatesWithStage2(
+                    candidates,
+                    resolveStage2BySceneMap(),
+                    episodePrefix
+                );
+                return { stage1SourceText, candidates, error: '', adaptedScriptSource };
             }
             return {
                 stage1SourceText,
                 candidates: [],
                 error: error?.message || String(error || 'scene_marker_parse_error'),
+                adaptedScriptSource,
             };
         }
-    }, [activeEpisode, buildStage1RestartSourceText, extractSceneDisplayLabel, extractStage1AdaptedScriptBody, parseSceneUnitsFromScriptMarkers]);
+    }, [
+        activeEpisode,
+        buildStage1RestartSourceText,
+        extractSceneDisplayLabel,
+        getStageOutputContent,
+        parseSceneMarkdownBySceneMap,
+        parseSceneUnitsFromScriptMarkers,
+        resolveStage1AdaptedScriptText,
+        splitSceneMarkdownTableBySceneId,
+    ]);
 
     const executeSceneBeatsRerun = useCallback(async ({ mode = 'all', sceneId = '' } = {}) => {
         if (!activeEpisode?.id || isAnalyzing) return;
@@ -13757,7 +13898,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert(
                 candidateError
                     ? t(`无法按场景分隔符切分剧本：${candidateError}`, `Failed to split script by scene markers: ${candidateError}`)
-                    : t('剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found; per-scene rerun is unavailable.')
+                    : t('优化后剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
             );
             return;
         }
@@ -13781,11 +13922,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             activeEpisode,
             extractStage1AdaptedScriptBody(stage1SourceText)
         );
+        const executableCandidates = candidates.filter((unit) => (
+            String(unit?.sceneText || '').trim() && !unit?.unmatchedScriptUnit
+        ));
         const targetSceneUnits = rerunMode === 'single'
-            ? candidates.filter((unit) => sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix))
+            ? executableCandidates.filter((unit) => sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix))
             : null;
         if (rerunMode === 'single' && !targetSceneUnits?.length) {
-            alert(t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.'));
+            const stage2Only = candidates.some((unit) => (
+                sceneUnitIdsMatch(unit.sceneId, targetSceneId, unit.sceneOrder, episodePrefix)
+                && unit?.unmatchedScriptUnit
+            ));
+            alert(
+                stage2Only
+                    ? t('该场景在第二阶段结果中存在，但第一阶段剧本分隔符中找不到对应场次正文，无法重排。', 'This scene exists in Stage 2 results, but no matching Stage 1 script body was found; rerun cannot start.')
+                    : t('未找到所选场景，无法重排。', 'Selected scene was not found; rerun cannot start.')
+            );
+            return;
+        }
+        if (rerunMode === 'all' && !executableCandidates.length) {
+            alert(t('没有可重排的场景（第二阶段场景无法映射回第一阶段剧本场次）。', 'No rerunnable scenes (Stage 2 scenes could not be mapped back to Stage 1 script units).'));
             return;
         }
 
@@ -13795,7 +13951,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const rerunLabel = rerunMode === 'single'
             ? `Stage 2.2 scene-only rerun [${targetSceneId}]`
             : 'Stage 2.2 scene-only rerun (sync orchestration)';
-        const orchestrationSceneCount = rerunMode === 'single' ? 1 : candidates.length;
+        const unitsForRerun = rerunMode === 'single' ? (targetSceneUnits || []) : executableCandidates;
+        const orchestrationSceneCount = unitsForRerun.length;
 
         analysisProgressDismissedRef.current = false;
         setIsAnalyzing(true);
@@ -13815,7 +13972,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             orchestrationLiveImportedScenesRef.current = new Set();
             orchestrationPersistedSceneMarkdownRef.current = {};
             const rerunSceneIds = collectOrchestrationResetSceneIds(
-                rerunMode === 'single' ? (targetSceneUnits || []) : candidates,
+                unitsForRerun,
                 episodePrefix
             );
             if (projectId && activeEpisode?.id && rerunSceneIds.length > 0) {
@@ -13836,7 +13993,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
 
-            const adaptedScriptForRerun = extractStage1AdaptedScriptBody(stage1SourceText);
+            const adaptedScriptForRerun = String(resolveStage1AdaptedScriptText().text || '').trim()
+                || extractStage1AdaptedScriptBody(stage1SourceText);
             const stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1SourceText, adaptedScriptForRerun);
             const finalStage2_2UserInput = stage2_2UserInputBody;
 
@@ -13847,7 +14005,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 stage2_2UserInputBody,
                 stage2_1SubjectIndexText,
                 stage1SourceText,
-                targetSceneUnits: rerunMode === 'single' ? targetSceneUnits : candidates,
+                targetSceneUnits: unitsForRerun,
                 startedAt,
                 baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
                 sceneAnalysisModePayload: 'scene_beats_only',
@@ -14151,6 +14309,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId,
         publishSceneOrchestrationPanelStatus,
         resolveSceneBeatsRerunCandidates,
+        resolveStage1AdaptedScriptText,
         resetSceneOrchestrationProgress,
         runAutoImportAndSwitchToScenes,
         runStage2_2WithValidationRetry,
@@ -14171,12 +14330,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const sceneBeatsRerunCandidates = useMemo(() => {
         const { candidates } = resolveSceneBeatsRerunCandidates();
         return candidates;
-    }, [resolveSceneBeatsRerunCandidates, activeEpisode?.id, activeEpisode?.ai_scene_analysis_adaptation, activeEpisode?.ai_stage_outputs]);
+    }, [
+        resolveSceneBeatsRerunCandidates,
+        activeEpisode?.id,
+        activeEpisode?.ai_scene_analysis_adaptation,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.ai_stage_outputs,
+    ]);
 
     const openSceneBeatsRerunModal = useCallback(() => {
         if (!activeEpisode?.id || isAnalyzing) return;
 
-        const { stage1SourceText, candidates, error: candidateError } = resolveSceneBeatsRerunCandidates();
+        const { stage1SourceText, candidates, error: candidateError, adaptedScriptSource } = resolveSceneBeatsRerunCandidates();
         if (!stage1SourceText) {
             alert(t('缺少第一阶段产物，无法仅重排场景。', 'Stage 1 outputs are missing, so scene-beats-only rerun cannot start.'));
             return;
@@ -14189,7 +14354,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             alert(
                 candidateError
                     ? t(`无法按场景分隔符切分剧本：${candidateError}`, `Failed to split script by scene markers: ${candidateError}`)
-                    : t('剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found; per-scene rerun is unavailable.')
+                    : t('优化后剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
             );
             return;
         }
@@ -14205,6 +14370,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
+        onLog?.(
+            t(
+                `场景重排将使用优化后剧本（来源：${adaptedScriptSource || 'unknown'}，${candidates.length} 场）。不会使用原始剧本。`,
+                `Scene beats rerun will use the optimized script (source: ${adaptedScriptSource || 'unknown'}, ${candidates.length} scene(s)). Original script is not used.`
+            ),
+            'info'
+        );
+
         setSceneBeatsRerunModal({
             open: true,
             mode: candidates.length === 1 ? 'single' : 'all',
@@ -14217,6 +14390,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         getStageOutputContent,
         hasUsableSubjectIndexRows,
         isAnalyzing,
+        onLog,
         resolveSceneBeatsRerunCandidates,
         t,
     ]);
@@ -14570,10 +14744,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resolveSubjectIndexTextForAssetRerun = useCallback(() => {
         const candidateSources = [
-            activeEpisode?.ai_scene_analysis_subject_index,
             getStageOutputContent('stage2', 'subject_index'),
             subjectIndexText,
+            activeEpisode?.ai_scene_analysis_subject_index,
         ];
+        for (const raw of candidateSources) {
+            const direct = extractPureSubjectIndexText(String(raw || '').trim());
+            if (direct && hasUsableSubjectIndexRows(direct)) return direct;
+        }
         for (const raw of candidateSources) {
             const direct = extractPureSubjectIndexText(String(raw || '').trim());
             if (direct) return direct;
@@ -14583,6 +14761,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_subject_index,
         extractPureSubjectIndexText,
         getStageOutputContent,
+        hasUsableSubjectIndexRows,
         subjectIndexText,
     ]);
 
@@ -15863,7 +16042,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         sceneIds.forEach((sceneId) => {
             const entry = byScene[sceneId] || {};
             const sceneContent = String(entry.markdown || '').trim();
-            const sceneLabel = String(entry.scene_name || sceneId).trim() || sceneId;
+            const sceneName = String(entry.scene_name || '').trim();
+            const sceneLabel = sceneName ? `${sceneId} · ${sceneName}` : sceneId;
             cards.push({
                 key: `stage2-scene-markdown-${sceneId}`,
                 eyebrow: t('第二阶段', 'Stage 2'),
@@ -15898,9 +16078,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         });
 
-        const subjectIndex = extractPureSubjectIndexText(
-            String(activeEpisode?.ai_scene_analysis_subject_index || getStageOutputContent('stage2', 'subject_index') || subjectIndexText || '').trim()
-        );
+        const subjectIndex = (() => {
+            const candidates = [
+                getStageOutputContent('stage2', 'subject_index'),
+                subjectIndexText,
+                activeEpisode?.ai_scene_analysis_subject_index,
+            ];
+            for (const raw of candidates) {
+                const extracted = extractPureSubjectIndexText(String(raw || '').trim());
+                if (extracted && hasUsableSubjectIndexRows(extracted)) return extracted;
+            }
+            for (const raw of candidates) {
+                const extracted = extractPureSubjectIndexText(String(raw || '').trim());
+                if (extracted) return extracted;
+            }
+            return '';
+        })();
 
         cards.push({
                 key: 'stage2-subject-index',
@@ -15937,7 +16130,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
 
         return cards;
-    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, isAnalyzing, persistSubjectIndexEdit, stage2SceneMarkdownByScene, subjectIndexText, t]);
+    }, [activeEpisode?.ai_scene_analysis_scene_markdown, activeEpisode?.ai_scene_analysis_subject_index, executeSceneBeatsRerun, extractPureSubjectIndexText, getStageOutputContent, handleImportStageArtifact, handleRerunSceneBeatsOnly, handleRestartStage2, hasUsableSubjectIndexRows, isAnalyzing, persistSubjectIndexEdit, stage2SceneMarkdownByScene, subjectIndexText, t]);
 
     const stage3StageCards = useMemo(() => {
         const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');
@@ -16703,10 +16896,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="p-4 overflow-y-auto custom-scrollbar space-y-4 text-sm">
                             <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-white/80">
                                 <div className="font-semibold text-white">
-                                    {t(`已从剧本分隔符识别 ${sceneBeatsRerunCandidates.length} 个场景`, `${sceneBeatsRerunCandidates.length} scene(s) detected from script markers`)}
+                                    {t(`基于优化后剧本，与第二阶段场景分析结果对齐，共 ${sceneBeatsRerunCandidates.length} 个场景`, `${sceneBeatsRerunCandidates.length} scene(s) from optimized script, aligned with Stage 2 scene analysis`)}
                                 </div>
                                 <div className="mt-1 text-xs text-white/55">
-                                    {t('按 [SCENE_START] / [SCENE_END] 切分；全部重跑将先同步场景单元，再由后端统一发起 Stage 2.2。', 'Split by [SCENE_START]/[SCENE_END]; rerun all syncs scene units then launches Stage 2.2 orchestration on backend.')}
+                                    {t('正文取自第一阶段「优化后剧本」（不会使用原始剧本）；列表按第二阶段 Scenes Table 的场次 ID / 名称展示。', 'Body comes from Stage 1 optimized script (original script is never used); list labels follow Stage 2 Scenes Table id/name.')}
                                 </div>
                             </div>
 

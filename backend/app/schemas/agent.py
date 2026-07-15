@@ -40,3 +40,5 @@ class AnalyzeSceneRequest(BaseModel):
     system_api_id: Optional[int] = None
     analysis_trace_id: Optional[str] = None
     skip_episode_persist: Optional[bool] = False
+    # Client-provided Subject Index for downstream gates when episode field is empty/contaminated.
+    subject_index_text: Optional[str] = None

@@ -3497,6 +3497,10 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     if (Array.isArray(reuseSubjectAssets) && reuseSubjectAssets.length > 0) {
         analyze_payload.reuse_subject_assets = reuseSubjectAssets;
     }
+    const subjectIndexText = String(runtimeHooks?.subjectIndexText || runtimeHooks?.subject_index_text || '').trim();
+    if (subjectIndexText) {
+        analyze_payload.subject_index_text = subjectIndexText;
+    }
     const analysisTraceId = String(runtimeHooks?.analysisTraceId || runtimeHooks?.requestId || '').trim();
     if (analysisTraceId) analyze_payload.analysis_trace_id = analysisTraceId;
     if (runtimeHooks?.analysisFeatures && typeof runtimeHooks.analysisFeatures === 'object') {
