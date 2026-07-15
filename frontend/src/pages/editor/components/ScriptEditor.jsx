@@ -7064,6 +7064,66 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         parseStageOutputsObject,
     ]);
 
+    const hasUsableSubjectIndexRows = useCallback((candidateText) => {
+        const candidate = String(candidateText || '').trim();
+        if (!candidate) return false;
+        return (
+            /(?:^|\n)\s*\|\s*S\d{3,}\s*\|/im.test(candidate)
+            || /(?:^|\n)\s*S\d{3,}\s*\|/im.test(candidate)
+            || /(?:^|\n)\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)/im.test(candidate)
+            || /(?:^|\n)\s*subject_no\s*=\s*[A-Za-z]?\d+\b/im.test(candidate)
+            || /(?:^|\n)\s*\|?\s*[A-Za-z]+\d+\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)/im.test(candidate)
+        );
+    }, []);
+
+    const ensurePersistedSubjectIndexForDownstream = useCallback(async (preferredText = '') => {
+        const stageSi = String(
+            preferredText
+            || currentStageOutputs?.stages?.stage2?.outputs?.subject_index?.content
+            || ''
+        ).trim();
+        const episodeSi = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+        const resolvedStage = extractPureSubjectIndexText(stageSi).trim() || stageSi;
+        const resolvedEpisode = extractPureSubjectIndexText(episodeSi).trim() || episodeSi;
+
+        if (hasUsableSubjectIndexRows(resolvedEpisode)) {
+            return resolvedEpisode;
+        }
+        if (!hasUsableSubjectIndexRows(resolvedStage)) {
+            return resolvedStage || resolvedEpisode || '';
+        }
+
+        // UI may show stage_outputs Subject Index while episode field is empty/contaminated.
+        // Heal the canonical episode field before scene orchestration / asset design.
+        try {
+            await persistSubjectIndexEdit(resolvedStage);
+            onLog?.(
+                t(
+                    '已将第二阶段面板中的资产清单同步到分集字段，便于场景重排继续。',
+                    'Synced Stage 2 asset index from the panel into the episode field for scene rerun.'
+                ),
+                'info'
+            );
+        } catch (healErr) {
+            onLog?.(
+                t(
+                    `资产清单同步警告：${healErr?.message || healErr}`,
+                    `Asset index sync warning: ${healErr?.message || healErr}`
+                ),
+                'warning'
+            );
+        }
+        return resolvedStage;
+    }, [
+        activeEpisode?.ai_scene_analysis_subject_index,
+        currentStageOutputs?.stages?.stage2?.outputs?.subject_index?.content,
+        extractPureSubjectIndexText,
+        hasUsableSubjectIndexRows,
+        onLog,
+        persistSubjectIndexEdit,
+        t,
+    ]);
+
     const clearSceneMarkdownPatchForScenes = useCallback(async (sceneIds, options = {}) => {
         if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
         const targetIds = (Array.isArray(sceneIds) ? sceneIds : [])
@@ -13707,8 +13767,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || activeEpisode?.ai_scene_analysis_subject_index
             || ''
         ).trim();
-        const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || stage2_1Text;
-        if (!stage2_1SubjectIndexText) {
+        const healedSubjectIndexText = await ensurePersistedSubjectIndexForDownstream(stage2_1Text);
+        const stage2_1SubjectIndexText = extractPureSubjectIndexText(healedSubjectIndexText || stage2_1Text).trim()
+            || String(healedSubjectIndexText || stage2_1Text || '').trim();
+        if (!stage2_1SubjectIndexText || !hasUsableSubjectIndexRows(stage2_1SubjectIndexText)) {
             alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
             return;
         }
@@ -14071,10 +14133,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         clearSceneMarkdownPatchForScenes,
         endSceneOrchestrationPanelTracking,
         ensureOrchestrationScenesInWorkspace,
+        ensurePersistedSubjectIndexForDownstream,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
         getStageOutputContent,
+        hasUsableSubjectIndexRows,
         importScenesFromPerScenePatchMap,
         isAnalyzing,
         localizeAnalysisFailureMessage,
@@ -14136,7 +14200,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim();
         const stage2_1SubjectIndexText = extractPureSubjectIndexText(stage2_1Text).trim() || stage2_1Text;
-        if (!stage2_1SubjectIndexText) {
+        if (!stage2_1SubjectIndexText || !hasUsableSubjectIndexRows(stage2_1SubjectIndexText)) {
             alert(t('缺少第二阶段资产清单，无法仅重排场景。请先执行资产提取。', 'Missing Stage 2 subject index. Please run asset extraction first.'));
             return;
         }
@@ -14151,6 +14215,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         extractPureSubjectIndexText,
         getStageOutputContent,
+        hasUsableSubjectIndexRows,
         isAnalyzing,
         resolveSceneBeatsRerunCandidates,
         t,

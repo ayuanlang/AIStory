@@ -8838,6 +8838,90 @@ def _subject_index_has_usable_content(subject_index_text: Any) -> bool:
     return has_subject_rows
 
 
+def _extract_subject_index_from_stage_outputs(stage_outputs_raw: Any) -> str:
+    """Pull sanitized Subject Index from episode.ai_stage_outputs stage2.subject_index."""
+    raw = str(stage_outputs_raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    stages = parsed.get("stages") if isinstance(parsed.get("stages"), dict) else {}
+    stage2 = stages.get("stage2") if isinstance(stages.get("stage2"), dict) else {}
+    outputs = stage2.get("outputs") if isinstance(stage2.get("outputs"), dict) else {}
+    slot = outputs.get("subject_index") if isinstance(outputs.get("subject_index"), dict) else {}
+    return sanitize_subject_index_text(slot.get("content"))
+
+
+def resolve_usable_episode_subject_index(
+    episode: Any,
+    *,
+    request_text: Any = None,
+    heal_episode_field: bool = False,
+    db: Any = None,
+) -> str:
+    """Resolve a usable Subject Index for downstream gates/injection.
+
+    Prefer episode.ai_scene_analysis_subject_index, then stage_outputs Subject Index
+    (what the Stage 2 UI shows), then request-embedded text. Optionally heal a
+    contaminated/empty episode field from stage_outputs so later calls succeed.
+    """
+    episode_field_raw = sanitize_subject_index_text(
+        getattr(episode, "ai_scene_analysis_subject_index", None) if episode is not None else None
+    )
+    stage_outputs_raw = _extract_subject_index_from_stage_outputs(
+        getattr(episode, "ai_stage_outputs", None) if episode is not None else None
+    )
+    request_raw = sanitize_subject_index_text(request_text)
+
+    candidates: List[Tuple[str, str]] = [
+        ("episode_field", episode_field_raw),
+        ("stage_outputs", stage_outputs_raw),
+        ("request_text", request_raw),
+    ]
+    resolved_source = ""
+    resolved_text = ""
+    for source, candidate in candidates:
+        if _subject_index_has_usable_content(candidate):
+            resolved_source = source
+            resolved_text = candidate
+            break
+
+    if (
+        heal_episode_field
+        and resolved_text
+        and episode is not None
+        and resolved_source == "stage_outputs"
+        and not _subject_index_has_usable_content(episode_field_raw)
+    ):
+        try:
+            episode.ai_scene_analysis_subject_index = resolved_text
+            if db is not None:
+                db.add(episode)
+                db.commit()
+            logger.info(
+                "[subject_index] healed episode.ai_scene_analysis_subject_index from stage_outputs episode_id=%s chars=%s",
+                getattr(episode, "id", None),
+                len(resolved_text),
+            )
+        except Exception as heal_err:
+            logger.warning(
+                "[subject_index] failed healing episode subject index from stage_outputs episode_id=%s err=%s",
+                getattr(episode, "id", None),
+                heal_err,
+            )
+            try:
+                if db is not None:
+                    db.rollback()
+            except Exception:
+                pass
+
+    return resolved_text
+
+
 def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
     text = sanitize_subject_index_text(subject_index_text)
     if not text:
@@ -9850,14 +9934,13 @@ async def run_scene_analysis_flow_node(
                 "asset_design_prop",
                 "asset_design_environment",
             }:
-                episode_subject_index = sanitize_subject_index_text(
-                    getattr(episode, "ai_scene_analysis_subject_index", None)
+                gate_subject_index = resolve_usable_episode_subject_index(
+                    episode,
+                    request_text=raw_payload.get("text"),
+                    heal_episode_field=True,
+                    db=db,
                 )
-                request_subject_index = sanitize_subject_index_text(raw_payload.get("text"))
-                if not (
-                    _subject_index_has_usable_content(episode_subject_index)
-                    or _subject_index_has_usable_content(request_subject_index)
-                ):
+                if not _subject_index_has_usable_content(gate_subject_index):
                     raise HTTPException(
                         status_code=400,
                         detail=_build_scene_analysis_blocking_failure_detail(
@@ -11846,8 +11929,11 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     episode_adaptation_for_scene_beats = str(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_adaptation", "") or ""
                     ).strip()
-                    persisted_subject_index_raw_for_gate = sanitize_subject_index_text(
-                        getattr(_ep_for_subject_index, "ai_scene_analysis_subject_index", None)
+                    persisted_subject_index_raw_for_gate = resolve_usable_episode_subject_index(
+                        _ep_for_subject_index,
+                        request_text=getattr(request, "text", None),
+                        heal_episode_field=True,
+                        db=db,
                     )
                     persisted_subject_index_for_prompt = persisted_subject_index_raw_for_gate
                     if persisted_subject_index_for_prompt and subject_index_allowed_types_for_request:
@@ -20326,7 +20412,25 @@ def update_episode(
     if hasattr(episode_in, 'ai_scene_analysis_scene_markdown') and episode_in.ai_scene_analysis_scene_markdown is not None:
         episode.ai_scene_analysis_scene_markdown = episode_in.ai_scene_analysis_scene_markdown
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
-        episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
+        sanitized_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
+        if _subject_index_has_usable_content(sanitized_subject_index):
+            episode.ai_scene_analysis_subject_index = sanitized_subject_index
+        else:
+            # Prefer Stage 2 panel Subject Index over empty/contaminated writes.
+            stage_candidate = ""
+            if getattr(episode_in, "ai_stage_outputs", None) is not None:
+                stage_candidate = _extract_subject_index_from_stage_outputs(episode_in.ai_stage_outputs)
+            if not _subject_index_has_usable_content(stage_candidate):
+                stage_candidate = _extract_subject_index_from_stage_outputs(episode.ai_stage_outputs)
+            if _subject_index_has_usable_content(stage_candidate):
+                episode.ai_scene_analysis_subject_index = stage_candidate
+                logger.info(
+                    "[update_episode] recovered subject index from stage_outputs episode_id=%s chars=%s",
+                    episode_id,
+                    len(stage_candidate),
+                )
+            else:
+                episode.ai_scene_analysis_subject_index = sanitized_subject_index
     if hasattr(episode_in, 'ai_scene_analysis_adaptation') and episode_in.ai_scene_analysis_adaptation is not None:
         episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
     if hasattr(episode_in, 'ai_entity_design_result') and episode_in.ai_entity_design_result is not None:
