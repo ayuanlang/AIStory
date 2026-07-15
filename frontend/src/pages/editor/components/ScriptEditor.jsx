@@ -4493,6 +4493,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let acceptedTables = 0;
         let droppedTables = 0;
         let droppedRows = 0;
+        let skippedEmptyRows = 0;
+        let incompleteRowError = '';
 
         for (const block of blocks) {
             const lines = String(block || '').split('\n').map(v => String(v || '').trim()).filter(Boolean);
@@ -4508,6 +4510,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const sceneNameIdx = findColIdx(normalizedHeaders, ['scenename', '场景名', '场景名称']);
             const coreInfoIdx = findColIdx(normalizedHeaders, ['coresceneinfo', '核心场景信息']);
             const originalIdx = findColIdx(normalizedHeaders, ['originalscripttext', '原始剧本文本', 'scripttext', 'adaptedscripttext', '改编剧本', '改编剧本文本']);
+            const environmentIdx = findColIdx(normalizedHeaders, ['environmentname', '环境名', '环境名称', '环境']);
+            const linkedCharactersIdx = findColIdx(normalizedHeaders, ['linkedcharacters', '关联角色', '角色', 'characters']);
+            const keyPropsIdx = findColIdx(normalizedHeaders, ['keyprops', '关键道具', '道具', 'props']);
+            const contentColumnsPresent = [coreInfoIdx, originalIdx, environmentIdx, linkedCharactersIdx, keyPropsIdx]
+                .some((idx) => idx >= 0);
 
             if (sceneIdIdx < 0 && sceneNoIdx < 0 && sceneNameIdx < 0) {
                 droppedTables += 1;
@@ -4525,12 +4532,28 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const line = lines[i];
                 if (isSeparatorLine(line)) continue;
 
+                const rawCells = cleanMarkdownTableCells(line);
+                const rawAllBlank = rawCells.every((cell) => !String(cell || '').trim());
+                if (!rawCells.length || rawAllBlank) {
+                    skippedEmptyRows += 1;
+                    continue;
+                }
+
                 const cells = splitCells(line, headers);
+                const cellsAllBlank = cells.every((cell) => !String(cell || '').trim());
+                if (!cells.length || cellsAllBlank) {
+                    skippedEmptyRows += 1;
+                    continue;
+                }
+
                 const sceneId = String(cells[sceneIdIdx] || '').trim();
                 const sceneNo = String(sceneNoIdx >= 0 ? (cells[sceneNoIdx] || '') : '').trim();
                 const sceneName = String(sceneNameIdx >= 0 ? (cells[sceneNameIdx] || '') : '').trim();
                 let coreInfo = String(coreInfoIdx >= 0 ? (cells[coreInfoIdx] || '') : '').trim();
                 let originalText = String(originalIdx >= 0 ? (cells[originalIdx] || '') : '').trim();
+                const environmentName = String(environmentIdx >= 0 ? (cells[environmentIdx] || '') : '').trim();
+                const linkedCharacters = String(linkedCharactersIdx >= 0 ? (cells[linkedCharactersIdx] || '') : '').trim();
+                const keyProps = String(keyPropsIdx >= 0 ? (cells[keyPropsIdx] || '') : '').trim();
 
                 // LLM rows may include unescaped "|" in long markdown cells; avoid over-dropping valid rows.
                 if (!coreInfo && !originalText && cells.length > headers.length) {
@@ -4543,9 +4566,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }
                 }
 
-                if (!sceneId && !sceneNo && !sceneName) {
+                const hasIdentity = Boolean(sceneId || sceneNo || sceneName);
+                if (!hasIdentity) {
+                    skippedEmptyRows += 1;
                     droppedRows += 1;
                     continue;
+                }
+
+                const hasContent = Boolean(coreInfo || originalText || environmentName || linkedCharacters || keyProps);
+                const truncated = headers.length >= 5
+                    && rawCells.length > 0
+                    && rawCells.length < Math.max(3, Math.floor(headers.length / 2))
+                    && !hasContent;
+                if ((contentColumnsPresent && !hasContent) || truncated) {
+                    incompleteRowError = t(
+                        `Scenes 表存在不完整行（场次 ${sceneId || sceneNo || sceneName}）：缺少核心内容或列数明显不足。`,
+                        `Scenes table has an incomplete row (${sceneId || sceneNo || sceneName}): missing core content or too few columns.`
+                    );
+                    break;
                 }
 
                 const mappedRow = outputHeaders.map((h) => {
@@ -4577,6 +4615,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 outputRows.push(mappedRow);
             }
+            if (incompleteRowError) break;
+        }
+
+        if (incompleteRowError) {
+            return {
+                ok: false,
+                reason: incompleteRowError,
+            };
         }
 
         if (!outputHeaders || outputRows.length === 0) {
@@ -4592,10 +4638,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const tableText = [headerLine, sepLine, ...rowLines].join('\n');
 
         let warning = '';
-        if (droppedTables > 0 || droppedRows > 0 || blocks.length > 1) {
+        if (droppedTables > 0 || droppedRows > 0 || skippedEmptyRows > 0 || blocks.length > 1) {
             warning = t(
-                `已过滤非法数据：保留 ${acceptedTables} 张合格表，丢弃 ${droppedTables} 张不合格表、${droppedRows} 行不合格数据。`,
-                `Invalid data filtered: kept ${acceptedTables} valid table(s), dropped ${droppedTables} invalid table(s) and ${droppedRows} invalid row(s).`
+                `已过滤非法/空行数据：保留 ${acceptedTables} 张合格表、${outputRows.length} 行；丢弃 ${droppedTables} 张不合格表、${droppedRows} 行不合格数据、跳过 ${skippedEmptyRows} 空行。`,
+                `Filtered invalid/empty rows: kept ${acceptedTables} valid table(s) and ${outputRows.length} row(s); dropped ${droppedTables} invalid table(s), ${droppedRows} invalid row(s), skipped ${skippedEmptyRows} empty row(s).`
             );
         }
 
@@ -5737,10 +5783,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const importCheck = validateAutoSceneTableImport(normalizedText);
         if (!importCheck?.ok) {
+            const reasonText = String(importCheck?.reason || '').trim();
+            const looksIncomplete = /不完整|incomplete/i.test(reasonText);
             return {
                 ok: false,
                 normalizedText,
-                reason: importCheck?.reason || t(`${contextLabel} 场景表缺少导入所需列或有效行。`, `${contextLabel} scene table is missing importable columns or valid rows.`),
+                reason: reasonText || (
+                    looksIncomplete
+                        ? t(`${contextLabel} 场景表不完整。`, `${contextLabel} scene table is incomplete.`)
+                        : t(`${contextLabel} 场景表缺少导入所需列或有效行。`, `${contextLabel} scene table is missing importable columns or valid rows.`)
+                ),
             };
         }
 

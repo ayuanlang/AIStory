@@ -1002,6 +1002,80 @@ def _scene_table_row_has_identity(cells: List[str], scene_id_idx: int, scene_no_
     return bool(scene_id or scene_no or scene_name)
 
 
+def _is_blank_scene_table_cells(cells: List[str]) -> bool:
+    return all(not str(cell or "").strip() for cell in (cells or []))
+
+
+def _scene_table_row_has_content(
+    cells: List[str],
+    *,
+    core_info_idx: int = -1,
+    adapted_idx: int = -1,
+    environment_idx: int = -1,
+    linked_characters_idx: int = -1,
+    key_props_idx: int = -1,
+) -> bool:
+    content_idxs = [
+        idx
+        for idx in (
+            core_info_idx,
+            adapted_idx,
+            environment_idx,
+            linked_characters_idx,
+            key_props_idx,
+        )
+        if idx >= 0
+    ]
+    if not content_idxs:
+        # No known content columns in this table schema; identity alone is acceptable.
+        return True
+    return any(_scene_table_cell_value(cells, idx) for idx in content_idxs)
+
+
+def _scene_table_content_columns_present(
+    *,
+    core_info_idx: int = -1,
+    adapted_idx: int = -1,
+    environment_idx: int = -1,
+    linked_characters_idx: int = -1,
+    key_props_idx: int = -1,
+) -> bool:
+    return any(
+        idx >= 0
+        for idx in (
+            core_info_idx,
+            adapted_idx,
+            environment_idx,
+            linked_characters_idx,
+            key_props_idx,
+        )
+    )
+
+
+def _is_incomplete_scene_table_row(
+    *,
+    raw_cell_count: int,
+    header_count: int,
+    has_identity: bool,
+    has_content: bool,
+    content_columns_present: bool,
+) -> bool:
+    """Return True when a non-empty scene row is structurally/content incomplete."""
+    if not has_identity:
+        return False
+    if content_columns_present and not has_content:
+        return True
+    # Truncated pipe rows: far fewer cells than headers, with no recoverable content.
+    if (
+        header_count >= 5
+        and raw_cell_count > 0
+        and raw_cell_count < max(3, header_count // 2)
+        and not has_content
+    ):
+        return True
+    return False
+
+
 def _scene_table_cell_value(cells: List[str], idx: int) -> str:
     if idx < 0 or idx >= len(cells):
         return ""
@@ -1076,62 +1150,107 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
             if _is_scene_table_separator_line(line):
                 continue
 
-            cells = _reconcile_scene_table_row_cells(_split_scene_table_cells(line), headers)
-            if not cells:
+            raw_cells = _split_scene_table_cells(line)
+            if not raw_cells or _is_blank_scene_table_cells(raw_cells):
+                # Empty markdown table rows are skipped.
                 continue
 
-            if _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx):
-                scene_id = _scene_table_cell_value(cells, scene_id_idx)
-                scene_no = _scene_table_cell_value(cells, scene_no_idx)
-                scene_name = _scene_table_cell_value(cells, scene_name_idx)
-                if not scene_id:
-                    if scene_no:
-                        scene_id = scene_no
-                    elif scene_name:
-                        scene_id = scene_name
-                if not scene_id:
+            cells = _reconcile_scene_table_row_cells(raw_cells, headers)
+            if not cells or _is_blank_scene_table_cells(cells):
+                continue
+
+            has_identity = _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx)
+            content_columns_present = _scene_table_content_columns_present(
+                core_info_idx=core_info_idx,
+                adapted_idx=adapted_idx,
+                environment_idx=environment_idx,
+                linked_characters_idx=linked_characters_idx,
+                key_props_idx=key_props_idx,
+            )
+            has_content = _scene_table_row_has_content(
+                cells,
+                core_info_idx=core_info_idx,
+                adapted_idx=adapted_idx,
+                environment_idx=environment_idx,
+                linked_characters_idx=linked_characters_idx,
+                key_props_idx=key_props_idx,
+            )
+
+            if not has_identity:
+                # Continuation rows or blank-ish rows without identity are skipped.
+                if current_unit is None:
                     continue
-                if scene_id in seen_scene_ids:
-                    raise SceneMarkerParseError("SCENES_TABLE_DUPLICATE_SCENE_ID", f"duplicate scene_id: {scene_id}")
-                seen_scene_ids.add(scene_id)
+                continuation_parts = [
+                    _scene_table_cell_value(cells, core_info_idx),
+                    _scene_table_cell_value(cells, adapted_idx),
+                    _scene_table_cell_value(cells, environment_idx),
+                    _scene_table_cell_value(cells, linked_characters_idx),
+                    _scene_table_cell_value(cells, key_props_idx),
+                ]
+                continuation_text = "\n\n".join(part for part in continuation_parts if part).strip()
+                if not continuation_text:
+                    continue
+                if current_unit.scene_text:
+                    current_unit.scene_text = f"{current_unit.scene_text}\n\n{continuation_text}".strip()
+                else:
+                    current_unit.scene_text = continuation_text
+                continue
 
-                scene_text = _build_scene_text_from_table_row(
-                    cells,
-                    core_info_idx=core_info_idx,
-                    adapted_idx=adapted_idx,
-                    scene_name_idx=scene_name_idx,
-                    environment_idx=environment_idx,
-                    linked_characters_idx=linked_characters_idx,
-                    key_props_idx=key_props_idx,
+            if _is_incomplete_scene_table_row(
+                raw_cell_count=len(raw_cells),
+                header_count=len(headers),
+                has_identity=True,
+                has_content=has_content,
+                content_columns_present=content_columns_present,
+            ):
+                scene_hint = (
+                    _scene_table_cell_value(cells, scene_id_idx)
+                    or _scene_table_cell_value(cells, scene_no_idx)
+                    or _scene_table_cell_value(cells, scene_name_idx)
+                    or "?"
                 )
-                current_unit = ParsedSceneUnit(
-                    scene_id=scene_id,
-                    scene_order=len(parsed) + 1,
-                    scene_text=scene_text,
-                    marker_start_token="scenes_table",
-                    marker_end_token="scenes_table",
-                    scene_markdown=_build_scene_markdown_from_table_row(headers, cells),
+                raise SceneMarkerParseError(
+                    "SCENES_TABLE_INCOMPLETE_ROW",
+                    f"incomplete scenes table row for scene_id={scene_hint}",
                 )
-                parsed.append(current_unit)
-                continue
 
-            if current_unit is None:
+            scene_id = _scene_table_cell_value(cells, scene_id_idx)
+            scene_no = _scene_table_cell_value(cells, scene_no_idx)
+            scene_name = _scene_table_cell_value(cells, scene_name_idx)
+            if not scene_id:
+                if scene_no:
+                    scene_id = scene_no
+                elif scene_name:
+                    scene_id = scene_name
+            if not scene_id:
                 continue
+            if scene_id in seen_scene_ids:
+                raise SceneMarkerParseError("SCENES_TABLE_DUPLICATE_SCENE_ID", f"duplicate scene_id: {scene_id}")
+            seen_scene_ids.add(scene_id)
 
-            continuation_parts = [
-                _scene_table_cell_value(cells, core_info_idx),
-                _scene_table_cell_value(cells, adapted_idx),
-                _scene_table_cell_value(cells, environment_idx),
-                _scene_table_cell_value(cells, linked_characters_idx),
-                _scene_table_cell_value(cells, key_props_idx),
-            ]
-            continuation_text = "\n\n".join(part for part in continuation_parts if part).strip()
-            if not continuation_text:
-                continue
-            if current_unit.scene_text:
-                current_unit.scene_text = f"{current_unit.scene_text}\n\n{continuation_text}".strip()
-            else:
-                current_unit.scene_text = continuation_text
+            scene_text = _build_scene_text_from_table_row(
+                cells,
+                core_info_idx=core_info_idx,
+                adapted_idx=adapted_idx,
+                scene_name_idx=scene_name_idx,
+                environment_idx=environment_idx,
+                linked_characters_idx=linked_characters_idx,
+                key_props_idx=key_props_idx,
+            )
+            if content_columns_present and not str(scene_text or "").strip():
+                raise SceneMarkerParseError(
+                    "SCENES_TABLE_INCOMPLETE_ROW",
+                    f"incomplete scenes table row with empty content for scene_id={scene_id}",
+                )
+            current_unit = ParsedSceneUnit(
+                scene_id=scene_id,
+                scene_order=len(parsed) + 1,
+                scene_text=scene_text,
+                marker_start_token="scenes_table",
+                marker_end_token="scenes_table",
+                scene_markdown=_build_scene_markdown_from_table_row(headers, cells),
+            )
+            parsed.append(current_unit)
 
     if not parsed:
         raise SceneMarkerParseError("SCENES_TABLE_NO_SCENES", "no valid scenes found in scenes table")
@@ -1209,13 +1328,55 @@ def merge_scenes_table_markdown_outputs(outputs: List[str]) -> str:
             for line in lines[1:]:
                 if _is_scene_table_separator_line(line):
                     continue
-                cells = _split_scene_table_cells(line)
-                if not cells:
+                raw_cells = _split_scene_table_cells(line)
+                if not raw_cells or _is_blank_scene_table_cells(raw_cells):
+                    continue
+                cells = _reconcile_scene_table_row_cells(raw_cells, headers)
+                if not cells or _is_blank_scene_table_cells(cells):
                     continue
                 while len(cells) < len(headers):
                     cells.append("")
-                if not _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx):
+                core_info_idx = _find_scene_table_col_idx(normalized_headers, ["coresceneinfo", "核心场景信息"])
+                adapted_idx = _find_scene_table_col_idx(
+                    normalized_headers,
+                    ["adaptedscripttext", "改编剧本文本", "改编剧本", "originalscripttext", "原始剧本文本", "scripttext"],
+                )
+                environment_idx = _find_scene_table_col_idx(normalized_headers, ["environmentname", "环境名", "环境名称", "环境"])
+                linked_characters_idx = _find_scene_table_col_idx(normalized_headers, ["linkedcharacters", "关联角色", "角色", "characters"])
+                key_props_idx = _find_scene_table_col_idx(normalized_headers, ["keyprops", "关键道具", "道具", "props"])
+                has_identity = _scene_table_row_has_identity(cells, scene_id_idx, scene_no_idx, scene_name_idx)
+                if not has_identity:
                     continue
+                content_columns_present = _scene_table_content_columns_present(
+                    core_info_idx=core_info_idx,
+                    adapted_idx=adapted_idx,
+                    environment_idx=environment_idx,
+                    linked_characters_idx=linked_characters_idx,
+                    key_props_idx=key_props_idx,
+                )
+                has_content = _scene_table_row_has_content(
+                    cells,
+                    core_info_idx=core_info_idx,
+                    adapted_idx=adapted_idx,
+                    environment_idx=environment_idx,
+                    linked_characters_idx=linked_characters_idx,
+                    key_props_idx=key_props_idx,
+                )
+                if _is_incomplete_scene_table_row(
+                    raw_cell_count=len(raw_cells),
+                    header_count=len(headers),
+                    has_identity=True,
+                    has_content=has_content,
+                    content_columns_present=content_columns_present,
+                ):
+                    # Incomplete rows invalidate the whole merge so callers treat it as failure.
+                    logger.warning(
+                        "[scene_markdown] incomplete row skipped merge | raw_cells=%s headers=%s preview=%s",
+                        len(raw_cells),
+                        len(headers),
+                        line[:160],
+                    )
+                    return ""
                 row = list(cells)
                 while len(row) < len(merged_headers):
                     row.append("")
@@ -1762,16 +1923,19 @@ def validate_single_scene_markdown_for_orchestration(
         units = parse_scene_units_from_scenes_table(text)
     except SceneMarkerParseError as exc:
         code = str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
+        if code == "SCENES_TABLE_INCOMPLETE_ROW":
+            return f"SCENE_MARKDOWN_INCOMPLETE_TABLE:{exc}"
         if code.startswith("SCENES_TABLE_"):
             return f"SCENE_MARKDOWN_PARSE_FAILED:{code}"
         return code
     if not units:
         return "SCENE_MARKDOWN_NO_SCENE_ROW"
-    matched = any(
-        _scene_markdown_ids_match(expected, str(unit.scene_id or "").strip(), scene_order)
+    matched_units = [
+        unit
         for unit in units
-    )
-    if not matched:
+        if _scene_markdown_ids_match(expected, str(unit.scene_id or "").strip(), scene_order)
+    ]
+    if not matched_units:
         returned_ids = ", ".join(
             dict.fromkeys(str(unit.scene_id or "").strip() for unit in units if str(unit.scene_id or "").strip())
         )
@@ -1779,6 +1943,9 @@ def validate_single_scene_markdown_for_orchestration(
         if returned_ids:
             suffix = f"{suffix},got={returned_ids}"
         return f"SCENE_MARKDOWN_SCENE_ID_MISMATCH{suffix}"
+    for unit in matched_units:
+        if not str(getattr(unit, "scene_text", "") or "").strip():
+            return f"SCENE_MARKDOWN_INCOMPLETE_TABLE:empty_content:{expected}"
     return None
 
 

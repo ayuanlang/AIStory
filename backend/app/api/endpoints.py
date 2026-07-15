@@ -28916,6 +28916,7 @@ def create_entity(
 class EntityCloneWithLLMRequest(BaseModel):
     modification_instruction: str
     new_name_hint: Optional[str] = None
+    episode_id: Optional[int] = None
 
 
 def _extract_first_json_payload(text: str):
@@ -29213,8 +29214,16 @@ async def clone_entity_with_llm(
         "instruction": instruction,
     }
 
+    target_episode_id = req.episode_id if req.episode_id is not None else source.episode_id
+    if target_episode_id is not None:
+        episode = db.query(Episode).filter(Episode.id == int(target_episode_id)).first()
+        if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
+            raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
+        target_episode_id = int(target_episode_id)
+
     db_entity = Entity(
         project_id=project_id,
+        episode_id=target_episode_id,
         name=cloned_name,
         name_en=cloned_name_en,
         base_name_en=source.base_name_en, # inherited from source
@@ -48388,6 +48397,25 @@ def _extract_first_json_object(raw_text: str) -> Dict[str, Any]:
     return {}
 
 
+def _resolve_generated_entity_episode_id(
+    db: Session,
+    project_id: int,
+    episode_id: Optional[int],
+) -> Optional[int]:
+    if episode_id is None:
+        return None
+    try:
+        eid = int(episode_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid episode_id")
+    if eid <= 0:
+        return None
+    episode = db.query(Episode).filter(Episode.id == eid).first()
+    if not episode or int(getattr(episode, "project_id", 0) or 0) != int(project_id):
+        raise HTTPException(status_code=400, detail="episode_id does not belong to this project")
+    return eid
+
+
 def _create_generated_entity_from_payload(
     db: Session,
     project_id: int,
@@ -48395,14 +48423,19 @@ def _create_generated_entity_from_payload(
     *,
     fallback_name: str,
     fallback_type: str = "character",
+    preferred_name: Optional[str] = None,
+    episode_id: Optional[int] = None,
 ) -> Entity:
-    name = str(payload.get("name") or fallback_name or "Generated Entity").strip()
+    preferred = str(preferred_name or "").strip()
+    name = preferred or str(payload.get("name") or fallback_name or "Generated Entity").strip()
     ent_type = str(payload.get("type") or fallback_type or "character").strip().lower()
     if ent_type not in {"character", "environment", "prop", "poster"}:
         ent_type = "character"
+    resolved_episode_id = _resolve_generated_entity_episode_id(db, project_id, episode_id)
 
     new_entity = Entity(
         project_id=project_id,
+        episode_id=resolved_episode_id,
         name=name,
         type=ent_type,
         name_en=str(payload.get("name_en") or "").strip() or None,
@@ -48422,6 +48455,8 @@ def _create_generated_entity_from_payload(
 async def api_generate_entity_from_text(
     project_id: int,
     text_desc: str = Form(...),
+    entity_name: Optional[str] = Form(None),
+    episode_id: Optional[int] = Form(None),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -48441,6 +48476,7 @@ async def api_generate_entity_from_text(
     if model:
         llm_config = {**llm_config, "model": model}
 
+    preferred_name = str(entity_name or "").strip()
     system_prompt = (
         "You are an entity designer. Return ONLY JSON with fields: "
         "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
@@ -48448,6 +48484,7 @@ async def api_generate_entity_from_text(
     user_prompt = (
         "根据用户输入生成一个可入库的新实体。\n"
         "要求 type 仅可为 character/environment/prop/poster 之一。\n"
+        f"{('实体中文名必须使用：' + preferred_name + chr(10)) if preferred_name else ''}"
         "用户输入：\n"
         f"{text_desc}"
     )
@@ -48455,7 +48492,16 @@ async def api_generate_entity_from_text(
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
-        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="文本生成实体")
+        return _create_generated_entity_from_payload(
+            db,
+            project_id,
+            payload,
+            fallback_name=preferred_name or "文本生成实体",
+            preferred_name=preferred_name or None,
+            episode_id=episode_id,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM text generation failed: {e}")
 
@@ -48464,6 +48510,8 @@ async def api_generate_entity_from_text(
 async def api_generate_entity_from_image(
     project_id: int,
     file: UploadFile = File(...),
+    entity_name: Optional[str] = Form(None),
+    episode_id: Optional[int] = Form(None),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -48491,11 +48539,15 @@ async def api_generate_entity_from_image(
     img_b64 = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:{mime};base64,{img_b64}"
 
+    preferred_name = str(entity_name or "").strip()
     system_prompt = (
         "You are a vision entity designer. Return ONLY JSON with fields: "
         "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
     )
-    user_prompt = "请根据图片反推一个可入库的新实体。"
+    user_prompt = (
+        "请根据图片反推一个可入库的新实体。"
+        + (f"\n实体中文名必须使用：{preferred_name}" if preferred_name else "")
+    )
 
     try:
         resp = await llm_service.generate_content_with_fallback(
@@ -48505,7 +48557,16 @@ async def api_generate_entity_from_image(
             image_urls=[data_url],
         )
         payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
-        return _create_generated_entity_from_payload(db, project_id, payload, fallback_name="图片反推实体")
+        return _create_generated_entity_from_payload(
+            db,
+            project_id,
+            payload,
+            fallback_name=preferred_name or "图片反推实体",
+            preferred_name=preferred_name or None,
+            episode_id=episode_id,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM image generation failed: {e}")
 
@@ -48515,6 +48576,8 @@ async def api_generate_entity_from_derive(
     project_id: int,
     base_entity_id: int = Form(...),
     derive_desc: str = Form(""),
+    entity_name: Optional[str] = Form(None),
+    episode_id: Optional[int] = Form(None),
     model: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -48538,6 +48601,8 @@ async def api_generate_entity_from_derive(
     if model:
         llm_config = {**llm_config, "model": model}
 
+    preferred_name = str(entity_name or "").strip()
+    resolved_episode_id = episode_id if episode_id is not None else getattr(base_entity, "episode_id", None)
     system_prompt = (
         "You are an entity variation designer. Return ONLY JSON with fields: "
         "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
@@ -48548,6 +48613,7 @@ async def api_generate_entity_from_derive(
         f"基础实体类型: {base_entity.type}\n"
         f"基础描述: {base_entity.description or ''}\n"
         f"基础外观: {base_entity.appearance_cn or ''}\n"
+        f"{('新实体中文名必须使用：' + preferred_name + chr(10)) if preferred_name else ''}"
         f"新增描述要求: {derive_desc or '在保持主体特征下，生成一个合理新变体'}"
     )
 
@@ -48558,9 +48624,13 @@ async def api_generate_entity_from_derive(
             db,
             project_id,
             payload,
-            fallback_name=f"{base_entity.name}-变体",
+            fallback_name=preferred_name or f"{base_entity.name}-变体",
             fallback_type=str(base_entity.type or "character"),
+            preferred_name=preferred_name or None,
+            episode_id=resolved_episode_id,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM derive generation failed: {e}")
 

@@ -1225,7 +1225,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                     const reusedEntity = (keyA && existingEntityMap.get(keyA)) || (keyB && existingEntityMap.get(keyB)) || null;
                     // If matched entity belongs to this episode or is project-global without episodes, skip.
                     // But if it belongs to a previous/different episode, we CLONE it instead of skipping so Sync works!
-                    if (reusedEntity && currentEpisode?.id && reusedEntity.episode_id !== currentEpisode.id) {
+                    if (reusedEntity && currentEpisode?.id && String(reusedEntity.episode_id || '').trim() !== String(currentEpisode.id).trim()) {
                         row.old_id = reusedEntity.id;
                         row.description_cn = row.description_cn || reusedEntity.description_cn || reusedEntity.description || '';
                         row.base_name_en = row.base_name_en || reusedEntity.base_name_en || reusedEntity.name_en || '';
@@ -6713,7 +6713,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleGenerateEntityFromText = async (entityName, textDesc) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityFromText(projectId, entityName, textDesc);
+            const created = await generateEntityFromText(projectId, entityName, textDesc, null, currentEpisode?.id || null);
+            const createdType = String(created?.type || '').trim().toLowerCase();
+            if (createdType && ['character', 'environment', 'prop', 'poster'].includes(createdType)) {
+                setSubTab(createdType);
+            }
             await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
@@ -6727,7 +6731,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleGenerateEntityFromImage = async (entityName, imageFile) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityFromImage(projectId, entityName, imageFile);
+            const created = await generateEntityFromImage(projectId, entityName, imageFile, null, currentEpisode?.id || null);
+            const createdType = String(created?.type || '').trim().toLowerCase();
+            if (createdType && ['character', 'environment', 'prop', 'poster'].includes(createdType)) {
+                setSubTab(createdType);
+            }
             await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
@@ -6741,7 +6749,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const handleGenerateDerivedEntity = async (entityName, baseEntityId, textDesc) => {
         try {
             setIsGeneratingRow(true);
-            await generateEntityDerived(projectId, entityName, baseEntityId, textDesc);
+            const created = await generateEntityDerived(projectId, entityName, baseEntityId, textDesc, null, currentEpisode?.id || null);
+            const createdType = String(created?.type || '').trim().toLowerCase();
+            if (createdType && ['character', 'environment', 'prop', 'poster'].includes(createdType)) {
+                setSubTab(createdType);
+            }
             await loadEntities();
             setShowAiEntityCreateModal(false);
         } catch (e) {
