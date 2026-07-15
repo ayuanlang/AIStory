@@ -4993,6 +4993,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         return '';
     }, [allEntities, getAssetEntityId, getAssetMeta, pickAssetMetaValue, resolveAssetImageUrlEntity]);
 
+    const normalizeEntityLookupKey = useCallback((value) => {
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '');
+    }, []);
+
     const collectAssetEntityNameKeys = useCallback((asset) => {
         const meta = getAssetMeta(asset);
         const entityId = String(getAssetEntityId(asset) || '').trim();
@@ -5156,10 +5160,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
         return typeName;
     }, [t]);
-
-    const normalizeEntityLookupKey = useCallback((value) => {
-        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, '');
-    }, []);
 
     const selectedEntityAliasIds = useMemo(() => {
         const selectedId = String(activeAssetLibraryEntity?.id || '').trim();
