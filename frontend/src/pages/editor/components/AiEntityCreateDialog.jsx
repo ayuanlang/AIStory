@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Copy, FileText, Image as ImageIcon, Loader2, Upload, Wand2, X } from 'lucide-react';
 
 const TABS = [
@@ -7,6 +7,16 @@ const TABS = [
     { id: 'derive', label: '派生实体', icon: Copy },
 ];
 
+const EPISODE_FILTER_ALL = 'all';
+const EPISODE_FILTER_NONE = 'none';
+
+function formatEpisodeOptionLabel(episode, index) {
+    const title = String(episode?.title || '').trim();
+    if (title) return title;
+    const number = episode?.number ?? episode?.episode_number ?? (index + 1);
+    return `第 ${number} 集`;
+}
+
 function AiEntityCreateDialog({
     isOpen,
     onClose,
@@ -14,12 +24,17 @@ function AiEntityCreateDialog({
     onGenerateImage,
     onGenerateDerived,
     entities,
+    episodes = [],
+    currentEpisode = null,
     isGeneratingRow,
 }) {
     const [tab, setTab] = useState('text');
     const [entityName, setEntityName] = useState('');
     const [textDesc, setTextDesc] = useState('');
     const [imageFile, setImageFile] = useState(null);
+    const [deriveEpisodeFilter, setDeriveEpisodeFilter] = useState(() => (
+        currentEpisode?.id != null ? String(currentEpisode.id) : EPISODE_FILTER_ALL
+    ));
     const [deriveEntityId, setDeriveEntityId] = useState('');
     const [deriveDesc, setDeriveDesc] = useState('');
     const [error, setError] = useState('');
@@ -28,6 +43,57 @@ function AiEntityCreateDialog({
         if (!imageFile) return '';
         return URL.createObjectURL(imageFile);
     }, [imageFile]);
+
+    useEffect(() => {
+        return () => {
+            if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+        };
+    }, [imagePreviewUrl]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setDeriveEpisodeFilter(currentEpisode?.id != null ? String(currentEpisode.id) : EPISODE_FILTER_ALL);
+        setDeriveEntityId('');
+        setError('');
+    }, [isOpen, currentEpisode?.id]);
+
+    const episodeOptions = useMemo(() => {
+        const list = Array.isArray(episodes) ? episodes : [];
+        const fromEpisodes = list.map((ep, index) => ({
+            value: String(ep.id),
+            label: formatEpisodeOptionLabel(ep, index),
+        }));
+
+        const knownIds = new Set(fromEpisodes.map((item) => item.value));
+        const orphanIds = new Set();
+        (Array.isArray(entities) ? entities : []).forEach((entity) => {
+            const eid = String(entity?.episode_id || '').trim();
+            if (eid && !knownIds.has(eid)) orphanIds.add(eid);
+        });
+
+        const orphans = Array.from(orphanIds).map((eid) => ({
+            value: eid,
+            label: `分集 #${eid}`,
+        }));
+
+        return [...fromEpisodes, ...orphans];
+    }, [entities, episodes]);
+
+    const filteredDeriveEntities = useMemo(() => {
+        const list = Array.isArray(entities) ? entities : [];
+        if (deriveEpisodeFilter === EPISODE_FILTER_ALL) return list;
+        if (deriveEpisodeFilter === EPISODE_FILTER_NONE) {
+            return list.filter((entity) => !String(entity?.episode_id || '').trim());
+        }
+        return list.filter((entity) => String(entity?.episode_id || '').trim() === String(deriveEpisodeFilter));
+    }, [deriveEpisodeFilter, entities]);
+
+    useEffect(() => {
+        if (!deriveEntityId) return;
+        const stillVisible = filteredDeriveEntities.some((entity) => String(entity?.id) === String(deriveEntityId));
+        if (!stillVisible) setDeriveEntityId('');
+    }, [deriveEntityId, filteredDeriveEntities]);
+
     const isEntityNameMissing = !entityName.trim();
 
     if (!isOpen) return null;
@@ -68,6 +134,18 @@ function AiEntityCreateDialog({
             const msg = err?.response?.data?.detail || err?.message || '生成失败';
             setError(String(msg));
         }
+    };
+
+    const formatEntityOptionLabel = (item) => {
+        const nameZh = String(item?.name || '').trim();
+        const nameEn = String(item?.name_en || '').trim();
+        const type = String(item?.type || '').trim();
+        const isSubset = nameZh && nameEn && (
+            nameZh.toLowerCase().includes(nameEn.toLowerCase())
+            || nameEn.toLowerCase().includes(nameZh.toLowerCase())
+        );
+        const namePart = `${nameZh || nameEn || `#${item?.id}`}${nameEn && !isSubset ? ` (${nameEn})` : ''}`;
+        return type ? `[${type}] ${namePart}` : namePart;
     };
 
     return (
@@ -163,23 +241,45 @@ function AiEntityCreateDialog({
                     {tab === 'derive' && (
                         <div className="space-y-3">
                             <div>
+                                <div className="text-xs text-white/70 mb-1">参考实体所属分集</div>
+                                <select
+                                    value={deriveEpisodeFilter}
+                                    onChange={(e) => setDeriveEpisodeFilter(e.target.value)}
+                                    className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
+                                >
+                                    <option value={EPISODE_FILTER_ALL}>全部分集</option>
+                                    {currentEpisode?.id != null && (
+                                        <option value={String(currentEpisode.id)}>
+                                            当前分集（{formatEpisodeOptionLabel(currentEpisode, 0)}）
+                                        </option>
+                                    )}
+                                    <option value={EPISODE_FILTER_NONE}>项目级（无分集）</option>
+                                    {episodeOptions
+                                        .filter((opt) => String(opt.value) !== String(currentEpisode?.id || ''))
+                                        .map((opt) => (
+                                            <option key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                            </option>
+                                        ))}
+                                </select>
+                            </div>
+                            <div>
                                 <div className="text-xs text-white/70 mb-1">选择参考实体</div>
                                 <select
                                     value={deriveEntityId}
                                     onChange={(e) => setDeriveEntityId(e.target.value)}
                                     className="w-full rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
                                 >
-                                    <option value="">请选择</option>
-                                    {(entities || []).map((item) => {
-                                        const nameZh = String(item.name || '').trim();
-                                        const nameEn = String(item.name_en || '').trim();
-                                        const isSubset = nameZh && nameEn && (nameZh.toLowerCase().includes(nameEn.toLowerCase()) || nameEn.toLowerCase().includes(nameZh.toLowerCase()));
-                                        return (
-                                            <option key={item.id} value={item.id}>
-                                                {item.name}{nameEn && !isSubset ? ` (${item.name_en})` : ''}
-                                            </option>
-                                        );
-                                    })}
+                                    <option value="">
+                                        {filteredDeriveEntities.length > 0
+                                            ? `请选择（${filteredDeriveEntities.length}）`
+                                            : '该分集下暂无实体'}
+                                    </option>
+                                    {filteredDeriveEntities.map((item) => (
+                                        <option key={item.id} value={item.id}>
+                                            {formatEntityOptionLabel(item)}
+                                        </option>
+                                    ))}
                                 </select>
                             </div>
                             <div>

@@ -4170,7 +4170,7 @@ const Editor = ({
                             )}
                             {shouldRenderSubjectsTab && (
                                 <div className={activeTab === 'subjects' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'subjects'}>
-                                    <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} tabMediaRefreshSignal={tabMediaRefreshSignals.subjects} isTabActive={activeTab === 'subjects'} onMediaRefreshRequest={() => bumpTabMediaRefresh('subjects')} />
+                                    <SubjectLibrary key={`subjects-${activeEpisode?.id || 'none'}-${tabResetKey}-${entitiesRefreshKey}`} projectId={id} project={project} currentEpisode={activeEpisode} episodes={episodes} uiLang={uiLang} userBatchParallelLimit={userBatchParallelLimit} onImportText={handleImport} tabMediaRefreshSignal={tabMediaRefreshSignals.subjects} isTabActive={activeTab === 'subjects'} onMediaRefreshRequest={() => bumpTabMediaRefresh('subjects')} />
                                 </div>
                             )}
                             {shouldRenderScenesTab && (

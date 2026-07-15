@@ -312,7 +312,7 @@ const sortEntitiesBySceneThenDependencies = (entities, sceneRankMap, allEntities
         .flatMap((rank) => topoSortEntitiesByVisualDependencies(groups.get(rank) || [], allEntities, nameMap));
 };
 
-export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
+export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = [], uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
@@ -7240,6 +7240,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onGenerateImage={handleGenerateEntityFromImage}
                         onGenerateDerived={handleGenerateDerivedEntity}
                         entities={allEntities}
+                        episodes={episodes}
+                        currentEpisode={currentEpisode}
                         isGeneratingRow={isGeneratingRow}
                     />
                 )}
