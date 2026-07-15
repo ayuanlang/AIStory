@@ -535,7 +535,7 @@ export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...i
     if (!resolvedSrc) return fallback || null;
 
     return (
-        <div ref={containerRef} className={`relative flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('object-cover', '').replace('object-contain', '').replace('max-w-full', 'w-full').replace('max-h-full', 'h-full') : ''}`}>
+        <div ref={containerRef} className={`relative z-0 isolate flex items-center justify-center overflow-hidden bg-[#151515] ${className ? className.replace('object-cover', '').replace('object-contain', '').replace('max-w-full', 'w-full').replace('max-h-full', 'h-full') : ''}`}>
             {!isLoaded && !failed && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                     <Loader2 className="w-5 h-5 animate-spin text-white/40 drop-shadow-md" />

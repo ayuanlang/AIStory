@@ -4696,7 +4696,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (assetLibraryContextResetRef.current === resetKey) return;
         assetLibraryContextResetRef.current = resetKey;
         
-        const preferredType = activeAssetLibraryEntity ? (String(activeAssetLibraryEntity?.type || '').toLowerCase() === 'environment' ? 'environment' : (String(activeAssetLibraryEntity?.type || '').toLowerCase() === 'prop' ? 'prop' : 'character')) : 'all';
+        const preferredType = inferPreferredAssetImageType(activeAssetLibraryEntity);
         const desiredType = preferredType !== 'all' ? preferredType : 'all';
 
         setAssetEpisodeFilter(currentEpisodeId ? `ep:${currentEpisodeId}` : 'all');
@@ -4952,6 +4952,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     const normalizeAssetImageType = useCallback((value) => {
         const stable = String(value || '').trim().toLowerCase();
         if (!stable) return '';
+        // Asset rows use type/asset_type="image|subject"; those are media kinds, not entity categories.
+        if (['image', 'images', 'subject', 'subjects', 'photo', 'frame', 'frames'].includes(stable)) return '';
         if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(stable)) return 'character';
         if (['prop', 'props', '道具', '物件'].includes(stable)) return 'prop';
         if (['environment', 'environments', 'scene', 'scenes', 'poster', '背景', '场景', '环境', '封面'].includes(stable)) return 'environment';
@@ -4990,6 +4992,59 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         if (nameEn) return nameEn;
         return '';
     }, [allEntities, getAssetEntityId, getAssetMeta, pickAssetMetaValue, resolveAssetImageUrlEntity]);
+
+    const collectAssetEntityNameKeys = useCallback((asset) => {
+        const meta = getAssetMeta(asset);
+        const entityId = String(getAssetEntityId(asset) || '').trim();
+        let entityRecord = entityId
+            ? (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null
+            : null;
+        if (!entityRecord) {
+            entityRecord = resolveAssetImageUrlEntity(asset);
+        }
+
+        const rawNames = [
+            entityRecord?.name,
+            entityRecord?.name_en,
+            pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName', 'owner_entity_name', 'ownerEntityName']),
+            pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn', 'owner_entity_name_en', 'ownerEntityNameEn']),
+            pickAssetMetaValue(meta, ['entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']),
+            asset?.name,
+            asset?.filename,
+            asset?.remark,
+        ];
+
+        const displayName = getAssetEntityDisplayName(asset);
+        if (displayName) {
+            rawNames.push(displayName);
+            String(displayName).split(/\s*\/\s*/).forEach((part) => rawNames.push(part));
+        }
+
+        const fileLabel = String(asset?.filename || asset?.name || '').trim().replace(/\.[a-z0-9]{2,5}$/i, '');
+        if (fileLabel) rawNames.push(fileLabel);
+
+        const keys = new Set();
+        rawNames.forEach((value) => {
+            const key = normalizeEntityLookupKey(value);
+            if (key) keys.add(key);
+        });
+        return keys;
+    }, [allEntities, getAssetEntityDisplayName, getAssetEntityId, getAssetMeta, normalizeEntityLookupKey, pickAssetMetaValue, resolveAssetImageUrlEntity]);
+
+    const resolveAssetEntityByName = useCallback((asset) => {
+        const nameKeys = collectAssetEntityNameKeys(asset);
+        if (!nameKeys.size) return null;
+        const meta = getAssetMeta(asset);
+        const preferredType = normalizeAssetImageType(
+            pickAssetMetaValue(meta, ['entity_type', 'entityType', 'subject_type', 'subjectType', 'category']) || ''
+        );
+        return (allEntities || []).find((entity) => {
+            const entityType = normalizeAssetImageType(entity?.type || entity?.entity_type || entity?.subject_type || '');
+            if (preferredType && entityType && preferredType !== entityType) return false;
+            const entityKeys = [entity?.name, entity?.name_en].map(normalizeEntityLookupKey).filter(Boolean);
+            return entityKeys.some((key) => nameKeys.has(key));
+        }) || null;
+    }, [allEntities, collectAssetEntityNameKeys, getAssetMeta, normalizeAssetImageType, normalizeEntityLookupKey, pickAssetMetaValue]);
 
     const isExplicitShotAsset = useCallback((asset) => {
         const meta = getAssetMeta(asset);
@@ -5049,7 +5104,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         if (isExplicitShotAsset(asset)) return '';
 
-        const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
+        const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset) || resolveAssetEntityByName(asset);
         const entityTypeFromTable = normalizeAssetImageType(
             entityRecord?.type
             || entityRecord?.entity_type
@@ -5058,17 +5113,18 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         );
         if (entityTypeFromTable) return entityTypeFromTable;
 
+        // Prefer subject/entity category fields; asset_type/frame_type are often "subject"/"image".
         const directType = normalizeAssetImageType(String(
             pickAssetMetaValue(meta, [
-                'asset_type',
-                'assetType',
-                'frame_type',
-                'frameType',
                 'subject_type',
                 'subjectType',
                 'entity_type',
                 'entityType',
                 'category',
+                'asset_type',
+                'assetType',
+                'frame_type',
+                'frameType',
             ]) ||
             ''
         ));
@@ -5079,15 +5135,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             asset?.entity_id ||
             ''
         ).trim();
-        if (!entityId) return '';
-
-        const fallbackEntityRecord = (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null;
-        const fallbackEntityType = normalizeAssetImageType(fallbackEntityRecord?.type || '');
-        if (fallbackEntityType) return fallbackEntityType;
+        if (entityId) {
+            const fallbackEntityRecord = (allEntities || []).find((entity) => String(entity?.id || '').trim() === entityId) || null;
+            const fallbackEntityType = normalizeAssetImageType(fallbackEntityRecord?.type || '');
+            if (fallbackEntityType) return fallbackEntityType;
+        }
 
         if (source === 'file_upload') return 'uploaded_asset';
         return '';
-    }, [allEntities, getAssetEntityId, getAssetMeta, isExplicitShotAsset, normalizeAssetImageType, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity]);
+    }, [allEntities, getAssetEntityId, getAssetMeta, isExplicitShotAsset, normalizeAssetImageType, pickAssetMetaValue, resolveAssetEntity, resolveAssetEntityByName, resolveAssetImageUrlEntity]);
 
     const getAssetImageTypeLabel = useCallback((typeName) => {
         const normalized = String(typeName || '').trim().toLowerCase();
@@ -5170,26 +5226,34 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
 
         const selectedType = normalizeAssetImageType(activeAssetLibraryEntity?.type || activeAssetLibraryEntity?.entity_type || activeAssetLibraryEntity?.subject_type || '');
         const assetType = getAssetImageType(asset);
-        if (selectedType && assetType && assetType !== selectedType) return false;
+        if (
+            selectedType
+            && assetType
+            && assetType !== selectedType
+            && assetType !== 'uploaded_asset'
+        ) return false;
 
         const assetEntityId = String(getAssetEntityId(asset) || '').trim();
         if (assetEntityId && selectedEntityAliasIds.has(assetEntityId)) return true;
         if (doesAssetMatchSelectedEntityImageUrl(asset)) return true;
 
-        const meta = getAssetMeta(asset);
-        const assetNameKeys = new Set([
-            pickAssetMetaValue(meta, ['entity_name', 'entityName', 'subject_name', 'subjectName', 'character_name', 'characterName', 'owner_entity_name', 'ownerEntityName', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']),
-            pickAssetMetaValue(meta, ['entity_name_en', 'entityNameEn', 'subject_name_en', 'subjectNameEn', 'character_name_en', 'characterNameEn', 'owner_entity_name_en', 'ownerEntityNameEn', 'entity_name_ascii', 'entityNameAscii', 'subject_name_ascii', 'subjectNameAscii', 'character_name_ascii', 'characterNameAscii']),
-            getAssetEntityDisplayName(asset),
-        ].map(normalizeEntityLookupKey).filter(Boolean));
-
         const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
             .map(normalizeEntityLookupKey)
             .filter(Boolean);
+        if (!selectedNameKeys.length) return false;
 
+        const assetNameKeys = collectAssetEntityNameKeys(asset);
         if (selectedNameKeys.some((key) => assetNameKeys.has(key))) return true;
+
+        // Filename / remark often embeds the entity name (e.g. 宁瑶_xxx.png).
+        for (const selectedKey of selectedNameKeys) {
+            if (selectedKey.length < 2) continue;
+            for (const assetKey of assetNameKeys) {
+                if (assetKey.includes(selectedKey) || selectedKey.includes(assetKey)) return true;
+            }
+        }
         return false;
-    }, [activeAssetLibraryEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetImageType, getAssetMeta, normalizeAssetImageType, normalizeEntityLookupKey, pickAssetMetaValue, selectedEntityAliasIds]);
+    }, [activeAssetLibraryEntity, collectAssetEntityNameKeys, doesAssetMatchSelectedEntityImageUrl, getAssetEntityId, getAssetImageType, normalizeAssetImageType, normalizeEntityLookupKey, selectedEntityAliasIds]);
 
     const preferredAssetImageType = useMemo(() => {
         return inferPreferredAssetImageType(activeAssetLibraryEntity);
@@ -5286,15 +5350,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             ? nonShotAssets 
             : nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset));
         const episodeMatchedAssets = entityMatchedAssets.filter((asset) => {
-            const episodeId = getAssetEpisodeId(asset);
             if (assetEpisodeFilter === 'all') return true;
+            const episodeId = getAssetEpisodeId(asset);
             const wantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
-            return episodeId === wantedEpisodeId;
+            if (episodeId === wantedEpisodeId) return true;
+            // Keep subject assets that match the current entity but lack episode meta.
+            if (!episodeId && doesAssetMatchSelectedEntity(asset)) return true;
+            const namedEntity = resolveAssetEntityByName(asset);
+            return Boolean(namedEntity && String(namedEntity?.episode_id || '').trim() === wantedEpisodeId);
         });
         const typeMatchedAssets = episodeMatchedAssets.filter((asset) => {
             const imageType = getAssetImageType(asset);
             if (assetImageTypeFilter === 'all') return true;
-            if (imageType === 'uploaded_asset' && assetImageTypeFilter === preferredAssetImageType && doesAssetMatchSelectedEntityImageUrl(asset)) {
+            if (!imageType && doesAssetMatchSelectedEntity(asset)) return true;
+            if (imageType === 'uploaded_asset' && assetImageTypeFilter === preferredAssetImageType && (
+                doesAssetMatchSelectedEntityImageUrl(asset) || doesAssetMatchSelectedEntity(asset)
+            )) {
                 return true;
             }
             return imageType === assetImageTypeFilter;
@@ -5365,7 +5436,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
         }
 
         return typeMatchedAssets;
-    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
+    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, currentEpisode?.id, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, resolveAssetEntityByName, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
 
     const assetNameOptions = useMemo(() => {
         return libraryFilteredAssets
@@ -5448,20 +5519,28 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
     ]);
 
     useEffect(() => {
-        // Keep "All Types" as default to avoid silently hiding entity names in the picker.
-        if (!showImageModal || imageModalTab !== 'library') return;
-    }, [showImageModal, imageModalTab]);
-
-    useEffect(() => {
-        if (!showImageModal || imageModalTab !== 'library') return;
+        const pickerOpen = (showImageModal && imageModalTab === 'library') || refSelectionMode === 'assets';
+        if (!pickerOpen) return;
         if (!assetNameOptions.length) {
             if (assetNameFilter) setAssetNameFilter('');
             return;
         }
-        if (!assetNameOptions.some((item) => item.value === assetNameFilter)) {
-            setAssetNameFilter(assetNameOptions[0].value);
-        }
-    }, [showImageModal, imageModalTab, assetNameOptions, assetNameFilter]);
+        if (assetNameFilter && assetNameOptions.some((item) => item.value === assetNameFilter)) return;
+
+        const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
+            .map(normalizeEntityLookupKey)
+            .filter(Boolean);
+        const preferredByName = assetNameOptions.find((item) => {
+            const labelKey = normalizeEntityLookupKey(item.label);
+            if (!labelKey || !selectedNameKeys.length) return false;
+            return selectedNameKeys.some((key) => (
+                labelKey === key
+                || (key.length >= 2 && labelKey.includes(key))
+                || (labelKey.length >= 2 && key.includes(labelKey))
+            ));
+        });
+        setAssetNameFilter((preferredByName || assetNameOptions[0]).value);
+    }, [showImageModal, imageModalTab, refSelectionMode, assetNameOptions, assetNameFilter, activeAssetLibraryEntity, normalizeEntityLookupKey]);
 
     const imageLibraryViewportRef = useRef(null);
     const imageRefPickerViewportRef = useRef(null);
@@ -7161,8 +7240,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             className="bg-[#1e1e1e] border border-white/10 rounded-2xl w-full max-w-5xl h-[80vh] flex shadow-2xl overflow-hidden"
                         >
                             {/* Left: Image */}
-                            <div className="w-1/2 bg-black relative flex flex-col min-h-0">
-                                <div className="flex-1 relative flex items-center justify-center min-h-0 overflow-hidden">
+                            <div className="w-1/2 bg-black relative z-0 isolate flex flex-col min-h-0">
+                                <div className="flex-1 relative z-0 flex items-center justify-center min-h-0 overflow-hidden">
                                 {viewingEntity.image_url ? (
                                     <>
                                         <SafeImage src={viewingEntity.image_url} alt={viewingEntity.name} className="w-full h-full object-contain" {...getSubjectImageRetryProps(viewingEntity.id, viewingEntity.image_url)} fallback={<div className="w-full h-full flex flex-col items-center justify-center text-white/20"><Users size={64} /><span className="mt-4 text-sm font-bold uppercase">{t('无图片', 'No Image')}</span></div>} />
@@ -7261,7 +7340,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </div>
                             
                             {/* Right: Info */}
-                            <div className="w-1/2 flex flex-col h-full bg-[#1e1e1e]">
+                            <div className="w-1/2 relative z-10 flex flex-col h-full bg-[#1e1e1e]">
                                 <div className="p-6 border-b border-white/10 flex justify-between items-start">
                                     <div className="flex-1 mr-4">
                                         <input 
@@ -7960,10 +8039,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                 <div
                                                                     key={idx}
                                                                     tabIndex={0}
-                                                                    className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group outline-none focus:border-primary/50"
+                                                                    className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative isolate group outline-none focus:border-primary/50"
                                                                     title={depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined}
                                                                 >
-                                                                    <div className="aspect-square bg-black rounded overflow-hidden">
+                                                                    <div className="relative aspect-square bg-black rounded overflow-hidden z-0">
                                                                          {depEntity?.image_url ? (
                                                                              <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
                                                                          ) : (
@@ -7971,6 +8050,52 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                                  <ImageIcon className="w-4 h-4 opacity-40" />
                                                                              </div>
                                                                          )}
+                                                                         <div className="absolute inset-0 z-20 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded p-1">
+                                                                             {depEntity?.image_url ? (
+                                                                                 <>
+                                                                                     <button
+                                                                                         type="button"
+                                                                                         title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
+                                                                                         disabled={assetReuseBusy || viewingEntityImageLocked}
+                                                                                         onClick={async (e) => {
+                                                                                             e.preventDefault();
+                                                                                             e.stopPropagation();
+                                                                                             if (!depEntity?.image_url || assetReuseBusy) return;
+                                                                                             setAssetReuseBusy(true);
+                                                                                             try {
+                                                                                                 const updated = await updateEntityImage(depEntity.image_url, false, viewingEntity, {
+                                                                                                     skipAnalyze: true,
+                                                                                                     notify: true,
+                                                                                                     extraFields: { anchor_description: depEntity.anchor_description },
+                                                                                                 });
+                                                                                                 if (updated) setViewingEntity(null);
+                                                                                             } finally {
+                                                                                                 setAssetReuseBusy(false);
+                                                                                             }
+                                                                                         }}
+                                                                                         className="relative z-10 w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1"
+                                                                                     >
+                                                                                         {assetReuseBusy ? <Loader2 className="animate-spin" size={10} /> : null}
+                                                                                         {assetReuseBusy ? t('复用中...', 'Reusing...') : t('复用资产', 'Reuse Asset')}
+                                                                                     </button>
+                                                                                     <button
+                                                                                         type="button"
+                                                                                         title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
+                                                                                         disabled={assetReuseBusy}
+                                                                                         onClick={(e) => {
+                                                                                             e.preventDefault();
+                                                                                             e.stopPropagation();
+                                                                                             setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
+                                                                                         }}
+                                                                                         className="relative z-10 w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold disabled:opacity-50"
+                                                                                     >
+                                                                                         {t('仅参考', 'Reference Only')}
+                                                                                     </button>
+                                                                                 </>
+                                                                             ) : (
+                                                                                 <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
+                                                                             )}
+                                                                         </div>
                                                                     </div>
                                                                     <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
                                                                         {depEntity ? depEntity.name : dep}
@@ -7980,53 +8105,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                                                                             {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
                                                                         </div>
                                                                     )}
-                                                                    
-                                                                    <div className="absolute inset-0 z-30 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded-lg p-1">
-                                                                         {depEntity?.image_url ? (
-                                                                             <>
-                                                                                 <button
-                                                                                     type="button"
-                                                                                     title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
-                                                                                     disabled={assetReuseBusy || viewingEntityImageLocked}
-                                                                                     onClick={async (e) => {
-                                                                                         e.preventDefault();
-                                                                                         e.stopPropagation();
-                                                                                         if (!depEntity?.image_url || assetReuseBusy) return;
-                                                                                         setAssetReuseBusy(true);
-                                                                                         try {
-                                                                                             const updated = await updateEntityImage(depEntity.image_url, false, viewingEntity, {
-                                                                                                 skipAnalyze: true,
-                                                                                                 notify: true,
-                                                                                                 extraFields: { anchor_description: depEntity.anchor_description },
-                                                                                             });
-                                                                                             if (updated) setViewingEntity(null);
-                                                                                         } finally {
-                                                                                             setAssetReuseBusy(false);
-                                                                                         }
-                                                                                     }}
-                                                                                     className="w-full text-[10px] py-1 bg-primary hover:bg-primary/80 border-transparent rounded text-black font-bold disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1"
-                                                                                 >
-                                                                                     {assetReuseBusy ? <Loader2 className="animate-spin" size={10} /> : null}
-                                                                                     {assetReuseBusy ? t('复用中...', 'Reusing...') : t('复用资产', 'Reuse Asset')}
-                                                                                 </button>
-                                                                                 <button
-                                                                                     type="button"
-                                                                                     title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
-                                                                                     disabled={assetReuseBusy}
-                                                                                     onClick={(e) => {
-                                                                                         e.preventDefault();
-                                                                                         e.stopPropagation();
-                                                                                         setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
-                                                                                     }}
-                                                                                     className="w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold disabled:opacity-50"
-                                                                                 >
-                                                                                     {t('仅参考', 'Reference Only')}
-                                                                                 </button>
-                                                                             </>
-                                                                         ) : (
-                                                                             <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
-                                                                         )}
-                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}

@@ -175,7 +175,7 @@ import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
 // Character Canon (Authoritative) generator (shared)
 
 import { CANON_TAG_STORAGE_KEY, CANON_IDENTITY_STORAGE_KEY, PROJECT_SCENE_ANALYSIS_OVERVIEW_FIELDS, DEFAULT_CANON_TAG_CATEGORIES, DEFAULT_CANON_IDENTITY_CATEGORIES, canonOptionValue, normalizeCanonTagCategories, normalizeUserListValues, formatUserListForTextarea, formatManagedUserHint } from '../editorConstants';
-export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, pickContext = {}, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh', isPortrait = false, maxSubmitRefSlots = null }) => {
+export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference Images", promptText = "", onPickMedia = null, pickContext = {}, useSequenceLogic = false, storageKey = "ref_image_urls", additionalAutoRefs = [], defaultAutoRefs = null, strictPromptOnly = false, onFindPrevFrame = null, uiLang = 'zh', isPortrait = false, maxSubmitRefSlots = null }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
     const [selectedImage, setSelectedImage] = useState(null);
     const tech = JSON.parse(shot.technical_notes || '{}');
@@ -254,10 +254,13 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
         const isManualMode = tech[storageKey] && Array.isArray(tech[storageKey]);
            const isLockedManual = isManualMode && isUserEdited;
            const deleted = new Set(Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : []);
+        const useExternalDefaultAutoRefs = Array.isArray(defaultAutoRefs);
         
-        const shouldDetectEntities = storageKey !== 'video_ref_image_urls';
+        const shouldDetectEntities = storageKey !== 'video_ref_image_urls' && !useExternalDefaultAutoRefs;
         const matchedEntities = shouldDetectEntities ? getEntityMatches() : [];
-        const autoMatches = matchedEntities.map(e => e.image_url).filter(Boolean);
+        const autoMatches = useExternalDefaultAutoRefs
+            ? normalizeMediaRefList(defaultAutoRefs).filter((url) => !deleted.has(url))
+            : matchedEntities.map(e => e.image_url).filter(Boolean);
         const environmentRefSet = new Set(
             matchedEntities
                 .filter((entity) => {
@@ -300,7 +303,8 @@ export const ReferenceManager = ({ shot, entities, onUpdate, title = "Reference 
                 hasStartFrame = true;
             }
 
-            if (hasStartFrame && environmentRefSet.size > 0) {
+            // When defaults come from the video panel, keep ENV refs (they are intentional).
+            if (hasStartFrame && environmentRefSet.size > 0 && !useExternalDefaultAutoRefs) {
                 activeRefs = activeRefs.filter((url) => {
                     const normalized = String(url || '').trim();
                     if (!normalized) return false;

@@ -85,6 +85,25 @@ class GroupAllocation(BaseModel):
     credit_limit: int
 
 
+class GroupCreditAllocateItem(BaseModel):
+    user_id: int
+    amount: int
+
+
+class GroupCreditAllocate(BaseModel):
+    """Distribute group pool credits into members' personal balances.
+
+    mode:
+      - equal: split total_amount (or full pool) across user_ids (or all members)
+      - custom: use allocations list as-is (manual amounts)
+    After equal preview on the client, callers typically submit mode=custom with edited amounts.
+    """
+    mode: str = "custom"  # equal | custom
+    total_amount: Optional[int] = None
+    user_ids: Optional[List[int]] = None
+    allocations: Optional[List[GroupCreditAllocateItem]] = None
+
+
 def _require_superuser(user: User) -> None:
     if not getattr(user, "is_superuser", False):
         raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -155,8 +174,24 @@ def _serialize_member(m: UserGroupMembership) -> dict:
         "full_name": user.full_name if user else None,
         "permission_level": m.permission_level,
         "credit_share_limit": m.credit_share_limit or 0,
+        "personal_credits": int(user.credits or 0) if user else 0,
         "created_at": m.created_at,
     }
+
+
+def _build_equal_allocations(user_ids: List[int], total_amount: int) -> List[dict]:
+    """Split total_amount across user_ids; remainder +1 to first recipients."""
+    n = len(user_ids)
+    if n <= 0 or total_amount <= 0:
+        return []
+    base = total_amount // n
+    rem = total_amount % n
+    out = []
+    for i, uid in enumerate(user_ids):
+        amt = base + (1 if i < rem else 0)
+        if amt > 0:
+            out.append({"user_id": int(uid), "amount": int(amt)})
+    return out
 
 
 @router.get("/schema-status", response_model=dict)
@@ -388,6 +423,152 @@ def update_group_credits(
     ))
     db.commit()
     return {"credits": group.credits}
+
+
+@router.post("/{group_id}/credits/allocate", response_model=dict)
+def allocate_group_credits(
+    group_id: int,
+    body: GroupCreditAllocate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Transfer credits from the group shared pool to members' personal balances."""
+    _require_group_admin_or_superuser(db, group_id, current_user)
+
+    group = db.query(UserGroup).filter(UserGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    memberships = (
+        db.query(UserGroupMembership)
+        .options(joinedload(UserGroupMembership.user))
+        .filter(UserGroupMembership.group_id == group_id)
+        .all()
+    )
+    member_by_id = {m.user_id: m for m in memberships}
+    if not member_by_id:
+        raise HTTPException(status_code=400, detail="Group has no members")
+
+    mode = (body.mode or "custom").strip().lower()
+    pool = int(group.credits or 0)
+
+    if mode == "equal":
+        if body.user_ids:
+            target_ids = [int(uid) for uid in body.user_ids]
+        else:
+            target_ids = list(member_by_id.keys())
+        for uid in target_ids:
+            if uid not in member_by_id:
+                raise HTTPException(status_code=400, detail=f"User {uid} is not a member of this group")
+        if body.total_amount is None:
+            total = pool
+        else:
+            total = int(body.total_amount)
+        if total <= 0:
+            raise HTTPException(status_code=400, detail="total_amount must be positive")
+        if total > pool:
+            raise HTTPException(status_code=400, detail="Insufficient group credits")
+        plan = _build_equal_allocations(target_ids, total)
+    elif mode == "custom":
+        if not body.allocations:
+            raise HTTPException(status_code=400, detail="allocations required for custom mode")
+        plan = []
+        for item in body.allocations:
+            amt = int(item.amount)
+            if amt < 0:
+                raise HTTPException(status_code=400, detail="Allocation amount cannot be negative")
+            if amt == 0:
+                continue
+            plan.append({"user_id": int(item.user_id), "amount": amt})
+        if not plan:
+            raise HTTPException(status_code=400, detail="No positive allocations provided")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid mode. Use equal or custom.")
+
+    # Merge duplicate user_ids
+    merged: dict = {}
+    for row in plan:
+        uid = int(row["user_id"])
+        merged[uid] = merged.get(uid, 0) + int(row["amount"])
+    plan = [{"user_id": uid, "amount": amt} for uid, amt in merged.items() if amt > 0]
+
+    for row in plan:
+        if row["user_id"] not in member_by_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User {row['user_id']} is not a member of this group",
+            )
+
+    total_out = sum(row["amount"] for row in plan)
+    if total_out <= 0:
+        raise HTTPException(status_code=400, detail="Total allocation must be positive")
+    if total_out > pool:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient group credits: need {total_out}, have {pool}",
+        )
+
+    group.credits = pool - total_out
+    group.updated_at = now_bj_iso()
+
+    results = []
+    for row in plan:
+        uid = row["user_id"]
+        amt = row["amount"]
+        user = member_by_id[uid].user
+        if not user:
+            user = db.query(User).filter(User.id == uid).first()
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User {uid} not found")
+        old_personal = int(user.credits or 0)
+        user.credits = old_personal + amt
+        db.add(TransactionHistory(
+            user_id=uid,
+            target_group_id=group_id,
+            amount=amt,
+            balance_after=int(user.credits or 0),
+            description="group_credit_allocate",
+            details={
+                "task_type": "group_credit_allocate",
+                "operator_id": current_user.id,
+                "group_id": group_id,
+                "mode": mode,
+                "from_group_credits": True,
+                "personal_before": old_personal,
+            },
+        ))
+        results.append({
+            "user_id": uid,
+            "username": user.username,
+            "amount": amt,
+            "personal_credits": int(user.credits or 0),
+        })
+
+    db.add(TransactionHistory(
+        user_id=current_user.id,
+        target_group_id=group_id,
+        amount=-total_out,
+        balance_after=int(group.credits or 0),
+        description="group_credit_allocate_pool",
+        details={
+            "task_type": "group_credit_allocate_pool",
+            "operator_id": current_user.id,
+            "group_id": group_id,
+            "mode": mode,
+            "total_allocated": total_out,
+            "recipients": [{"user_id": r["user_id"], "amount": r["amount"]} for r in results],
+        },
+    ))
+    db.commit()
+    db.refresh(group)
+
+    return {
+        "group_id": group_id,
+        "mode": mode,
+        "total_allocated": total_out,
+        "group_credits": int(group.credits or 0),
+        "allocations": results,
+    }
 
 
 @router.delete("/{group_id}", response_model=dict)

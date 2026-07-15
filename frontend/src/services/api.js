@@ -3714,6 +3714,10 @@ export const updateAdminGroupCredits = async (groupId, credits, mode = 'set') =>
     await api.post(`/groups/${groupId}/credits`, { amount: credits, mode })
 ).data;
 
+export const allocateGroupCredits = async (groupId, payload) => (
+    await api.post(`/groups/${groupId}/credits/allocate`, payload || {})
+).data;
+
 export const deleteAdminGroup = async (groupId) => (
     await api.delete(`/groups/${groupId}`)
 ).data;

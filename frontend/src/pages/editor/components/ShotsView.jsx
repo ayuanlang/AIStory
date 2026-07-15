@@ -3671,101 +3671,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return {};
     }, []);
 
-    const resolveShotStartFrameRefs = (shotSnapshot, rawPrompt, resolvedEntities) => {
-        let refs = [];
-        try {
-            const noteStr = shotSnapshot?.technical_notes || '{}';
-            const tech = JSON.parse(noteStr);
-            const isManualMode = Array.isArray(tech.ref_image_urls);
-            const isUserEdited = Boolean(tech.ref_image_urls_user_edited);
-            const isLockedManual = isManualMode && isUserEdited;
-            const autoMatches = getSuggestedRefImages(shotSnapshot, rawPrompt, true, resolvedEntities);
-
-            const deletedRefs = tech.deleted_ref_urls || [];
-            if (isLockedManual) {
-                refs = [...tech.ref_image_urls];
-                for (const img of autoMatches) {
-                    if (!refs.includes(img) && !deletedRefs.includes(img)) {
-                        refs.push(img);
-                    }
-                }
-            } else if (isManualMode) {
-                refs = autoMatches.filter(url => !deletedRefs.includes(url));
-            } else {
-                refs = [...new Set(autoMatches)];
-            }
-        } catch (e) {
-            console.error('Error determining start frame refs:', e);
-        }
-
-        return refs.filter(Boolean);
-    };
-
-    const resolveShotEndFrameRefs = (shotSnapshot, rawPrompt, resolvedEntities) => {
-        let refs = [];
-        try {
-            const noteStr = shotSnapshot?.technical_notes || '{}';
-            const tech = JSON.parse(noteStr);
-            const isManualMode = Array.isArray(tech.end_ref_image_urls);
-            const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
-            const isLockedManual = isManualMode && isUserEdited;
-            const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
-
-            const matchedEntities = collectMatchedEntitiesFromPrompt({
-                promptText: rawPrompt,
-                associatedEntities: '',
-                entityPool: Array.isArray(resolvedEntities) ? resolvedEntities : entities,
-                includeAssociatedEntities: false,
-                preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
-            });
-            const autoMatches = matchedEntities
-                .map((entity) => String(entity?.image_url || '').trim())
-                .filter(Boolean);
-            const environmentRefSet = new Set(
-                matchedEntities
-                    .filter((entity) => {
-                        const entityType = String(entity?.type || '').trim().toLowerCase();
-                        return entityType.includes('environment') || entityType.includes('env') || entityType.includes('scene');
-                    })
-                    .map((entity) => String(entity?.image_url || '').trim())
-                    .filter(Boolean)
-            );
-
-            if (isLockedManual) {
-                refs = [...tech.end_ref_image_urls];
-                for (const img of autoMatches) {
-                    if (!refs.includes(img) && !deletedRefs.includes(img)) {
-                        refs.push(img);
-                    }
-                }
-            } else if (isManualMode) {
-                refs = autoMatches.filter((url) => !deletedRefs.includes(url));
-            } else {
-                refs = [...autoMatches];
-            }
-
-            const currentStartFrame = String(shotSnapshot?.image_url || '').trim();
-            if (!isLockedManual && currentStartFrame && !refs.includes(currentStartFrame) && !deletedRefs.includes(currentStartFrame)) {
-                refs.unshift(currentStartFrame);
-            }
-
-            if (currentStartFrame && refs.includes(currentStartFrame) && environmentRefSet.size > 0) {
-                refs = refs.filter((url) => {
-                    const normalized = String(url || '').trim();
-                    if (!normalized) return false;
-                    if (normalized === currentStartFrame) return true;
-                    return !environmentRefSet.has(normalized);
-                });
-            }
-        } catch (e) {
-            console.error('Error determining end frame refs:', e);
-        }
-
-        return normalizeMediaRefList(refs);
-    };
-
     const normalizeImageRefList = (refs = []) => normalizeMediaRefList(refs).filter((url) => !isVideoMediaRefUrl(url));
 
+    /** Same image refs as the video "Refs" panel — source of truth for shot image generation defaults. */
     const resolveShotVideoImageRefs = useCallback((shotSnapshot, resolvedEntities = null) => {
         if (!shotSnapshot) return [];
 
@@ -3789,36 +3697,54 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return normalizeImageRefList(activeRefs);
     }, [activeEpisode?.id, entities]);
 
-    const mergeVideoImageRefs = useCallback((shotSnapshot, fallbackRefs = [], resolvedEntities = null) => {
-        return normalizeImageRefList([
-            ...resolveShotVideoImageRefs(shotSnapshot, resolvedEntities),
-            ...(Array.isArray(fallbackRefs) ? fallbackRefs : []),
-        ]);
+    /**
+     * Default refs for start/end/keyframe/joint image gen = video panel refs.
+     * Start/end panel lists are used only after the user manually edits that panel.
+     * End frame still prepends the current start frame for continuity when unlocked.
+     */
+    const resolveDefaultShotImageGenerationRefs = useCallback((shotSnapshot, panel = 'start', resolvedEntities = null) => {
+        if (!shotSnapshot) return [];
+
+        let tech = {};
+        try {
+            tech = JSON.parse(shotSnapshot.technical_notes || '{}');
+            if (!tech || typeof tech !== 'object') tech = {};
+        } catch {
+            tech = {};
+        }
+
+        const storageKey = panel === 'end' ? 'end_ref_image_urls' : 'ref_image_urls';
+        const userEdited = Boolean(tech[`${storageKey}_user_edited`]);
+        const deletedRefs = new Set(
+            (Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [])
+                .map((url) => String(url || '').trim())
+                .filter(Boolean),
+        );
+
+        let refs;
+        if (userEdited && Array.isArray(tech[storageKey])) {
+            refs = normalizeImageRefList(tech[storageKey]);
+        } else {
+            refs = resolveShotVideoImageRefs(shotSnapshot, resolvedEntities);
+        }
+
+        if (panel === 'end' && !userEdited) {
+            const currentStartFrame = String(shotSnapshot?.image_url || '').trim();
+            if (
+                currentStartFrame
+                && !deletedRefs.has(currentStartFrame)
+                && !refs.includes(currentStartFrame)
+            ) {
+                refs = [currentStartFrame, ...refs];
+            }
+        }
+
+        return normalizeImageRefList(refs.filter((url) => !deletedRefs.has(String(url || '').trim())));
     }, [resolveShotVideoImageRefs]);
 
-    const resolveJointShotDiptychRefs = useCallback((shotSnapshot, rawStartPrompt = '', rawEndPrompt = '', resolvedEntities = null) => {
-        const entityPool = Array.isArray(resolvedEntities) ? resolvedEntities : entities;
-        const startPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-            promptText: rawStartPrompt,
-            associatedEntities: shotSnapshot?.associated_entities || '',
-            entityPool,
-            includeAssociatedEntities: false,
-            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
-        });
-        const endPromptEntityRefs = collectMatchedEntityImageUrlsFromPrompt({
-            promptText: rawEndPrompt,
-            associatedEntities: shotSnapshot?.associated_entities || '',
-            entityPool,
-            includeAssociatedEntities: false,
-            preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
-        });
-
-        return normalizeMediaRefList([
-            ...resolveShotVideoImageRefs(shotSnapshot, entityPool),
-            ...startPromptEntityRefs,
-            ...endPromptEntityRefs,
-        ]);
-    }, [activeEpisode?.id, entities, resolveShotVideoImageRefs]);
+    const resolveJointShotDiptychRefs = useCallback((shotSnapshot, _rawStartPrompt = '', _rawEndPrompt = '', resolvedEntities = null) => {
+        return resolveShotVideoImageRefs(shotSnapshot, resolvedEntities);
+    }, [resolveShotVideoImageRefs]);
 
     const cropGeneratedPanelToBlob = useCallback(async ({
         image,
@@ -6551,148 +6477,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
-    // --- Helper: Parsing Entities matches ---
-    // Updated Logic: Matches both [Name] and {Name}, allowing specific text source
-    const getSuggestedRefImages = useCallback((shot, sourceText = null, strictMode = false, entitySource = null) => {
-        if (!shot) return [];
-        const entList = Array.isArray(entitySource) ? entitySource : entities;
-        if (!entList.length) return [];
-
-        let tech = {};
-        try {
-            tech = JSON.parse(shot?.technical_notes || '{}');
-        } catch (e) {
-            tech = {};
-        }
-
-        const promptText = String(
-            sourceText
-            || buildShotVideoRefPromptText(shot, tech)
-            || ''
-        ).trim();
-
-        return collectMatchedEntityImageUrlsFromPrompt({
-            promptText,
-            associatedEntities: strictMode ? '' : (shot?.associated_entities || ''),
-            entityPool: entList,
-            includeAssociatedEntities: !strictMode,
-            preferredEpisodeId: activeEpisode?.id ?? shot?.episode_id ?? null,
-        });
-    }, [activeEpisode?.id, entities]);
-
-    const getPromptMatchedEntities = useCallback((shot, sourceText = '', entitySource = null) => {
-        const entityPool = Array.isArray(entitySource) ? entitySource : entities;
-        if (!shot || !Array.isArray(entityPool) || entityPool.length === 0) return [];
-
-        const normalizeName = (text) => normalizeEntityToken(text);
-        const regexes = [
-            /\[([\s\S]+?)\]/g,
-            /\{([\s\S]+?)\}/g,
-            /【([\s\S]+?)】/g,
-            /｛([\s\S]+?)｝/g,
-            /(?:^|[\s,，;；])(@[^\s,，;；\]\[\(\)（）\{\}【】]+)/g,
-        ];
-
-        const textToScan = String(sourceText || '').trim();
-        if (!textToScan) return [];
-
-        const candidateSet = new Set();
-        regexes.forEach((regex) => {
-            regex.lastIndex = 0;
-            let matched;
-            while ((matched = regex.exec(textToScan)) !== null) {
-                const token = normalizeName(matched?.[1] || '');
-                if (token) candidateSet.add(token);
-            }
-        });
-
-        const candidates = Array.from(candidateSet);
-        if (candidates.length === 0) return [];
-
-        return entityPool.filter((entity) => {
-            return candidates.some((candidate) => entityTokenMatchesName(entity, candidate));
-        });
-    }, [entities]);
-
-    const getEndFrameVisibleRefs = useCallback((shot, sourceText = '', entitySource = null) => {
-        const tech = JSON.parse(shot?.technical_notes || '{}');
-        const isManualMode = Array.isArray(tech.end_ref_image_urls);
-        const isUserEdited = Boolean(tech.end_ref_image_urls_user_edited);
-        const isLockedManual = isManualMode && isUserEdited;
-        const deletedRefs = Array.isArray(tech.deleted_ref_urls) ? tech.deleted_ref_urls : [];
-
-        const matchedEntities = getPromptMatchedEntities(shot, sourceText, entitySource);
-        const autoMatches = matchedEntities
-            .map((entity) => String(entity?.image_url || '').trim())
-            .filter(Boolean);
-        const environmentRefSet = new Set(
-            matchedEntities
-                .filter((entity) => {
-                    const entityType = String(entity?.type || '').trim().toLowerCase();
-                    return entityType.includes('environment') || entityType.includes('env') || entityType.includes('scene');
-                })
-                .map((entity) => String(entity?.image_url || '').trim())
-                .filter(Boolean)
-        );
-
-        let refs = [];
-        if (isLockedManual) {
-            refs = [...tech.end_ref_image_urls];
-            for (const img of autoMatches) {
-                if (!refs.includes(img) && !deletedRefs.includes(img)) {
-                    refs.push(img);
-                }
-            }
-        } else if (isManualMode) {
-            // Manual but not locked: refresh by current entity images.
-            refs = autoMatches.filter((url) => !deletedRefs.includes(url));
-        } else {
-            refs = [...autoMatches];
-        }
-
-        const currentStartFrame = String(shot?.image_url || '').trim();
-        if (!isLockedManual && currentStartFrame && !refs.includes(currentStartFrame) && !deletedRefs.includes(currentStartFrame)) {
-            refs.unshift(currentStartFrame);
-        }
-
-        if (currentStartFrame && refs.includes(currentStartFrame) && environmentRefSet.size > 0) {
-            refs = refs.filter((url) => {
-                const normalized = String(url || '').trim();
-                if (!normalized) return false;
-                if (normalized === currentStartFrame) return true;
-                return !environmentRefSet.has(normalized);
-            });
-        }
-
-        return [...new Set(refs.map((url) => String(url || '').trim()).filter(Boolean))];
-    }, [getPromptMatchedEntities]);
-
-    // Initialize Reference Images in technical_notes if empty
-    useEffect(() => {
-        if (editingShot && entities.length > 0) {
-            let updates = {};
-            let hasUpdates = false;
-
-            // 1. Ref Images Init
-            try {
-                const tech = JSON.parse(editingShot.technical_notes || '{}');
-                if (tech.ref_image_urls === undefined && !tech.ref_image_urls_user_edited) {
-                    // Initialize strictly with Start Frame Prompt (camera_position)
-                    const suggested = getSuggestedRefImages(editingShot, editingShot.start_frame);
-                    if (suggested.length > 0) {
-                        tech.ref_image_urls = suggested;
-                        updates.technical_notes = JSON.stringify(tech);
-                        hasUpdates = true;
-                    }
-                }
-            } catch (e) { console.error("Error init ref images", e); }
-
-            if (hasUpdates) {
-                setEditingShot(prev => ({ ...prev, ...updates }));
-            }
-        }
-    }, [editingShot?.id, entities]); // Only run when shot ID changes or entities load
-
     // Keyframe State Management
 
     // Parse keyframes from shot text + technical_notes images
@@ -7099,8 +6883,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const fullPrompt = styledPrompt + globalCtx;
             const preferredImageSize = getEpisodePreferredImageSize(activeEpisode?.episode_info);
             
+            const keyframeRefs = resolveShotVideoImageRefs(editingShot, entities);
             // Generate
-            const res = await generateImage(fullPrompt, null, null, { function_name: 'generate_shot_images',
+            const res = await generateImage(fullPrompt, null, keyframeRefs.length > 0 ? keyframeRefs : null, { function_name: 'generate_shot_images',
                 project_id: projectId,
                 episode_id: activeEpisode?.id,
                 shot_id: editingShot.id,
@@ -7383,11 +7168,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  onLog?.('Start Frame generation stopped by user.', 'warning');
                  return;
              }
-                const refs = mergeVideoImageRefs(
-                    shotSnapshot,
-                    resolveShotStartFrameRefs(shotSnapshot, rawPrompt, resolvedEntities),
-                    resolvedEntities,
-                );
+                const refs = resolveDefaultShotImageGenerationRefs(shotSnapshot, 'start', resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     refs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
@@ -7500,12 +7281,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                  onLog?.('End Frame generation stopped by user.', 'warning');
                  return;
              }
-                const tech = JSON.parse(shotSnapshot.technical_notes || '{}');
-                const uniqueRefs = mergeVideoImageRefs(
-                    shotSnapshot,
-                    getEndFrameVisibleRefs(shotSnapshot, rawPrompt, resolvedEntities),
-                    resolvedEntities,
-                );
+                const uniqueRefs = resolveDefaultShotImageGenerationRefs(shotSnapshot, 'end', resolvedEntities);
                 if (extraProviderOptions && extraProviderOptions.auto_refs) {
                     uniqueRefs.push(...extraProviderOptions.auto_refs);
                     delete extraProviderOptions.auto_refs;
@@ -9292,11 +9068,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (!startUrl && !startPromptIsInherited) {
                 const isManualStart = techNotes.manual_start_frame === true;
                 const { text: startSubmitPrompt } = injectEntityFeatures(rawStartPrompt, isManualStart, resolvedEntities);
-                const startRefs = mergeVideoImageRefs(
-                    workingShot,
-                    resolveShotStartFrameRefs(workingShot, rawStartPrompt, resolvedEntities),
-                    resolvedEntities,
-                );
+                const startRefs = resolveDefaultShotImageGenerationRefs(workingShot, 'start', resolvedEntities);
                 const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(startSubmitPrompt) });
                 const finalStartPrompt = isManualStart ? startSubmitPrompt : (startSubmitPrompt + globalCtx);
                 const startResult = await generateImage(finalStartPrompt, null, startRefs.length > 0 ? startRefs : null, { function_name: 'generate_shot_images',
@@ -9339,11 +9111,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     const isManualEnd = techNotes.manual_end_frame === true;
                     const { text: endSubmitPrompt } = injectEntityFeatures(rawEndPrompt, isManualEnd, resolvedEntities);
                     const endShotContext = { ...workingShot, image_url: startUrl || workingShot.image_url };
-                    const endRefs = mergeVideoImageRefs(
-                        endShotContext,
-                        getEndFrameVisibleRefs(endShotContext, rawEndPrompt, resolvedEntities),
-                        resolvedEntities,
-                    );
+                    const endRefs = resolveDefaultShotImageGenerationRefs(endShotContext, 'end', resolvedEntities);
                     const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(endSubmitPrompt) });
                     const finalEndPrompt = isManualEnd ? endSubmitPrompt : (endSubmitPrompt + globalCtx);
                     const endResult = await generateImage(finalEndPrompt, null, endRefs.length > 0 ? endRefs : null, { function_name: 'generate_shot_images',
@@ -9394,7 +9162,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setShotGeneratingState(stableShotId, 'end', false);
     setShotGeneratingState(stableShotId, 'cropping', false);
         }
-    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEndFrameVisibleRefs, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, mergeVideoImageRefs, onUpdateShot, project?.global_info, projectId, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolveShotStartFrameRefs, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
+    }, [activeEpisode?.episode_info, activeEpisode?.id, activeImageCapabilityProfile?.aspectRatios, activeImageCapabilityProfile?.imageSizeValues, applyJointShotDiptychResult, buildEntityNegativePrompt, buildShotDiptychPlan, buildShotFramePromptFromVideoBase, clearPendingImageJob, clearPendingJointDiptychImageJob, getEpisodePreferredAspectRatio, getEpisodePreferredImageSize, getGlobalContextStr, injectEntityFeatures, isStartFrameInheritPrompt, onUpdateShot, project?.global_info, projectId, resolveDefaultShotImageGenerationRefs, resolveJointShotDiptychRefs, resolveShotPanelExportResolution, resolvedPromptSubmitLang, selectBestShotDiptychRequestAspectRatio, setPendingImageJob, setPendingJointDiptychImageJob, setShotGeneratingState]);
 
     const runLocalKeyframeBatch = useCallback(async () => {
         const orderedShots = (Array.isArray(shots) ? shots : []).filter((shot) => Boolean(shot?.id));
@@ -11347,6 +11115,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             onPickMedia={openMediaPicker}
                                             pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             storageKey="ref_image_urls"
+                                            defaultAutoRefs={resolveShotVideoImageRefs(editingShot)}
                                             strictPromptOnly={true}
                                             onFindPrevFrame={() => {
                                                 // Logic to find PREVIOUS shot end frame
@@ -11553,6 +11322,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                             onPickMedia={openMediaPicker}
                                             pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }}
                                             storageKey="end_ref_image_urls"
+                                            defaultAutoRefs={resolveShotVideoImageRefs(editingShot)}
                                             strictPromptOnly={true}
                                         />
                                         </div>
@@ -13059,7 +12829,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         }}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? startPromptTextCn : startPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'start_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="ref_image_urls" defaultAutoRefs={resolveShotVideoImageRefs(editingShot)} strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>
@@ -13169,7 +12939,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         onPromptUpdate={handleManualEndFrameInputChange}
                                                                     />
                                                                 </div>
-                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="end_ref_image_urls" strictPromptOnly={true} />
+                                                                <ReferenceManager shot={editingShot} entities={entities} onUpdate={(updates) => { persistEditingShotUpdates(updates); }} title={t('参考图', 'Refs')} promptText={shotPromptDisplayLang === 'cn' ? endPromptTextCn : endPromptTextEn} uiLang={uiLang} onPickMedia={openMediaPicker} pickContext={{ shotId: editingShot?.id, shotFrameType: 'end_ref', desiredAssetType: 'all', lockAssetType: false, allowMultiSelect: true }} storageKey="end_ref_image_urls" defaultAutoRefs={resolveShotVideoImageRefs(editingShot)} strictPromptOnly={true} />
                                                                 {imageCfgControl}
                                                                 {renderGenerationHistoryPanel()}
                                                             </div>

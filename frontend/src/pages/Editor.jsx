@@ -1873,13 +1873,27 @@ const Editor = ({
         let knownEntities = Array.isArray(existingEntities) ? [...existingEntities] : [];
         const normalizeEntityKey = (type, name) => `${canonicalSubjectType(type) || 'unknown'}:${normalizeEntityToken(name)}`;
         const existingEntityMap = new Map();
+        const preferCurrentEpisodeEntity = (prev, next) => {
+            if (!prev) return next;
+            if (!activeEpisode?.id) return next;
+            const prevInEpisode = String(prev?.episode_id) === String(activeEpisode.id);
+            const nextInEpisode = String(next?.episode_id) === String(activeEpisode.id);
+            if (nextInEpisode && !prevInEpisode) return next;
+            return prev;
+        };
         for (const e of (existingEntities || [])) {
             const t = canonicalSubjectType(e?.type);
             if (!t) continue;
             const name = String(e?.name || '').trim();
             const nameEn = String(e?.name_en || '').trim();
-            if (name) existingEntityMap.set(normalizeEntityKey(t, name), e);
-            if (nameEn) existingEntityMap.set(normalizeEntityKey(t, nameEn), e);
+            if (name) {
+                const key = normalizeEntityKey(t, name);
+                existingEntityMap.set(key, preferCurrentEpisodeEntity(existingEntityMap.get(key), e));
+            }
+            if (nameEn) {
+                const key = normalizeEntityKey(t, nameEn);
+                existingEntityMap.set(key, preferCurrentEpisodeEntity(existingEntityMap.get(key), e));
+            }
         }
 
         if (projectVisualBackfill && id) {
@@ -2096,9 +2110,15 @@ const Editor = ({
                                           addLog('Skipped prop entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             if (existingEntityMap.has(normalizeEntityKey('prop', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('prop', entityNameEn)))) {
-                                logSkippedExistingSubject('prop', entityName, entityNameEn);
-                                continue;
+                             const existingPropForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
+                             if (existingPropForName) {
+                                if (String(existingPropForName.episode_id) === String(activeEpisode?.id)) {
+                                    logSkippedExistingSubject('prop', entityName, entityNameEn);
+                                    continue;
+                                } else {
+                                    prop.visual_dependencies = Array.isArray(prop.visual_dependencies) ? prop.visual_dependencies : (typeof prop.visual_dependencies === 'string' ? [prop.visual_dependencies] : []);
+                                    prop.visual_dependencies.push(`existing_id:${existingPropForName.id}`);
+                                }
                              }
                              const desc = [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
@@ -2166,9 +2186,15 @@ const Editor = ({
                                           addLog('Skipped environment entity without name aliases (name/subject_name_exact/name_en).', 'warning');
                                 continue;
                              }
-                             if (existingEntityMap.has(normalizeEntityKey('environment', entityName)) || (entityNameEn && existingEntityMap.has(normalizeEntityKey('environment', entityNameEn)))) {
-                                logSkippedExistingSubject('environment', entityName, entityNameEn);
-                                continue;
+                             const existingEnvForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
+                             if (existingEnvForName) {
+                                if (String(existingEnvForName.episode_id) === String(activeEpisode?.id)) {
+                                    logSkippedExistingSubject('environment', entityName, entityNameEn);
+                                    continue;
+                                } else {
+                                    env.visual_dependencies = Array.isArray(env.visual_dependencies) ? env.visual_dependencies : (typeof env.visual_dependencies === 'string' ? [env.visual_dependencies] : []);
+                                    env.visual_dependencies.push(`existing_id:${existingEnvForName.id}`);
+                                }
                              }
                              const desc = [
                                           `Name (EN): ${entityNameEn || env.name_en || ''}`,

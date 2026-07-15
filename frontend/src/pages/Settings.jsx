@@ -8,6 +8,7 @@ import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fet
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 import { fetchGroups, createGroup, addGroupMember, fetchGroupMembers } from '../services/api';
+import GroupCreditAllocatePanel from '../components/GroupCreditAllocatePanel';
 import { getUiLang, setUiLang as setGlobalUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 import { formatProviderLabel } from '../lib/providerLabel';
 
@@ -2332,7 +2333,7 @@ const Settings = () => {
 
             {viewingMembersGroup && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-                    <div className="bg-[#1a1b26] border border-white/10 rounded-xl p-6 w-full max-w-lg shadow-2xl relative" style={{ zIndex: 101 }}>
+                    <div className="bg-[#1a1b26] border border-white/10 rounded-xl p-6 w-full max-w-2xl shadow-2xl relative max-h-[90vh] overflow-y-auto" style={{ zIndex: 101 }}>
                         <div className="flex items-start justify-between gap-3 mb-4">
                             <div>
                                 <h3 className="text-xl font-bold">{t('成员列表', 'Members')}</h3>
@@ -2340,6 +2341,9 @@ const Settings = () => {
                                     {viewingMembersGroup.name}
                                     <span className="ml-2 text-white/50">
                                         ({groupMembers.length || viewingMembersGroup.member_count || 0})
+                                    </span>
+                                    <span className="ml-3 text-primary/90 font-mono text-xs">
+                                        {t('组积分', 'Group credits')}: {viewingMembersGroup.credits ?? 0}
                                     </span>
                                 </p>
                             </div>
@@ -2353,19 +2357,20 @@ const Settings = () => {
                                 {t('关闭', 'Close')}
                             </button>
                         </div>
-                        <div className="rounded-lg border border-white/10 overflow-hidden bg-black/40 max-h-[50vh] overflow-y-auto">
+                        <div className="rounded-lg border border-white/10 overflow-hidden bg-black/40 max-h-[36vh] overflow-y-auto mb-4">
                             <table className="w-full text-left border-collapse text-sm">
                                 <thead className="sticky top-0 bg-[#1a1b26]">
                                     <tr className="border-b border-white/10 text-muted-foreground">
                                         <th className="p-3">{t('用户名', 'Username')}</th>
                                         <th className="p-3">{t('邮箱', 'Email')}</th>
+                                        <th className="p-3 text-right">{t('个人积分', 'Personal')}</th>
                                         <th className="p-3">{t('角色', 'Role')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {isLoadingGroupMembers && (
                                         <tr>
-                                            <td colSpan={3} className="p-6 text-center text-muted-foreground">
+                                            <td colSpan={4} className="p-6 text-center text-muted-foreground">
                                                 {t('加载中…', 'Loading…')}
                                             </td>
                                         </tr>
@@ -2379,6 +2384,7 @@ const Settings = () => {
                                                 ) : null}
                                             </td>
                                             <td className="p-3 text-muted-foreground">{m.email || '-'}</td>
+                                            <td className="p-3 text-right font-mono text-white/70">{m.personal_credits ?? 0}</td>
                                             <td className="p-3">
                                                 {m.permission_level >= 2 ? t('管理员', 'Admin') : t('成员', 'Member')}
                                             </td>
@@ -2386,7 +2392,7 @@ const Settings = () => {
                                     ))}
                                     {!isLoadingGroupMembers && groupMembers.length === 0 && (
                                         <tr>
-                                            <td colSpan={3} className="p-6 text-center text-muted-foreground">
+                                            <td colSpan={4} className="p-6 text-center text-muted-foreground">
                                                 {t('暂无成员', 'No members')}
                                             </td>
                                         </tr>
@@ -2394,6 +2400,34 @@ const Settings = () => {
                                 </tbody>
                             </table>
                         </div>
+                        {!isLoadingGroupMembers && groupMembers.length > 0 && (viewingMembersGroup.permission_level >= 2) && (
+                            <GroupCreditAllocatePanel
+                                groupId={viewingMembersGroup.group_id}
+                                groupCredits={viewingMembersGroup.credits ?? 0}
+                                members={groupMembers}
+                                onAllocated={async (res) => {
+                                    setViewingMembersGroup((prev) => (
+                                        prev ? { ...prev, credits: res?.group_credits ?? 0 } : prev
+                                    ));
+                                    try {
+                                        const members = await fetchGroupMembers(viewingMembersGroup.group_id);
+                                        setGroupMembers(Array.isArray(members) ? members : []);
+                                    } catch (e) {
+                                        console.error(e);
+                                    }
+                                    try {
+                                        const data = await fetchGroups();
+                                        setUserGroups(data);
+                                    } catch (e) {
+                                        console.error(e);
+                                    }
+                                    alert(t(
+                                        `已分配 ${res?.total_allocated ?? 0} 积分，组剩余 ${res?.group_credits ?? 0}`,
+                                        `Allocated ${res?.total_allocated ?? 0}; group remaining ${res?.group_credits ?? 0}`
+                                    ));
+                                }}
+                            />
+                        )}
                     </div>
                 </div>
             )}

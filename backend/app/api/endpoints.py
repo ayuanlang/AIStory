@@ -34356,9 +34356,9 @@ def check_order_status(
             order.paid_at = now_bj_iso()
             
             # Add Credits & Transaction
-            from app.models.all_models import Group
+            from app.models.all_models import UserGroup
             if order.target_group_id:
-                target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+                target_group = db.query(UserGroup).filter(UserGroup.id == order.target_group_id).first()
                 if target_group:
                     old_credits = target_group.credits or 0
                     target_group.credits = old_credits + order.credits
@@ -34367,7 +34367,6 @@ def check_order_status(
                         target_group_id=order.target_group_id,
                         amount=order.credits,
                         balance_after=target_group.credits,
-                        type="group_recharge",
                         description="Group Recharge (Active Query)",
                         details={
                             "task_type": "group_recharge",
@@ -34445,9 +34444,9 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                     # Store transaction_id from WeChat
                     wx_transaction_id = result.get('transaction_id')
                     
-                    from app.models.all_models import Group
+                    from app.models.all_models import UserGroup
                     if order.target_group_id:
-                        target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+                        target_group = db.query(UserGroup).filter(UserGroup.id == order.target_group_id).first()
                         if target_group:
                             old_credits = target_group.credits or 0
                             target_group.credits = old_credits + order.credits
@@ -34456,7 +34455,6 @@ async def wechat_notify(request: Request, db: Session = Depends(get_db)):
                                 target_group_id=order.target_group_id,
                                 amount=order.credits,
                                 balance_after=target_group.credits,
-                                type="group_recharge",
                                 description="Group Recharge (WeChat)",
                                 details={
                                     "task_type": "group_recharge", "provider": "wechat", "model": "cny",
@@ -34522,9 +34520,9 @@ def mock_pay_order(
     order.paid_at = now_bj_iso()
     
     # Add Credits
-    from app.models.all_models import Group
+    from app.models.all_models import UserGroup
     if order.target_group_id:
-        target_group = db.query(Group).filter(Group.id == order.target_group_id).first()
+        target_group = db.query(UserGroup).filter(UserGroup.id == order.target_group_id).first()
         if target_group:
             old_credits = target_group.credits or 0
             target_group.credits = old_credits + order.credits
@@ -34533,7 +34531,6 @@ def mock_pay_order(
                 target_group_id=order.target_group_id,
                 amount=order.credits,
                 balance_after=target_group.credits,
-                type="group_recharge",
                 description="Group Recharge (Mock)",
                 details={
                     "task_type": "group_recharge", 
@@ -44191,6 +44188,117 @@ def _collect_video_prompt_entity_refs(
     return _dedupe_media_ref_urls(refs)
 
 
+def _is_video_media_ref_url(url: Any) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    path = raw.split("?", 1)[0].split("#", 1)[0].lower()
+    return bool(re.search(r"\.(mp4|webm|mov|m4v|avi|mkv)$", path))
+
+
+def _filter_image_media_ref_urls(urls: Optional[List[str]]) -> List[str]:
+    return [
+        str(url).strip()
+        for url in _dedupe_media_ref_urls(urls if isinstance(urls, list) else [])
+        if str(url or "").strip() and not _is_video_media_ref_url(url)
+    ]
+
+
+def _resolve_shot_video_panel_image_refs(
+    shot: Any,
+    tech: Dict[str, Any],
+    entity_lookup: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """Image refs from the shot video Refs panel (frontend WYSIWYG source of truth)."""
+    notes = tech if isinstance(tech, dict) else {}
+    deleted = {str(x).strip() for x in (notes.get("deleted_ref_urls") or []) if str(x).strip()}
+    video_manual = bool(notes.get("video_ref_image_urls_manual") or notes.get("video_ref_image_urls_user_edited"))
+
+    if video_manual and isinstance(notes.get("video_ref_image_urls"), list):
+        refs = [
+            str(x).strip()
+            for x in (notes.get("video_ref_image_urls") or [])
+            if str(x).strip() and str(x).strip() not in deleted
+        ]
+        # Keep newly matched video-prompt entities unless explicitly deleted (frontend parity).
+        prompt_candidates = [
+            str(getattr(shot, "video_content", None) or "").strip(),
+            str(notes.get("video_prompt_cn") or "").strip(),
+            str(getattr(shot, "prompt", None) or "").strip(),
+        ]
+        for url in _collect_video_prompt_entity_refs(prompt_candidates, entity_lookup):
+            if url and url not in deleted and url not in refs:
+                refs.append(url)
+        return _filter_image_media_ref_urls(refs)
+
+    video_mode = _resolve_shot_video_mode(notes)
+    prompt_candidates = [
+        str(getattr(shot, "video_content", None) or "").strip(),
+        str(notes.get("video_prompt_cn") or "").strip(),
+        str(getattr(shot, "prompt", None) or "").strip(),
+    ]
+    entity_refs = _collect_video_prompt_entity_refs(prompt_candidates, entity_lookup)
+    start_ref = str(getattr(shot, "image_url", None) or "").strip()
+    end_ref = str(notes.get("end_frame_url") or "").strip()
+    keyframes = _limit_keyframes_for_video_mode(notes.get("keyframes"), video_mode)
+
+    if video_mode == "entity_refs":
+        refs = list(entity_refs)
+    elif video_mode == "entity_refs_start_end":
+        refs = list(entity_refs)
+        if start_ref:
+            refs.append(start_ref)
+        if end_ref:
+            refs.append(end_ref)
+    elif video_mode == "keyframes_entity_refs":
+        refs = [*keyframes, *entity_refs]
+        if not refs and start_ref:
+            refs.append(start_ref)
+    elif video_mode == "end":
+        refs = [end_ref] if end_ref else []
+    elif video_mode == "start_end":
+        refs = []
+        if start_ref:
+            refs.append(start_ref)
+        if end_ref:
+            refs.append(end_ref)
+    else:
+        refs = [start_ref] if start_ref else []
+
+    refs = [url for url in refs if url and url not in deleted]
+    return _filter_image_media_ref_urls(refs)
+
+
+def _resolve_default_shot_image_gen_refs(
+    shot: Any,
+    tech: Dict[str, Any],
+    entity_lookup: Dict[str, Dict[str, Any]],
+    *,
+    panel: str = "start",
+) -> List[str]:
+    """Default start/end image-gen refs = video panel refs; panel lists only after user edit."""
+    notes = tech if isinstance(tech, dict) else {}
+    deleted = {str(x).strip() for x in (notes.get("deleted_ref_urls") or []) if str(x).strip()}
+    storage_key = "end_ref_image_urls" if panel == "end" else "ref_image_urls"
+    user_edited = bool(notes.get(f"{storage_key}_user_edited"))
+
+    if user_edited and isinstance(notes.get(storage_key), list):
+        refs = [
+            str(x).strip()
+            for x in (notes.get(storage_key) or [])
+            if str(x).strip() and str(x).strip() not in deleted
+        ]
+    else:
+        refs = _resolve_shot_video_panel_image_refs(shot, notes, entity_lookup)
+
+    if panel == "end" and not user_edited:
+        start_image = str(getattr(shot, "image_url", None) or "").strip()
+        if start_image and start_image not in deleted and start_image not in refs:
+            refs = [start_image, *refs]
+
+    return _filter_image_media_ref_urls(refs)
+
+
 def _merge_entity_refs_for_video_mode(
     base_refs: List[str],
     *,
@@ -45913,21 +46021,13 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 start_ref_index_map,
                             )
                             start_prompt = _inject_shot_prompt_anchors(start_prompt_raw, entity_lookup, global_style, start_ref_index_map)
-                            auto_matches = []
-                            auto_matches.extend([x for x in _collect_prompt_entity_ref_images(start_prompt_raw, entity_lookup) if x not in auto_matches])
-                            start_refs: List[str] = []
-                            if isinstance(tech.get("ref_image_urls"), list):
-                                saved_refs = [str(x).strip() for x in tech.get("ref_image_urls") or [] if str(x).strip()]
-                                deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
-                                new_auto = [url for url in auto_matches if url not in saved_refs and url not in deleted_refs]
-                                start_refs = saved_refs + new_auto
-                                if is_sap_start_prompt and prev_end and prev_end not in start_refs and prev_end not in deleted_refs:
-                                    # SAP means reusing previous shot end frame as current start reference.
-                                    start_refs.insert(0, prev_end)
-                            else:
-                                start_refs = list(auto_matches)
-                                if prev_end and prev_end not in start_refs:
-                                    start_refs.insert(0, prev_end)
+                            start_refs = _resolve_default_shot_image_gen_refs(
+                                shot, tech, entity_lookup, panel="start"
+                            )
+                            deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
+                            if is_sap_start_prompt and prev_end and prev_end not in start_refs and prev_end not in deleted_refs:
+                                # SAP means reusing previous shot end frame as current start reference.
+                                start_refs.insert(0, prev_end)
 
                             start_refs = [x for x in dict.fromkeys([str(x).strip() for x in start_refs if str(x).strip()]) if x]
                             start_req = GenerationRequest(
@@ -46007,17 +46107,9 @@ def _run_shot_media_batch_job(episode_id: int, request_payload: Dict[str, Any], 
                                 end_ref_index_map,
                             )
                             end_prompt = _inject_shot_prompt_anchors(end_prompt_raw, entity_lookup, global_style, end_ref_index_map)
-                            refs: List[str] = []
-                            if isinstance(tech.get("end_ref_image_urls"), list):
-                                refs.extend([str(x).strip() for x in tech.get("end_ref_image_urls") or [] if str(x).strip()])
-                            else:
-                                refs.extend([x for x in _collect_prompt_entity_ref_images(end_prompt_raw, entity_lookup) if x not in refs])
-
-                            deleted_refs = {str(x).strip() for x in tech.get("deleted_ref_urls") or [] if str(x).strip()}
-                            start_image = str(shot.image_url or "").strip()
-                            if start_image and start_image not in refs and start_image not in deleted_refs:
-                                refs.insert(0, start_image)
-
+                            refs = _resolve_default_shot_image_gen_refs(
+                                shot, tech, entity_lookup, panel="end"
+                            )
                             refs = [x for x in dict.fromkeys([str(x).strip() for x in refs if str(x).strip()]) if x]
                             end_req = GenerationRequest(
                                 prompt=end_prompt,

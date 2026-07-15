@@ -467,7 +467,7 @@ const AssetItem = React.memo(({ asset, onClick, onDelete, isManageMode, isSelect
             onClick={handleClick}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
-             className={`group relative aspect-square bg-card rounded-xl border overflow-hidden cursor-pointer transition-all hover:scale-[1.02] shadow-sm transform-gpu ${isSelected ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-black' : 'border-white/5 hover:border-primary/50'}`}
+             className={`group relative isolate aspect-square bg-card rounded-xl border overflow-hidden cursor-pointer transition-all hover:scale-[1.02] shadow-sm transform-gpu ${isSelected ? 'border-primary ring-2 ring-primary ring-offset-2 ring-offset-black' : 'border-white/5 hover:border-primary/50'}`}
         >
             {/* Always visible dependency badges at the top-left */}
             <div className="absolute top-2 left-2 z-50 flex flex-col gap-1 pointer-events-none">
