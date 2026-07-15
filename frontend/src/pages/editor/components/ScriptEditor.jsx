@@ -7860,6 +7860,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'Missing adapted script for scene beats orchestration. Complete Stage 1 script optimization first.'
             ));
         }
+        const subjectIndexForStage2_2 = String(stage2_1SubjectIndexText || '').trim();
+        if (!subjectIndexForStage2_2 || !hasSubjectIndexStructure(subjectIndexForStage2_2)) {
+            throw new Error(t(
+                '缺少资产清单（Subject Index），无法执行场景编排。请先完成第二阶段资产提取后再重试。',
+                'Missing Subject Index asset inventory. Complete Stage 2.1 asset extraction before scene orchestration.'
+            ));
+        }
         let sceneUnits = [];
         try {
             sceneUnits = parseSceneUnitsFromScriptMarkers(adaptedScriptForSplit);
@@ -8422,6 +8429,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractStage1AdaptedScriptBody,
         fetchPrompt,
         getEpisodeProgressSnapshot,
+        hasSubjectIndexStructure,
         importSingleSceneDuringOrchestration,
         logStage2_2Diagnostics,
         mergeStage2_2SceneTableOutputs,
@@ -8549,9 +8557,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
               }
           }
 
-        if (!subjectIndexText.trim()) {
-            console.log("No asset index found in the analysis result. Skipping Stage 3 asset design.");
-            return emptyReport;
+        if (!subjectIndexText.trim() || !hasSubjectIndexStructure(subjectIndexText)) {
+            onLog?.('[Stage 3 Asset Design] Error: Missing usable Subject Index. Aborting asset design.', 'error');
+            throw new Error(t(
+                '缺少资产清单（Subject Index），无法继续资产生成。请先完成第二阶段资产提取后再重试。',
+                'Missing Subject Index asset inventory. Complete Stage 2.1 asset extraction before asset generation.'
+            ));
         }
 
         phase2GenerationInFlightRef.current = true;
@@ -9128,7 +9139,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         fetchPrompt, analyzeScene, awaitAnalyzeSceneWithRecovery, adaptationText,
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
-        project, extractPureSubjectIndexText, filterSubjectIndexTextForAssetTask,
+        project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
+        hasSubjectIndexStructure,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,

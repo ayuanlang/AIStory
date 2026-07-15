@@ -6820,9 +6820,11 @@ def _build_scene_analysis_blocking_failure_detail(
     if "ANALYSIS_JSON_INVALID" in codes:
         reasons_cn.append("返回内容的结构片段损坏，系统无法安全解析")
     if "ANALYSIS_SUBJECT_INDEX_MISSING" in codes:
-        reasons_cn.append("第一阶段未解析到 Subject Index 区块")
+        reasons_cn.append("未解析到完整的资产清单（Subject Index）区块")
     if "ANALYSIS_SUBJECT_INDEX_HEADER_ONLY" in codes:
-        reasons_cn.append("第一阶段仅解析到 Subject Index 表头，缺少实体条目")
+        reasons_cn.append("仅解析到 Subject Index 表头，缺少实体条目")
+    if "ANALYSIS_SUBJECT_INDEX_REQUIRED" in codes:
+        reasons_cn.append("缺少资产清单（Subject Index），无法继续场景编排或资产生成")
 
     raw_reasons: List[str] = []
     raw_reasons.extend([str(x or "").strip() for x in (integrity_warnings or []) if str(x or "").strip()])
@@ -8814,6 +8816,28 @@ async def _run_scene_markdown_node_per_scene(
     }
 
 
+def _subject_index_has_usable_content(subject_index_text: Any) -> bool:
+    """Return True when Subject Index has at least one real entity row (not header-only)."""
+    text = sanitize_subject_index_text(subject_index_text)
+    if not text.strip():
+        return False
+
+    has_subject_rows = bool(
+        re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", text)
+        or re.search(r"(?im)^\s*S\d{3,}\s*\|", text)
+        or re.search(
+            r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
+            text,
+        )
+        or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", text)
+        or re.search(
+            r"(?im)^\s*\|?\s*[A-Za-z]+\d+\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)",
+            text,
+        )
+    )
+    return has_subject_rows
+
+
 def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
     text = sanitize_subject_index_text(subject_index_text)
     if not text:
@@ -9819,6 +9843,31 @@ async def run_scene_analysis_flow_node(
             _require_project_access(db, episode.project_id, current_user)
             if raw_payload.get("project_id") and int(raw_payload.get("project_id")) != int(episode.project_id):
                 raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
+            # Scene orchestration / asset design must not start without a usable Subject Index.
+            if node_key in {
+                "scene_markdown",
+                "asset_design_character",
+                "asset_design_prop",
+                "asset_design_environment",
+            }:
+                episode_subject_index = sanitize_subject_index_text(
+                    getattr(episode, "ai_scene_analysis_subject_index", None)
+                )
+                request_subject_index = sanitize_subject_index_text(raw_payload.get("text"))
+                if not (
+                    _subject_index_has_usable_content(episode_subject_index)
+                    or _subject_index_has_usable_content(request_subject_index)
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=_build_scene_analysis_blocking_failure_detail(
+                            ["ANALYSIS_SUBJECT_INDEX_REQUIRED"],
+                            [],
+                            [
+                                "缺少资产清单（Subject Index），无法继续场景编排或资产生成。请先完成第二阶段资产提取后再重试。"
+                            ],
+                        ),
+                    )
         elif raw_payload.get("project_id"):
             _require_project_access(db, int(raw_payload.get("project_id")), current_user)
             
@@ -11788,6 +11837,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             return filtered_text
 
         persisted_subject_index_for_prompt = ""
+        persisted_subject_index_raw_for_gate = ""
         episode_adaptation_for_scene_beats = ""
         if is_subject_index_consumer_stage and getattr(request, "episode_id", None):
             try:
@@ -11796,9 +11846,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     episode_adaptation_for_scene_beats = str(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_adaptation", "") or ""
                     ).strip()
-                    persisted_subject_index_for_prompt = sanitize_subject_index_text(
+                    persisted_subject_index_raw_for_gate = sanitize_subject_index_text(
                         getattr(_ep_for_subject_index, "ai_scene_analysis_subject_index", None)
                     )
+                    persisted_subject_index_for_prompt = persisted_subject_index_raw_for_gate
                     if persisted_subject_index_for_prompt and subject_index_allowed_types_for_request:
                         persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
                             persisted_subject_index_for_prompt,
@@ -11924,6 +11975,39 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "待分析剧本",
                 f"Script to Analyze:\n\n{str(script_body or '').strip()}",
             )
+
+        # Scene orchestration (2.2) and asset design require a usable Subject Index.
+        if is_subject_index_consumer_stage:
+            request_embedded_subject_index = _extract_embedded_subject_index_from_stage_text(request.text)
+            gate_subject_index = (
+                persisted_subject_index_raw_for_gate
+                if _subject_index_has_usable_content(persisted_subject_index_raw_for_gate)
+                else request_embedded_subject_index
+            )
+            if not _subject_index_has_usable_content(gate_subject_index):
+                detail = _build_scene_analysis_blocking_failure_detail(
+                    ["ANALYSIS_SUBJECT_INDEX_REQUIRED"],
+                    [],
+                    [
+                        "缺少资产清单（Subject Index），无法继续场景编排或资产生成。请先完成第二阶段资产提取后再重试。"
+                    ],
+                )
+                logger.error(
+                    "[analyze_scene] subject_index_required_blocking episode_id=%s mode=%s prompt_file=%s is_scene_beats_stage=%s",
+                    getattr(request, "episode_id", None),
+                    effective_scene_analysis_mode,
+                    getattr(request, "prompt_file", None),
+                    is_scene_beats_stage,
+                )
+                raise HTTPException(status_code=400, detail=detail)
+            # Prefer persisted index for injection; fall back to request-embedded when episode field is empty.
+            if not persisted_subject_index_for_prompt and request_embedded_subject_index:
+                persisted_subject_index_for_prompt = request_embedded_subject_index
+                if subject_index_allowed_types_for_request:
+                    persisted_subject_index_for_prompt = _filter_subject_index_text_by_types(
+                        persisted_subject_index_for_prompt,
+                        subject_index_allowed_types_for_request,
+                    )
 
         if persisted_subject_index_for_prompt:
             saved_subject_index_block = (
@@ -12741,6 +12825,81 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             })
             raise
 
+        # Subject Index completeness guard applies only to Stage 2.1 assets extraction.
+        # Fail before persist so incomplete indexes cannot unlock scene orchestration / asset design.
+        blocking_codes: List[str] = []
+        blocking_subject_warnings: List[str] = []
+        source_subject_index_text = ""
+        should_check_subject_index_guard = bool(
+            (not is_entity_design_phase)
+            and is_subject_index_extraction_stage
+        )
+        if should_check_subject_index_guard:
+            source_subject_index_text = sanitize_subject_index_text(result_content)
+            has_subject_section = bool(
+                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
+                or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
+            )
+            has_subject_header = bool(
+                re.search(
+                    r"(?im)^\s*\|\s*subject_no\s*\|\s*subject_type\s*\|",
+                    source_subject_index_text,
+                )
+                or re.search(
+                    r"(?im)^\s*subject_no\s*\|\s*subject_type\s*\|",
+                    source_subject_index_text,
+                )
+                or re.search(
+                    r"(?im)^\s*subject_no(?:\s+|\t+|\s*\|\s*)subject_type\b",
+                    source_subject_index_text,
+                )
+                or re.search(r"(?i)subject_no\s*=\s*", source_subject_index_text)
+            )
+            has_subject_rows = bool(
+                re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", source_subject_index_text)
+                or re.search(r"(?im)^\s*S\d{3,}\s*\|", source_subject_index_text)
+                or re.search(
+                    r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
+                    source_subject_index_text,
+                )
+                or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", source_subject_index_text)
+            )
+
+            if not has_subject_section or not has_subject_rows:
+                if has_subject_header and not has_subject_rows:
+                    blocking_codes.append("ANALYSIS_SUBJECT_INDEX_HEADER_ONLY")
+                    blocking_subject_warnings.append(
+                        "资产提取仅解析到 Subject Index 表头，缺少实体条目（如 S001... 行或 subject_no=... 条目），请重试。"
+                    )
+                else:
+                    blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
+                    blocking_subject_warnings.append(
+                        "资产提取未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块与 S001... 实体行）后重试。"
+                    )
+
+        if blocking_codes:
+            for code in blocking_codes:
+                if code not in (integrity_meta.get("warning_codes") or []):
+                    integrity_meta.setdefault("warning_codes", []).append(code)
+            for warn in blocking_subject_warnings:
+                warn_text = str(warn or "").strip()
+                if warn_text and warn_text not in (integrity_meta.get("warnings") or []):
+                    integrity_meta.setdefault("warnings", []).append(warn_text)
+
+            detail = _build_scene_analysis_blocking_failure_detail(
+                blocking_codes,
+                integrity_meta.get("warnings") or [],
+                blocking_subject_warnings,
+            )
+            logger.error(
+                "[analyze_scene] subject_index_missing_blocking episode_id=%s codes=%s warnings=%s output_chars=%s",
+                getattr(request, "episode_id", None),
+                blocking_codes,
+                blocking_subject_warnings,
+                len(result_content or ""),
+            )
+            raise HTTPException(status_code=400, detail=detail)
+
         # Step 3: persist staging fields only (no scenes/entities/shots import).
         saved_to_episode = False
         persisted_field_name = None
@@ -12799,74 +12958,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 raw_total_chars,
                 dedup_total_chars,
                 stage_ctx.stage_key,
-            )
-
-        # Subject Index completeness guard applies only to Stage 2.1 assets extraction.
-        # Scene beats (Stage 2.2) outputs Scenes Table only and must not be checked for Subject Index.
-        blocking_codes: List[str] = []
-        blocking_subject_warnings: List[str] = []
-        source_subject_index_text = ""
-        should_check_subject_index_guard = bool(
-            (not is_entity_design_phase)
-            and is_subject_index_extraction_stage
-        )
-        if should_check_subject_index_guard:
-            source_subject_index_text = sanitize_subject_index_text(result_content)
-            has_subject_section = bool(
-                re.search(r"(?i)(?:subject\s*index|subjects?\s*index|角色|道具|场景|设计资产|Entities)", source_subject_index_text)
-                or re.search(r"(?i)(?:subject_no|subject_type)", source_subject_index_text)
-            )
-            has_subject_header = bool(
-                re.search(
-                    r"(?im)^\s*\|\s*subject_no\s*\|\s*subject_type\s*\|",
-                    source_subject_index_text,
-                )
-                or re.search(
-                    r"(?im)^\s*subject_no\s*\|\s*subject_type\s*\|",
-                    source_subject_index_text,
-                )
-                or re.search(
-                    r"(?im)^\s*subject_no(?:\s+|\t+|\s*\|\s*)subject_type\b",
-                    source_subject_index_text,
-                )
-                or re.search(r"(?i)subject_no\s*=\s*", source_subject_index_text)
-            )
-            has_subject_rows = bool(
-                re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", source_subject_index_text)
-                or re.search(r"(?im)^\s*S\d{3,}\s*\|", source_subject_index_text)
-                or re.search(
-                    r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
-                    source_subject_index_text,
-                )
-                or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", source_subject_index_text)
-            )
-
-            if not has_subject_section:
-                blocking_codes.append("ANALYSIS_SUBJECT_INDEX_MISSING")
-                blocking_subject_warnings.append(
-                    "第一阶段未解析到完整的 Subject Index 区块，请确认返回结果中包含完整的 Subject Index 内容（如标题区块或 subject_no=... 条目）后重试。"
-                )
-            elif has_subject_header and not has_subject_rows:
-                blocking_codes.append("ANALYSIS_SUBJECT_INDEX_HEADER_ONLY")
-                blocking_subject_warnings.append(
-                    "第一阶段仅解析到 Subject Index 表头，缺少实体条目（如 S001... 行或 subject_no=... 条目），请重试。"
-                )
-
-        if blocking_codes:
-            for code in blocking_codes:
-                if code not in (integrity_meta.get("warning_codes") or []):
-                    integrity_meta.setdefault("warning_codes", []).append(code)
-            for warn in blocking_subject_warnings:
-                warn_text = str(warn or "").strip()
-                if warn_text and warn_text not in (integrity_meta.get("warnings") or []):
-                    integrity_meta.setdefault("warnings", []).append(warn_text)
-
-            logger.warning(
-                "[analyze_scene] subject_index_missing_non_blocking episode_id=%s codes=%s warnings=%s output_chars=%s",
-                getattr(request, "episode_id", None),
-                blocking_codes,
-                blocking_subject_warnings,
-                len(result_content or ""),
             )
 
         if integrity_meta.get("truncation_suspected") or continuation_stopped_by_max_segments:

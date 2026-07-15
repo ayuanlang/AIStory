@@ -1661,6 +1661,24 @@ const Editor = ({
         const suppressAlerts = Boolean(importOptions?.suppressAlerts);
         const skipDbVerify = Boolean(importOptions?.skipDbVerify) || suppressAlerts;
         const replaceExistingScenes = Boolean(importOptions?.replaceExistingScenes);
+        // Prefer explicit import episode (analysis pipeline) over live UI selection.
+        // Avoids stale/null activeEpisode and treats legacy episode_id=null as not "same episode".
+        const normalizeImportEpisodeId = (value) => {
+            if (value == null || value === '') return null;
+            const asNum = Number(value);
+            if (Number.isFinite(asNum) && asNum > 0) return asNum;
+            const asText = String(value).trim();
+            if (!asText || asText === 'null' || asText === 'undefined') return null;
+            return asText;
+        };
+        const importEpisodeId = normalizeImportEpisodeId(
+            importOptions?.episodeId ?? importOptions?.episode_id ?? activeEpisodeId ?? activeEpisode?.id
+        );
+        const isSameEpisodeSubject = (entity) => {
+            const entityEpisodeId = normalizeImportEpisodeId(entity?.episode_id);
+            if (!importEpisodeId || !entityEpisodeId) return false;
+            return String(entityEpisodeId) === String(importEpisodeId);
+        };
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -1875,9 +1893,9 @@ const Editor = ({
         const existingEntityMap = new Map();
         const preferCurrentEpisodeEntity = (prev, next) => {
             if (!prev) return next;
-            if (!activeEpisode?.id) return next;
-            const prevInEpisode = String(prev?.episode_id) === String(activeEpisode.id);
-            const nextInEpisode = String(next?.episode_id) === String(activeEpisode.id);
+            if (!importEpisodeId) return next;
+            const prevInEpisode = isSameEpisodeSubject(prev);
+            const nextInEpisode = isSameEpisodeSubject(next);
             if (nextInEpisode && !prevInEpisode) return next;
             return prev;
         };
@@ -2026,7 +2044,7 @@ const Editor = ({
                             }
                             const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
                             if (existingForName) {
-                                if (String(existingForName.episode_id) === String(activeEpisode?.id)) {
+                                if (isSameEpisodeSubject(existingForName)) {
                                     logSkippedExistingSubject('character', entityName, entityNameEn);
                                     continue;
                                 } else {
@@ -2052,7 +2070,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'character',
-                                    episode_id: activeEpisode?.id || undefined,
+                                    episode_id: importEpisodeId || undefined,
                                     description: desc,
                                     generation_prompt_cn: char.generation_prompt_cn || '',
                                     generation_prompt_en: char.generation_prompt_en || '',
@@ -2112,7 +2130,7 @@ const Editor = ({
                              }
                              const existingPropForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
                              if (existingPropForName) {
-                                if (String(existingPropForName.episode_id) === String(activeEpisode?.id)) {
+                                if (isSameEpisodeSubject(existingPropForName)) {
                                     logSkippedExistingSubject('prop', entityName, entityNameEn);
                                     continue;
                                 } else {
@@ -2134,7 +2152,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'prop',
-                                    episode_id: activeEpisode?.id || undefined,
+                                    episode_id: importEpisodeId || undefined,
                                     description: desc,
                                     generation_prompt_cn: prop.generation_prompt_cn || '',
                                     generation_prompt_en: prop.generation_prompt_en || '',
@@ -2188,12 +2206,16 @@ const Editor = ({
                              }
                              const existingEnvForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
                              if (existingEnvForName) {
-                                if (String(existingEnvForName.episode_id) === String(activeEpisode?.id)) {
+                                if (isSameEpisodeSubject(existingEnvForName)) {
                                     logSkippedExistingSubject('environment', entityName, entityNameEn);
                                     continue;
                                 } else {
                                     env.visual_dependencies = Array.isArray(env.visual_dependencies) ? env.visual_dependencies : (typeof env.visual_dependencies === 'string' ? [env.visual_dependencies] : []);
                                     env.visual_dependencies.push(`existing_id:${existingEnvForName.id}`);
+                                    addLog(
+                                        `Environment '${entityName}' exists outside current episode (existing_episode=${existingEnvForName.episode_id ?? 'null'}, import_episode=${importEpisodeId ?? 'null'}); creating episode-scoped copy.`,
+                                        'info'
+                                    );
                                 }
                              }
                              const desc = [
@@ -2210,7 +2232,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'environment',
-                                    episode_id: activeEpisode?.id || undefined,
+                                    episode_id: importEpisodeId || undefined,
                                     description: desc,
                                     generation_prompt_cn: env.generation_prompt_cn || '',
                                     generation_prompt_en: env.generation_prompt_en || '',
@@ -2272,7 +2294,7 @@ const Editor = ({
                                 || (shouldOverwritePoster
                                     ? (knownEntities.find((item) => {
                                         if (canonicalSubjectType(item?.type) !== 'poster') return false;
-                                        if (activeEpisode?.id && String(item?.episode_id || '') !== String(activeEpisode.id)) return false;
+                                        if (importEpisodeId && !isSameEpisodeSubject(item)) return false;
                                         return true;
                                     }) || null)
                                     : null);
@@ -2290,7 +2312,7 @@ const Editor = ({
                                     const payload = {
                                         name: entityName,
                                         type: 'poster',
-                                        episode_id: activeEpisode?.id || existingPoster.episode_id || undefined,
+                                        episode_id: importEpisodeId || existingPoster.episode_id || undefined,
                                         description: desc,
                                         generation_prompt_cn: poster.generation_prompt_cn || '',
                                         generation_prompt_en: poster.generation_prompt_en || '',
@@ -2348,7 +2370,7 @@ const Editor = ({
                                 const payload = {
                                     name: entityName,
                                     type: 'poster',
-                                    episode_id: activeEpisode?.id || undefined,
+                                    episode_id: importEpisodeId || undefined,
                                     description: desc,
                                     generation_prompt_cn: poster.generation_prompt_cn || '',
                                     generation_prompt_en: poster.generation_prompt_en || '',

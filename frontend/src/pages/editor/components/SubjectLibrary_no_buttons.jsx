@@ -4399,13 +4399,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
             return;
         }
 
-        const toGenerate = allEntities.filter(e => !e.image_url);
+        // Respect episode scope selector: "当前分集" only queues this episode's entities.
+        const toGenerate = scopedEntities.filter(e => !e.image_url);
         if (toGenerate.length === 0) {
-            alert("All entities already have images!");
+            alert(t('当前范围内主体均已有图片。', 'All entities in the current scope already have images!'));
             return;
         }
 
-        if (!await confirmUiMessage(`Batch generate images for ${toGenerate.length} entities? This will respect dependency order.`)) return;
+        if (!await confirmUiMessage(
+            t(
+                `将为${entityEpisodeScope === 'current' ? '当前分集中' : '整个项目中'} ${toGenerate.length} 个主体批量生图（遵循依赖顺序）。是否继续？`,
+                `Batch generate images for ${toGenerate.length} entities in the ${entityEpisodeScope === 'current' ? 'current episode' : 'whole project'} (respects dependency order). Continue?`
+            )
+        )) return;
 
         let scenesToScan = [];
         try {
@@ -4967,7 +4973,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                         onClick={handleBatchGenerateEntities}
                         disabled={isBatchGeneratingEntities || isBatchReconstructingEntities}
                         className="px-3 py-2 text-xs font-bold uppercase rounded-md bg-white/10 hover:bg-white/20 text-white flex items-center gap-2 disabled:opacity-50 transition-all border border-white/10"
-                        title={t('批量生成全部实体（遵循依赖）', 'Batch Generate All Entities (Respects Dependencies)')}
+                        title={t(
+                            entityEpisodeScope === 'current'
+                                ? '批量生成当前分集实体（遵循依赖）'
+                                : '批量生成整个项目实体（遵循依赖）',
+                            entityEpisodeScope === 'current'
+                                ? 'Batch Generate Current Episode Entities (Respects Dependencies)'
+                                : 'Batch Generate Whole Project Entities (Respects Dependencies)'
+                        )}
                     >
                          {isBatchGeneratingEntities ? (
                              <>
