@@ -464,6 +464,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
+    /** Dependency tokens excluded from this generation's asset-reference refs (session-only). */
+    const [excludedVisualDepKeys, setExcludedVisualDepKeys] = useState([]);
     const [isUploadingRef, setIsUploadingRef] = useState(false);
     const [refSelectionMode, setRefSelectionMode] = useState(null); // 'assets'
     const [assets, setAssets] = useState([]);
@@ -722,6 +724,33 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const pid = String(projectId || '').trim();
         return pid ? `aistory.entityRefAudioGenMode.${pid}` : 'aistory.entityRefAudioGenMode.global';
     }, [projectId]);
+
+    useEffect(() => {
+        setExcludedVisualDepKeys([]);
+    }, [viewingEntity?.id, selectedEntity?.id]);
+
+    const getVisualDepKey = useCallback((dep) => String(dep ?? '').trim(), []);
+
+    const isVisualDepExcluded = useCallback((dep) => {
+        const key = getVisualDepKey(dep);
+        return Boolean(key) && excludedVisualDepKeys.includes(key);
+    }, [excludedVisualDepKeys, getVisualDepKey]);
+
+    const toggleVisualDepExcluded = useCallback((dep, depEntity = null) => {
+        const key = getVisualDepKey(dep);
+        if (!key) return;
+        const currentlyExcluded = excludedVisualDepKeys.includes(key);
+        const willExclude = !currentlyExcluded;
+        setExcludedVisualDepKeys((prev) => (
+            currentlyExcluded ? prev.filter((item) => item !== key) : [...prev, key]
+        ));
+        if (willExclude) {
+            const entityId = depEntity?.id ?? resolveDependencyEntity(dep, allEntities)?.id;
+            if (entityId && refImage?.entity_id && String(refImage.entity_id) === String(entityId)) {
+                setRefImage(null);
+            }
+        }
+    }, [allEntities, excludedVisualDepKeys, getVisualDepKey, refImage?.entity_id]);
 
     useEffect(() => {
         try {
@@ -5791,12 +5820,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (!promptToUse) return;
 
         const entityNameMap = buildEntityNameMap(allEntities);
+        const excludedDepKeySet = new Set(
+            (excludedVisualDepKeys || []).map((key) => String(key || '').trim()).filter(Boolean)
+        );
         const missingDependencyTargets = getMissingVisualDependencyTargets(
             activeEntity,
             allEntities,
             (target) => target?.image_url,
             entityNameMap
-        );
+        ).filter(({ token }) => !excludedDepKeySet.has(String(token || '').trim()));
         if (missingDependencyTargets.length > 0) {
             const missingLabels = missingDependencyTargets.map(formatEntityDependencyLabel).join('、');
             showSubjectNotification(
@@ -5841,6 +5873,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             if (activeEntity && activeEntity.visual_dependencies) {
                  const deps = parseVisualDependencies(activeEntity.visual_dependencies);
                  deps.forEach(dep => {
+                     if (excludedDepKeySet.has(String(dep || '').trim())) return;
                      const target = resolveDependencyEntity(dep, allEntities);
 
                      if (target && target.image_url) {
@@ -5866,7 +5899,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
             if (onLog) {
                 onLog(
-                    `Subject generation refs: manual_ref=${refImage?.url ? 'yes' : 'no'}, dependency_refs=${depUrls.length}, total_unique=${uniqueRefs.length}`,
+                    `Subject generation refs: manual_ref=${refImage?.url ? 'yes' : 'no'}, dependency_refs=${depUrls.length}, excluded_deps=${excludedDepKeySet.size}, total_unique=${uniqueRefs.length}`,
                     'process'
                 );
             }
@@ -6980,7 +7013,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         return (
                         <div
                             key={entity.id}
-                            onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); setRefImage(null); }}
+                            onClick={() => { setViewingEntity(entity); setViewingEntityTab('generate'); setAdvancedInstruction(''); setRefImage(null); setExcludedVisualDepKeys([]); }}
                             className={`bg-card/90 border rounded-2xl overflow-hidden relative group w-full cursor-pointer hover:border-primary/40 hover:-translate-y-1 hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] shadow-[0_4px_20px_rgb(0,0,0,0.3)] transition-all duration-300 min-h-[260px] flex flex-col ${(() => {
                                 const deps = parseVisualDependencies(entity.visual_dependencies);
                                 const hasDependencies = deps && deps.length > 0;
@@ -8056,15 +8089,30 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
                                                             const depEntity = resolveDependencyEntity(dep, allEntities);
+                                                            const depExcluded = isVisualDepExcluded(dep);
 
                                                             return (
                                                                 <div
                                                                     key={idx}
                                                                     tabIndex={0}
-                                                                    className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative isolate group outline-none focus:border-primary/50"
-                                                                    title={depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined}
+                                                                    className={`flex-shrink-0 w-24 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-1 relative isolate group outline-none focus:border-primary/50 ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
+                                                                    title={depExcluded
+                                                                        ? t('已取消本次参考，点击恢复', 'Cancelled for this generation; click to restore')
+                                                                        : (depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined)}
                                                                 >
-                                                                    <div className="relative aspect-square bg-black rounded overflow-hidden z-0">
+                                                                    <button
+                                                                        type="button"
+                                                                        title={depExcluded ? t('恢复参考', 'Restore reference') : t('取消参考', 'Cancel reference')}
+                                                                        onClick={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            toggleVisualDepExcluded(dep, depEntity);
+                                                                        }}
+                                                                        className={`absolute -top-1.5 -right-1.5 z-30 h-5 w-5 rounded-full border flex items-center justify-center shadow-sm ${depExcluded ? 'bg-emerald-500/90 border-emerald-300/40 text-black' : 'bg-black/80 border-white/20 text-white/80 hover:text-white hover:bg-red-500/80'}`}
+                                                                    >
+                                                                        {depExcluded ? <RotateCcw size={10} /> : <X size={10} />}
+                                                                    </button>
+                                                                    <div className={`relative aspect-square bg-black rounded overflow-hidden z-0 ${depExcluded ? 'grayscale' : ''}`}>
                                                                          {depEntity?.image_url ? (
                                                                              <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
                                                                          ) : (
@@ -8072,6 +8120,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                  <ImageIcon className="w-4 h-4 opacity-40" />
                                                                              </div>
                                                                          )}
+                                                                         {depExcluded ? (
+                                                                             <div className="absolute inset-0 z-20 bg-black/70 flex items-center justify-center rounded">
+                                                                                 <span className="text-[9px] font-bold text-white/80 px-1 text-center">{t('已取消', 'Cancelled')}</span>
+                                                                             </div>
+                                                                         ) : (
                                                                          <div className="absolute inset-0 z-20 bg-black/80 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto flex flex-col gap-1 items-center justify-center transition-opacity rounded p-1">
                                                                              {depEntity?.image_url ? (
                                                                                  <>
@@ -8107,26 +8160,57 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                          onClick={(e) => {
                                                                                              e.preventDefault();
                                                                                              e.stopPropagation();
-                                                                                             setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name });
+                                                                                             setExcludedVisualDepKeys((prev) => prev.filter((item) => item !== getVisualDepKey(dep)));
+                                                                                             setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name, name: depEntity.name });
                                                                                          }}
                                                                                          className="relative z-10 w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold disabled:opacity-50"
                                                                                      >
                                                                                          {t('仅参考', 'Reference Only')}
                                                                                      </button>
+                                                                                     <button
+                                                                                         type="button"
+                                                                                         title={t('取消本次参考，生图时不提交该实体图片', 'Cancel this reference for generation')}
+                                                                                         disabled={assetReuseBusy}
+                                                                                         onClick={(e) => {
+                                                                                             e.preventDefault();
+                                                                                             e.stopPropagation();
+                                                                                             toggleVisualDepExcluded(dep, depEntity);
+                                                                                         }}
+                                                                                         className="relative z-10 w-full text-[10px] py-1 bg-white/10 hover:bg-red-500/30 text-white/90 border border-white/15 rounded font-bold disabled:opacity-50"
+                                                                                     >
+                                                                                         {t('取消参考', 'Cancel Ref')}
+                                                                                     </button>
                                                                                  </>
                                                                              ) : (
-                                                                                 <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
+                                                                                 <div className="flex flex-col gap-1 items-center w-full px-0.5">
+                                                                                     <div className="text-[10px] text-muted-foreground">{t('无图', 'No Image')}</div>
+                                                                                     <button
+                                                                                         type="button"
+                                                                                         title={t('取消本次参考', 'Cancel this reference')}
+                                                                                         onClick={(e) => {
+                                                                                             e.preventDefault();
+                                                                                             e.stopPropagation();
+                                                                                             toggleVisualDepExcluded(dep, depEntity);
+                                                                                         }}
+                                                                                         className="relative z-10 w-full text-[10px] py-1 bg-white/10 hover:bg-red-500/30 text-white/90 border border-white/15 rounded font-bold"
+                                                                                     >
+                                                                                         {t('取消参考', 'Cancel Ref')}
+                                                                                     </button>
+                                                                                 </div>
                                                                              )}
                                                                          </div>
+                                                                         )}
                                                                     </div>
-                                                                    <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
+                                                                    <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={dep}>
                                                                         {depEntity ? depEntity.name : dep}
                                                                     </div>
-                                                                    {!depEntity && (
+                                                                    {depExcluded ? (
+                                                                        <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>
+                                                                    ) : !depEntity ? (
                                                                         <div className="text-[8px] text-red-400 px-0.5">
                                                                             {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
                                                                         </div>
-                                                                    )}
+                                                                    ) : null}
                                                                 </div>
                                                             );
                                                         })}
@@ -8866,10 +8950,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                 <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
                                                         const depEntity = resolveDependencyEntity(dep, allEntities);
+                                                        const depExcluded = isVisualDepExcluded(dep);
                                                         
                                                         return (
-                                                            <div key={idx} className="flex-shrink-0 w-24 bg-black/40 border border-white/10 rounded-lg p-1.5 flex flex-col gap-1 relative group">
-                                                                <div className="aspect-square bg-black rounded overflow-hidden">
+                                                            <div
+                                                                key={idx}
+                                                                className={`flex-shrink-0 w-24 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-1 relative group ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
+                                                                title={depExcluded ? t('已取消本次参考，点击右上角恢复', 'Cancelled for this generation; click corner to restore') : undefined}
+                                                            >
+                                                                <button
+                                                                    type="button"
+                                                                    title={depExcluded ? t('恢复参考', 'Restore reference') : t('取消参考', 'Cancel reference')}
+                                                                    onClick={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+                                                                        toggleVisualDepExcluded(dep, depEntity);
+                                                                    }}
+                                                                    className={`absolute -top-1.5 -right-1.5 z-30 h-5 w-5 rounded-full border flex items-center justify-center shadow-sm ${depExcluded ? 'bg-emerald-500/90 border-emerald-300/40 text-black' : 'bg-black/80 border-white/20 text-white/80 hover:text-white hover:bg-red-500/80'}`}
+                                                                >
+                                                                    {depExcluded ? <RotateCcw size={10} /> : <X size={10} />}
+                                                                </button>
+                                                                <div className={`aspect-square bg-black rounded overflow-hidden relative ${depExcluded ? 'grayscale' : ''}`}>
                                                                      {depEntity?.image_url ? (
                                                                          <SafeImage src={depEntity.image_url} alt={dep} className="w-full h-full object-cover" {...getSubjectImageRetryProps(depEntity.id, depEntity.image_url)} />
                                                                      ) : (
@@ -8877,15 +8978,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                              <Users size={16} className="text-white/20"/>
                                                                          </div>
                                                                      )}
+                                                                     {depExcluded && (
+                                                                         <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
+                                                                             <span className="text-[9px] font-bold text-white/80">{t('已取消', 'Cancelled')}</span>
+                                                                         </div>
+                                                                     )}
                                                                 </div>
-                                                                <div className="text-[10px] truncate font-bold text-white px-0.5" title={dep}>
+                                                                <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={dep}>
                                                                     {depEntity ? depEntity.name : dep}
                                                                 </div>
-                                                                {!depEntity && (
+                                                                {depExcluded ? (
+                                                                    <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>
+                                                                ) : !depEntity ? (
                                                                     <div className="text-[8px] text-red-400 px-0.5">
                                                                         {entityListLoading ? t('加载中', 'Loading') : t('未找到', 'Not Found')}
                                                                     </div>
-                                                                )}
+                                                                ) : null}
                                                             </div>
                                                         );
                                                     })}

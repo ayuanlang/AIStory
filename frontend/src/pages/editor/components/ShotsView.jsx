@@ -26,7 +26,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw, CaptionsOff, VolumeX, Eraser } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -124,6 +124,7 @@ import {
     rebindShotMediaAssets,
     backfillEpisodeMediaFromLibrary,
     persistShotMedia,
+    cleanupShotVideo,
     getCachedUserPreferences,
     markAssetAsCurrentProjectAsset,
 } from '../../../services/api';
@@ -2495,6 +2496,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [assetDetailModal, setAssetDetailModal] = useState({ open: false, type: 'start', keyframeIndex: -1 });
     const [assetDetailPreviewMode, setAssetDetailPreviewMode] = useState('fit');
     const [isEditingVideoPreviewArmed, setIsEditingVideoPreviewArmed] = useState(false);
+    const [videoCleanupMenuOpen, setVideoCleanupMenuOpen] = useState(false);
     const [frameTrimModal, setFrameTrimModal] = useState(() => createInitialFrameTrimState());
     const [shotImageCfgDefault, setShotImageCfgDefault] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
     const [shotImageCfgValue, setShotImageCfgValue] = useState(() => resolveShotImageCfgDefault(getCachedUserPreferences()));
@@ -8960,6 +8962,82 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         }
     };
 
+    const handleLocalVideoCleanup = async (action) => {
+        if (!editingShot) return;
+        const shotSnapshot = editingShot;
+        const targetShotId = shotSnapshot.id;
+        const targetGeneratingState = generatingStateByShot[targetShotId] || { start: false, end: false, video: false };
+        const isVideoGenerating = isShotVideoUiRunning(targetShotId, targetGeneratingState);
+        if (targetGeneratingState.start || targetGeneratingState.end || isVideoGenerating) return;
+
+        const currentVideoUrl = String(shotSnapshot.video_url || '').trim();
+        if (!currentVideoUrl) {
+            showNotification(t('当前镜头没有可处理的视频。', 'No video found for this shot to clean up.'), 'warning');
+            return;
+        }
+
+        const actionKey = String(action || '').trim().toLowerCase();
+        const isSubtitle = actionKey === 'remove_subtitle' || actionKey === 'remove_subtitle_and_bgm';
+        const isBgm = actionKey === 'remove_bgm' || actionKey === 'remove_subtitle_and_bgm';
+        if (!isSubtitle && !isBgm) return;
+
+        const confirmMsg = actionKey === 'remove_subtitle_and_bgm'
+            ? t('将用本地 ffmpeg 去除当前视频的字幕与 BGM（音轨），并覆盖镜头视频，是否继续？', 'Locally remove subtitles and BGM (audio) from this video and replace the shot video. Continue?')
+            : isSubtitle
+                ? t('将用本地 ffmpeg 去除当前视频底部字幕区域（并剥离软字幕轨），是否继续？', 'Locally remove burned-in bottom subtitles (and soft subtitle tracks) from this video. Continue?')
+                : t('将用本地 ffmpeg 去除当前视频的 BGM（整条音轨），是否继续？', 'Locally remove BGM (entire audio track) from this video. Continue?');
+        if (!await confirmUiMessage(confirmMsg)) return;
+
+        setVideoCleanupMenuOpen(false);
+        setShotGeneratingState(targetShotId, 'video', true);
+        setVideoStatuses((prev) => ({
+            ...prev,
+            [targetShotId]: isSubtitle && isBgm ? 'cleaning_both' : (isSubtitle ? 'cleaning_subtitle' : 'cleaning_bgm'),
+        }));
+
+        const stableTargetShotId = String(targetShotId || '').trim();
+        try {
+            const res = await cleanupShotVideo(targetShotId, {
+                action: actionKey,
+                source_url: currentVideoUrl,
+            });
+            const nextUrl = String(res?.url || res?.shot?.video_url || '').trim();
+            if (!nextUrl) {
+                throw new Error(t('清理结果缺少视频地址', 'Cleanup result missing video URL'));
+            }
+            if (typeof clearBrokenMediaUrl === 'function') clearBrokenMediaUrl(nextUrl);
+
+            const newData = { video_url: nextUrl };
+            setShots((prev) => (prev || []).map((shot) => (
+                String(shot?.id || '').trim() === stableTargetShotId ? { ...shot, ...newData } : shot
+            )));
+            setEditingShot((prev) => {
+                if (!prev || prev.id !== targetShotId) return prev;
+                return { ...prev, ...newData };
+            });
+
+            onLog?.(t('本地视频清理完成并已回填。', 'Local video cleanup completed and backfilled.'), 'success');
+            showNotification(
+                isSubtitle && isBgm
+                    ? t('字幕与 BGM 已去除', 'Subtitles and BGM removed')
+                    : isSubtitle
+                        ? t('字幕已去除', 'Subtitles removed')
+                        : t('BGM 已去除', 'BGM removed'),
+                'success'
+            );
+            refreshShotAssetsMeta();
+            Promise.resolve(refreshShots()).catch(() => {});
+            setIsEditingVideoPreviewArmed(true);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'unknown error';
+            onLog?.(`${t('本地视频清理失败', 'Local video cleanup failed')}: ${detail}`, 'error');
+            showNotification(`${t('本地视频清理失败', 'Local video cleanup failed')}: ${detail}`, 'error');
+        } finally {
+            setShotGeneratingState(targetShotId, 'video', false);
+            setVideoStatuses((prev) => { const n = { ...prev }; delete n[targetShotId]; return n; });
+        }
+    };
+
     const handleForceStopShotVideo = useCallback(async (shotId) => {
         const stableShotId = String(shotId || '').trim();
         if (!stableShotId) return;
@@ -11405,6 +11483,54 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <span>2x</span>
                                                 </button>
 
+                                                <div className="relative">
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setVideoCleanupMenuOpen((open) => !open);
+                                                        }}
+                                                        disabled={currentShotGenerating || !String(editingShot?.video_url || '').trim()}
+                                                        className={`text-[10px] font-bold px-2 py-1 rounded flex items-center justify-center gap-1 ${currentShotGenerating || !String(editingShot?.video_url || '').trim() ? 'bg-white/10 text-white/40 cursor-not-allowed' : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'}`}
+                                                        title={t('本地去除字幕 / BGM', 'Local remove subtitles / BGM')}
+                                                        aria-label={t('本地去除字幕 / BGM', 'Local remove subtitles / BGM')}
+                                                    >
+                                                        <Eraser className="w-3 h-3" />
+                                                        <ChevronDown className="w-3 h-3 opacity-70" />
+                                                    </button>
+                                                    {videoCleanupMenuOpen && (
+                                                        <div
+                                                            className="absolute right-0 top-full mt-1 z-40 min-w-[148px] rounded-md border border-white/15 bg-[#1a1b1f] shadow-xl overflow-hidden"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            <button
+                                                                type="button"
+                                                                className="w-full px-3 py-2 text-left text-[11px] text-white/85 hover:bg-white/10 flex items-center gap-2"
+                                                                onClick={() => handleLocalVideoCleanup('remove_subtitle')}
+                                                            >
+                                                                <CaptionsOff className="w-3.5 h-3.5 text-amber-200" />
+                                                                {t('去除字幕', 'Remove subtitles')}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="w-full px-3 py-2 text-left text-[11px] text-white/85 hover:bg-white/10 flex items-center gap-2"
+                                                                onClick={() => handleLocalVideoCleanup('remove_bgm')}
+                                                            >
+                                                                <VolumeX className="w-3.5 h-3.5 text-amber-200" />
+                                                                {t('去除 BGM', 'Remove BGM')}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="w-full px-3 py-2 text-left text-[11px] text-white/85 hover:bg-white/10 flex items-center gap-2 border-t border-white/10"
+                                                                onClick={() => handleLocalVideoCleanup('remove_subtitle_and_bgm')}
+                                                            >
+                                                                <Eraser className="w-3.5 h-3.5 text-amber-200" />
+                                                                {t('字幕 + BGM', 'Subtitles + BGM')}
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+
                                                 <label className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-white cursor-pointer select-none ml-1 mr-2">
                                                     <input 
                                                         type="checkbox" 
@@ -11446,11 +11572,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <Loader2 className="w-6 h-6 animate-spin text-primary"/>
                                                     <span className="text-[10px] text-white/70 animate-pulse">{t(
                                                         videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_subtitle' ? '正在本地去除字幕...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_bgm' ? '正在本地去除 BGM...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_both' ? '正在本地去除字幕与 BGM...' :
                                                         (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                         '正在生成视频...',
                                                         videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_subtitle' ? 'Removing subtitles locally...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_bgm' ? 'Removing BGM locally...' :
+                                                        videoStatuses[editingShot.id] === 'cleaning_both' ? 'Removing subtitles & BGM locally...' :
                                                         (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
                                                         (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
                                                         (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
@@ -12467,7 +12599,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                         success: busy
                                                             ? 'bg-emerald-500/10 text-emerald-300/50 cursor-wait'
                                                             : 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30',
-                                                        warning: disabled
+                                                        warning: busy
+                                                            ? 'bg-amber-500/10 text-amber-300/50 cursor-wait'
+                                                            : disabled
                                                             ? 'bg-amber-500/10 text-amber-300/50 cursor-not-allowed'
                                                             : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30',
                                                         danger: disabled
@@ -12973,11 +13107,17 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             <Loader2 className="w-6 h-6 animate-spin text-primary" />
                                                                             <span className="text-xs text-white/80">{t(
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? '正在 Topaz 提质...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_subtitle' ? '正在本地去除字幕...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_bgm' ? '正在本地去除 BGM...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_both' ? '正在本地去除字幕与 BGM...' :
                                                                                 (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? '保存视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? '加载视频中...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? '获取视频中...' :
                                                                                 '正在生成视频...',
                                                                                 videoStatuses[editingShot.id] === 'upscaling' ? 'Topaz upscaling...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_subtitle' ? 'Removing subtitles locally...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_bgm' ? 'Removing BGM locally...' :
+                                                                                videoStatuses[editingShot.id] === 'cleaning_both' ? 'Removing subtitles & BGM locally...' :
                                                                                 (videoStatuses[editingShot.id] === 'saving' || videoStatuses[editingShot.id] === 'saving_video' || videoStatuses[editingShot.id] === 'save_video') ? 'Saving Video...' :
                                                                                 (videoStatuses[editingShot.id] === 'loading' || videoStatuses[editingShot.id] === 'loading_video' || videoStatuses[editingShot.id] === 'load_video' || videoStatuses[editingShot.id] === 'downloading' || videoStatuses[editingShot.id] === 'downloading_video') ? 'Loading Video...' :
                                                                                 (videoStatuses[editingShot.id] === 'fetching' || videoStatuses[editingShot.id] === 'fetching_video') ? 'Fetching Video...' :
@@ -13086,6 +13226,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
                                                                         busy: currentShotGenerating && videoStatuses[editingShot.id] === 'upscaling',
                                                                         variant: 'success',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('去除字幕', 'Remove Subtitles'),
+                                                                        busyLabel: t('去字幕中...', 'Removing subtitles...'),
+                                                                        onClick: () => handleLocalVideoCleanup('remove_subtitle'),
+                                                                        disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
+                                                                        busy: currentShotGenerating && videoStatuses[editingShot.id] === 'cleaning_subtitle',
+                                                                        variant: 'warning',
+                                                                    })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('去除 BGM', 'Remove BGM'),
+                                                                        busyLabel: t('去 BGM 中...', 'Removing BGM...'),
+                                                                        onClick: () => handleLocalVideoCleanup('remove_bgm'),
+                                                                        disabled: currentShotGenerating || !String(editingShot?.video_url || '').trim(),
+                                                                        busy: currentShotGenerating && videoStatuses[editingShot.id] === 'cleaning_bgm',
+                                                                        variant: 'warning',
                                                                     })}
                                                                     {renderDetailActionButton({
                                                                         label: t('生成视频', 'Generate Video'),

@@ -2470,6 +2470,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         deletedSubjectKeys: {},
         subjectEdits: {},
         editingSubjectKey: '',
+        draftNewEntry: null,
     });
     const [isSavingPhase2RerunSubjectIndex, setIsSavingPhase2RerunSubjectIndex] = useState(false);
     const [sceneBeatsRerunModal, setSceneBeatsRerunModal] = useState({
@@ -15148,6 +15149,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return `### Subject Index\n\n${buildMarkdownTable(SUBJECT_INDEX_STANDARD_HEADERS, rows)}`.trim();
     }, [buildMarkdownTable]);
 
+    const allocateNextSubjectNoForRerun = useCallback((entries = []) => {
+        let maxNum = 0;
+        (entries || []).forEach((entry) => {
+            const raw = String(
+                entry?.subjectNo
+                || resolveSubjectFieldValueByAliases(entry?.fields, ['subject_no', 'id', '编号'])
+                || ''
+            ).trim();
+            const match = raw.match(/(\d+)/);
+            if (!match) return;
+            const num = Number.parseInt(match[1], 10);
+            if (Number.isFinite(num) && num > maxNum) maxNum = num;
+        });
+        return `S${String(maxNum + 1).padStart(3, '0')}`;
+    }, []);
+
+    const defaultSubjectTypeForRerunCategory = useCallback((category) => {
+        const key = String(category || '').trim();
+        if (key === 'props') return 'prop';
+        if (key === 'environments') return 'environment';
+        if (key === 'posters') return 'cover_poster';
+        return 'character';
+    }, []);
+
     const buildSingleSubjectIndexTextForRerun = useCallback((entry) => {
         const normalizedFields = normalizeSubjectIndexEntryFields(entry?.fields, entry);
         const subjectType = String(entry?.type || normalizedFields.subject_type || '').trim();
@@ -15304,11 +15329,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             deletedSubjectKeys: {},
             subjectEdits: {},
             editingSubjectKey: '',
+            draftNewEntry: null,
         }));
     }, [phase2RerunDisplayEntries, phase2RerunModal.category]);
 
     const closePhase2RerunModal = useCallback(() => {
-        setPhase2RerunModal((prev) => ({ ...prev, open: false }));
+        setPhase2RerunModal((prev) => ({ ...prev, open: false, draftNewEntry: null, editingSubjectKey: '' }));
     }, []);
 
     const resolveAssetRerunPatchFromSceneRequest = useCallback((request) => {
@@ -15480,6 +15506,166 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
     }, [getSubjectFieldValueByAliases, mapSubjectIndexTypeToRerunTarget, onLog, persistPhase2RerunSubjectIndexChanges, phase2RerunModal?.subjectEdits, t]);
 
+    const beginAddPhase2RerunEntry = useCallback(() => {
+        const category = String(phase2RerunModal.category || 'characters').trim() || 'characters';
+        const subjectType = defaultSubjectTypeForRerunCategory(category);
+        const subjectNo = allocateNextSubjectNoForRerun(phase2RerunDisplayEntries);
+        const fields = normalizeSubjectIndexEntryFields({
+            subject_no: subjectNo,
+            subject_type: subjectType,
+            subject_name_zh: '',
+            subject_name_en: '',
+            base_entity: 'None',
+            dependency_reference: 'None',
+            entity_attributes: '',
+            script_entity_coverage: '',
+        });
+        setPhase2RerunModal((prev) => ({
+            ...prev,
+            editingSubjectKey: '',
+            draftNewEntry: { fields },
+            query: '',
+        }));
+    }, [
+        allocateNextSubjectNoForRerun,
+        defaultSubjectTypeForRerunCategory,
+        phase2RerunDisplayEntries,
+        phase2RerunModal.category,
+    ]);
+
+    const updatePhase2RerunDraftNewField = useCallback((fieldKey, value) => {
+        if (!fieldKey) return;
+        setPhase2RerunModal((prev) => {
+            const draft = (prev.draftNewEntry && typeof prev.draftNewEntry === 'object') ? prev.draftNewEntry : { fields: {} };
+            const currentFields = (draft.fields && typeof draft.fields === 'object') ? draft.fields : {};
+            return {
+                ...prev,
+                draftNewEntry: {
+                    ...draft,
+                    fields: {
+                        ...currentFields,
+                        [fieldKey]: String(value ?? ''),
+                    },
+                },
+            };
+        });
+    }, []);
+
+    const cancelAddPhase2RerunEntry = useCallback(() => {
+        setPhase2RerunModal((prev) => ({ ...prev, draftNewEntry: null }));
+    }, []);
+
+    const saveAddPhase2RerunEntry = useCallback(async () => {
+        const draft = phase2RerunModal?.draftNewEntry;
+        const fields = (draft?.fields && typeof draft.fields === 'object') ? draft.fields : {};
+        const nextName = String(getSubjectFieldValueByAliases(fields, ['subject_name_zh', 'subject_name_exact', 'subject_name_en', 'subject_name', 'name', '名称', '名字'])).trim();
+        const nextTypeRaw = String(getSubjectFieldValueByAliases(fields, ['subject_type', 'type', '类型', '类别'])).trim();
+        const nextType = normalizeSubjectIndexTypeForAssetTask(nextTypeRaw) || nextTypeRaw;
+        if (!nextName) {
+            alert(t('实体名称不能为空。', 'Entity name cannot be empty.'));
+            return;
+        }
+        const mapped = mapSubjectIndexTypeToRerunTarget(nextType);
+        if (!mapped?.category || !mapped?.targetEntityTypes?.length) {
+            alert(t('实体类型无效，请填写 character / prop / environment / cover_poster。', 'Invalid entity type. Use character / prop / environment / cover_poster.'));
+            return;
+        }
+
+        const normalizedNameKey = normalizeSubjectKey(nextName);
+        const duplicate = (phase2RerunDisplayEntries || []).find((item) => {
+            if (mapped.category && item.category !== mapped.category) return false;
+            return normalizeSubjectKey(item.name) === normalizedNameKey;
+        });
+        if (duplicate) {
+            alert(t(`已存在同名实体「${duplicate.name}」，请修改名称后再新增。`, `An entity named "${duplicate.name}" already exists. Change the name before adding.`));
+            return;
+        }
+
+        let subjectNo = String(getSubjectFieldValueByAliases(fields, ['subject_no', 'id', '编号']) || '').trim();
+        if (!subjectNo) {
+            subjectNo = allocateNextSubjectNoForRerun(phase2RerunDisplayEntries);
+        }
+        const normalizedFields = normalizeSubjectIndexEntryFields({
+            ...fields,
+            subject_no: subjectNo,
+            subject_type: nextType,
+            subject_name_zh: nextName,
+            base_entity: String(fields.base_entity || 'None').trim() || 'None',
+            dependency_reference: String(fields.dependency_reference || 'None').trim() || 'None',
+        }, {
+            subjectNo,
+            name: nextName,
+            type: nextType,
+        });
+
+        const newEntry = {
+            key: `added:${subjectNo}:${normalizeSubjectKey(nextName) || nextName}`,
+            subjectNo,
+            name: nextName,
+            type: nextType,
+            category: mapped.category,
+            targetEntityTypes: mapped.targetEntityTypes,
+            fields: normalizedFields,
+            fieldOrder: [...SUBJECT_INDEX_STANDARD_HEADERS],
+        };
+        const sourceText = buildSingleSubjectIndexTextForRerun(newEntry);
+        if (!sourceText) {
+            alert(t('无法生成新实体的 Subject Index 行。', 'Unable to build Subject Index row for the new entity.'));
+            return;
+        }
+        newEntry.sourceText = sourceText;
+        newEntry.sourceLine = `subject_no=${subjectNo} | subject_type=${nextType} | subject_name_exact=${nextName}`;
+
+        let nextEntries = [...(phase2RerunDisplayEntries || [])];
+        if (nextType === 'cover_poster') {
+            nextEntries = nextEntries.filter((item) => normalizeSubjectIndexTypeForAssetTask(item.type) !== 'cover_poster');
+        }
+        nextEntries.push(newEntry);
+        const nonPoster = nextEntries.filter((item) => normalizeSubjectIndexTypeForAssetTask(item.type) !== 'cover_poster');
+        const posters = nextEntries.filter((item) => normalizeSubjectIndexTypeForAssetTask(item.type) === 'cover_poster');
+        nextEntries = [...nonPoster, ...posters];
+
+        const editedText = buildFullSubjectIndexTextFromEntries(nextEntries);
+        if (!editedText) {
+            alert(t('无法生成 Subject Index 内容。', 'Unable to build Subject Index content.'));
+            return;
+        }
+
+        setIsSavingPhase2RerunSubjectIndex(true);
+        try {
+            await persistSubjectIndexEdit(editedText);
+            setPhase2RerunModal((prev) => ({
+                ...prev,
+                draftNewEntry: null,
+                subjectEdits: {},
+                deletedSubjectKeys: {},
+                editingSubjectKey: '',
+                subjectKey: `${mapped.category}:${normalizeSubjectKey(nextName) || nextName}:${subjectNo}`,
+                category: mapped.category || prev.category,
+                mode: prev.mode === 'all' ? 'all' : (prev.mode === 'category' ? 'category' : 'single'),
+            }));
+            onLog?.(t(`已新增 Subject Index 条目：${subjectNo} ${nextName}`, `Added Subject Index entry: ${subjectNo} ${nextName}`), 'success');
+        } catch (error) {
+            console.error('Failed to persist new Subject Index entry from asset rerun modal:', error);
+            onLog?.(t(`新增 Subject Index 条目失败：${error?.message || error}`, `Failed to add Subject Index entry: ${error?.message || error}`), 'error');
+            alert(t('保存失败，请重试。', 'Save failed. Please try again.'));
+        } finally {
+            setIsSavingPhase2RerunSubjectIndex(false);
+        }
+    }, [
+        allocateNextSubjectNoForRerun,
+        buildFullSubjectIndexTextFromEntries,
+        buildSingleSubjectIndexTextForRerun,
+        getSubjectFieldValueByAliases,
+        mapSubjectIndexTypeToRerunTarget,
+        normalizeSubjectIndexTypeForAssetTask,
+        onLog,
+        persistSubjectIndexEdit,
+        phase2RerunDisplayEntries,
+        phase2RerunModal?.draftNewEntry,
+        t,
+    ]);
+
     useEffect(() => {
         if (!phase2RerunModal.open) return;
         if (phase2RerunModal.mode !== 'single') return;
@@ -15504,6 +15690,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const confirmPhase2RerunSelection = useCallback(async () => {
+        if (phase2RerunModal?.draftNewEntry) {
+            alert(t('请先保存或取消正在新增的 Subject Index 条目。', 'Save or cancel the new Subject Index entry first.'));
+            return;
+        }
         const mode = String(phase2RerunModal.mode || 'all');
         const sourceText = resolveSubjectIndexTextForAssetRerun();
         if (!sourceText) {
@@ -15548,7 +15738,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             retryOptions = { explicitSubjectIndexText: resolvedEditedText };
         }
 
-        setPhase2RerunModal((prev) => ({ ...prev, open: false }));
+        setPhase2RerunModal((prev) => ({ ...prev, open: false, draftNewEntry: null }));
 
         if ((hasEdits || hasDeletions) && resolvedEditedText) {
             try {
@@ -15570,6 +15760,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         phase2RerunDisplayEntries,
         phase2RerunModal.category,
         phase2RerunModal.deletedSubjectKeys,
+        phase2RerunModal.draftNewEntry,
         phase2RerunModal.mode,
         phase2RerunModal.subjectEdits,
         phase2RerunModal.subjectKey,
@@ -17178,7 +17369,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <div className="rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-3 py-3 text-emerald-100">
                                     <div className="font-semibold">{t('将重新生成全部资产类型', 'All asset types will be regenerated')}</div>
                                     <div className="mt-1 text-xs text-emerald-100/75">
-                                        {t('包括角色、道具、环境与封面/海报；可在下方编辑 Subject Index 各实体字段。', 'Includes characters, props, environments, posters and covers. Edit Subject Index fields below.')}
+                                        {t('包括角色、道具、环境与封面/海报；可在下方新增、编辑 Subject Index 各实体字段后再重跑。', 'Includes characters, props, environments, posters and covers. Add or edit Subject Index fields below, then rerun.')}
                                     </div>
                                 </div>
                             )}
@@ -17218,19 +17409,102 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {t('将仅重跑所选分类', 'Only the selected category will be regenerated')}
                                     </div>
                                     <div className="mt-1 text-xs text-sky-100/75">
-                                        {t('系统会从当前 Subject Index 中筛出该分类，再进入资产设计；可在下方编辑各实体字段。', 'The current Subject Index will be filtered to this category before asset design. You can edit entity fields below.')}
+                                        {t('系统会从当前 Subject Index 中筛出该分类，再进入资产设计；可在下方新增或编辑各实体字段。', 'The current Subject Index will be filtered to this category before asset design. You can add or edit entity fields below.')}
                                     </div>
                                 </div>
                             )}
 
                             {(phase2RerunModal.mode === 'all' || phase2RerunModal.mode === 'category' || phase2RerunModal.mode === 'single') && (
                                 <div className="space-y-3">
-                                    <input
-                                        value={phase2RerunModal.query || ''}
-                                        onChange={(event) => setPhase2RerunModal((prev) => ({ ...prev, query: event.target.value }))}
-                                        placeholder={t('搜索编号或实体名...', 'Search subject number or name...')}
-                                        className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none focus:border-purple-400/50"
-                                    />
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <input
+                                            value={phase2RerunModal.query || ''}
+                                            onChange={(event) => setPhase2RerunModal((prev) => ({ ...prev, query: event.target.value }))}
+                                            placeholder={t('搜索编号或实体名...', 'Search subject number or name...')}
+                                            className="flex-1 min-w-[180px] rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/90 outline-none focus:border-purple-400/50"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={beginAddPhase2RerunEntry}
+                                            disabled={!!phase2RerunModal.draftNewEntry || isSavingPhase2RerunSubjectIndex}
+                                            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-bold transition-colors ${phase2RerunModal.draftNewEntry || isSavingPhase2RerunSubjectIndex ? 'border-emerald-400/15 bg-emerald-500/10 text-emerald-100/45 cursor-not-allowed' : 'border-emerald-400/40 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-50'}`}
+                                            title={t('新增 Subject Index 条目后再重跑', 'Add a Subject Index entry, then rerun')}
+                                        >
+                                            <Plus className="w-4 h-4" />
+                                            {t('新增条目', 'Add Entry')}
+                                        </button>
+                                    </div>
+
+                                    {phase2RerunModal.draftNewEntry && (
+                                        <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3 space-y-2">
+                                            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="text-sm font-semibold text-emerald-50">
+                                                    {t('新增 Subject Index 条目', 'New Subject Index Entry')}
+                                                </div>
+                                                <div className="text-[11px] text-emerald-100/70">
+                                                    {t('保存后写入资产清单，再确认重跑即可生成视觉资产。', 'Save writes into the Subject Index; then confirm rerun to generate visuals.')}
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                {SUBJECT_INDEX_STANDARD_HEADERS.map((fieldKey) => {
+                                                    const stableKey = String(fieldKey || '').trim();
+                                                    if (!stableKey) return null;
+                                                    const draftFields = (phase2RerunModal.draftNewEntry?.fields && typeof phase2RerunModal.draftNewEntry.fields === 'object')
+                                                        ? phase2RerunModal.draftNewEntry.fields
+                                                        : {};
+                                                    const rawValue = String(draftFields[stableKey] ?? '');
+                                                    const fieldLabel = SUBJECT_INDEX_FIELD_LABELS[stableKey];
+                                                    const labelText = fieldLabel ? t(fieldLabel.zh, fieldLabel.en) : stableKey;
+                                                    const isLongText = rawValue.length > 80
+                                                        || SUBJECT_INDEX_LONG_TEXT_FIELDS.has(stableKey)
+                                                        || /attributes|coverage|dependency/i.test(stableKey);
+                                                    const spanClass = (stableKey === 'entity_attributes' || stableKey === 'script_entity_coverage')
+                                                        ? 'sm:col-span-2'
+                                                        : '';
+                                                    return (
+                                                        <label key={`draft-new-${stableKey}`} className={`flex flex-col gap-1 ${spanClass}`}>
+                                                            <span className="text-[11px] text-emerald-100/70">{labelText}</span>
+                                                            {isLongText ? (
+                                                                <textarea
+                                                                    value={rawValue}
+                                                                    onChange={(event) => updatePhase2RerunDraftNewField(stableKey, event.target.value)}
+                                                                    rows={stableKey === 'entity_attributes' ? 5 : 3}
+                                                                    className="rounded border border-emerald-400/20 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-emerald-300/50 resize-y"
+                                                                    placeholder={stableKey === 'subject_type' ? 'character | prop | environment | cover_poster' : ''}
+                                                                />
+                                                            ) : (
+                                                                <input
+                                                                    value={rawValue}
+                                                                    onChange={(event) => updatePhase2RerunDraftNewField(stableKey, event.target.value)}
+                                                                    className="rounded border border-emerald-400/20 bg-black/40 px-2 py-1.5 text-xs text-white/90 outline-none focus:border-emerald-300/50"
+                                                                    placeholder={stableKey === 'subject_type' ? 'character | prop | environment | cover_poster' : ''}
+                                                                />
+                                                            )}
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                            <div className="flex items-center justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={cancelAddPhase2RerunEntry}
+                                                    disabled={isSavingPhase2RerunSubjectIndex}
+                                                    className="px-2.5 py-1 text-[11px] rounded border border-white/15 bg-white/5 hover:bg-white/10 text-white/80"
+                                                >
+                                                    {t('取消', 'Cancel')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={saveAddPhase2RerunEntry}
+                                                    disabled={isSavingPhase2RerunSubjectIndex}
+                                                    className={`px-2.5 py-1 text-[11px] rounded border font-semibold ${isSavingPhase2RerunSubjectIndex ? 'border-emerald-400/15 bg-emerald-500/10 text-emerald-100/50 cursor-not-allowed' : 'border-emerald-400/40 bg-emerald-500/25 hover:bg-emerald-500/35 text-emerald-50'}`}
+                                                >
+                                                    {isSavingPhase2RerunSubjectIndex ? t('保存中...', 'Saving...') : t('保存新增', 'Save Entry')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <div className="rounded-lg border border-white/10 bg-black/20 max-h-[360px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
                                         {filteredPhase2RerunSubjectEntries.length > 0 ? filteredPhase2RerunSubjectEntries.map((item) => {
                                             const isSingleMode = phase2RerunModal.mode === 'single';
@@ -17349,7 +17623,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             );
                                         }) : (
                                             <div className="px-3 py-6 text-center text-sm text-white/45">
-                                                {t('当前筛选下没有可编辑的 Subject Index 实体。', 'No editable Subject Index entities under current filters.')}
+                                                {t('当前筛选下没有可编辑的 Subject Index 实体。可点击上方「新增条目」补充。', 'No editable Subject Index entities under current filters. Use “Add Entry” above to create one.')}
                                             </div>
                                         )}
                                     </div>

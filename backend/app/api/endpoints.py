@@ -146,7 +146,7 @@ import os
 
 
 from app.services.media_service import MediaGenerationService
-from app.services.video_service import create_montage
+from app.services.video_service import create_montage, process_video_cleanup_local
 from app.services.project_cost_service import compute_project_cost_estimation
 from app.api.deps import get_current_user, cache_user_identity, invalidate_cached_user_identity, list_cached_user_entries  # Import dependency
 from fastapi.responses import JSONResponse
@@ -4132,6 +4132,11 @@ def _replace_legacy_temp_urls_in_shot_payload(
 
 class ShotPersistMediaRequest(BaseModel):
     slot: str = "video"
+    source_url: Optional[str] = None
+
+
+class ShotVideoCleanupRequest(BaseModel):
+    action: str  # remove_subtitle | remove_bgm | remove_subtitle_and_bgm
     source_url: Optional[str] = None
 
 
@@ -28505,6 +28510,85 @@ def persist_shot_media(
         "technical_notes": refreshed.technical_notes,
     }
     return result
+
+
+@router.post("/shots/{shot_id}/video-cleanup", response_model=Dict[str, Any])
+def cleanup_shot_video_local(
+    shot_id: int,
+    payload: ShotVideoCleanupRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Local ffmpeg cleanup: remove burned-in/soft subtitles and/or BGM (audio track)."""
+    db_shot = db.query(Shot).filter(Shot.id == shot_id, _active_shot_clause()).first()
+    if not db_shot:
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    scene = db.query(Scene).filter(Scene.id == db_shot.scene_id, _active_scene_clause()).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    episode = db.query(Episode).filter(Episode.id == scene.episode_id, _active_episode_clause()).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    _require_project_access(db, episode.project_id, current_user)
+
+    action = str(payload.action or "").strip().lower()
+    remove_subtitle = action in {"remove_subtitle", "subtitle", "remove_subtitle_and_bgm", "both"}
+    remove_bgm = action in {"remove_bgm", "bgm", "remove_audio", "mute", "remove_subtitle_and_bgm", "both"}
+    if not remove_subtitle and not remove_bgm:
+        raise HTTPException(
+            status_code=400,
+            detail="action must be one of: remove_subtitle, remove_bgm, remove_subtitle_and_bgm",
+        )
+
+    source_url = str(payload.source_url or getattr(db_shot, "video_url", None) or "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="Shot has no video to clean up")
+
+    try:
+        result = process_video_cleanup_local(
+            source_url,
+            remove_subtitle=remove_subtitle,
+            remove_bgm=remove_bgm,
+            user_id=int(current_user.id or 0),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        detail = str(exc)
+        if "busy" in detail.lower():
+            raise HTTPException(status_code=429, detail=detail)
+        raise HTTPException(status_code=500, detail=detail)
+    except Exception as exc:
+        logger.error("Shot video cleanup failed shot_id=%s action=%s err=%s", shot_id, action, exc)
+        raise HTTPException(status_code=500, detail=f"Video cleanup failed: {exc}")
+
+    new_url = str((result or {}).get("url") or "").strip()
+    if not new_url:
+        raise HTTPException(status_code=500, detail="Video cleanup returned empty url")
+
+    db_shot.video_url = new_url
+    try:
+        db.add(db_shot)
+        db.commit()
+        db.refresh(db_shot)
+    except Exception as exc:
+        db.rollback()
+        logger.error("Failed to persist cleaned video_url shot_id=%s err=%s", shot_id, exc)
+        raise HTTPException(status_code=500, detail="Cleanup succeeded but failed to save shot video_url")
+
+    return {
+        "url": new_url,
+        "action": action,
+        "remove_subtitle": bool(remove_subtitle),
+        "remove_bgm": bool(remove_bgm),
+        "shot": {
+            "id": db_shot.id,
+            "video_url": db_shot.video_url,
+        },
+    }
 
 
 @router.post("/entities/{entity_id}/persist-media", response_model=Dict[str, Any])

@@ -3318,6 +3318,16 @@ export const persistShotMedia = async (shotId, payload = {}) => {
     return response.data;
 };
 
+export const cleanupShotVideo = async (shotId, payload = {}) => {
+    const response = await api.post(`/shots/${Number(shotId)}/video-cleanup`, {
+        action: payload.action || 'remove_bgm',
+        ...(payload.source_url ? { source_url: payload.source_url } : {}),
+    }, {
+        timeout: Number(payload.timeout_ms || 10 * 60 * 1000),
+    });
+    return response.data;
+};
+
 export const persistEntityMedia = async (entityId, payload = {}) => {
     const response = await api.post(`/entities/${Number(entityId)}/persist-media`, {
         ...(payload.source_url ? { source_url: payload.source_url } : {}),
