@@ -545,7 +545,7 @@ const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
 const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
 const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
 const BLOCK_MARKER_LINE_PATTERN = /^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$/gim;
-const SCENE_MARKER_LINE_PATTERN = /^\s*`?\[SCENE_(?:START|END):[^\]]+\]`?\s*$/gim;
+const SCENE_MARKER_LINE_PATTERN = /^\s*`?\[SCENE_(?:START|END)(?::[^\]]+)?\]`?\s*$/gim;
 const MIN_SCENE_UNIT_BODY_CHARS = 50;
 
 const stripBlockLevelMarkersFromSceneText = (text) => (
@@ -572,7 +572,7 @@ const normalizeSceneMarkerScriptText = (scriptText) => {
     const text = String(scriptText || '').replace(/\r\n/g, '\n');
     if (!text.trim()) return '';
     return text.replace(
-        /`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END):[^\]]+)\])`+/gi,
+        /`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END)(?::[^\]]+)?)])`+/gi,
         '$1'
     );
 };
@@ -590,21 +590,72 @@ const resolveSceneBlockText = (scriptText) => {
     return blockText || normalized.trim();
 };
 
+const inferSceneIdFromBareStartContext = (blockText, markerEndPos) => {
+    const after = String(blockText || '').slice(Math.max(0, Number(markerEndPos) || 0), Math.max(0, Number(markerEndPos) || 0) + 120);
+    const firstLine = after.split('\n')[0] || after;
+    const patterns = [
+        /^\s*(EP\d+_SC\d+[A-Za-z]?)\b/i,
+        /^\s*Scene\s*(\d+)\b/i,
+        /^\s*【场景\s*(\d+)/,
+        /^\s*场景\s*(\d+)\s*[：:\-—–]/,
+        /^\s*(\d+)\s*[—–:\-【]/,
+    ];
+    for (const pattern of patterns) {
+        const match = firstLine.match(pattern);
+        if (!match) continue;
+        const value = String(match[1] || '').trim();
+        if (value) return value;
+    }
+    return '';
+};
+
 const collectSceneBoundaryMarkers = (blockText) => {
     const markers = [];
-    const startPattern = /`?\[SCENE_START:([^\]\s]+)\]`?/gi;
-    const endPattern = /`?\[SCENE_END:([^\]\s]+)\]`?/gi;
+    // Accept both [SCENE_START:ID] and bare [SCENE_START] (Stage 1 template historically used bare form).
+    // Also recover IDs from title lines like: [SCENE_START] Scene 4 — Winery Courtyard...
+    const startPattern = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/gi;
+    const endPattern = /`?\[SCENE_END(?::([^\s\]]+))?\]`?/gi;
     let match;
     while ((match = startPattern.exec(blockText)) !== null) {
-        const sceneId = String(match[1] || '').trim();
-        if (sceneId) markers.push({ pos: match.index, endPos: match.index + match[0].length, kind: 'start', sceneId });
+        const explicitId = String(match[1] || '').trim();
+        const inferredId = explicitId || inferSceneIdFromBareStartContext(blockText, match.index + match[0].length);
+        markers.push({
+            pos: match.index,
+            endPos: match.index + match[0].length,
+            kind: 'start',
+            sceneId: inferredId,
+        });
     }
     while ((match = endPattern.exec(blockText)) !== null) {
-        const sceneId = String(match[1] || '').trim();
-        if (sceneId) markers.push({ pos: match.index, endPos: match.index + match[0].length, kind: 'end', sceneId });
+        markers.push({
+            pos: match.index,
+            endPos: match.index + match[0].length,
+            kind: 'end',
+            sceneId: String(match[1] || '').trim(),
+        });
     }
     markers.sort((a, b) => (a.pos - b.pos) || (a.kind === 'end' ? -1 : 1));
-    return markers;
+
+    let autoIndex = 0;
+    let lastStartId = '';
+    return markers.map((marker) => {
+        if (marker.kind === 'start') {
+            let sceneId = marker.sceneId;
+            if (!sceneId) {
+                autoIndex += 1;
+                sceneId = String(autoIndex);
+            } else {
+                const numericId = Number(sceneId);
+                if (Number.isFinite(numericId) && numericId > autoIndex) {
+                    autoIndex = numericId;
+                }
+            }
+            lastStartId = sceneId;
+            return { ...marker, sceneId };
+        }
+        const sceneId = marker.sceneId || lastStartId || String(Math.max(autoIndex, 1));
+        return { ...marker, sceneId };
+    });
 };
 
 const decrementCanonicalSceneId = (sceneId) => {
@@ -2115,7 +2166,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const strictBlock = extractScenesBlockOnly(candidate);
             if (strictBlock) return strictBlock;
 
-            if (/\[SCENE_START:/i.test(candidate)) {
+            if (/\[SCENE_START(?::[^\s\]]+)?\]/i.test(candidate)) {
                 const endMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*Subject\s*Index|###\s*Part\s*1|###\s*Project\s*Visual\s*Backfill|\[Project Metadata\]|\[Reusable Subject Assets)/im);
                 const fallbackEndMarkerMatch = candidate.match(/(?:^|\n)\s*(?:###\s*第三部分|##\s*第三部分|第三部分[:：]?\s*Project\s*Visual\s*Backfill|[-]{5,}\s*$|\{\s*"project_visual_backfill"\s*:)/im);
                 if (endMarkerMatch?.index >= 0) {
@@ -13404,6 +13455,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const isSceneMarkdownTableText = (candidateText) => {
             const candidate = String(candidateText || '');
             if (!candidate.trim()) return false;
+            // If scene markers exist, this is adapted script body — never treat as Scenes Table.
+            if (/\[SCENE_START(?::[^\s\]]+)?\]/i.test(candidate)) return false;
             return /(?:^|\n)\s*(?:#{0,6}\s*)?(?:Part\s*1\s*:\s*Scenes?\s*Table|Scenes?\s*Table|场景分析结果|场景表)\b/i.test(candidate)
                 || /(?:^|\n)\s*\|[^\n]*(?:Scene\s*ID|Scene\s*No\.?|Core\s*Scene\s*Info|Equivalent\s*Duration|场景\s*ID|场景编号|核心场景信息)[^\n]*\|/i.test(candidate);
         };
@@ -14351,10 +14404,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
         if (!candidates.length) {
+            const adaptedProbe = String(resolveStage1AdaptedScriptText().text || '');
+            const hasBareMarkers = /\[SCENE_START\]/i.test(adaptedProbe) || /\[SCENE_END\]/i.test(adaptedProbe);
+            const hasIdMarkers = /\[SCENE_START:[^\]]+\]/i.test(adaptedProbe);
+            const originalScript = String(activeEpisode?.script_content || '').trim();
+            const usingOriginal = Boolean(
+                adaptedProbe
+                && originalScript
+                && adaptedProbe === originalScript
+            );
+            onLog?.(
+                t(
+                    `场景重排切分失败：source=${adaptedScriptSource || 'unknown'} chars=${adaptedProbe.length} bare_markers=${hasBareMarkers} id_markers=${hasIdMarkers} same_as_original=${usingOriginal}`,
+                    `Scene beats split failed: source=${adaptedScriptSource || 'unknown'} chars=${adaptedProbe.length} bare_markers=${hasBareMarkers} id_markers=${hasIdMarkers} same_as_original=${usingOriginal}`
+                ),
+                'warning'
+            );
             alert(
                 candidateError
                     ? t(`无法按场景分隔符切分剧本：${candidateError}`, `Failed to split script by scene markers: ${candidateError}`)
-                    : t('优化后剧本中未找到 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
+                    : (
+                        hasBareMarkers && !hasIdMarkers
+                            ? t('优化后剧本里只有裸 [SCENE_START]/[SCENE_END]（无 Scene ID）。请刷新后重试；若仍失败，请重跑第一阶段以生成 [SCENE_START:EPxx_SCyy] 格式。', 'Optimized script only has bare [SCENE_START]/[SCENE_END] markers (no Scene ID). Refresh and retry; if it still fails, rerun Stage 1 to emit [SCENE_START:EPxx_SCyy].')
+                            : t('优化后剧本中未找到可用的 [SCENE_START]/[SCENE_END] 场景分隔符，无法按场重排。', 'No usable [SCENE_START]/[SCENE_END] scene markers found in the optimized script; per-scene rerun is unavailable.')
+                    )
             );
             return;
         }
@@ -14386,12 +14459,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.id,
+        activeEpisode?.script_content,
         extractPureSubjectIndexText,
         getStageOutputContent,
         hasUsableSubjectIndexRows,
         isAnalyzing,
         onLog,
         resolveSceneBeatsRerunCandidates,
+        resolveStage1AdaptedScriptText,
         t,
     ]);
 

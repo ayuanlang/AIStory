@@ -61,14 +61,14 @@ SCENES_BLOCK_START_TOKEN = "[SCENES_BLOCK_START]"
 SCENES_BLOCK_END_TOKEN = "[SCENES_BLOCK_END]"
 SCENES_BLOCK_START_PATTERN = re.compile(r"`?\[SCENES_BLOCK_START\]`?", re.IGNORECASE)
 SCENES_BLOCK_END_PATTERN = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
-SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START:([^\]\s]+)\]`?", re.IGNORECASE)
-SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END:([^\]\s]+)\]`?", re.IGNORECASE)
+SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 BLOCK_MARKER_LINE_PATTERN = re.compile(
     r"^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 SCENE_MARKER_LINE_PATTERN = re.compile(
-    r"^\s*`?\[SCENE_(?:START|END):[^\]]+\]`?\s*$",
+    r"^\s*`?\[SCENE_(?:START|END)(?::[^\]]+)?\]`?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 MIN_SCENE_UNIT_BODY_CHARS = 50
@@ -289,7 +289,7 @@ def _normalize_scene_marker_script_text(script_text: str) -> str:
     if not text.strip():
         return ""
     text = re.sub(
-        r"`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END):[^\]]+)\])`+",
+        r"`+(\[(?:SCENES?_BLOCK_(?:START|END)|SCENE_(?:START|END)(?::[^\]]+)?)])`+",
         r"\1",
         text,
         flags=re.IGNORECASE,
@@ -341,18 +341,85 @@ def _resolve_scene_block_text(text: str) -> str:
     return block_text if block_text else normalized.strip()
 
 
+def _infer_scene_id_from_bare_start_context(block_text: str, marker_end_pos: int) -> str:
+    after = str(block_text or "")[max(0, int(marker_end_pos or 0)) : max(0, int(marker_end_pos or 0)) + 120]
+    first_line = after.split("\n", 1)[0] if after else ""
+    patterns = (
+        r"^\s*(EP\d+_SC\d+[A-Za-z]?)\b",
+        r"^\s*Scene\s*(\d+)\b",
+        r"^\s*【场景\s*(\d+)",
+        r"^\s*场景\s*(\d+)\s*[：:\-—–]",
+        r"^\s*(\d+)\s*[—–:\-【]",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, first_line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value = str(match.group(1) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _collect_scene_boundary_markers(block_text: str) -> List[_SceneBoundaryMarker]:
+    """Collect scene boundary markers.
+
+    Accepts both `[SCENE_START:ID]` / `[SCENE_END:ID]` and bare `[SCENE_START]` /
+    `[SCENE_END]`. For bare START, also recover IDs from nearby title text such as
+    `[SCENE_START] Scene 4 — Winery Courtyard...`.
+    """
     markers: List[_SceneBoundaryMarker] = []
     for match in SCENE_START_PATTERN.finditer(block_text):
-        scene_id = str(match.group(1) or "").strip()
-        if scene_id:
-            markers.append(_SceneBoundaryMarker(match.start(), match.end(), "start", scene_id))
+        explicit_id = str(match.group(1) or "").strip()
+        inferred_id = explicit_id or _infer_scene_id_from_bare_start_context(
+            block_text,
+            match.end(),
+        )
+        markers.append(
+            _SceneBoundaryMarker(
+                match.start(),
+                match.end(),
+                "start",
+                inferred_id,
+            )
+        )
     for match in SCENE_END_PATTERN.finditer(block_text):
-        scene_id = str(match.group(1) or "").strip()
-        if scene_id:
-            markers.append(_SceneBoundaryMarker(match.start(), match.end(), "end", scene_id))
+        markers.append(
+            _SceneBoundaryMarker(
+                match.start(),
+                match.end(),
+                "end",
+                str(match.group(1) or "").strip(),
+            )
+        )
     markers.sort(key=lambda item: (item.pos, 0 if item.kind == "end" else 1))
-    return markers
+
+    auto_index = 0
+    last_start_id = ""
+    resolved: List[_SceneBoundaryMarker] = []
+    for marker in markers:
+        if marker.kind == "start":
+            scene_id = str(marker.scene_id or "").strip()
+            if not scene_id:
+                auto_index += 1
+                scene_id = str(auto_index)
+            else:
+                try:
+                    numeric_id = int(scene_id)
+                except Exception:
+                    numeric_id = 0
+                if numeric_id > auto_index:
+                    auto_index = numeric_id
+            last_start_id = scene_id
+            resolved.append(
+                _SceneBoundaryMarker(marker.pos, marker.end_pos, marker.kind, scene_id)
+            )
+            continue
+        scene_id = str(marker.scene_id or "").strip() or last_start_id or str(max(auto_index, 1))
+        resolved.append(
+            _SceneBoundaryMarker(marker.pos, marker.end_pos, marker.kind, scene_id)
+        )
+    return resolved
 
 
 def _decrement_canonical_scene_id(scene_id: str) -> Optional[str]:
