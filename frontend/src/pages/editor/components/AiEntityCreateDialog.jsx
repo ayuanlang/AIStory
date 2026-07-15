@@ -190,6 +190,9 @@ function AiEntityCreateDialog({
                                     className="w-full h-36 rounded-md border border-white/15 bg-black/30 px-3 py-2 text-sm text-white resize-none"
                                     placeholder="例如：保持脸部特征不变，发型改为波浪短发，服装换成黑色风衣。"
                                 />
+                                <div className="text-[11px] text-white/45 mt-1">
+                                    LLM 会基于参考实体的中英文提示词改写为新实体提示词，并将参考实体自动设为视觉依赖。
+                                </div>
                             </div>
                         </div>
                     )}

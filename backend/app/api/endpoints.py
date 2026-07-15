@@ -48425,6 +48425,9 @@ def _create_generated_entity_from_payload(
     fallback_type: str = "character",
     preferred_name: Optional[str] = None,
     episode_id: Optional[int] = None,
+    visual_dependencies: Optional[List[str]] = None,
+    dependency_strategy: Optional[Dict[str, Any]] = None,
+    custom_attributes: Optional[Dict[str, Any]] = None,
 ) -> Entity:
     preferred = str(preferred_name or "").strip()
     name = preferred or str(payload.get("name") or fallback_name or "Generated Entity").strip()
@@ -48432,6 +48435,13 @@ def _create_generated_entity_from_payload(
     if ent_type not in {"character", "environment", "prop", "poster"}:
         ent_type = "character"
     resolved_episode_id = _resolve_generated_entity_episode_id(db, project_id, episode_id)
+
+    deps = visual_dependencies
+    if deps is None:
+        deps = payload.get("visual_dependencies")
+    strategy = dependency_strategy
+    if strategy is None and isinstance(payload.get("dependency_strategy"), dict):
+        strategy = payload.get("dependency_strategy")
 
     new_entity = Entity(
         project_id=project_id,
@@ -48443,7 +48453,19 @@ def _create_generated_entity_from_payload(
         description=str(payload.get("description") or payload.get("bio") or "").strip() or None,
         atmosphere=str(payload.get("atmosphere") or payload.get("personality") or "").strip() or None,
         appearance_cn=str(payload.get("appearance_cn") or payload.get("features") or "").strip() or None,
+        clothing=str(payload.get("clothing") or "").strip() or None,
+        action_characteristics=str(payload.get("action_characteristics") or "").strip() or None,
+        gender=str(payload.get("gender") or "").strip() or None,
+        role=str(payload.get("role") or "").strip() or None,
+        archetype=str(payload.get("archetype") or "").strip() or None,
+        visual_params=str(payload.get("visual_params") or "").strip() or None,
         narrative_description=str(payload.get("narrative_description") or payload.get("bio") or "").strip() or None,
+        generation_prompt_cn=str(payload.get("generation_prompt_cn") or "").strip() or None,
+        generation_prompt_en=str(payload.get("generation_prompt_en") or "").strip() or None,
+        anchor_description=str(payload.get("anchor_description") or "").strip() or None,
+        visual_dependencies=_coerce_visual_dependencies(deps),
+        dependency_strategy=strategy if isinstance(strategy, dict) else {},
+        custom_attributes=custom_attributes if isinstance(custom_attributes, dict) else {},
     )
     db.add(new_entity)
     db.commit()
@@ -48602,32 +48624,164 @@ async def api_generate_entity_from_derive(
         llm_config = {**llm_config, "model": model}
 
     preferred_name = str(entity_name or "").strip()
+    derive_instruction = str(derive_desc or "").strip() or "在保持主体核心特征下，生成一个合理新变体"
     resolved_episode_id = episode_id if episode_id is not None else getattr(base_entity, "episode_id", None)
+    base_type = str(base_entity.type or "character").strip().lower() or "character"
+    base_dep_token = str(base_entity.name or base_entity.name_en or "").strip() or f"existing_id:{base_entity.id}"
+
+    source_payload = {
+        "name": base_entity.name,
+        "name_en": base_entity.name_en,
+        "type": base_type,
+        "description": base_entity.description,
+        "anchor_description": base_entity.anchor_description,
+        "generation_prompt_cn": base_entity.generation_prompt_cn,
+        "generation_prompt_en": base_entity.generation_prompt_en,
+        "appearance_cn": base_entity.appearance_cn,
+        "clothing": base_entity.clothing,
+        "action_characteristics": base_entity.action_characteristics,
+        "role": base_entity.role,
+        "archetype": base_entity.archetype,
+        "gender": base_entity.gender,
+        "atmosphere": base_entity.atmosphere,
+        "visual_params": base_entity.visual_params,
+        "narrative_description": base_entity.narrative_description,
+    }
+    source_payload_json = json.dumps(source_payload, ensure_ascii=False)
+
     system_prompt = (
-        "You are an entity variation designer. Return ONLY JSON with fields: "
-        "name, name_en, type, description, appearance_cn, atmosphere, narrative_description."
+        "You are an entity variation designer. Return ONLY JSON with one top-level object.\n"
+        "Task: derive a NEW entity from the reference entity by rewriting its prompts according to the "
+        "additional modification description. Do NOT overwrite the reference entity.\n\n"
+        "Hard constraints:\n"
+        "1) Keep the same subject type as the reference.\n"
+        "2) Treat generation_prompt_cn / generation_prompt_en of the reference as templates. "
+        "Preserve their structure and clause order; only change content required by the modification description.\n"
+        "3) generation_prompt_cn and generation_prompt_en must stay semantically aligned.\n"
+        "4) Update appearance_cn / clothing / description / narrative_description to match the modification.\n"
+        "5) Do not invent a new unrelated subject; this must clearly be a variant of the reference.\n"
+        "6) Do not output explanations, markdown, or code fences.\n"
+        "7) Required JSON keys: name, name_en, type, description, appearance_cn, clothing, "
+        "generation_prompt_cn, generation_prompt_en, atmosphere, narrative_description, "
+        "gender, role, archetype, action_characteristics, visual_params, anchor_description."
     )
     user_prompt = (
-        "基于已有实体生成一个新的衍生实体，不要覆盖原实体。\n"
-        f"基础实体名称: {base_entity.name}\n"
-        f"基础实体类型: {base_entity.type}\n"
-        f"基础描述: {base_entity.description or ''}\n"
-        f"基础外观: {base_entity.appearance_cn or ''}\n"
-        f"{('新实体中文名必须使用：' + preferred_name + chr(10)) if preferred_name else ''}"
-        f"新增描述要求: {derive_desc or '在保持主体特征下，生成一个合理新变体'}"
+        f"Reference entity JSON:\n{source_payload_json}\n\n"
+        f"Additional modification description:\n{derive_instruction}\n\n"
+        f"Preferred new Chinese name (must use if provided): {preferred_name or 'None'}\n\n"
+        "Rewrite the reference prompts into prompts for the NEW derived entity, applying only the requested changes."
     )
+
+    def _pick_text(*values, fallback=""):
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return str(fallback or "")
 
     try:
         resp = await llm_service.generate_content_with_fallback(user_prompt, system_prompt, llm_config)
         payload = _extract_first_json_object(llm_service.sanitize_text_output(str(resp.get("content") or "")))
+        if not isinstance(payload, dict):
+            payload = {}
+
+        candidate_prompt_en = _pick_text(payload.get("generation_prompt_en"), base_entity.generation_prompt_en)
+        candidate_prompt_cn = _pick_text(payload.get("generation_prompt_cn"), base_entity.generation_prompt_cn)
+
+        source_en = str(base_entity.generation_prompt_en or "").strip()
+        source_cn = str(base_entity.generation_prompt_cn or "").strip()
+        if source_en or source_cn:
+            en_ok, en_reason = _validate_prompt_structure(source_en, candidate_prompt_en) if source_en else (True, "ok")
+            cn_ok, cn_reason = _validate_prompt_structure(source_cn, candidate_prompt_cn) if source_cn else (True, "ok")
+            if not (en_ok and cn_ok):
+                repair_prompt = (
+                    f"{user_prompt}\n\n"
+                    "Additional hard-fix instruction:\n"
+                    "Your previous prompts failed structural validation against the reference prompts. "
+                    "Regenerate now and strictly preserve source prompt structure/label order. "
+                    f"EN check: {en_reason}. CN check: {cn_reason}. "
+                    "Only replace content details required by the modification description."
+                )
+                repair_resp = await llm_service.generate_content_with_fallback(
+                    repair_prompt,
+                    system_prompt,
+                    llm_config,
+                )
+                repaired = _extract_first_json_object(
+                    llm_service.sanitize_text_output(str(repair_resp.get("content") or ""))
+                )
+                if isinstance(repaired, dict) and repaired:
+                    payload = repaired
+                    candidate_prompt_en = _pick_text(payload.get("generation_prompt_en"), candidate_prompt_en, source_en)
+                    candidate_prompt_cn = _pick_text(payload.get("generation_prompt_cn"), candidate_prompt_cn, source_cn)
+
+        payload["type"] = base_type
+        payload["generation_prompt_en"] = candidate_prompt_en
+        payload["generation_prompt_cn"] = candidate_prompt_cn
+        payload["description"] = _pick_text(payload.get("description"), base_entity.description)
+        payload["appearance_cn"] = _pick_text(payload.get("appearance_cn"), base_entity.appearance_cn)
+        payload["clothing"] = _pick_text(payload.get("clothing"), base_entity.clothing)
+        payload["atmosphere"] = _pick_text(payload.get("atmosphere"), base_entity.atmosphere)
+        payload["narrative_description"] = _pick_text(
+            payload.get("narrative_description"),
+            base_entity.narrative_description,
+            base_entity.description,
+        )
+        payload["gender"] = _pick_text(payload.get("gender"), base_entity.gender)
+        payload["role"] = _pick_text(payload.get("role"), base_entity.role)
+        payload["archetype"] = _pick_text(payload.get("archetype"), base_entity.archetype)
+        payload["action_characteristics"] = _pick_text(
+            payload.get("action_characteristics"),
+            base_entity.action_characteristics,
+        )
+        payload["visual_params"] = _pick_text(payload.get("visual_params"), base_entity.visual_params)
+        payload["anchor_description"] = _pick_text(
+            payload.get("anchor_description"),
+            base_entity.anchor_description,
+        )
+        if preferred_name:
+            payload["name"] = preferred_name
+        else:
+            payload["name"] = _pick_text(payload.get("name"), f"{base_entity.name}-变体")
+        payload["name_en"] = _pick_text(payload.get("name_en"), base_entity.name_en)
+        payload["base_name_en"] = _pick_text(
+            payload.get("base_name_en"),
+            base_entity.base_name_en,
+            base_entity.name_en,
+        )
+
+        # Always treat the reference entity as a visual dependency of the derived entity.
+        derived_deps = _coerce_visual_dependencies(payload.get("visual_dependencies"))
+        if base_dep_token and base_dep_token not in derived_deps:
+            derived_deps = [base_dep_token, *derived_deps]
+        new_name = str(payload.get("name") or "").strip()
+        derived_deps = [dep for dep in derived_deps if str(dep or "").strip() and str(dep).strip() != new_name]
+
+        dependency_strategy = {
+            "type": "derived_from_reference",
+            "logic": (
+                f"Derived from reference entity `{base_dep_token}` (id={base_entity.id}). "
+                f"Prompts are rewritten from the reference prompts according to: {derive_instruction}"
+            ),
+            "reference_entity_id": int(base_entity.id),
+            "reference_entity_name": base_dep_token,
+        }
+
         return _create_generated_entity_from_payload(
             db,
             project_id,
             payload,
             fallback_name=preferred_name or f"{base_entity.name}-变体",
-            fallback_type=str(base_entity.type or "character"),
+            fallback_type=base_type,
             preferred_name=preferred_name or None,
             episode_id=resolved_episode_id,
+            visual_dependencies=derived_deps,
+            dependency_strategy=dependency_strategy,
+            custom_attributes={
+                "source": "subject_library_ai_derive",
+                "derived_from_entity_id": int(base_entity.id),
+                "derive_instruction": derive_instruction,
+            },
         )
     except HTTPException:
         raise
