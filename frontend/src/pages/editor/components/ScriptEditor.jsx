@@ -889,6 +889,102 @@ const assertSceneBeatsMinLength = (sceneText, sceneId = '') => (
     resolveSceneBeatsBodyForStage22(sceneText, sceneId).bodyText
 );
 
+/** Legacy 【主环境】…【衍生环境】 when ENV_BLOCK markers are absent. */
+const extractLegacyEnvBlockFromSceneText = (sceneText) => {
+    const text = String(sceneText || '');
+    const mainIdx = text.search(/【主环境】/);
+    if (mainIdx < 0) return '';
+    const endRe = /\[BEAT_START|\[SCENE_END|【Scene实体覆盖】|【观察视角与空间建置】|【场景切换|【对白拆句/i;
+    const rest = text.slice(mainIdx);
+    const endMatch = endRe.exec(rest);
+    const body = (endMatch ? rest.slice(0, endMatch.index) : rest).trim();
+    if (!body) return '';
+    return `[ENV_BLOCK_START]\n${body}\n[ENV_BLOCK_END]`;
+};
+
+/** Extract `[ENV_BLOCK_START]…[ENV_BLOCK_END]` (主环境+衍生环境). */
+const extractEnvBlockFromSceneText = (sceneText) => {
+    const text = String(sceneText || '');
+    if (!text.trim()) return '';
+    const startRe = /`?\[ENV_BLOCK_START(?::([^\s\]]+))?\]`?/gi;
+    const starts = [];
+    let match;
+    while ((match = startRe.exec(text)) !== null) {
+        starts.push({ index: match.index, endPos: match.index + match[0].length });
+    }
+    if (!starts.length) {
+        return extractLegacyEnvBlockFromSceneText(text);
+    }
+    const endRe = /`?\[ENV_BLOCK_END(?::([^\s\]]+))?\]`?/gi;
+    return starts.map((startItem, idx) => {
+        const nextStart = idx + 1 < starts.length ? starts[idx + 1].index : text.length;
+        endRe.lastIndex = startItem.endPos;
+        const endMatch = endRe.exec(text);
+        let block;
+        if (endMatch && endMatch.index <= nextStart) {
+            block = text.slice(startItem.index, endMatch.index + endMatch[0].length).trim();
+        } else {
+            block = text.slice(startItem.index, nextStart).replace(/\s+$/, '');
+            if (block && !/`?\[ENV_BLOCK_END(?::[^\]]+)?\]`?/i.test(block)) {
+                block = `${block}\n[ENV_BLOCK_END]`;
+            }
+        }
+        return String(block || '').trim();
+    }).filter(Boolean).join('\n\n').trim();
+};
+
+/** Per-scene Stage 2.1 body: ENV_BLOCK + Beats (fallback to full scene). */
+const extractSceneEnvAndBeatsBody = (sceneText, sceneId = '') => {
+    const source = stripBlockLevelMarkersFromSceneText(sceneText).trim();
+    if (!source) return { bodyText: '', source: 'scene_fallback' };
+    const envBlock = extractEnvBlockFromSceneText(source).trim();
+    const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
+    const beatsChars = stripBeatBoundaryMarkers(beatsOnly).length;
+    const chunks = [];
+    if (envBlock) chunks.push(envBlock);
+    if (beatsOnly && beatsChars >= MIN_SCENE_BEATS_CHARS) chunks.push(beatsOnly);
+    if (chunks.length) {
+        return { bodyText: chunks.join('\n\n').trim(), source: 'extracted' };
+    }
+    return { bodyText: source, source: 'scene_fallback', sceneId };
+};
+
+/**
+ * Rebuild Stage 2.1 script: per-scene ENV_BLOCK + Beats only
+ * (replaces full Stage 1 adapted script).
+ */
+const buildAssetsExtractionScriptFromAdapted = (adaptedScript) => {
+    const script = String(adaptedScript || '').trim();
+    if (!script) return '';
+    let units = [];
+    try {
+        units = parseSceneUnitsFromScriptMarkersText(script);
+    } catch (_) {
+        return script;
+    }
+    if (!units.length) return script;
+    const parts = [SCENES_BLOCK_START_TOKEN];
+    let fallbackCount = 0;
+    units.forEach((unit) => {
+        const sceneId = String(unit?.sceneId || '').trim();
+        let markerStart = String(unit?.markerStartToken || '').trim();
+        let markerEnd = String(unit?.markerEndToken || '').trim();
+        if (!markerStart && sceneId) markerStart = `[SCENE_START:${sceneId}]`;
+        if (!markerEnd && sceneId) markerEnd = `[SCENE_END:${sceneId}]`;
+        const resolved = extractSceneEnvAndBeatsBody(unit?.sceneText || '', sceneId);
+        if (resolved.source === 'scene_fallback') fallbackCount += 1;
+        if (markerStart) parts.push(markerStart);
+        if (resolved.bodyText) parts.push(resolved.bodyText);
+        if (markerEnd) parts.push(markerEnd);
+    });
+    parts.push(SCENES_BLOCK_END_TOKEN);
+    const rebuilt = parts.filter((p) => String(p || '').trim()).join('\n').trim();
+    if (fallbackCount > 0) {
+        // Caller may log; keep helper free of UI deps.
+    }
+    return rebuilt || script;
+};
+
 const createSceneOrchestrationProgressPoller = ({
     getSnapshot,
     episodeId,
@@ -2363,9 +2459,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
+        // Stage 2.1: per-scene ENV_BLOCK + Beats only (not full Stage 1 adapted script).
+        const slimScriptText = buildAssetsExtractionScriptFromAdapted(adaptedScriptText) || adaptedScriptText;
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。基于“优化后剧本”提取实体并建立资产库；项目信息与第一阶段产出的“全局风格”作为补充约束一并生效；如与原始剧本存在任何差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -2397,10 +2495,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stage2InputParts.push(wrapInjectionSection('全局风格', `[全局风格 - 第二阶段补充约束]\n${stage1VisualBackfillJson}`));
         }
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
-        stage2InputParts.push(wrapInjectionSection('优化后剧本', `[优化后剧本 - 第二阶段权威输入]\n${adaptedScriptText || ''}`));
+        stage2InputParts.push(wrapInjectionSection(
+            '优化后剧本',
+            `[优化后剧本 - Stage 2.1权威输入（逐场环境块+Beat）]\n${slimScriptText || ''}`
+        ));
 
         return {
             adaptedScriptText,
+            slimScriptText,
             userInput: stage2InputParts.filter(part => String(part || '').trim()).join('\n\n'),
         };
     }, [extractProjectVisualBackfillJsonText, extractStage1AdaptedScriptBody, project?.global_info]);
@@ -12908,12 +13010,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (splitStage1Flow) {
                 stage1PhaseRawText = String(analyzedText || '').trim();
-                const { adaptedScriptText, userInput: stage2UserInput } = buildStage2UserInputFromStage1(analyzedText || '', selectedReuseSubjectAssets);
+                const {
+                    adaptedScriptText,
+                    slimScriptText,
+                    userInput: stage2UserInput,
+                } = buildStage2UserInputFromStage1(analyzedText || '', selectedReuseSubjectAssets);
                 if (!String(adaptedScriptText || '').trim()) {
                     throw new Error('第一阶段未提取到“修改后的剧本”正文，请确认返回结果包含第二部分剧本正文后重试。');
                 }
 
                 setAdaptationText(adaptedScriptText);
+                if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
+                    onLog(
+                        `Stage 2.1 输入已瘦身为逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
+                        'info'
+                    );
+                }
 
                 // Guard against upstream AI model providers returning backend JSON error strings instead of markdown text.
                 let isUpstreamError = false;
@@ -13714,7 +13826,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return;
         }
 
-        const { adaptedScriptText, userInput: stage2UserInput } = buildStage2UserInputFromStage1(stage1SourceText, selectedReuseSubjectAssets);
+        const {
+            adaptedScriptText,
+            slimScriptText,
+            userInput: stage2UserInput,
+        } = buildStage2UserInputFromStage1(stage1SourceText, selectedReuseSubjectAssets);
         if (!String(adaptedScriptText || '').trim()) {
             alert(t('第一阶段产物里没有可用的改编剧本，无法从第二阶段重跑。', 'No usable adapted script was found in Stage 1 outputs.'));
             return;
@@ -13735,6 +13851,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             resetAutoSubjectsImportCache();
             setAdaptationText(adaptedScriptText);
+            if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
+                onLog(
+                    `Stage 2.1 输入已瘦身为逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
+                    'info'
+                );
+            }
 
             await purgeEpisodeWorkspaceScenes('restart-stage2-clear');
             if (typeof onUpdateEpisodeInfo === 'function') {

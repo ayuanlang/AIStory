@@ -65,7 +65,19 @@ SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START(?::([^\s\]]+))?\]`?", re.IGNO
 SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 BEAT_START_PATTERN = re.compile(r"`?\[BEAT_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 BEAT_END_PATTERN = re.compile(r"`?\[BEAT_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+ENV_BLOCK_START_PATTERN = re.compile(r"`?\[ENV_BLOCK_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+ENV_BLOCK_END_PATTERN = re.compile(r"`?\[ENV_BLOCK_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 LEGACY_BEAT_LINE_PATTERN = re.compile(r"(?m)^\s*-\s*Beat\s+(\d+)\b")
+LEGACY_MAIN_ENV_HEADER_PATTERN = re.compile(r"【主环境】")
+LEGACY_ENV_BLOCK_END_PATTERN = re.compile(
+    r"(?=\[BEAT_START|"
+    r"\[SCENE_END|"
+    r"【Scene实体覆盖】|"
+    r"【观察视角与空间建置】|"
+    r"【场景切换|"
+    r"【对白拆句)",
+    re.IGNORECASE,
+)
 BLOCK_MARKER_LINE_PATTERN = re.compile(
     r"^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -1285,6 +1297,139 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
     return parsed
 
 
+def extract_legacy_env_block_from_scene_text(scene_text: str) -> str:
+    """Extract 【主环境】…【衍生环境】… when ENV_BLOCK markers are absent."""
+    text = str(scene_text or "")
+    main_match = LEGACY_MAIN_ENV_HEADER_PATTERN.search(text)
+    if not main_match:
+        return ""
+    start = main_match.start()
+    end_match = LEGACY_ENV_BLOCK_END_PATTERN.search(text, main_match.end())
+    end = end_match.start() if end_match else len(text)
+    body = text[start:end].strip()
+    if not body:
+        return ""
+    return f"[ENV_BLOCK_START]\n{body}\n[ENV_BLOCK_END]"
+
+
+def extract_env_block_from_scene_text(scene_text: str) -> str:
+    """
+    Extract `[ENV_BLOCK_START]…[ENV_BLOCK_END]` (主环境+衍生环境).
+    Falls back to legacy 【主环境】…【衍生环境】 section when markers are missing.
+    """
+    text = str(scene_text or "")
+    if not text.strip():
+        return ""
+
+    starts = list(ENV_BLOCK_START_PATTERN.finditer(text))
+    if not starts:
+        return extract_legacy_env_block_from_scene_text(text)
+
+    blocks: List[str] = []
+    for idx, start_match in enumerate(starts):
+        next_start = starts[idx + 1].start() if idx + 1 < len(starts) else len(text)
+        end_match = ENV_BLOCK_END_PATTERN.search(text, start_match.end())
+        if end_match and end_match.start() <= next_start:
+            block = text[start_match.start(): end_match.end()].strip()
+        else:
+            block = text[start_match.start(): next_start].rstrip()
+            if block and not ENV_BLOCK_END_PATTERN.search(block):
+                block = f"{block}\n[ENV_BLOCK_END]"
+        if block:
+            blocks.append(block.strip())
+    return "\n\n".join(blocks).strip()
+
+
+def extract_scene_env_and_beats_body(
+    scene_text: str,
+    scene_id: str = "",
+    *,
+    min_beats_chars: int = MIN_SCENE_BEATS_CHARS,
+) -> Tuple[str, str]:
+    """
+    Build Stage 2.1 per-scene payload: ENV_BLOCK + Beat blocks.
+    Returns `(body, source)` where source is `extracted` | `scene_fallback`.
+    """
+    source_text = _strip_block_level_markers_from_scene_text(scene_text).strip()
+    sid = str(scene_id or "unknown").strip() or "unknown"
+    if not source_text:
+        return "", "scene_fallback"
+
+    env_block = extract_env_block_from_scene_text(source_text).strip()
+    beats_only = extract_beat_blocks_from_scene_text(source_text).strip()
+    beats_chars = len(_strip_beat_boundary_markers(beats_only)) if beats_only else 0
+    threshold = int(min_beats_chars or MIN_SCENE_BEATS_CHARS)
+
+    chunks: List[str] = []
+    if env_block:
+        chunks.append(env_block)
+    if beats_only and beats_chars >= threshold:
+        chunks.append(beats_only)
+
+    if chunks:
+        return "\n\n".join(chunks).strip(), "extracted"
+
+    logger.warning(
+        "[assets_extraction] env+beat extract fallback to full scene | scene_id=%s env=%s beats_chars=%s",
+        sid,
+        bool(env_block),
+        beats_chars,
+    )
+    return source_text, "scene_fallback"
+
+
+def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
+    """
+    Rebuild Stage 2.1 script input: per-scene ENV_BLOCK + Beats only
+    (replaces full Stage 1 adapted script with slim extraction).
+    """
+    script = str(adapted_script or "").strip()
+    if not script:
+        return ""
+
+    try:
+        units = parse_scene_units_from_markers(script)
+    except Exception as exc:
+        logger.warning("[assets_extraction] scene parse failed; using full adapted script | err=%s", exc)
+        return script
+
+    if not units:
+        return script
+
+    parts: List[str] = [SCENES_BLOCK_START_TOKEN]
+    fallback_count = 0
+    for unit in units:
+        scene_id = str(getattr(unit, "scene_id", "") or "").strip()
+        marker_start = str(getattr(unit, "marker_start_token", "") or "").strip()
+        marker_end = str(getattr(unit, "marker_end_token", "") or "").strip()
+        if not marker_start and scene_id:
+            marker_start = f"[SCENE_START:{scene_id}]"
+        if not marker_end and scene_id:
+            marker_end = f"[SCENE_END:{scene_id}]"
+        body, source = extract_scene_env_and_beats_body(
+            getattr(unit, "scene_text", "") or "",
+            scene_id,
+        )
+        if source == "scene_fallback":
+            fallback_count += 1
+        if marker_start:
+            parts.append(marker_start)
+        if body:
+            parts.append(body)
+        if marker_end:
+            parts.append(marker_end)
+    parts.append(SCENES_BLOCK_END_TOKEN)
+    rebuilt = "\n".join(part for part in parts if str(part or "").strip()).strip()
+    logger.info(
+        "[assets_extraction] rebuilt env+beat script | scenes=%s fallback_scenes=%s chars=%s→%s",
+        len(units),
+        fallback_count,
+        len(script),
+        len(rebuilt),
+    )
+    return rebuilt or script
+
+
 def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
     """Wrap legacy `- Beat N` sections with BEAT_START/END when markers are absent."""
     text = str(scene_text or "")
@@ -2262,6 +2407,10 @@ __all__ = [
     "wrap_scene_unit_as_script_block",
     "extract_beat_blocks_from_scene_text",
     "extract_legacy_beat_sections_from_scene_text",
+    "extract_env_block_from_scene_text",
+    "extract_legacy_env_block_from_scene_text",
+    "extract_scene_env_and_beats_body",
+    "build_assets_extraction_script_from_adapted",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",
     "import_scene_markdown_stage",

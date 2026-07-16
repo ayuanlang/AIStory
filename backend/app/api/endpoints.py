@@ -140,6 +140,7 @@ from app.services.script_analysis_flow import (
     sanitize_scene_markdown_llm_output,
     wrap_scene_unit_as_script_block,
     SceneBeatsTooShortError,
+    build_assets_extraction_script_from_adapted,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
@@ -10066,6 +10067,35 @@ async def run_scene_analysis_flow_node(
         logger.info("[剧本分析流程] 开始调用 evaluate_scene 执行节点 %s...", node_key)
         try:
             if node_key == "assets_extraction":
+                # Slim Stage 1 script to per-scene ENV_BLOCK + Beats before Subject Index LLM.
+                try:
+                    original_text = str(raw_payload.get("text") or "")
+                    adapted_for_assets = extract_adapted_script_from_beats_user_input(original_text)
+                    if not adapted_for_assets.strip():
+                        wrapped = unwrap_injection_section(original_text, "优化后剧本")
+                        if wrapped:
+                            adapted_for_assets = re.sub(
+                                r"^\[[^\]]+\]\s*\n?",
+                                "",
+                                str(wrapped),
+                            ).strip()
+                    if adapted_for_assets.strip():
+                        slim_script = build_assets_extraction_script_from_adapted(adapted_for_assets)
+                        if slim_script.strip() and slim_script.strip() != adapted_for_assets.strip():
+                            raw_payload["text"] = _replace_adapted_script_in_beats_user_input(
+                                original_text,
+                                slim_script,
+                            )
+                            logger.info(
+                                "[剧本分析流程] assets_extraction 已替换为逐场环境+Beat 输入 | chars=%s→%s",
+                                len(adapted_for_assets),
+                                len(slim_script),
+                            )
+                except Exception as slim_exc:
+                    logger.warning(
+                        "[剧本分析流程] assets_extraction env+beat slim failed; using original text | err=%s",
+                        slim_exc,
+                    )
                 max_attempts = 2
                 result = None
                 assets_cover_poster_missing_after_retries = False
