@@ -284,6 +284,7 @@ _USER_PREF_ALLOWED_REASONING_EFFORT = {"low", "medium", "high"}
 _USER_PREF_DEFAULTS: Dict[str, Any] = {
     "prompt_submit_language": "en",
     "auto_download_local": False,
+    "draft_mode": False,
     "generation": {},
     "advanced_model": {
         "temperature": 0.7,
@@ -353,6 +354,7 @@ def _normalize_user_preferences(payload: Any) -> Dict[str, Any]:
     return {
         "prompt_submit_language": _normalize_prompt_submit_language(raw.get("prompt_submit_language")),
         "auto_download_local": bool(raw.get("auto_download_local", False)),
+        "draft_mode": bool(raw.get("draft_mode", False)),
         "generation": generation,
         "homepage_referral": homepage_referral,
         "advanced_model": advanced_model,
@@ -361,7 +363,7 @@ def _normalize_user_preferences(payload: Any) -> Dict[str, Any]:
 
 def _merge_user_preferences(current: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
     merged: Dict[str, Any] = dict(current or {})
-    for key in ("prompt_submit_language", "auto_download_local"):
+    for key in ("prompt_submit_language", "auto_download_local", "draft_mode"):
         if key in patch:
             merged[key] = patch.get(key)
 

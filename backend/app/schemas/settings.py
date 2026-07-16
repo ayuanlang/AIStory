@@ -29,6 +29,7 @@ class APISettingOut(APISettingBase):
 class UserPreferencesUpdate(BaseModel):
     prompt_submit_language: Optional[str] = None
     auto_download_local: Optional[bool] = None
+    draft_mode: Optional[bool] = None
     generation: Optional[Dict[str, Any]] = None
     advanced_model: Optional[Dict[str, Any]] = None
 
@@ -36,6 +37,7 @@ class UserPreferencesUpdate(BaseModel):
 class UserPreferencesOut(BaseModel):
     prompt_submit_language: str = "en"
     auto_download_local: bool = False
+    draft_mode: bool = False
     generation: Dict[str, Any] = Field(default_factory=dict)
     homepage_referral: Dict[str, Any] = Field(default_factory=dict)
     advanced_model: Dict[str, Any] = Field(default_factory=lambda: {

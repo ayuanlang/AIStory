@@ -126,6 +126,7 @@ import {
     persistShotMedia,
     cleanupShotVideo,
     getCachedUserPreferences,
+    getDraftModePreference,
     markAssetAsCurrentProjectAsset,
 } from '../../../services/api';
 
@@ -646,7 +647,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [mediaPersistGraceRefreshSeq, setMediaPersistGraceRefreshSeq] = useState(0);
     const activeOssVideoSyncRef = useRef(new Set());
     const [isBatchGenerating, setIsBatchGenerating] = useState(false);
-    const [isDraftMode, setIsDraftMode] = useState(false);
+    const [isDraftMode, setIsDraftMode] = useState(() => !!getDraftModePreference());
     const readStoredUsePrevVideo = useCallback(() => {
         try {
             return localStorage.getItem('aiStory_usePrevVideo') === 'true';
@@ -2507,8 +2508,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const refreshShotAssetsMeta = useCallback(() => setShotAssetsRefreshKey(k => k + 1), []);
 
     const [editShotRefreshing, setEditShotRefreshing] = useState(false);
+    const editShotRefreshingRef = useRef(false);
     const handleRefreshEditShotElements = useCallback(async () => {
-        if (editShotRefreshing) return;
+        if (editShotRefreshingRef.current) return;
+        editShotRefreshingRef.current = true;
         setEditShotRefreshing(true);
         try {
             const shotId = editingShotRef.current?.id;
@@ -2527,9 +2530,16 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         } catch (e) {
             console.error('Failed to refresh edit shot elements', e);
         } finally {
+            editShotRefreshingRef.current = false;
             setEditShotRefreshing(false);
         }
-    }, [editShotRefreshing, loadEntities, refreshShotAssetsMeta, setEditingShot]);
+    }, [loadEntities, refreshShotAssetsMeta, setEditingShot]);
+
+    // Entering the edit-shot drawer: refresh entity refs + force image reload so reference thumbnails are current.
+    useEffect(() => {
+        if (!editingShot?.id) return;
+        void handleRefreshEditShotElements();
+    }, [editingShot?.id, handleRefreshEditShotElements]);
 
     const syncShotImageCfgFromSettings = useCallback(() => {
         const nextDefault = resolveShotImageCfgDefault(getCachedUserPreferences());

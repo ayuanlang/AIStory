@@ -39926,6 +39926,7 @@ def get_users(
 def get_users_page(
     page: int = 1,
     page_size: int = 20,
+    q: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -39935,11 +39936,32 @@ def get_users_page(
     safe_page = max(int(page or 1), 1)
     safe_page_size = max(1, min(int(page_size or 20), 200))
     skip = (safe_page - 1) * safe_page_size
+    keyword = str(q or "").strip()
+
+    def _cached_entry_matches(entry: dict) -> bool:
+        if not keyword:
+            return True
+        needle = keyword.casefold()
+        username = str(entry.get("username") or "").casefold()
+        full_name = str(entry.get("full_name") or "").casefold()
+        user_id = str(entry.get("id") or "")
+        return needle in username or needle in full_name or needle in user_id
 
     try:
-        total = int(db.query(User).count())
+        query = db.query(User)
+        if keyword:
+            like_pattern = f"%{keyword}%"
+            filters = [
+                User.username.ilike(like_pattern),
+                User.full_name.ilike(like_pattern),
+                cast(User.id, String).ilike(like_pattern),
+            ]
+            if keyword.isdigit():
+                filters.append(User.id == int(keyword))
+            query = query.filter(or_(*filters))
+        total = int(query.count())
         items = (
-            db.query(User)
+            query
             .order_by(User.id.asc())
             .offset(skip)
             .limit(safe_page_size)
@@ -39951,7 +39973,7 @@ def get_users_page(
         except Exception:
             pass
         logger.warning("get_users_page fallback to cached principals | user_id=%s error=%s", getattr(current_user, "id", None), type(exc).__name__)
-        cached_entries = list_cached_user_entries()
+        cached_entries = [entry for entry in list_cached_user_entries() if _cached_entry_matches(entry)]
         total = len(cached_entries)
         window = cached_entries[skip: skip + safe_page_size]
         items = [

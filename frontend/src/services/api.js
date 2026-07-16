@@ -1678,6 +1678,7 @@ export const normalizeUserPreferences = (value) => {
     return {
         prompt_submit_language: normalizePromptSubmitLanguagePreference(raw.prompt_submit_language),
         auto_download_local: !!raw.auto_download_local,
+        draft_mode: !!raw.draft_mode,
         generation,
         advanced_model: {
             temperature: Number.isFinite(temperatureNum) ? Math.max(0, Math.min(2, temperatureNum)) : 0.7,
@@ -1710,7 +1711,18 @@ const setCachedUserPreferences = (next) => {
 
 export const getUserPreferences = async () => {
     const response = await api.get('/settings/preferences');
-    return setCachedUserPreferences(response?.data || {});
+    const data = { ...(response?.data || {}) };
+    // Migrate legacy local-only draft_mode (set before backend supported the field).
+    try {
+        const draftRaw = localStorage.getItem(draftModePreferenceStorageKey());
+        if (draftRaw === '1' && !data.draft_mode) {
+            data.draft_mode = true;
+            void api.put('/settings/preferences', { draft_mode: true }).catch(() => {});
+        }
+    } catch {
+        // ignore
+    }
+    return setCachedUserPreferences(data);
 };
 
 export const getHomepageShareLink = async () => {
@@ -1731,16 +1743,18 @@ export const normalizePromptSubmitLanguagePreference = (value) => {
 };
 
 export const getDraftModePreference = () => {
-    const cached = getCachedUserPreferences();
-    if (cached && typeof cached.draft_mode === 'boolean') {
-        return cached.draft_mode;
-    }
+    // Prefer the dedicated key so Settings toggles take effect immediately,
+    // and legacy local-only values are not masked by a cache default of false.
     try {
         const raw = localStorage.getItem(draftModePreferenceStorageKey());
         if (raw === '1') return true;
         if (raw === '0') return false;
     } catch {
         // ignore
+    }
+    const cached = getCachedUserPreferences();
+    if (cached && typeof cached.draft_mode === 'boolean') {
+        return cached.draft_mode;
     }
     return false;
 };
@@ -3712,9 +3726,15 @@ export const updateBillingDefaultApiPricing = async (defaultApiPricing, contentF
     }
     return (await api.put('/billing/default-api-pricing', payload)).data;
 };
-export const getAdminUsersPage = async (page = 1, pageSize = 20) => (
-    await api.get(`/users/page?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`)
-).data;
+export const getAdminUsersPage = async (page = 1, pageSize = 20, q = '') => {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+    });
+    const keyword = String(q || '').trim();
+    if (keyword) params.set('q', keyword);
+    return (await api.get(`/users/page?${params.toString()}`)).data;
+};
 
 export const getAdminGroupsPage = async (page = 1, pageSize = 20) => (
     await api.get(`/groups/page?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}&t=${Date.now()}`)

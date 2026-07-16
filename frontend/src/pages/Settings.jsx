@@ -4,7 +4,7 @@ import { useStore } from '@/lib/store';
 import { Save, Info, Upload, Download, Coins, History, Palette, CheckCircle, ArrowLeft, User, KeyRound, Link as LinkIcon, Copy } from 'lucide-react';
 import { API_URL } from '@/config';
 
-import { getFunctionApiConfigs, updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink, getScriptAnalysisFlowConfigManage, updateScriptAnalysisFlowConfigManage } from '../services/api';
+import { updateSetting, getSettings, getTransactions, fetchMe, getUserPreferences, updateMyProfile, updateMyPassword, uploadMyAvatar, recordSystemLogAction, getAutoDownloadLocalPreference, setAutoDownloadLocalPreference, getDraftModePreference, setDraftModePreference, getPromptSubmitLanguagePreference, setPromptSubmitLanguagePreference, normalizePromptSubmitLanguagePreference, updateUserPreferences, getHomepageShareLink, getScriptAnalysisFlowConfigManage, updateScriptAnalysisFlowConfigManage } from '../services/api';
 import RechargeModal from '../components/RechargeModal'; // Import RechargeModal
 
 import { fetchGroups, createGroup, addGroupMember, fetchGroupMembers } from '../services/api';
@@ -347,9 +347,6 @@ const Settings = () => {
     const [isBillingLoading, setIsBillingLoading] = useState(false);
     const [showRecharge, setShowRecharge] = useState(false); // Recharge Modal State
 
-    const [functionApiConfigs, setFunctionApiConfigs] = useState([]);
-
-
     // Unified Top Up entry: support /settings?tab=billing and cross-app 402 redirects.
     useEffect(() => {
         const params = new URLSearchParams(location.search || '');
@@ -357,7 +354,7 @@ const Settings = () => {
         if (tab === 'billing' || tab === 'usage') {
             setActiveTab('usage');
         } else if (tab === 'system-api' || tab === 'system_api' || tab === 'api' || tab === 'api-settings' || tab === 'default-api-activation') {
-            setActiveTab('api_settings');
+            setActiveTab('general');
         }
 
         // If we navigated here due to insufficient credits, auto-open the modal.
@@ -387,12 +384,6 @@ const Settings = () => {
     useEffect(() => {
         loadScriptAnalysisFlowConfig();
     }, []);
-
-    useEffect(() => {
-        if (activeTab === 'api' || activeTab === 'prompts') {
-            setActiveTab('api_settings');
-        }
-    }, [activeTab]);
 
     useEffect(() => {
         const onUiLangChanged = (e) => {
@@ -737,28 +728,9 @@ const Settings = () => {
     };
 
 
-    const loadFunctionApiConfigs = async () => {
-
-        try {
-            const funcConfigs = await getFunctionApiConfigs();
-            setFunctionApiConfigs(Array.isArray(funcConfigs) ? funcConfigs : []);
-        } catch (err) {
-            console.error("Failed to load function api configs", err);
-            setFunctionApiConfigs([]);
-        }
-    };
-
     useEffect(() => {
         if (activeTab === 'usage') {
             refreshBilling();
-        }
-        if (activeTab === 'api_settings') {
-            loadFunctionApiConfigs();
-            fetchMe().then(userRes => {
-                if (userRes && userRes.credits !== undefined) {
-                    setUserCredits(userRes.credits);
-                }
-            }).catch(err => console.error("Failed to load user credits", err));
         }
     }, [activeTab]);
 
@@ -1662,12 +1634,6 @@ const Settings = () => {
                             >
                                          {t('常规', 'General')}
                             </button>
-                            <button 
-                                onClick={() => trackMenuAction('settings.tab.api_settings', t('默认 API 激活', 'Default API Activation'), () => setActiveTab('api_settings'))}
-                                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'api_settings' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
-                            >
-                                         {t('默认 API 激活', 'Default API Activation')}
-                            </button>
                             <button
                                 onClick={() => trackMenuAction('settings.tab.account', t('用户管理', 'Account'), () => setActiveTab('account'))}
                                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'account' ? 'bg-primary text-black' : 'text-muted-foreground hover:text-white'}`}
@@ -2119,78 +2085,6 @@ const Settings = () => {
                         </div>
                     </div>
                 </div>
-            ) : activeTab === 'api_settings' ? (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-
-                    <div className="rounded-xl border border-blue-400/30 bg-blue-500/10 p-4 relative">
-                            <div className="flex justify-between items-start md:items-center">
-                                <div>
-                                    <h2 className="text-2xl font-extrabold tracking-wide text-blue-200">{t('功能专属 API 默认激活', 'Function-specific API Default Activation')}</h2>
-                                    <p className="text-xs text-blue-100/80 mt-1">{t('选择各功能的默认 API，将保存到你的本地用户设置中。', 'Select default API for each function to save to your local preferences.')}</p>
-                                </div>
-                                <button
-                                    onClick={() => {
-                                        functionApiConfigs.forEach(funcConfig => {
-                                            const funcName = funcConfig.function_name;
-                                            const storageKey = 'func_api_' + funcName;
-                                            const apiList = funcConfig.api_settings || [];
-                                            if (apiList.length > 0) {
-                                                localStorage.setItem(storageKey, apiList[0].system_api_id);
-                                            } else {
-                                                localStorage.setItem(storageKey, '');
-                                            }
-                                        });
-                                        setFunctionApiConfigs([...functionApiConfigs]);
-                                        showNotification(t('已恢复系统默认（最高优先级配置）', 'Restored to system default (highest priority config)'), 'success');
-                                    }}
-                                    className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-200 text-sm rounded-lg transition-colors mt-2 md:mt-0"
-                                >
-                                    {t('恢复系统默认', 'Restore System Default')}
-                                </button>
-                            </div>
-                        </div>
-                        <div className="bg-black/20 p-4 sm:p-6 rounded-xl border border-blue-400/20 space-y-4 shadow-sm">
-                            {functionApiConfigs.map(funcConfig => {
-                                const funcName = funcConfig.function_name;
-                                const apiList = funcConfig.api_settings || [];
-                                const storageKey = 'func_api_' + funcName;
-                                const currentVal = Number(localStorage.getItem(storageKey)) || '';
-                                
-                                return (
-                                    <div key={funcName} className="flex flex-col md:flex-row md:items-center justify-between p-3 bg-white/5 border border-white/10 rounded-lg gap-2">
-                                        <div className="text-sm font-medium text-white/90">{funcName}</div>
-                                        <select
-                                            value={currentVal || ''}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                localStorage.setItem(storageKey, val);
-                                                setFunctionApiConfigs([...functionApiConfigs]); // trigger re-render
-                                            }}
-                                            className="bg-[#111114] border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50 min-w-[200px]"
-                                        >
-                                            <option value="">-- {t('系统默认', 'System Default')} --</option>
-                                            {apiList.map((api, idx) => {
-                                                let label = api.alias || (api.system_api_model || api.system_api_name || ('API ID: ' + api.system_api_id));
-                                                if (api.provider_alias) {
-                                                    label = `[${api.provider_alias}] ` + label;
-                                                }
-                                                if (api.applicable_languages && api.applicable_languages.length > 0) {
-                                                    label += ' (' + api.applicable_languages.join(', ') + ')';
-                                                }
-                                                return (
-                                                    <option key={idx} value={api.system_api_id}>
-                                                        {label}
-                                                    </option>
-                                                );
-                                            })}
-                                        </select>
-                                    </div>
-                                );
-                            })}
-                            {functionApiConfigs.length === 0 && <div className="text-sm text-gray-500">{t('暂无功能 API 配置', 'No function API configs available')}</div>}
-                        </div>
-                    </div>
-
             ) : activeTab === 'groups' ? (
                   <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
                       <section className="bg-black/20 p-4 sm:p-6 rounded-xl border border-white/10 space-y-4 shadow-sm">

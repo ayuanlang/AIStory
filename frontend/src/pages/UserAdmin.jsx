@@ -7,7 +7,7 @@ import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
 import GroupsAdmin from '../components/GroupsAdmin';
 import UserEditModal from '../components/UserEditModal';
-import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database } from 'lucide-react';
+import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -4898,6 +4898,7 @@ const UserAdmin = () => {
     const [usersPage, setUsersPage] = useState(1);
     const [usersPageSize, setUsersPageSize] = useState(20);
     const [usersTotal, setUsersTotal] = useState(0);
+    const [usersSearchText, setUsersSearchText] = useState('');
     const [userEditModal, setUserEditModal] = useState(null);
     const [isSavingUserEditModal, setIsSavingUserEditModal] = useState(false);
 
@@ -4924,11 +4925,11 @@ const UserAdmin = () => {
         is_superuser: !!user?.is_superuser,
     });
 
-    const fetchAllData = async (nextPage = usersPage, nextPageSize = usersPageSize) => {
+    const fetchAllData = async (nextPage = usersPage, nextPageSize = usersPageSize, nextQ = usersSearchText) => {
         setLoading(true);
         try {
             const [usersRes] = await Promise.allSettled([
-                getAdminUsersPage(nextPage, nextPageSize),
+                getAdminUsersPage(nextPage, nextPageSize, nextQ),
             ]);
 
             if (usersRes.status === 'fulfilled') {
@@ -5257,13 +5258,16 @@ const UserAdmin = () => {
 
     // Initial Fetch
     useEffect(() => {
-        fetchAllData(usersPage, usersPageSize);
+        fetchAllData(usersPage, usersPageSize, usersSearchText);
     }, []);
 
     useEffect(() => {
         if (activeTab !== 'users') return;
-        fetchAllData(usersPage, usersPageSize);
-    }, [activeTab, usersPage, usersPageSize]);
+        const timer = setTimeout(() => {
+            fetchAllData(usersPage, usersPageSize, usersSearchText);
+        }, 220);
+        return () => clearTimeout(timer);
+    }, [activeTab, usersPage, usersPageSize, usersSearchText]);
 
     // Helper Components
     const TabButton = ({ id, label, icon: Icon }) => (
@@ -5898,8 +5902,22 @@ const UserAdmin = () => {
                     {activeTab === 'users' && (
                         <div>
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-300">
-                                <div>
-                                    {t('用户总量', 'Total Users')}: <span className="font-semibold text-white">{usersTotal}</span>
+                                <div className="flex flex-wrap items-center gap-3 min-w-0">
+                                    <div>
+                                        {t('用户总量', 'Total Users')}: <span className="font-semibold text-white">{usersTotal}</span>
+                                    </div>
+                                    <div className="relative">
+                                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                                        <input
+                                            value={usersSearchText}
+                                            onChange={(e) => {
+                                                setUsersSearchText(e.target.value);
+                                                setUsersPage(1);
+                                            }}
+                                            className="bg-black/30 border border-gray-700 rounded pl-8 pr-3 py-1.5 text-xs w-56 max-w-full text-white placeholder:text-gray-500"
+                                            placeholder={t('搜索用户名 / 姓名 / ID', 'Search username / name / ID')}
+                                        />
+                                    </div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <span>{t('每页', 'Per Page')}</span>

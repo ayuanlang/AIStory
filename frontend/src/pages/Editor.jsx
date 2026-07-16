@@ -4028,7 +4028,7 @@ const Editor = ({
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {
                                 persistProjectReturnSnapshot();
                                 const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-                                window.location.assign(`/settings?tab=default-api-activation&return_to=${returnTo}`);
+                                window.location.assign(`/settings?return_to=${returnTo}`);
                             });
                         }}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors"
