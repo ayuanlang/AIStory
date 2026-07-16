@@ -139,6 +139,7 @@ from app.services.script_analysis_flow import (
     patch_single_scene_markdown_for_orchestration,
     sanitize_scene_markdown_llm_output,
     wrap_scene_unit_as_script_block,
+    SceneBeatsTooShortError,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import now_bj_iso
@@ -8149,11 +8150,16 @@ def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_t
 
 
 def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
+    if isinstance(exc, SceneBeatsTooShortError):
+        return False
     if isinstance(exc, (OperationalError, SQLAlchemyTimeoutError)):
         return True
     if isinstance(exc, HTTPException):
         status = int(getattr(exc, "status_code", 500) or 500)
         detail = str(getattr(exc, "detail", "") or "")
+        # Beats-too-short is a Stage 1 data quality error; do not retry.
+        if detail.startswith("SCENE_MARKDOWN_BEATS_TOO_SHORT"):
+            return False
         if status in (408, 429, 500, 502, 503, 504):
             return True
         if detail.startswith(
@@ -8179,6 +8185,8 @@ def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
 
 
 def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
+    if isinstance(exc, SceneBeatsTooShortError):
+        return exc.detail
     if isinstance(exc, HTTPException):
         detail = str(getattr(exc, "detail", "") or "")
         if detail.startswith("SCENE_MARKDOWN_SCENE_ID_MISMATCH"):
@@ -8287,10 +8295,20 @@ async def _run_scene_markdown_node_per_scene(
 
     if len(scene_units) == 1:
         unit = scene_units[0]
-        single_scene_block = wrap_scene_unit_as_script_block(unit)
+        try:
+            single_scene_block = wrap_scene_unit_as_script_block(unit)
+        except SceneBeatsTooShortError as beats_exc:
+            logger.error(
+                "[scene_markdown] beats too short | scene_id=%s chars=%s min=%s",
+                beats_exc.scene_id,
+                beats_exc.char_count,
+                beats_exc.min_chars,
+            )
+            raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
         single_scene_instruction = (
             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
-            "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+            "输入剧本正文**仅含**该场 `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块（不含 Scene 级【主环境】等说明块）；"
+            "请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
             "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
@@ -8428,10 +8446,20 @@ async def _run_scene_markdown_node_per_scene(
                             max_attempts,
                         )
 
-                        single_scene_block = wrap_scene_unit_as_script_block(unit)
+                        try:
+                            single_scene_block = wrap_scene_unit_as_script_block(unit)
+                        except SceneBeatsTooShortError as beats_exc:
+                            logger.error(
+                                "[scene_markdown] beats too short | scene_id=%s chars=%s min=%s",
+                                beats_exc.scene_id,
+                                beats_exc.char_count,
+                                beats_exc.min_chars,
+                            )
+                            raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
                         single_scene_instruction = (
                             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
-                            "请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+                            "输入剧本正文**仅含**该场 `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块（不含 Scene 级【主环境】等说明块）；"
+                            "请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
                             "禁止输出思考过程、解释、规划说明或任何非表格内容；"

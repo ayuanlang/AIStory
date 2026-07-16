@@ -798,6 +798,97 @@ const parseSceneUnitsFromScriptMarkersText = (scriptText) => {
     }));
 };
 
+/** Extract legacy `- Beat N` sections and wrap with BEAT_START/END. */
+const extractLegacyBeatSectionsFromSceneText = (sceneText) => {
+    const text = String(sceneText || '');
+    const beatLineRe = /^\s*-\s*Beat\s+(\d+)\b/gm;
+    const matches = [];
+    let match;
+    while ((match = beatLineRe.exec(text)) !== null) {
+        matches.push({ index: match.index, beatN: String(match[1] || '').trim() });
+    }
+    if (!matches.length) return '';
+    return matches.map((item, idx) => {
+        const beatN = item.beatN || String(idx + 1);
+        const start = item.index;
+        const end = idx + 1 < matches.length ? matches[idx + 1].index : text.length;
+        const body = text.slice(start, end).trim();
+        if (!body) return '';
+        return `[BEAT_START:${beatN}]\n${body}\n[BEAT_END:${beatN}]`;
+    }).filter(Boolean).join('\n\n').trim();
+};
+
+/** Stage 2.2 input: only `[BEAT_START:…]`…`[BEAT_END:…]` blocks from a scene body. */
+const extractBeatBlocksFromSceneText = (sceneText) => {
+    const text = String(sceneText || '');
+    if (!text.trim()) return '';
+    const startRe = /`?\[BEAT_START(?::([^\s\]]+))?\]`?/gi;
+    const starts = [];
+    let match;
+    while ((match = startRe.exec(text)) !== null) {
+        starts.push({
+            index: match.index,
+            endPos: match.index + match[0].length,
+            beatId: String(match[1] || '').trim(),
+        });
+    }
+    if (!starts.length) {
+        return extractLegacyBeatSectionsFromSceneText(text);
+    }
+    const endRe = /`?\[BEAT_END(?::([^\s\]]+))?\]`?/gi;
+    return starts.map((startItem, idx) => {
+        const beatId = startItem.beatId || String(idx + 1);
+        const nextStart = idx + 1 < starts.length ? starts[idx + 1].index : text.length;
+        endRe.lastIndex = startItem.endPos;
+        const endMatch = endRe.exec(text);
+        let block;
+        if (endMatch && endMatch.index <= nextStart) {
+            block = text.slice(startItem.index, endMatch.index + endMatch[0].length).trim();
+        } else {
+            block = text.slice(startItem.index, nextStart).replace(/\s+$/, '');
+            if (block && !/`?\[BEAT_END(?::[^\]]+)?\]`?/i.test(block)) {
+                block = `${block}\n[BEAT_END:${beatId}]`;
+            }
+        }
+        return String(block || '').trim();
+    }).filter(Boolean).join('\n\n').trim();
+};
+
+const MIN_SCENE_BEATS_CHARS = 20;
+
+/** Strip BEAT_START/END markers so length reflects Beat body content. */
+const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
+    .replace(/`?\[BEAT_START(?::[^\]]+)?\]`?/gi, '')
+    .replace(/`?\[BEAT_END(?::[^\]]+)?\]`?/gi, '')
+    .trim();
+
+/**
+ * Resolve Stage 2.2 Beat body: prefer BEAT_START/END extraction;
+ * on split failure / too-short Beats, fall back to the entire scene text.
+ * Returns `{ bodyText, usedSceneFallback }`. Throws only if final body is still too short.
+ */
+const resolveSceneBeatsBodyForStage22 = (sceneText, sceneId = '') => {
+    const source = String(sceneText || '').trim();
+    const id = String(sceneId || 'unknown').trim() || 'unknown';
+    const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
+    const extractedChars = stripBeatBoundaryMarkers(beatsOnly).length;
+    if (beatsOnly && extractedChars >= MIN_SCENE_BEATS_CHARS) {
+        return { bodyText: beatsOnly, usedSceneFallback: false };
+    }
+    if (source.length >= MIN_SCENE_BEATS_CHARS) {
+        return { bodyText: source, usedSceneFallback: true, extractedChars };
+    }
+    const finalChars = Math.max(extractedChars, source.length);
+    throw new Error(
+        `SCENE_MARKDOWN_BEATS_TOO_SHORT:${id}:beats_chars=${finalChars}<${MIN_SCENE_BEATS_CHARS}`
+    );
+};
+
+/** @deprecated prefer resolveSceneBeatsBodyForStage22; kept as thin wrapper. */
+const assertSceneBeatsMinLength = (sceneText, sceneId = '') => (
+    resolveSceneBeatsBodyForStage22(sceneText, sceneId).bodyText
+);
+
 const createSceneOrchestrationProgressPoller = ({
     getSnapshot,
     episodeId,
@@ -2323,7 +2414,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : String(extractStage1AdaptedScriptBody(stage1Text) || '').trim();
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
-            '请执行第二阶段的第二步：视听推演与节拍拆解（Beat Generation & Scene Breakdown）。基于上游提取的"资产清单"和"优化后剧本"，生成标准化的《Scenes Table》——包含每一个可视场景的环境、角色、道具布局与动作节拍序列。',
+            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 Subject Index + 单场 Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，不含 Scene 级【主环境】等说明块）。仅对 Beat 叙述层做 Index 名称转译并落入《Scenes Table》的 `{Beats}`；禁止改情节/对白/建置/补实体。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -2358,10 +2449,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!sceneText) {
             sceneText = String(unit?.sceneMarkdown || unit?.scene_markdown || '').trim();
         }
+        // Prefer Beat blocks; fall back to full scene when split fails / too short.
+        const { bodyText } = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
         return [
             SCENES_BLOCK_START_TOKEN,
             markerStartToken,
-            sceneText,
+            bodyText,
             markerEndToken,
             SCENES_BLOCK_END_TOKEN,
         ].filter((part) => String(part || '').trim()).join('\n');
@@ -8231,6 +8324,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'info'
             );
         }
+        // Preflight: resolve Beats (extract → full-scene fallback); error only if final body still too short.
+        const beatsTooShortErrors = [];
+        for (const unit of unitsToProcess) {
+            const sceneId = String(unit?.sceneId || '').trim() || 'unknown';
+            const sceneText = stripBlockLevelMarkersFromSceneText(unit?.sceneText || unit?.sceneMarkdown || '');
+            try {
+                const resolved = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
+                if (resolved.usedSceneFallback) {
+                    onLog?.(
+                        t(
+                            `[${label}] 场景 ${sceneId} Beat 分割失败或过短（extracted=${resolved.extractedChars ?? 0}），已兜底使用整场正文（${resolved.bodyText.length} 字）`,
+                            `[${label}] Scene ${sceneId} beat split failed/too short (extracted=${resolved.extractedChars ?? 0}); falling back to full scene body (${resolved.bodyText.length} chars)`
+                        ),
+                        'warning'
+                    );
+                }
+            } catch (beatsErr) {
+                const msg = String(beatsErr?.message || beatsErr || '');
+                beatsTooShortErrors.push(msg);
+                onLog?.(
+                    t(
+                        `[${label}] 场景 ${sceneId} Beats/整场正文均不足 ${MIN_SCENE_BEATS_CHARS} 字：${msg}`,
+                        `[${label}] Scene ${sceneId} Beats and full scene body both shorter than ${MIN_SCENE_BEATS_CHARS}: ${msg}`
+                    ),
+                    'error'
+                );
+            }
+        }
+        if (beatsTooShortErrors.length > 0) {
+            throw new Error(
+                t(
+                    `场景编排失败：${beatsTooShortErrors.length} 场 Beats 分割失败且整场正文也少于 ${MIN_SCENE_BEATS_CHARS} 字。${beatsTooShortErrors.join('；')}`,
+                    `Scene orchestration failed: ${beatsTooShortErrors.length} scene(s) have failed beat split and full scene body shorter than ${MIN_SCENE_BEATS_CHARS}. ${beatsTooShortErrors.join('; ')}`
+                )
+            );
+        }
         const isSingleExplicitScene = explicitSceneUnits.length === 1;
         const orchestrationSceneCount = isSingleExplicitScene
             ? 1
@@ -8254,7 +8383,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
             const singleSceneBody = [
-                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${unit.sceneId}\`，不得仅填场次序号或其他别名。`,
+                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。输入剧本正文**仅含**该场 \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等说明块）；请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${unit.sceneId}\`，不得仅填场次序号或其他别名。`,
                 buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
             ].join('\n\n');
             const singleFinalInput = singleSceneBody;
@@ -8380,7 +8509,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneLabel = `${label} [${sceneId}]`;
                     const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
                     const singleSceneBody = [
-                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。请仅输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${sceneId}\`，不得仅填场次序号或其他别名。`,
+                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。输入剧本正文**仅含**该场 \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等说明块）；请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${sceneId}\`，不得仅填场次序号或其他别名。`,
                         buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
                     ].join('\n\n');
                     let sceneAttempt = null;

@@ -63,6 +63,9 @@ SCENES_BLOCK_START_PATTERN = re.compile(r"`?\[SCENES_BLOCK_START\]`?", re.IGNORE
 SCENES_BLOCK_END_PATTERN = re.compile(r"`?\[SCENES_BLOCK_END\]`?", re.IGNORECASE)
 SCENE_START_PATTERN = re.compile(r"`?\[SCENE_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 SCENE_END_PATTERN = re.compile(r"`?\[SCENE_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+BEAT_START_PATTERN = re.compile(r"`?\[BEAT_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+BEAT_END_PATTERN = re.compile(r"`?\[BEAT_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+LEGACY_BEAT_LINE_PATTERN = re.compile(r"(?m)^\s*-\s*Beat\s+(\d+)\b")
 BLOCK_MARKER_LINE_PATTERN = re.compile(
     r"^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -72,6 +75,7 @@ SCENE_MARKER_LINE_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 MIN_SCENE_UNIT_BODY_CHARS = 50
+MIN_SCENE_BEATS_CHARS = 20
 
 ISSUE_SEVERITY_VALUES = {"INFO", "WARNING", "BLOCKER"}
 
@@ -80,6 +84,29 @@ class SceneMarkerParseError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = str(code or "SCENE_MARKER_PARSE_ERROR")
+
+
+class SceneBeatsTooShortError(ValueError):
+    """Raised when extracted Stage 2.2 Beat text is shorter than MIN_SCENE_BEATS_CHARS."""
+
+    def __init__(self, scene_id: str, char_count: int, min_chars: int = MIN_SCENE_BEATS_CHARS):
+        self.scene_id = str(scene_id or "unknown").strip() or "unknown"
+        self.char_count = int(char_count or 0)
+        self.min_chars = int(min_chars or MIN_SCENE_BEATS_CHARS)
+        super().__init__(
+            f"SCENE_MARKDOWN_BEATS_TOO_SHORT:{self.scene_id}:{self.char_count}<{self.min_chars}"
+        )
+
+    @property
+    def code(self) -> str:
+        return "SCENE_MARKDOWN_BEATS_TOO_SHORT"
+
+    @property
+    def detail(self) -> str:
+        return (
+            f"SCENE_MARKDOWN_BEATS_TOO_SHORT:{self.scene_id}:"
+            f"beats_chars={self.char_count}<{self.min_chars}"
+        )
 
 
 @dataclass
@@ -1258,7 +1285,127 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
     return parsed
 
 
+def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
+    """Wrap legacy `- Beat N` sections with BEAT_START/END when markers are absent."""
+    text = str(scene_text or "")
+    matches = list(LEGACY_BEAT_LINE_PATTERN.finditer(text))
+    if not matches:
+        return ""
+    blocks: List[str] = []
+    for idx, match in enumerate(matches):
+        beat_n = str(match.group(1) or idx + 1).strip() or str(idx + 1)
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        if not body:
+            continue
+        blocks.append(f"[BEAT_START:{beat_n}]\n{body}\n[BEAT_END:{beat_n}]")
+    return "\n\n".join(blocks).strip()
+
+
+def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
+    """
+    Extract only `[BEAT_START:…]`…`[BEAT_END:…]` blocks from a Stage 1 scene body.
+    Falls back to legacy `- Beat N` sections when markers are missing.
+    """
+    text = str(scene_text or "")
+    if not text.strip():
+        return ""
+
+    starts = list(BEAT_START_PATTERN.finditer(text))
+    if not starts:
+        return extract_legacy_beat_sections_from_scene_text(text)
+
+    blocks: List[str] = []
+    for idx, start_match in enumerate(starts):
+        beat_id = str(start_match.group(1) or idx + 1).strip() or str(idx + 1)
+        next_start = starts[idx + 1].start() if idx + 1 < len(starts) else len(text)
+        end_match = BEAT_END_PATTERN.search(text, start_match.end())
+        if end_match and end_match.start() <= next_start:
+            block = text[start_match.start(): end_match.end()].strip()
+        else:
+            block = text[start_match.start(): next_start].rstrip()
+            if block and not BEAT_END_PATTERN.search(block):
+                block = f"{block}\n[BEAT_END:{beat_id}]"
+        if block:
+            blocks.append(block.strip())
+    return "\n\n".join(blocks).strip()
+
+
+def _strip_beat_boundary_markers(beats_text: str) -> str:
+    """Remove `[BEAT_START:…]` / `[BEAT_END:…]` tokens so length reflects Beat body content."""
+    cleaned = BEAT_START_PATTERN.sub("", str(beats_text or ""))
+    cleaned = BEAT_END_PATTERN.sub("", cleaned)
+    return cleaned.strip()
+
+
+def measure_scene_beats_char_count(scene_text: str) -> int:
+    """Character count of extracted Beat body content (markers excluded)."""
+    return len(_strip_beat_boundary_markers(extract_beat_blocks_from_scene_text(scene_text)))
+
+
+def resolve_scene_beats_body_for_stage_2_2(
+    scene_text: str,
+    scene_id: str = "",
+    *,
+    min_chars: int = MIN_SCENE_BEATS_CHARS,
+) -> Tuple[str, bool]:
+    """
+    Resolve Stage 2.2 Beat body for one scene.
+
+    Prefer `[BEAT_START]/[BEAT_END]` (or legacy `- Beat N`) extraction.
+    Fallback: when split fails / body shorter than `min_chars`, use the entire scene text.
+    Returns `(body_text, used_scene_fallback)`.
+    Raises SceneBeatsTooShortError only when even the full scene body is too short.
+    """
+    source = str(scene_text or "").strip()
+    threshold = int(min_chars or MIN_SCENE_BEATS_CHARS)
+    sid = str(scene_id or "unknown").strip() or "unknown"
+
+    beats_only = extract_beat_blocks_from_scene_text(source).strip()
+    extracted_chars = len(_strip_beat_boundary_markers(beats_only)) if beats_only else 0
+    if beats_only and extracted_chars >= threshold:
+        return beats_only, False
+
+    fallback = source
+    fallback_chars = len(fallback)
+    if fallback_chars >= threshold:
+        logger.warning(
+            "[scene_markdown] beat split fallback to full scene | scene_id=%s extracted_chars=%s scene_chars=%s min=%s",
+            sid,
+            extracted_chars,
+            fallback_chars,
+            threshold,
+        )
+        return fallback, True
+
+    raise SceneBeatsTooShortError(sid, max(extracted_chars, fallback_chars), threshold)
+
+
+def validate_scene_beats_min_length(
+    scene_text: str,
+    scene_id: str = "",
+    *,
+    min_chars: int = MIN_SCENE_BEATS_CHARS,
+) -> str:
+    """
+    Resolve Beats body with full-scene fallback; enforce min length on the final body.
+    Returns the body text on success; raises SceneBeatsTooShortError otherwise.
+    """
+    body_text, _used_fallback = resolve_scene_beats_body_for_stage_2_2(
+        scene_text,
+        scene_id,
+        min_chars=min_chars,
+    )
+    return body_text
+
+
 def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
+    """
+    Wrap one scene for Stage 2.2 LLM input: Scene markers + Beat blocks.
+    Prefer extracted Beats; on split failure / too-short Beats, fall back to full scene body.
+    Raises SceneBeatsTooShortError only when the final body is still shorter than MIN_SCENE_BEATS_CHARS.
+    """
     scene_text = _strip_block_level_markers_from_scene_text(getattr(unit, "scene_text", "") or "")
     marker_start = str(getattr(unit, "marker_start_token", "") or "").strip()
     marker_end = str(getattr(unit, "marker_end_token", "") or "").strip()
@@ -1275,11 +1422,12 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         scene_markdown = str(getattr(unit, "scene_markdown", "") or "").strip()
         if scene_markdown:
             scene_text = scene_markdown
+    body_text, _used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
     parts = [SCENES_BLOCK_START_TOKEN]
     if marker_start:
         parts.append(marker_start)
-    if scene_text:
-        parts.append(scene_text)
+    if body_text:
+        parts.append(body_text)
     if marker_end:
         parts.append(marker_end)
     parts.append(SCENES_BLOCK_END_TOKEN)
@@ -2089,6 +2237,11 @@ __all__ = [
     "STAGE_SCENE_MARKDOWN",
     "STAGE_SCRIPT_OPTIMIZATION",
     "SceneMarkerParseError",
+    "SceneBeatsTooShortError",
+    "MIN_SCENE_BEATS_CHARS",
+    "measure_scene_beats_char_count",
+    "resolve_scene_beats_body_for_stage_2_2",
+    "validate_scene_beats_min_length",
     "build_script_analysis_flow_plan",
     "get_script_analysis_flow_registry",
     "normalize_node_status",
@@ -2107,6 +2260,8 @@ __all__ = [
     "extract_scenes_table_markdown_block",
     "sanitize_scene_markdown_llm_output",
     "wrap_scene_unit_as_script_block",
+    "extract_beat_blocks_from_scene_text",
+    "extract_legacy_beat_sections_from_scene_text",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",
     "import_scene_markdown_stage",
