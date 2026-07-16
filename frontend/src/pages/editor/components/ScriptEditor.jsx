@@ -2568,11 +2568,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             .split('\n')
             .map((line) => String(line || '').trim())
             .find(Boolean) || '';
-        const nameMatch = firstLine.match(/【场景\s*\d+[：:]\s*([^】]+)】/)
+        const namedFieldMatch = String(unit?.sceneText || '').match(/【场景名称】\s*([^\n【]+)/);
+        const nameMatch = namedFieldMatch
+            || firstLine.match(/【场景\s*\d+[：:]\s*([^】]+)】/)
             || firstLine.match(/\*\*【场景\s*[^】]+】\*\*/)
             || firstLine.match(/Scene\s*\d+\s*[:：]\s*(.+)$/i);
         const sceneName = nameMatch
-            ? String(nameMatch[1] || nameMatch[0] || '').replace(/[*【】]/g, '').trim()
+            ? String(nameMatch[1] || nameMatch[0] || '')
+                .replace(/[*【】]/g, '')
+                .replace(/\s*[｜|]\s*.*$/, '')
+                .trim()
             : '';
         if (sceneId && sceneName) return `${sceneId} · ${sceneName}`;
         return sceneId || sceneName || (uiLang === 'zh' ? '未命名场景' : 'Unnamed scene');
