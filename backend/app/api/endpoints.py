@@ -6886,8 +6886,13 @@ def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
 
 
 
-from app.services.system_log_service import log_action
-from app.schemas.system_log import SystemLogOut, SystemLogCreate
+from app.services.system_log_service import append_ui_system_logs, get_ui_system_log_path, log_action
+from app.schemas.system_log import (
+    SystemLogOut,
+    SystemLogCreate,
+    UiSystemLogBatchCreate,
+    UiSystemLogBatchOut,
+)
 
 def _can_use_system_settings(user: User) -> bool:
     return bool((user.credits or 0) > 0 or user.is_superuser or user.is_system)
@@ -6979,6 +6984,29 @@ def create_system_log_action(
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post("/system_logs/ui", response_model=UiSystemLogBatchOut)
+def persist_ui_system_logs(
+    payload: UiSystemLogBatchCreate,
+    current_user: User = Depends(get_current_user),
+):
+    """Persist frontend「系统日志」panel entries to backend/logs/user_system.log (max 100 lines)."""
+    entries = list(payload.entries or [])
+    if len(entries) > 100:
+        entries = entries[-100:]
+
+    user_name = str(current_user.username or f"user_{current_user.id}").strip() or f"user_{current_user.id}"
+    written = append_ui_system_logs(
+        [entry.model_dump() if hasattr(entry, "model_dump") else entry.dict() for entry in entries],
+        user_id=int(current_user.id),
+        user_name=user_name,
+    )
+    return UiSystemLogBatchOut(
+        ok=True,
+        written=int(written or 0),
+        log_file=str(get_ui_system_log_path()),
+    )
 
 
 def get_system_api_setting(
@@ -30036,9 +30064,13 @@ class UserPageOut(BaseModel):
 
 
 USER_ACTIVE_LEVEL_DEFAULT = 1
-USER_BATCH_PARALLEL_LIMIT_MAX = 12
-USER_MEDIA_GENERATION_PARALLEL_BONUS = 2
-USER_MEDIA_GENERATION_PARALLEL_LIMIT_MAX = USER_BATCH_PARALLEL_LIMIT_MAX + USER_MEDIA_GENERATION_PARALLEL_BONUS
+USER_ACTIVE_LEVEL_MAX = 12
+USER_PARALLEL_LIMIT_BONUS = 2
+USER_PARALLEL_LIMIT_MAX = USER_ACTIVE_LEVEL_MAX + USER_PARALLEL_LIMIT_BONUS
+# Backward-compatible aliases
+USER_BATCH_PARALLEL_LIMIT_MAX = USER_ACTIVE_LEVEL_MAX
+USER_MEDIA_GENERATION_PARALLEL_BONUS = USER_PARALLEL_LIMIT_BONUS
+USER_MEDIA_GENERATION_PARALLEL_LIMIT_MAX = USER_PARALLEL_LIMIT_MAX
 SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
 SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
 SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 1
@@ -30056,20 +30088,23 @@ def _is_user_enabled(value: Any) -> bool:
     return _normalize_user_active_level(value, USER_ACTIVE_LEVEL_DEFAULT) > 0
 
 
-def _resolve_user_batch_parallel_limit(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+def _resolve_user_active_level(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+    """Clamp raw is_active to 1..USER_ACTIVE_LEVEL_MAX (no +2 bonus)."""
     normalized = _normalize_user_active_level(value, default)
     if normalized <= 0:
         normalized = max(1, int(default or USER_ACTIVE_LEVEL_DEFAULT))
-    return min(USER_BATCH_PARALLEL_LIMIT_MAX, max(1, normalized))
+    return min(USER_ACTIVE_LEVEL_MAX, max(1, normalized))
+
+
+def _resolve_user_batch_parallel_limit(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+    """Batch + media parallel cap: is_active + 2 (clamped to USER_PARALLEL_LIMIT_MAX)."""
+    active_level = _resolve_user_active_level(value, default)
+    return min(USER_PARALLEL_LIMIT_MAX, max(1, int(active_level) + int(USER_PARALLEL_LIMIT_BONUS)))
 
 
 def _resolve_user_media_generation_parallel_limit(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
-    """Image/video submit parallel cap: is_active + 2 (clamped)."""
-    active_level = _resolve_user_batch_parallel_limit(value, default)
-    return min(
-        USER_MEDIA_GENERATION_PARALLEL_LIMIT_MAX,
-        max(1, int(active_level) + int(USER_MEDIA_GENERATION_PARALLEL_BONUS)),
-    )
+    """Image/video submit parallel cap — same as batch: is_active + 2."""
+    return _resolve_user_batch_parallel_limit(value, default)
 
 
 _USER_MEDIA_GENERATION_ACTIVE_STATUSES = frozenset(
@@ -30111,7 +30146,7 @@ def _count_user_active_media_generation_jobs(user_id: int) -> int:
 
 def _enforce_user_media_generation_parallel_limit(user: "User") -> int:
     """Reject new image/video submits when user is_active+2 parallel slots are full."""
-    active_level = _resolve_user_batch_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
+    active_level = _resolve_user_active_level(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
     limit = _resolve_user_media_generation_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
     active = _count_user_active_media_generation_jobs(int(getattr(user, "id", 0) or 0))
     if active >= limit:
@@ -30136,7 +30171,7 @@ def _release_media_generation_job_after_limit_race(
     active = _count_user_active_media_generation_jobs(int(getattr(user, "id", 0) or 0))
     if active <= limit:
         return
-    active_level = _resolve_user_batch_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
+    active_level = _resolve_user_active_level(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
     reason = (
         f"并行图片/视频生成已达上限（当前 {active}/{limit}）。"
         f"启用级别 is_active={active_level}（上限=is_active+2），请等待进行中的任务完成后再提交。"
@@ -31226,6 +31261,16 @@ class AdminStorageUsageOut(BaseModel):
     users: List[AdminStorageUsageUserOut]
 
 
+_RUNTIME_LOG_PREFIXES = ("app_info.log", "user_system.log")
+
+
+def _is_allowed_runtime_log_filename(name: str) -> bool:
+    safe_name = str(name or "").strip()
+    if not safe_name or "/" in safe_name or "\\" in safe_name:
+        return False
+    return any(safe_name == prefix or safe_name.startswith(f"{prefix}.") for prefix in _RUNTIME_LOG_PREFIXES)
+
+
 @router.get("/admin/runtime-logs/files", response_model=List[RuntimeLogFileOut])
 def list_runtime_log_files(
     current_user: User = Depends(get_current_user)
@@ -31238,9 +31283,14 @@ def list_runtime_log_files(
         return []
 
     files: List[RuntimeLogFileOut] = []
-    for path in sorted(log_dir.glob("app_info.log*"), key=lambda p: p.stat().st_mtime, reverse=True):
-        if not path.is_file():
+    seen = set()
+    candidates = []
+    for prefix in _RUNTIME_LOG_PREFIXES:
+        candidates.extend(log_dir.glob(f"{prefix}*"))
+    for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        if not path.is_file() or path.name in seen or not _is_allowed_runtime_log_filename(path.name):
             continue
+        seen.add(path.name)
         stat = path.stat()
         files.append(
             RuntimeLogFileOut(
@@ -31268,7 +31318,7 @@ def view_runtime_log_file(
     safe_name = str(filename or "").strip()
     if not safe_name:
         raise HTTPException(status_code=400, detail="filename is required")
-    if "/" in safe_name or "\\" in safe_name or not safe_name.startswith("app_info.log"):
+    if not _is_allowed_runtime_log_filename(safe_name):
         raise HTTPException(status_code=400, detail="invalid filename")
 
     capped_tail = max(1, min(int(tail_lines or 300), 5000))

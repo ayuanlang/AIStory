@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 class SystemLogBase(BaseModel):
     action: str
@@ -18,6 +18,22 @@ class SystemLogOut(SystemLogBase):
 
     class Config:
         from_attributes = True
+
+
+class UiSystemLogEntry(BaseModel):
+    message: str
+    type: str = "info"
+    client_time: Optional[str] = None
+
+
+class UiSystemLogBatchCreate(BaseModel):
+    entries: List[UiSystemLogEntry] = Field(default_factory=list)
+
+
+class UiSystemLogBatchOut(BaseModel):
+    ok: bool = True
+    written: int = 0
+    log_file: str = ""
 
 class LLMCallLogOut(BaseModel):
     id: int

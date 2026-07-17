@@ -389,6 +389,7 @@ class LoggingMiddleware:
             "/favicon.ico",
             "/healthz",
             "/api/v1/system_logs/actions",
+            "/api/v1/system_logs/ui",
         }
         is_noise = path in noise_exact or any(path.startswith(p) for p in noise_prefixes)
 

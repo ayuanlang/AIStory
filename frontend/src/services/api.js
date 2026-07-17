@@ -1077,6 +1077,22 @@ export const recordSystemLogAction = async (payload = {}) => {
     }
 }
 
+export const persistUiSystemLogs = async (payload = {}) => {
+    try {
+        const response = await api.post('/system_logs/ui', payload || {}, {
+            skipAuthRedirect: true,
+            timeout: 15000,
+        });
+        return response.data;
+    } catch (error) {
+        return {
+            ok: false,
+            written: 0,
+            error: error?.response?.data?.detail || error?.message || String(error),
+        };
+    }
+}
+
 export const fetchProject = async (id) => {
     const response = await api.get(`/projects/${id}`);
     return response.data;

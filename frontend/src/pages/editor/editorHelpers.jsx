@@ -346,8 +346,10 @@ export const isBrokenSceneImageUrl = (url) => {
 
 export const normalizeBatchParallelLimit = (value) => {
     const parsed = Number(value);
+    // Default matches is_active=1 → parallel = 1+2
     if (!Number.isFinite(parsed)) return 3;
-    return Math.min(12, Math.max(1, Math.trunc(parsed)));
+    const activeLevel = Math.min(12, Math.max(1, Math.trunc(parsed)));
+    return Math.min(14, Math.max(1, activeLevel + 2));
 };
 
 export const normalizeAsciiSubjectSeparatorsForDeps = (value) => {

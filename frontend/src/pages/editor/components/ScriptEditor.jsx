@@ -5,6 +5,8 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLog } from '../../../context/LogContext';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import LLMResultPanel from './LLMResultPanel';
@@ -400,23 +402,98 @@ const deriveSceneOrderFromSceneId = (sceneId) => {
     return null;
 };
 
-const dbSceneMatchesPatchSceneId = (dbScenes, patchSceneId) => {
+const findDbSceneByPatchSceneId = (dbScenes, patchSceneId) => {
     const patchToken = normalizeSceneIdToken(patchSceneId);
-    if (!patchToken) return false;
+    if (!patchToken) return null;
     const rows = Array.isArray(dbScenes) ? dbScenes : [];
-    if (rows.some((row) => (
+    const exact = rows.find((row) => (
         [row?.scene_no, row?.scene_id, row?.scene_code]
             .map(normalizeSceneIdToken)
             .some((token) => token && token === patchToken)
-    ))) {
-        return true;
-    }
+    ));
+    if (exact) return exact;
     const expectedOrder = deriveSceneOrderFromSceneId(patchSceneId);
-    if (!Number.isFinite(expectedOrder) || sceneIdHasLetterSuffix(patchSceneId)) return false;
-    return rows.some((row) => {
+    if (!Number.isFinite(expectedOrder) || sceneIdHasLetterSuffix(patchSceneId)) return null;
+    return rows.find((row) => {
         const rowOrder = deriveSceneOrderFromSceneId(row?.scene_no) ?? Number(String(row?.scene_no || '').trim());
         return Number.isFinite(rowOrder) && Number(rowOrder) === Number(expectedOrder);
-    });
+    }) || null;
+};
+
+const dbSceneMatchesPatchSceneId = (dbScenes, patchSceneId) => (
+    !!findDbSceneByPatchSceneId(dbScenes, patchSceneId)
+);
+
+const resolveImportedDbSceneIdFromReport = (importReport, markerSceneId) => {
+    const rows = [
+        ...(Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : []),
+        ...(Array.isArray(importReport?.scenes) ? importReport.scenes : []),
+    ];
+    const markerToken = normalizeSceneIdToken(markerSceneId);
+    if (markerToken) {
+        for (const row of rows) {
+            const id = Number(row?.id || 0);
+            if (!Number.isFinite(id) || id <= 0) continue;
+            const tokens = [row?.scene_no, row?.scene_id, row?.scene_code]
+                .map(normalizeSceneIdToken)
+                .filter(Boolean);
+            if (tokens.some((token) => token === markerToken)) return id;
+        }
+    }
+    const withIds = rows
+        .map((row) => Number(row?.id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    if (withIds.length === 1) return withIds[0];
+    return null;
+};
+
+const EMPTY_STORYBOARD_TASK_PROGRESS = {
+    started: 0,
+    completed: 0,
+    failed: 0,
+    running: 0,
+    items: {},
+};
+
+const normalizeStoryboardTaskProgress = (value) => {
+    if (!value || typeof value !== 'object') return EMPTY_STORYBOARD_TASK_PROGRESS;
+    const items = value.items && typeof value.items === 'object' ? value.items : {};
+    const itemList = Object.values(items);
+    if (itemList.length > 0) {
+        const started = itemList.length;
+        const completed = itemList.filter((item) => String(item?.status || '').toLowerCase() === 'completed').length;
+        const failed = itemList.filter((item) => String(item?.status || '').toLowerCase() === 'failed').length;
+        const running = itemList.filter((item) => (
+            ['starting', 'generating', 'importing'].includes(String(item?.status || '').toLowerCase())
+        )).length;
+        return { started, completed, failed, running, items };
+    }
+    return {
+        started: Number(value.started || 0) || 0,
+        completed: Number(value.completed || 0) || 0,
+        failed: Number(value.failed || 0) || 0,
+        running: Number(value.running || 0) || 0,
+        items: {},
+    };
+};
+
+const pickRicherStoryboardTaskProgress = (...candidates) => {
+    let best = EMPTY_STORYBOARD_TASK_PROGRESS;
+    let bestScore = -1;
+    for (const candidate of candidates) {
+        const normalized = normalizeStoryboardTaskProgress(candidate);
+        const itemCount = Object.keys(normalized.items || {}).length;
+        const score = (itemCount * 1000)
+            + (Number(normalized.started || 0) * 10)
+            + Number(normalized.completed || 0)
+            + Number(normalized.failed || 0)
+            + Number(normalized.running || 0);
+        if (score > bestScore) {
+            best = normalized;
+            bestScore = score;
+        }
+    }
+    return best;
 };
 
 const resolveLiveImportedSceneIdsToSkip = async ({
@@ -1645,6 +1722,8 @@ const slimAnalysisUiReportForSnapshot = (uiReport) => {
         resolvedSceneImportCount: uiReport.resolvedSceneImportCount,
         resolvedAssetHandledCounts: uiReport.resolvedAssetHandledCounts,
         stage3SubtasksOk: uiReport.stage3SubtasksOk,
+        storyboardAutoStarted: Boolean(uiReport.storyboardAutoStarted),
+        storyboardTaskProgress: normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress),
     };
 };
 
@@ -2032,6 +2111,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         sceneOrchestrationPanelReporterRef.current = null;
     }, []);
     const [analysisUiReport, setAnalysisUiReport] = useState(null);
+    const [storyboardTaskProgress, setStoryboardTaskProgress] = useState(EMPTY_STORYBOARD_TASK_PROGRESS);
+    const storyboardTaskProgressRef = useRef(EMPTY_STORYBOARD_TASK_PROGRESS);
     const [analysisReviewIssues, setAnalysisReviewIssues] = useState([]);
     const analysisFallbackRetryRef = useRef({
         episodeId: null,
@@ -2678,6 +2759,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         mode: 'all',
         sceneId: '',
     });
+    const [storyboardRerunModal, setStoryboardRerunModal] = useState({
+        open: false,
+        mode: 'all',
+        sceneId: '',
+        candidates: [],
+        loading: false,
+    });
+    const [isRerunningStoryboard, setIsRerunningStoryboard] = useState(false);
+    const [diagnosticImportingKind, setDiagnosticImportingKind] = useState('');
+    const [stageArtifactEditModal, setStageArtifactEditModal] = useState({
+        open: false,
+        kind: '', // script_opt | subject_index
+        titleZh: '',
+        titleEn: '',
+        hintZh: '',
+        hintEn: '',
+        content: '',
+        editing: false,
+        saving: false,
+    });
     const [postAnalysisCheckModal, setPostAnalysisCheckModal] = useState({
         open: false,
         status: 'idle',
@@ -2855,12 +2956,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setAnalysisFlowStatusHistory((prev) => {
             const lastItem = prev[prev.length - 1];
-            // For scene orchestration phases with a per-scene highlightHint, always add a new
+            // For scene orchestration / storyboard phases with a per-scene highlightHint, always add a new
             // entry so every scene's status update is visible (not overwritten by the next scene).
-            const isSceneOrchestrationHint = highlightHint && /「EP\d+_SC\d+」/i.test(highlightHint);
+            const isPerSceneHint = highlightHint && /「[^」]+」/.test(highlightHint);
+            const shouldAppendPerSceneUpdate = (
+                isPerSceneHint
+                && (phase === 'scene_beats' || phase === 'storyboard')
+            );
             if (lastItem && lastItem.phase === phase && lastItem.message === message) {
                 if (highlightHint && highlightHint !== String(lastItem.highlightHint || '').trim()) {
-                    if (isSceneOrchestrationHint) {
+                    if (shouldAppendPerSceneUpdate) {
                         // Fall through to add a new entry below
                     } else {
                         return [...prev.slice(0, -1), { ...lastItem, highlightHint }];
@@ -5836,6 +5941,326 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return patchMap;
     }, [extractSceneDisplayLabel, patchSceneTableRowIdentity, splitSceneMarkdownTableBySceneId]);
 
+    const resetStoryboardKickoffTracking = useCallback(() => {
+        storyboardKickoffByMarkerRef.current = new Set();
+        storyboardKickoffByDbIdRef.current = new Set();
+        stage3AutoStartCacheRef.current = null;
+        storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
+        setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
+    }, []);
+
+    const isStoryboardAutoStartEnabled = useCallback(async () => {
+        if (stage3AutoStartCacheRef.current && typeof stage3AutoStartCacheRef.current === 'object') {
+            return stage3AutoStartCacheRef.current.storyboard_generation !== false;
+        }
+        try {
+            const flowRegistry = await getSceneAnalysisFlowRegistry();
+            const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
+            stage3AutoStartCacheRef.current = configured && typeof configured === 'object' ? configured : {};
+            return stage3AutoStartCacheRef.current.storyboard_generation !== false;
+        } catch (_) {
+            stage3AutoStartCacheRef.current = { storyboard_generation: true };
+            return true;
+        }
+    }, []);
+
+    const updateStoryboardTaskItem = useCallback((markerSceneId, patch = {}) => {
+        const stableMarker = String(markerSceneId || '').trim();
+        if (!stableMarker) return EMPTY_STORYBOARD_TASK_PROGRESS;
+        // Ref is the concurrency-safe source of truth (sync read/merge/write; no await in between).
+        const prev = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+        const nextItems = {
+            ...(prev.items || {}),
+            [stableMarker]: {
+                ...(prev.items?.[stableMarker] || {}),
+                ...patch,
+                markerSceneId: stableMarker,
+            },
+        };
+        const nextProgress = normalizeStoryboardTaskProgress({ items: nextItems });
+        storyboardTaskProgressRef.current = nextProgress;
+        setStoryboardTaskProgress(nextProgress);
+        return nextProgress;
+    }, []);
+
+    const publishStoryboardTaskPanelStatus = useCallback(({
+        markerSceneId,
+        sceneOrder,
+        status,
+        errorMessage = '',
+        progressSnapshot = null,
+    } = {}) => {
+        const stableMarker = String(markerSceneId || '').trim();
+        const progress = normalizeStoryboardTaskProgress(
+            progressSnapshot || storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS
+        );
+        const started = Number(progress.started || 0);
+        const completed = Number(progress.completed || 0);
+        const failed = Number(progress.failed || 0);
+        const running = Number(progress.running || 0);
+        const orderLabel = sceneOrder ? ` (${sceneOrder})` : '';
+        const statusKey = String(status || '').trim().toLowerCase();
+        let highlightHint = '';
+        if (stableMarker && (statusKey === 'starting' || statusKey === 'generating')) {
+            highlightHint = t(
+                `「${stableMarker}」镜头任务已调起${orderLabel}`,
+                `"${stableMarker}" storyboard task started${orderLabel}`
+            );
+        } else if (stableMarker && statusKey === 'importing') {
+            highlightHint = t(
+                `「${stableMarker}」镜头结果写入中${orderLabel}`,
+                `"${stableMarker}" applying storyboard rows${orderLabel}`
+            );
+        } else if (stableMarker && statusKey === 'completed') {
+            highlightHint = t(
+                `「${stableMarker}」镜头任务完成${orderLabel}`,
+                `"${stableMarker}" storyboard task completed${orderLabel}`
+            );
+        } else if (stableMarker && statusKey === 'failed') {
+            highlightHint = t(
+                `「${stableMarker}」镜头任务失败${orderLabel}${errorMessage ? `：${errorMessage}` : ''}`,
+                `"${stableMarker}" storyboard task failed${orderLabel}${errorMessage ? `: ${errorMessage}` : ''}`
+            );
+        }
+        const finished = completed + failed;
+        const allSettled = started > 0 && running <= 0 && finished >= started;
+        const nextMessage = allSettled
+            ? t(
+                `镜头任务已结束（完成 ${completed}/${started}${failed > 0 ? `，失败 ${failed}` : ''}）`,
+                `Storyboard tasks finished (${completed}/${started} done${failed > 0 ? `, ${failed} failed` : ''})`
+            )
+            : t(
+                `镜头任务进行中（已启动 ${started}，完成 ${completed}，失败 ${failed}，运行中 ${running}）`,
+                `Storyboard tasks in progress (started ${started}, done ${completed}, failed ${failed}, running ${running})`
+            );
+        setAnalysisFlowStatus((prev) => {
+            const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+            const analysisTerminal = prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed';
+            return {
+                phase: (!allSettled || !analysisTerminal) ? 'storyboard' : prevPhase,
+                message: nextMessage,
+                highlightHint,
+            };
+        });
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            storyboardAutoStarted: started > 0 || Boolean(prev?.storyboardAutoStarted),
+            storyboardTaskProgress: progress,
+        }));
+    }, [t]);
+
+    const kickoffStoryboardForImportedScene = useCallback(async ({
+        markerSceneId,
+        sceneOrder,
+        importReport = null,
+        dbSceneIdHint = null,
+        force = false,
+    } = {}) => {
+        const stableMarker = String(markerSceneId || '').trim();
+        if (!stableMarker) return false;
+
+        const priorItem = storyboardTaskProgressRef.current?.items?.[stableMarker];
+        const priorStatus = String(priorItem?.status || '').trim().toLowerCase();
+        if (['starting', 'generating', 'importing'].includes(priorStatus)) {
+            onLog?.(
+                t(
+                    `[镜头任务] ${stableMarker} 仍在运行中，跳过重复调起`,
+                    `[Storyboard] ${stableMarker} is already running; skipped duplicate kickoff`
+                ),
+                'warning'
+            );
+            return false;
+        }
+
+        if (!force) {
+            if (storyboardKickoffByMarkerRef.current.has(stableMarker)) return true;
+            const autoStart = await isStoryboardAutoStartEnabled();
+            if (!autoStart) return false;
+        }
+
+        let dbSceneId = Number(dbSceneIdHint || 0);
+        if (!Number.isFinite(dbSceneId) || dbSceneId <= 0) {
+            dbSceneId = Number(resolveImportedDbSceneIdFromReport(importReport, stableMarker) || 0);
+        }
+        if (!Number.isFinite(dbSceneId) || dbSceneId <= 0) {
+            const episodeId = Number(activeEpisode?.id || 0);
+            if (episodeId && typeof fetchScenes === 'function') {
+                try {
+                    const dbScenes = await fetchScenes(episodeId);
+                    const matched = findDbSceneByPatchSceneId(dbScenes, stableMarker);
+                    dbSceneId = Number(matched?.id || 0);
+                } catch (_) {
+                    dbSceneId = 0;
+                }
+            }
+        }
+        if (!Number.isFinite(dbSceneId) || dbSceneId <= 0) {
+            const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                sceneOrder,
+                status: 'failed',
+                error: t('未解析到数据库 Scene.id', 'Could not resolve DB Scene.id'),
+            });
+            publishStoryboardTaskPanelStatus({
+                markerSceneId: stableMarker,
+                sceneOrder,
+                status: 'failed',
+                errorMessage: t('未解析到数据库 Scene.id', 'Could not resolve DB Scene.id'),
+                progressSnapshot: failedProgress,
+            });
+            onLog?.(
+                t(
+                    `[镜头任务] ${stableMarker} 入库后未解析到数据库 Scene.id，跳过分镜启动`,
+                    `[Storyboard] ${stableMarker}: could not resolve DB Scene.id after import; skipped shot kickoff`
+                ),
+                'warning'
+            );
+            return false;
+        }
+        if (!force && storyboardKickoffByDbIdRef.current.has(dbSceneId)) {
+            storyboardKickoffByMarkerRef.current.add(stableMarker);
+            return true;
+        }
+        if (force) {
+            storyboardKickoffByMarkerRef.current.delete(stableMarker);
+            storyboardKickoffByDbIdRef.current.delete(dbSceneId);
+        }
+
+        storyboardKickoffByMarkerRef.current.add(stableMarker);
+        storyboardKickoffByDbIdRef.current.add(dbSceneId);
+        const startingProgress = updateStoryboardTaskItem(stableMarker, {
+            dbSceneId,
+            sceneOrder,
+            status: 'starting',
+            error: '',
+        });
+        publishStoryboardTaskPanelStatus({
+            markerSceneId: stableMarker,
+            sceneOrder,
+            status: 'starting',
+            progressSnapshot: startingProgress,
+        });
+        onLog?.(
+            t(
+                `[镜头任务] ${stableMarker} 已入库，正在调起分镜生成（Scene #${dbSceneId}）...`,
+                `[Storyboard] ${stableMarker} imported; starting shot generation (Scene #${dbSceneId})...`
+            ),
+            'info'
+        );
+
+        void (async () => {
+            try {
+                const generatingProgress = updateStoryboardTaskItem(stableMarker, { status: 'generating' });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'generating',
+                    progressSnapshot: generatingProgress,
+                });
+                const result = await generateSceneShots(dbSceneId, {
+                    function_name: 'script_analysis',
+                });
+                const generatedRows = Array.isArray(result?.content) ? result.content : [];
+                if (!generatedRows.length) {
+                    throw new Error(t('分镜返回为空（无可用镜头行）', 'Storyboard generation returned no shot rows'));
+                }
+                const importingProgress = updateStoryboardTaskItem(stableMarker, { status: 'importing' });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'importing',
+                    progressSnapshot: importingProgress,
+                });
+                await applySceneAIResult(dbSceneId, { content: generatedRows });
+                const completedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'completed',
+                    progressSnapshot: completedProgress,
+                });
+                onLog?.(
+                    t(
+                        `[镜头任务] ${stableMarker} 分镜已生成并写入（${generatedRows.length} 镜）`,
+                        `[Storyboard] ${stableMarker} shots generated and applied (${generatedRows.length} rows)`
+                    ),
+                    'success'
+                );
+            } catch (err) {
+                const errMsg = String(err?.response?.data?.detail || err?.message || err || 'unknown error');
+                const failedProgress = updateStoryboardTaskItem(stableMarker, { status: 'failed', error: errMsg });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'failed',
+                    errorMessage: errMsg,
+                    progressSnapshot: failedProgress,
+                });
+                onLog?.(
+                    t(
+                        `[镜头任务] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
+                        `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
+                    ),
+                    'warning'
+                );
+            }
+        })();
+
+        return true;
+    }, [
+        activeEpisode?.id,
+        fetchScenes,
+        isStoryboardAutoStartEnabled,
+        onLog,
+        publishStoryboardTaskPanelStatus,
+        t,
+        updateStoryboardTaskItem,
+    ]);
+
+    const ensureStoryboardTasksForImportedScenes = useCallback(async (importReport = null) => {
+        const autoStart = await isStoryboardAutoStartEnabled();
+        if (!autoStart) {
+            return { started: 0, skipped: true, totalTracked: storyboardKickoffByDbIdRef.current.size };
+        }
+
+        const pending = [];
+        const seenMarkers = new Set();
+        const enqueue = (markerSceneId, dbSceneIdHint = null) => {
+            const marker = String(markerSceneId || '').trim();
+            if (!marker || seenMarkers.has(marker)) return;
+            if (storyboardKickoffByMarkerRef.current.has(marker)) return;
+            seenMarkers.add(marker);
+            pending.push({ markerSceneId: marker, dbSceneIdHint, importReport });
+        };
+
+        for (const marker of orchestrationLiveImportedScenesRef.current || []) {
+            enqueue(marker);
+        }
+        const rows = [
+            ...(Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : []),
+            ...(Array.isArray(importReport?.scenes) ? importReport.scenes : []),
+        ];
+        for (const row of rows) {
+            const marker = String(row?.scene_no || row?.scene_id || row?.scene_code || '').trim();
+            const dbId = Number(row?.id || 0);
+            if (marker) {
+                enqueue(marker, Number.isFinite(dbId) && dbId > 0 ? dbId : null);
+            } else if (Number.isFinite(dbId) && dbId > 0 && !storyboardKickoffByDbIdRef.current.has(dbId)) {
+                enqueue(`#${dbId}`, dbId);
+            }
+        }
+
+        let started = 0;
+        for (const item of pending) {
+            const ok = await kickoffStoryboardForImportedScene(item);
+            if (ok) started += 1;
+        }
+        return {
+            started,
+            skipped: false,
+            totalTracked: storyboardKickoffByDbIdRef.current.size,
+        };
+    }, [isStoryboardAutoStartEnabled, kickoffStoryboardForImportedScene]);
+
     const importScenesFromPerScenePatchMap = useCallback(async (patchMap, options = {}) => {
         const skipSceneIds = new Set(
             (Array.isArray(options?.skipSceneIds) ? options.skipSceneIds : [])
@@ -5901,6 +6326,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 sceneOrder,
                 totalScenes: batchTotalScenes,
             });
+            void kickoffStoryboardForImportedScene({
+                markerSceneId: sceneId,
+                sceneOrder,
+                importReport: sceneImportReport,
+            });
             if (projectId && activeEpisode?.id) {
                 try {
                     await syncSceneUnitsProgress({
@@ -5922,7 +6352,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ));
         }
         return mergeSceneImportReports(sceneReports) || lastReport;
-    }, [activeEpisode?.id, beginSceneOrchestrationPanelTracking, doImportText, onLog, projectId, publishSceneOrchestrationPanelStatus, purgeEpisodeScenes, syncSceneUnitsProgress, t]);
+    }, [activeEpisode?.id, beginSceneOrchestrationPanelTracking, doImportText, kickoffStoryboardForImportedScene, onLog, projectId, publishSceneOrchestrationPanelStatus, purgeEpisodeScenes, syncSceneUnitsProgress, t]);
 
     const parseSceneMarkdownBySceneMap = useCallback((rawValue) => {
         const text = String(rawValue || '').trim();
@@ -7327,12 +7757,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase: 'imported',
             sceneOrder,
         });
+        void kickoffStoryboardForImportedScene({
+            markerSceneId: stableSceneId,
+            sceneOrder,
+            importReport: sceneImportReport,
+        });
         return sceneImportReport;
     }, [
         activeEpisode?.id,
         buildSceneMarkdownPatchFromPerSceneOutputs,
         doImportText,
         fetchScenes,
+        kickoffStoryboardForImportedScene,
         onLog,
         onRefreshEpisodes,
         patchSceneTableRowIdentity,
@@ -7438,6 +7874,104 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         parseStageOutputsObject,
     ]);
 
+    const resolveScriptOptBeatsContent = useCallback(() => {
+        const adapted = String(
+            currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content
+            || adaptationText
+            || activeEpisode?.ai_scene_analysis_adaptation
+            || ''
+        ).trim();
+        if (!adapted) return '';
+        const slimBeats = String(buildAssetsExtractionScriptFromAdapted(adapted) || '').trim();
+        if (slimBeats) return slimBeats;
+        const body = String(extractStage1AdaptedScriptBody(adapted) || '').trim();
+        return body || adapted;
+    }, [
+        activeEpisode?.ai_scene_analysis_adaptation,
+        adaptationText,
+        currentStageOutputs,
+        extractStage1AdaptedScriptBody,
+    ]);
+
+    const persistAdaptedScriptEdit = useCallback(async (newVal) => {
+        const normalizedValue = String(newVal || '').trim();
+        if (!normalizedValue) {
+            throw new Error(t('优化后剧本（Beats 分割部分）不能为空。', 'Optimized script (beats portion) cannot be empty.'));
+        }
+        if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
+
+        const persistedStageOutputs = parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '');
+        const persistedStage1RawText = String(
+            latestStage1RawTextRef.current
+            || persistedStageOutputs?.stages?.stage1?.outputs?.raw_text?.content
+            || ''
+        ).trim();
+        const persistedStage2RawText = String(persistedStageOutputs?.stages?.stage2?.outputs?.raw_text?.content || '').trim();
+        const persistedStage2_1Text = String(
+            latestStage2_1TextRef.current
+            || persistedStageOutputs?.stages?.stage2?.outputs?.subject_index?.content
+            || activeEpisode?.ai_scene_analysis_subject_index
+            || ''
+        ).trim();
+        const existingSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+        const visualBackfillJson = String(
+            extractProjectVisualBackfillJsonText(persistedStage1RawText)
+            || currentStageOutputs?.stages?.stage1?.outputs?.project_visual_backfill?.content
+            || ''
+        ).trim();
+        const syntheticStage1Raw = [
+            '### 第二部分：修改后的剧本',
+            normalizedValue,
+            visualBackfillJson
+                ? `### 第三部分：Project Visual Backfill\n\`\`\`json\n${visualBackfillJson}\n\`\`\``
+                : '',
+        ].filter(Boolean).join('\n\n');
+
+        setAdaptationText(normalizedValue);
+        latestStage1RawTextRef.current = syntheticStage1Raw;
+
+        const rawJson = String(persistedStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || '').trim();
+        const sceneMarkdownByScene = parseSceneMarkdownBySceneMap(rawJson);
+
+        try {
+            await onUpdateEpisodeInfo(activeEpisode.id, {
+                ai_scene_analysis_adaptation: normalizedValue,
+                ai_stage_outputs: JSON.stringify(buildStageOutputsObject({
+                    analysisRawText: existingSceneMarkdown,
+                    assetRawText: latestAssetRawTextRef.current || activeEpisode?.ai_entity_design_result || llmAssetRawResultContent || '',
+                    stage1RawText: syntheticStage1Raw,
+                    stage2RawText: persistedStage2RawText || existingSceneMarkdown,
+                    stage2_1Text: extractPureSubjectIndexText(persistedStage2_1Text) || persistedStage2_1Text,
+                    sceneMarkdownByScene: sceneMarkdownByScene && Object.keys(sceneMarkdownByScene).length > 0
+                        ? sceneMarkdownByScene
+                        : null,
+                    replaceSceneMarkdownByScene: false,
+                }), null, 2),
+            });
+            onLog?.(`[Stage 1 Adapted Script] Saved manual beats edit (len=${normalizedValue.length})`, 'success');
+        } catch (error) {
+            console.error('Failed to update stage1 adapted script', error);
+            onLog?.(`Failed to save adapted script edit: ${error?.message || error}`, 'error');
+            throw error;
+        }
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.ai_scene_analysis_subject_index,
+        activeEpisode?.ai_stage_outputs,
+        activeEpisode?.id,
+        buildStageOutputsObject,
+        currentStageOutputs,
+        extractProjectVisualBackfillJsonText,
+        extractPureSubjectIndexText,
+        llmAssetRawResultContent,
+        onLog,
+        onUpdateEpisodeInfo,
+        parseSceneMarkdownBySceneMap,
+        parseStageOutputsObject,
+        t,
+    ]);
+
     const hasUsableSubjectIndexRows = useCallback((candidateText) => {
         const candidate = String(candidateText || '').trim();
         if (!candidate) return false;
@@ -7449,6 +7983,104 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || /(?:^|\n)\s*\|?\s*[A-Za-z]+\d+\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)/im.test(candidate)
         );
     }, []);
+
+    const resolveSubjectIndexEditContent = useCallback(() => {
+        const candidates = [
+            currentStageOutputs?.stages?.stage2?.outputs?.subject_index?.content,
+            subjectIndexText,
+            activeEpisode?.ai_scene_analysis_subject_index,
+        ];
+        for (const raw of candidates) {
+            const extracted = extractPureSubjectIndexText(String(raw || '').trim());
+            if (extracted && hasUsableSubjectIndexRows(extracted)) return extracted;
+        }
+        for (const raw of candidates) {
+            const extracted = extractPureSubjectIndexText(String(raw || '').trim());
+            if (extracted) return extracted;
+        }
+        return '';
+    }, [
+        activeEpisode?.ai_scene_analysis_subject_index,
+        currentStageOutputs,
+        extractPureSubjectIndexText,
+        hasUsableSubjectIndexRows,
+        subjectIndexText,
+    ]);
+
+    const openStageArtifactEditModal = useCallback((kind) => {
+        const stableKind = String(kind || '').trim();
+        if (stableKind === 'script_opt') {
+            const content = resolveScriptOptBeatsContent();
+            if (!content) {
+                alert(t('暂无剧本优化（Beats 分割）内容可查看。', 'No script-opt beats content available yet.'));
+                return;
+            }
+            setStageArtifactEditModal({
+                open: true,
+                kind: 'script_opt',
+                titleZh: '剧本优化 · Beats 分割内容',
+                titleEn: 'Script Opt · Beats Portion',
+                hintZh: '仅展示/编辑优化后剧本中用于下游的环境块与 Beat 分割部分（不含修改说明与全局风格 JSON）。',
+                hintEn: 'View/edit only the ENV + Beat portion of the optimized script used downstream (excludes revision notes and global-style JSON).',
+                content,
+                editing: false,
+                saving: false,
+            });
+            return;
+        }
+        if (stableKind === 'subject_index') {
+            const content = resolveSubjectIndexEditContent();
+            if (!content) {
+                alert(t('暂无清单整理内容可查看。', 'No subject-index content available yet.'));
+                return;
+            }
+            setStageArtifactEditModal({
+                open: true,
+                kind: 'subject_index',
+                titleZh: '清单整理 · 资产清单',
+                titleEn: 'List Preparation · Subject Index',
+                hintZh: '支持 Markdown 预览与编辑；保存后作为第二阶段 Subject Index 权威输入。',
+                hintEn: 'Markdown preview and edit; saved content becomes the Stage 2 Subject Index source of truth.',
+                content,
+                editing: false,
+                saving: false,
+            });
+        }
+    }, [resolveScriptOptBeatsContent, resolveSubjectIndexEditContent, t]);
+
+    const saveStageArtifactEditModal = useCallback(async () => {
+        const kind = String(stageArtifactEditModal.kind || '').trim();
+        const content = String(stageArtifactEditModal.content || '');
+        setStageArtifactEditModal((prev) => ({ ...prev, saving: true }));
+        try {
+            if (kind === 'script_opt') {
+                await persistAdaptedScriptEdit(content);
+            } else if (kind === 'subject_index') {
+                await persistSubjectIndexEdit(content);
+            }
+            setStageArtifactEditModal((prev) => ({
+                ...prev,
+                saving: false,
+                editing: false,
+                content: kind === 'subject_index'
+                    ? (extractPureSubjectIndexText(content.trim()) || content.trim())
+                    : content.trim(),
+            }));
+        } catch (error) {
+            setStageArtifactEditModal((prev) => ({ ...prev, saving: false }));
+            alert(t(
+                `保存失败：${error?.message || error}`,
+                `Save failed: ${error?.message || error}`
+            ));
+        }
+    }, [
+        extractPureSubjectIndexText,
+        persistAdaptedScriptEdit,
+        persistSubjectIndexEdit,
+        stageArtifactEditModal.content,
+        stageArtifactEditModal.kind,
+        t,
+    ]);
 
     const ensurePersistedSubjectIndexForDownstream = useCallback(async (preferredText = '') => {
         const stageSi = String(
@@ -7569,6 +8201,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const orchestrationLiveImportedScenesRef = useRef(new Set());
     const orchestrationPersistedSceneMarkdownRef = useRef({});
+    const storyboardKickoffByMarkerRef = useRef(new Set());
+    const storyboardKickoffByDbIdRef = useRef(new Set());
+    const stage3AutoStartCacheRef = useRef(null);
     const analysisStopRequestedRef = useRef(false);
     const activeAnalysisTaskIdsRef = useRef(new Set());
     const analysisRunInFlightRef = useRef(false);
@@ -7766,10 +8401,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisDetailLogs([]);
         setAnalysisUiReport(null);
         setAnalysisReviewIssues([]);
+        resetStoryboardKickoffTracking();
         if (persist && id) {
             clearAnalysisSessionProgressSnapshot(id);
         }
-    }, [activeEpisode?.id]);
+    }, [activeEpisode?.id, resetStoryboardKickoffTracking]);
 
     const restoreAnalysisProgressFromSession = useCallback((episodeId) => {
         const id = Number(episodeId || 0);
@@ -7796,6 +8432,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (uiReport) {
             setAnalysisUiReport(uiReport);
             setAnalysisReviewIssues(Array.isArray(uiReport.reviewIssues) ? uiReport.reviewIssues : []);
+            const restoredStoryboard = normalizeStoryboardTaskProgress(uiReport.storyboardTaskProgress);
+            if (Number(restoredStoryboard.started || 0) > 0 || Object.keys(restoredStoryboard.items || {}).length > 0) {
+                storyboardTaskProgressRef.current = restoredStoryboard;
+                setStoryboardTaskProgress(restoredStoryboard);
+            }
             if (String(uiReport?.status || '').trim().toLowerCase() === 'running') {
                 beginAnalysisTimer(Number(uiReport?.startedAt || Date.now()));
             }
@@ -8542,6 +9183,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const orchestrationSceneIds = collectOrchestrationResetSceneIds(unitsToProcess, episodePrefix);
             orchestrationLiveImportedScenesRef.current = new Set();
             orchestrationPersistedSceneMarkdownRef.current = {};
+            resetStoryboardKickoffTracking();
             onLog?.(`[${label}] backend scene orchestration enabled: ${orchestrationSceneCount} scene(s).`, 'info');
             if (projectId && activeEpisode?.id) {
                 try {
@@ -8909,6 +9551,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         projectId,
         publishSceneOrchestrationPanelStatus,
         resetSceneOrchestrationProgress,
+        resetStoryboardKickoffTracking,
         selectedReuseSubjectAssets,
         resolveSelectedScriptAnalysisApiId,
         setAnalysisFlowStatus,
@@ -9825,6 +10468,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                 });
 
+                let recoveryStoryboardStarted = false;
+                try {
+                    const residualStoryboard = await ensureStoryboardTasksForImportedScenes(sceneBeatsImportReport);
+                    recoveryStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
+                        || Number(residualStoryboard?.started || 0) > 0
+                        || Number(residualStoryboard?.totalTracked || 0) > 0;
+                } catch (storyboardErr) {
+                    onLog?.(`Failed to auto-start storyboard generation after scene beats recovery: ${storyboardErr?.message || storyboardErr}`, 'warning');
+                }
+
                 setAnalysisUiReport(buildCompletedAnalysisUiReport({
                     status: 'completed',
                     startedAt,
@@ -9832,12 +10485,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phaseTimings: null,
                     importReport: sceneBeatsImportReport,
                     runtimeMeta: sceneBeatsRuntimeMeta,
+                    storyboardAutoStarted: recoveryStoryboardStarted,
+                    storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
                     warning: '',
                     error: '',
                 }));
                 setAnalysisFlowStatus({
                     phase: 'completed',
-                    message: t('场景编排任务已恢复并导入完成。', 'Scene beats task resumed and imported.'),
+                    message: recoveryStoryboardStarted
+                        ? t('场景编排任务已恢复并导入完成；镜头任务已按场调起。', 'Scene beats task resumed and imported; storyboard tasks started.')
+                        : t('场景编排任务已恢复并导入完成。', 'Scene beats task resumed and imported.'),
                 });
                 clearAnalysisTaskMarker(activeEpisode.id);
             } catch (e) {
@@ -10034,6 +10691,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
+            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
+            try {
+                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
+                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
+                    || Number(residualStoryboard?.started || 0) > 0
+                    || Number(residualStoryboard?.totalTracked || 0) > 0;
+            } catch (storyboardErr) {
+                onLog?.(`Failed to auto-start storyboard generation on resume: ${storyboardErr?.message || storyboardErr}`, 'warning');
+            }
+            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
                 startedAt,
@@ -10042,6 +10709,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
+                storyboardTaskProgress: storyboardProgressSnapshot,
                 warning: [importWarningMessage, resumeReviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(resumeReviewIssues) : '']
                     .map((item) => String(item || '').trim())
                     .filter(Boolean)
@@ -11543,25 +12211,38 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        forceRegenerateRef.current = true;
-        analysisProgressDismissedRef.current = false;
-        setIsAnalyzing(true);
-        beginAnalysisRestartUi(Date.now());
-
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
-        
         if (!projectLanguage) {
             const ok = await confirmUiMessage(t(
                 '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
                 'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
             ));
             if (!ok) {
-                setIsAnalyzing(false);
-                forceRegenerateRef.current = false;
                 return;
             }
             if (onLog) onLog('Project language is empty. Analysis continues with warning.', 'warning');
         }
+
+        // Confirmations done: wipe workspace artifacts + diagnostic panel before starting a fresh run.
+        try {
+            if (onLog) onLog('Clearing workspace analysis artifacts and diagnostic panel before AI Script Analysis...', 'process');
+            await clearAnalysisOutputsForRestart({
+                preserveProgressUi: false,
+                deferWorkspaceUiReset: false,
+            });
+        } catch (clearErr) {
+            console.error('Failed to clear analysis outputs before rerun', clearErr);
+            alert(t(
+                `清空工作区分析结果失败：${clearErr?.message || clearErr}`,
+                `Failed to clear workspace analysis outputs: ${clearErr?.message || clearErr}`
+            ));
+            return;
+        }
+
+        forceRegenerateRef.current = true;
+        analysisProgressDismissedRef.current = false;
+        setIsAnalyzing(true);
+        beginAnalysisRestartUi(Date.now());
 
         const stage1Input = ensureStage1ProjectContextInjected(actualContent);
 
@@ -11684,8 +12365,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             resetAnalysisFallbackRetryCounts(activeEpisode.id);
             lastAutoSubjectsImportRef.current = { signature: '', result: null };
             if (!preserveProgressUi) {
+                orchestrationLiveImportedScenesRef.current = new Set();
+                orchestrationPersistedSceneMarkdownRef.current = {};
+                endSceneOrchestrationPanelTracking();
+                resetStoryboardKickoffTracking();
                 clearAnalysisSessionProgressSnapshot(activeEpisode.id);
                 analysisTimerStartedAtRef.current = 0;
+                analysisDetailLogsRef.current = [];
+                setAnalysisDetailLogs([]);
+                setAnalysisFlowStatusHistory([]);
+                setAnalysisReviewIssues([]);
+                setAnalysisUiReport(null);
+                setAnalysisFlowStatus({ phase: 'idle', message: '' });
+                setSubjectConsistencyReport(null);
+                setDiagnosticImportingKind('');
+                setIsRerunningStoryboard(false);
+                setStoryboardRerunModal({
+                    open: false,
+                    mode: 'all',
+                    sceneId: '',
+                    candidates: [],
+                    loading: false,
+                });
+                setStageArtifactEditModal({
+                    open: false,
+                    kind: '',
+                    titleZh: '',
+                    titleEn: '',
+                    hintZh: '',
+                    hintEn: '',
+                    content: '',
+                    editing: false,
+                    saving: false,
+                });
+                if (latestAnalysisProgressUiRef.current) {
+                    latestAnalysisProgressUiRef.current = {
+                        ...latestAnalysisProgressUiRef.current,
+                        flowStatus: { phase: 'idle', message: '' },
+                        flowHistory: [],
+                        detailLogs: [],
+                        uiReport: null,
+                        dismissed: false,
+                    };
+                }
             }
 
             if (projectId && activeEpisode?.id) {
@@ -11717,11 +12439,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 } catch (refreshErr) {
                     if (onLog) onLog(`AI Script Analysis restart episode refresh warning: ${refreshErr?.message || refreshErr}`, 'warning');
                 }
-            }
-
-            if (!preserveProgressUi) {
-                setAnalysisUiReport(null);
-                setAnalysisFlowStatus({ phase: 'idle', message: '' });
             }
         } catch (clearErr) {
             if (onLog) onLog(`AI Script Analysis restart clear warning: ${clearErr?.message || clearErr}`, 'warning');
@@ -12574,28 +13291,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importWarningMessage,
             });
 
-            let aiShotsBatchStarted = false;
+            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
             try {
-                const flowRegistry = await getSceneAnalysisFlowRegistry();
-                const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
-                const storyboardAutoStart = configured?.storyboard_generation !== false;
-                
-                if (storyboardAutoStart && Array.isArray(importReport?.scenes) && importReport.scenes.length > 0) {
-                    if (onLog) onLog('Auto-starting storyboard generation for newly imported scenes...', 'info');
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: t('🔄 正在启动分镜自动生成任务...', 'Starting automated storyboard generation...'),
-                    });
-                    
-                    const workflowStarted = await runSceneAnalysisFlowNode({
-                        node_key: 'storyboard_generation',
-                        project_id: projectId,
-                        episode_id: activeEpisode.id,
-                        scene_ids: importReport.scenes.map(s => s.id),
-                    });
-                    
-                    aiShotsBatchStarted = !!(workflowStarted?.batch_status || workflowStarted);
-                    if (onLog) onLog(`Storyboard generation automatically started.`, 'success');
+                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
+                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
+                    || Number(residualStoryboard?.started || 0) > 0
+                    || Number(residualStoryboard?.totalTracked || 0) > 0;
+                if (aiShotsBatchStarted && onLog) {
+                    onLog(
+                        t(
+                            `分镜任务已按场景调起（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）。`,
+                            `Storyboard tasks kicked off per scene (${storyboardKickoffByDbIdRef.current.size} tracked).`
+                        ),
+                        'success'
+                    );
                 }
             } catch (err) {
                 if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
@@ -12609,6 +13318,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .join('；');
             const reviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
+            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -12618,6 +13328,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
+                storyboardTaskProgress: storyboardProgressSnapshot,
                 warning: [combinedReportWarning, reviewWarningText]
                     .map((item) => String(item || '').trim())
                     .filter(Boolean)
@@ -13594,28 +14305,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importWarningMessage,
             });
 
-            let aiShotsBatchStarted = false;
+            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
             try {
-                const flowRegistry = await getSceneAnalysisFlowRegistry();
-                const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
-                const storyboardAutoStart = configured?.storyboard_generation !== false;
-                
-                if (storyboardAutoStart && Array.isArray(importReport?.scenes) && importReport.scenes.length > 0) {
-                    if (onLog) onLog('Auto-starting storyboard generation for newly imported scenes...', 'info');
-                    setAnalysisFlowStatus({
-                        phase: 'completed',
-                        message: t('🔄 正在启动分镜自动生成任务...', 'Starting automated storyboard generation...'),
-                    });
-                    
-                    const workflowStarted = await runSceneAnalysisFlowNode({
-                        node_key: 'storyboard_generation',
-                        project_id: projectId,
-                        episode_id: activeEpisode.id,
-                        scene_ids: importReport.scenes.map(s => s.id),
-                    });
-                    
-                    aiShotsBatchStarted = !!(workflowStarted?.batch_status || workflowStarted);
-                    if (onLog) onLog(`Storyboard generation automatically started.`, 'success');
+                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
+                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
+                    || Number(residualStoryboard?.started || 0) > 0
+                    || Number(residualStoryboard?.totalTracked || 0) > 0;
+                if (aiShotsBatchStarted && onLog) {
+                    onLog(
+                        t(
+                            `分镜任务已按场景调起（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）。`,
+                            `Storyboard tasks kicked off per scene (${storyboardKickoffByDbIdRef.current.size} tracked).`
+                        ),
+                        'success'
+                    );
                 }
             } catch (err) {
                 if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
@@ -13629,6 +14332,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .join('；');
             const advancedReviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
+            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -13638,6 +14342,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: aiShotsBatchStarted,
+                storyboardTaskProgress: storyboardProgressSnapshot,
                 warning: [combinedReportWarning, advancedReviewWarningText]
                     .map((item) => String(item || '').trim())
                     .filter(Boolean)
@@ -14125,20 +14830,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             }
 
+            let restartStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0;
+            try {
+                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
+                restartStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
+                    || Number(residualStoryboard?.started || 0) > 0
+                    || Number(residualStoryboard?.totalTracked || 0) > 0;
+            } catch (storyboardErr) {
+                onLog?.(`Failed to auto-start storyboard generation after Stage 2 restart: ${storyboardErr?.message || storyboardErr}`, 'warning');
+            }
+
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
-            
                 status: 'completed',
                 startedAt,
                 durationMs: Date.now() - startedAt,
                 phaseTimings: null,
                 importReport,
                 runtimeMeta,
+                storyboardAutoStarted: restartStoryboardStarted,
+                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
                 warning: '',
                 error: '',
             }));
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: t('已基于第一阶段产物重新完成第二、三阶段。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs.'),
+                message: restartStoryboardStarted
+                    ? t('已基于第一阶段产物重新完成第二、三阶段；分镜任务已按场景调起。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs; storyboard tasks kicked off per scene.')
+                    : t('已基于第一阶段产物重新完成第二、三阶段。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs.'),
             });
             onLog?.('Stage 2 restart completed using saved Stage 1 outputs.', 'success');
         } catch (error) {
@@ -14333,6 +15051,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         try {
             orchestrationLiveImportedScenesRef.current = new Set();
             orchestrationPersistedSceneMarkdownRef.current = {};
+            resetStoryboardKickoffTracking();
             const rerunSceneIds = collectOrchestrationResetSceneIds(
                 unitsForRerun,
                 episodePrefix
@@ -14597,6 +15316,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
             });
 
+            let rerunStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0;
+            try {
+                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
+                rerunStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
+                    || Number(residualStoryboard?.started || 0) > 0
+                    || Number(residualStoryboard?.totalTracked || 0) > 0;
+            } catch (storyboardErr) {
+                onLog?.(`Failed to auto-start storyboard generation after scene beats rerun: ${storyboardErr?.message || storyboardErr}`, 'warning');
+            }
+
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
                 startedAt,
@@ -14604,6 +15333,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phaseTimings: null,
                 importReport,
                 runtimeMeta,
+                storyboardAutoStarted: rerunStoryboardStarted,
+                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
                 warning: '',
                 error: '',
                 runTag: 'scene_beats_only_rerun',
@@ -14612,8 +15343,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: rerunMode === 'single'
-                    ? t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
-                    : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`),
+                    ? (
+                        rerunStoryboardStarted
+                            ? t(`场景 ${targetSceneId} 编排已重排完成，镜头任务已调起。`, `Scene ${targetSceneId} beats rerun completed; storyboard task started.`)
+                            : t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
+                    )
+                    : (
+                        rerunStoryboardStarted
+                            ? t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成，镜头任务已按场调起。`, `All ${orchestrationSceneCount} scene beats reruns completed; storyboard tasks started.`)
+                            : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`)
+                    ),
             });
         } catch (error) {
             const friendlyError = localizeAnalysisFailureMessage(error?.message || String(error));
@@ -14654,6 +15393,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         endSceneOrchestrationPanelTracking,
         ensureOrchestrationScenesInWorkspace,
         ensurePersistedSubjectIndexForDownstream,
+        ensureStoryboardTasksForImportedScenes,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,
@@ -14673,6 +15413,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveSceneBeatsRerunCandidates,
         resolveStage1AdaptedScriptText,
         resetSceneOrchestrationProgress,
+        resetStoryboardKickoffTracking,
         runAutoImportAndSwitchToScenes,
         runStage2_2WithValidationRetry,
         saveAnalysisTaskMarker,
@@ -14791,6 +15532,331 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [executeSceneBeatsRerun, sceneBeatsRerunModal.mode, sceneBeatsRerunModal.sceneId, t]);
 
     const handleRerunSceneBeatsOnly = openSceneBeatsRerunModal;
+
+    const buildStoryboardRerunCandidates = useCallback(async () => {
+        const episodeId = Number(activeEpisode?.id || 0);
+        if (!episodeId || typeof fetchScenes !== 'function') return [];
+        const dbScenes = await fetchScenes(episodeId).catch(() => []);
+        const progressItems = storyboardTaskProgressRef.current?.items || {};
+        return (Array.isArray(dbScenes) ? dbScenes : [])
+            .filter((scene) => Number(scene?.id || 0) > 0)
+            .map((scene, index) => {
+                const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
+                    || `#${scene.id}`;
+                const progress = progressItems[marker] || {};
+                const sceneOrder = Number(
+                    progress?.sceneOrder
+                    || deriveSceneOrderFromSceneId(marker)
+                    || index + 1
+                ) || (index + 1);
+                return {
+                    sceneId: marker,
+                    dbSceneId: Number(scene.id),
+                    sceneOrder,
+                    displayLabel: String(scene?.scene_name || marker).trim() || marker,
+                    status: String(progress?.status || '').trim().toLowerCase(),
+                    error: String(progress?.error || '').trim(),
+                };
+            })
+            .sort((left, right) => {
+                if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
+                    return (left.sceneOrder || 0) - (right.sceneOrder || 0);
+                }
+                return String(left.sceneId).localeCompare(String(right.sceneId));
+            });
+    }, [activeEpisode?.id]);
+
+    const executeStoryboardRerun = useCallback(async ({
+        mode = 'all',
+        sceneId = '',
+        candidates = [],
+    } = {}) => {
+        const list = Array.isArray(candidates) ? candidates : [];
+        const rerunMode = String(mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
+        const targetSceneId = String(sceneId || '').trim();
+        const targets = rerunMode === 'single'
+            ? list.filter((item) => String(item?.sceneId || '').trim() === targetSceneId)
+            : list;
+        if (!targets.length) {
+            alert(t('没有可重跑的镜头任务场景。', 'No storyboard scenes available to rerun.'));
+            return;
+        }
+
+        analysisProgressDismissedRef.current = false;
+        setIsRerunningStoryboard(true);
+        setAnalysisFlowStatus({
+            phase: 'storyboard',
+            message: rerunMode === 'single'
+                ? t(`正在重跑镜头任务：${targetSceneId}...`, `Rerunning storyboard for ${targetSceneId}...`)
+                : t(`正在重跑全部 ${targets.length} 场镜头任务...`, `Rerunning storyboard for all ${targets.length} scenes...`),
+        });
+
+        let started = 0;
+        try {
+            for (const item of targets) {
+                const ok = await kickoffStoryboardForImportedScene({
+                    markerSceneId: item.sceneId,
+                    sceneOrder: item.sceneOrder,
+                    dbSceneIdHint: item.dbSceneId,
+                    force: true,
+                });
+                if (ok) started += 1;
+            }
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                storyboardAutoStarted: true,
+                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
+            }));
+            onLog?.(
+                t(
+                    `[镜头任务] 已按场景重跑调起 ${started}/${targets.length} 场`,
+                    `[Storyboard] Rerun kickoff started for ${started}/${targets.length} scene(s)`
+                ),
+                started > 0 ? 'success' : 'warning'
+            );
+            if (started <= 0) {
+                setAnalysisFlowStatus({
+                    phase: 'warning',
+                    message: t('镜头任务重跑未成功调起（可能仍在运行或缺少场景 ID）。', 'Storyboard rerun did not start (already running or missing scene id).'),
+                });
+            }
+        } finally {
+            setIsRerunningStoryboard(false);
+        }
+    }, [kickoffStoryboardForImportedScene, onLog, t]);
+
+    const openStoryboardRerunModal = useCallback(async () => {
+        if (!activeEpisode?.id || isAnalyzing || isRerunningStoryboard) return;
+        setStoryboardRerunModal({
+            open: true,
+            mode: 'all',
+            sceneId: '',
+            candidates: [],
+            loading: true,
+        });
+        try {
+            const candidates = await buildStoryboardRerunCandidates();
+            if (!candidates.length) {
+                setStoryboardRerunModal((prev) => ({ ...prev, open: false, loading: false, candidates: [] }));
+                alert(t('当前集没有已入库的场景，无法重跑镜头任务。请先完成场景拆解并入库。', 'No imported scenes in this episode. Finish scene breakdown/import before rerunning storyboard.'));
+                return;
+            }
+            setStoryboardRerunModal({
+                open: true,
+                mode: candidates.length === 1 ? 'single' : 'all',
+                sceneId: candidates[0]?.sceneId || '',
+                candidates,
+                loading: false,
+            });
+        } catch (err) {
+            setStoryboardRerunModal((prev) => ({ ...prev, open: false, loading: false, candidates: [] }));
+            alert(t(
+                `加载场景列表失败：${err?.message || err}`,
+                `Failed to load scene list: ${err?.message || err}`
+            ));
+        }
+    }, [activeEpisode?.id, buildStoryboardRerunCandidates, isAnalyzing, isRerunningStoryboard, t]);
+
+    const confirmStoryboardRerunSelection = useCallback(async () => {
+        const mode = String(storyboardRerunModal.mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
+        const sceneId = String(storyboardRerunModal.sceneId || '').trim();
+        const candidates = Array.isArray(storyboardRerunModal.candidates) ? storyboardRerunModal.candidates : [];
+        if (mode === 'single' && !sceneId) {
+            alert(t('请先选择要重跑镜头的场景。', 'Select a scene to rerun storyboard first.'));
+            return;
+        }
+        setStoryboardRerunModal((prev) => ({ ...prev, open: false }));
+        await executeStoryboardRerun({ mode, sceneId, candidates });
+    }, [
+        executeStoryboardRerun,
+        storyboardRerunModal.candidates,
+        storyboardRerunModal.mode,
+        storyboardRerunModal.sceneId,
+        t,
+    ]);
+
+    const handleRerunStoryboardTasks = openStoryboardRerunModal;
+
+    const resolveDiagnosticAssetDesignImport = useCallback(() => {
+        const stage3ArtifactJson = getStageOutputContent('stage3', 'asset_design_json');
+        const liveStage3RawText = String(llmAssetRawResultContent || activeEpisode?.ai_entity_design_result || '').trim();
+        const liveStage3Payload = getAnalysisEntitiesPayloadFromJsonText(liveStage3RawText);
+        const assetDesignJson = String(
+            stage3ArtifactJson
+            || (liveStage3Payload ? JSON.stringify(liveStage3Payload, null, 2) : liveStage3RawText)
+            || ''
+        ).trim();
+        const assetDesignPayload = getAnalysisEntitiesPayloadFromJsonText(assetDesignJson);
+        return { assetDesignJson, assetDesignPayload };
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        getAnalysisEntitiesPayloadFromJsonText,
+        getStageOutputContent,
+        llmAssetRawResultContent,
+    ]);
+
+    const handleDiagnosticPanelImport = useCallback(async (kind) => {
+        const stableKind = String(kind || '').trim();
+        if (!stableKind || isAnalyzing || diagnosticImportingKind) return;
+        setDiagnosticImportingKind(stableKind);
+        try {
+            if (stableKind === 'script_opt') {
+                const beats = resolveScriptOptBeatsContent();
+                const adapted = String(
+                    beats
+                    || resolveStage1AdaptedScriptText().text
+                    || getStageOutputContent('stage1', 'adapted_script')
+                    || ''
+                ).trim();
+                if (!adapted) {
+                    alert(t('暂无可导入的剧本优化内容。', 'No script-opt content available to import.'));
+                    return;
+                }
+                if (!activeEpisode?.id) return;
+                // Persist workspace Stage-1 beats/adapted script into episode data fields
+                // (adaptation + stage outputs), and write script_content — not a UI-only restore.
+                await persistAdaptedScriptEdit(adapted);
+                if (typeof onUpdateScript === 'function') {
+                    await onUpdateScript(activeEpisode.id, adapted);
+                }
+                setRawContent(adapted);
+                onLog?.(
+                    t(
+                        '已将剧本优化（Beats）内容写入数据表（script_content / adaptation）。',
+                        'Imported script-opt (beats) content into the database (script_content / adaptation).'
+                    ),
+                    'success'
+                );
+                return;
+            }
+            if (stableKind === 'subject_index') {
+                const content = resolveSubjectIndexEditContent();
+                if (!content) {
+                    alert(t('暂无可导入的清单整理内容。', 'No subject-index content available to import.'));
+                    return;
+                }
+                await handleImportStageArtifact({
+                    content,
+                    importType: 'auto',
+                    label: 'diagnostic subject index',
+                });
+                return;
+            }
+            if (stableKind === 'scene_beats') {
+                const content = String(
+                    getStageOutputContent('stage2', 'scene_markdown')
+                    || activeEpisode?.ai_scene_analysis_scene_markdown
+                    || ''
+                ).trim();
+                if (!content) {
+                    alert(t('暂无可导入的场景拆解内容。', 'No scene-breakdown content available to import.'));
+                    return;
+                }
+                await handleImportStageArtifact({
+                    content,
+                    importType: 'scene',
+                    label: 'diagnostic scene markdown',
+                });
+                return;
+            }
+            if (stableKind === 'storyboard') {
+                const candidates = await buildStoryboardRerunCandidates();
+                if (!candidates.length) {
+                    alert(t('工作区尚无已入库场景，无法导入镜头。', 'No imported scenes in workspace; cannot import shots.'));
+                    return;
+                }
+                let applied = 0;
+                let skipped = 0;
+                for (const item of candidates) {
+                    try {
+                        const latest = await getSceneLatestAIResult(item.dbSceneId);
+                        const rows = Array.isArray(latest?.content) ? latest.content : [];
+                        if (!rows.length) {
+                            skipped += 1;
+                            continue;
+                        }
+                        await applySceneAIResult(item.dbSceneId, { content: rows });
+                        applied += 1;
+                        updateStoryboardTaskItem(item.sceneId, {
+                            dbSceneId: item.dbSceneId,
+                            sceneOrder: item.sceneOrder,
+                            status: 'completed',
+                            error: '',
+                        });
+                    } catch (err) {
+                        skipped += 1;
+                        onLog?.(
+                            t(
+                                `[镜头导入] ${item.sceneId} 失败：${err?.message || err}`,
+                                `[Storyboard import] ${item.sceneId} failed: ${err?.message || err}`
+                            ),
+                            'warning'
+                        );
+                    }
+                }
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    storyboardAutoStarted: applied > 0 || Boolean(prev?.storyboardAutoStarted),
+                    storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
+                }));
+                if (applied <= 0) {
+                    alert(t(
+                        `未找到可导入的镜头结果（${candidates.length} 场均无最新分镜缓存）。可先点「重跑」生成。`,
+                        `No importable shot results found (${candidates.length} scene(s) have no latest storyboard cache). Use Rerun to generate first.`
+                    ));
+                    return;
+                }
+                onLog?.(
+                    t(
+                        `[镜头导入] 已导入 ${applied} 场（跳过 ${skipped} 场）`,
+                        `[Storyboard import] Applied ${applied} scene(s) (skipped ${skipped})`
+                    ),
+                    'success'
+                );
+                return;
+            }
+            if (stableKind === 'assets') {
+                const { assetDesignJson, assetDesignPayload } = resolveDiagnosticAssetDesignImport();
+                if (!assetDesignJson) {
+                    alert(t('暂无可导入的视觉资产内容。', 'No visual-asset content available to import.'));
+                    return;
+                }
+                await handleImportStageArtifact({
+                    content: assetDesignJson,
+                    importType: 'json',
+                    label: 'diagnostic asset design json',
+                    importOptions: {
+                        subjectsJson: assetDesignPayload || null,
+                        suppressAlerts: false,
+                    },
+                });
+            }
+        } catch (error) {
+            alert(t(
+                `导入失败：${error?.message || error}`,
+                `Import failed: ${error?.message || error}`
+            ));
+        } finally {
+            setDiagnosticImportingKind('');
+        }
+    }, [
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.id,
+        buildStoryboardRerunCandidates,
+        diagnosticImportingKind,
+        getStageOutputContent,
+        handleImportStageArtifact,
+        isAnalyzing,
+        onLog,
+        onUpdateScript,
+        persistAdaptedScriptEdit,
+        resolveDiagnosticAssetDesignImport,
+        resolveScriptOptBeatsContent,
+        resolveStage1AdaptedScriptText,
+        resolveSubjectIndexEditContent,
+        t,
+        updateStoryboardTaskItem,
+    ]);
 
     const handleRerunFailedAssetSubtasks = useCallback(async () => {
         if (isAnalyzing || phase2GenerationInFlightRef.current) return;
@@ -16277,24 +17343,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const stage1StageCards = useMemo(() => {
         const adaptedScript = getStageOutputContent('stage1', 'adapted_script');
+        const beatsPortion = resolveScriptOptBeatsContent() || adaptedScript;
         const visualBackfillJson = getStageOutputContent('stage1', 'project_visual_backfill');
 
         return [
             {
                 key: 'stage1-adapted-script',
                 eyebrow: t('第一阶段', 'Stage 1'),
-                title: t('优化后剧本', 'Optimized Script'),
-                status: adaptedScript ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
-                badge: adaptedScript ? t('可回填', 'Re-importable') : t('待输出', 'Pending'),
-                summary: t('单独保存第一阶段产出的优化后剧本，可直接回填到当前剧本编辑区。', 'Stores the Stage 1 optimized script separately and can restore it back into the script editor.'),
-                content: adaptedScript,
+                title: t('优化后剧本（Beats 分割）', 'Optimized Script (Beats)'),
+                status: beatsPortion ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
+                badge: beatsPortion ? t('可回填', 'Re-importable') : t('待输出', 'Pending'),
+                summary: t('仅展示用于下游的环境块与 Beat 分割部分；可 Markdown 编辑后保存。', 'Shows only the ENV + Beat portion used downstream; editable Markdown with save.'),
+                content: beatsPortion,
+                onSave: persistAdaptedScriptEdit,
                 actions: [
                     {
                         key: 'reimport-stage1-script',
                         label: t('回填剧本', 'Restore Script'),
                         icon: 'refresh',
                         onClick: handleRestoreAdaptedScript,
-                        disabled: isAnalyzing || !adaptedScript,
+                        disabled: isAnalyzing || !beatsPortion,
                         loading: false,
                     },
                     {
@@ -16333,7 +17401,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 placeholder: t('第一阶段尚未产出全局风格。', 'No Stage 1 global style yet.'),
             },
         ];
-    }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, t]);
+    }, [formatArtifactContent, getStageOutputContent, handleAnalysisClick, handleImportStageArtifact, handleRestoreAdaptedScript, isAnalyzing, llmRawResultContent, persistAdaptedScriptEdit, resolveScriptOptBeatsContent, t]);
 
     const stage2SceneMarkdownByScene = useMemo(() => {
         const rawJson = getStageOutputContent('stage2', 'scene_markdown_by_scene');
@@ -16908,10 +17976,52 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         {t('进度诊断面板', 'Workflow Diagnostics')}
                     </div>
                     {(() => {
-                        const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted);
+                        const progress = pickRicherStoryboardTaskProgress(
+                            storyboardTaskProgress,
+                            storyboardTaskProgressRef.current,
+                            analysisUiReport?.storyboardTaskProgress,
+                        );
+                        const storyboardStartedCount = Number(progress?.started || 0);
+                        const storyboardCompletedCount = Number(progress?.completed || 0);
+                        const storyboardFailedCount = Number(progress?.failed || 0);
+                        const storyboardRunningCount = Number(progress?.running || 0);
+                        const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted) || storyboardStartedCount > 0;
                         const storyboardCanStart = Boolean(getStageOutputContent('stage2', 'scene_markdown'));
+                        const storyboardInFlight = storyboardRunningCount > 0
+                            || (storyboardStartedCount > (storyboardCompletedCount + storyboardFailedCount));
+                        const storyboardSettled = storyboardAutoStarted
+                            && !storyboardInFlight
+                            && storyboardStartedCount > 0;
+                        const canImportScriptOpt = Boolean(
+                            resolveScriptOptBeatsContent()
+                            || getStageOutputContent('stage1', 'adapted_script')
+                        );
+                        const canImportSubjectIndex = Boolean(resolveSubjectIndexEditContent());
+                        const canImportSceneBeats = Boolean(String(
+                            getStageOutputContent('stage2', 'scene_markdown')
+                            || activeEpisode?.ai_scene_analysis_scene_markdown
+                            || ''
+                        ).trim());
+                        const canImportStoryboard = Boolean(storyboardCanStart || storyboardStartedCount > 0);
+                        const canImportAssets = Boolean(resolveDiagnosticAssetDesignImport().assetDesignJson);
+                        const diagnosticBtnClass = 'text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white transition-colors';
+                        const renderImportButton = (kind, enabled) => (
+                            <button
+                                type="button"
+                                onClick={() => handleDiagnosticPanelImport(kind)}
+                                disabled={isAnalyzing || !enabled || diagnosticImportingKind === kind}
+                                className={diagnosticBtnClass}
+                                title={enabled
+                                    ? t('将当前阶段产物导入工作区', 'Import this stage output into the workspace')
+                                    : t('暂无可导入内容', 'No importable content yet')}
+                            >
+                                {diagnosticImportingKind === kind
+                                    ? <Loader2 className="w-3 h-3 animate-spin inline" />
+                                    : t('导入', 'Import')}
+                            </button>
+                        );
                         return (
-                    <div className="flex-1 w-full flex items-center justify-between relative max-w-3xl px-8 mt-2 md:mt-0">
+                    <div className="flex-1 w-full flex items-center justify-between relative max-w-4xl px-4 mt-2 md:mt-0">
                         <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
                         <div className="flex flex-col items-center gap-2 relative">
@@ -16921,16 +18031,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('剧本优化', 'Script Opt')}</span>
                                 {!!getStageOutputContent('stage1', 'adapted_script') ? (
-                                    <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                    <div className="flex items-center gap-1 flex-wrap justify-center">
+                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                        {renderImportButton('script_opt', canImportScriptOpt)}
+                                        <button
+                                            onClick={() => openStageArtifactEditModal('script_opt')}
+                                            disabled={isAnalyzing}
+                                            className={diagnosticBtnClass}
+                                        >
+                                            {t('编辑', 'Edit')}
+                                        </button>
+                                    </div>
                                 ) : (
-                                    <span className={`text-[10px] ${isAnalyzing ? 'text-purple-300' : 'text-white/30'}`}>
-                                        {isAnalyzing ? (
-                                            <span className="flex items-center gap-1">
-                                                <Loader2 className="w-3 h-3 animate-spin"/>
-                                                {t('处理中', 'Processing')}
-                                            </span>
-                                        ) : t('等待中', 'Pending')}
-                                    </span>
+                                    <div className="flex flex-col items-center gap-1">
+                                        <span className={`text-[10px] ${isAnalyzing ? 'text-purple-300' : 'text-white/30'}`}>
+                                            {isAnalyzing ? (
+                                                <span className="flex items-center gap-1">
+                                                    <Loader2 className="w-3 h-3 animate-spin"/>
+                                                    {t('处理中', 'Processing')}
+                                                </span>
+                                            ) : t('等待中', 'Pending')}
+                                        </span>
+                                        {renderImportButton('script_opt', canImportScriptOpt)}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -16942,21 +18065,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('清单整理', 'List Preparation')}</span>
                                 {!!getStageOutputContent('stage2', 'subject_index') ? (
-                                     <div className="flex items-center gap-1">
+                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
+                                         {renderImportButton('subject_index', canImportSubjectIndex)}
+                                         <button
+                                            onClick={() => openStageArtifactEditModal('subject_index')}
+                                            disabled={isAnalyzing}
+                                            className={diagnosticBtnClass}
+                                         >
+                                            {t('编辑', 'Edit')}
+                                         </button>
+                                         <button onClick={handleRestartStage2} disabled={isAnalyzing} className={diagnosticBtnClass}>
                                             {t('重跑', 'Rerun')}
                                          </button>
                                      </div>
                                 ) : (
-                                    !!getStageOutputContent('stage1', 'adapted_script') ? (
-                                        <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                            {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
-                                        </button>
-                                    ) : (
-                                        <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                    )
+                                    <div className="flex flex-col items-center gap-1">
+                                        {!!getStageOutputContent('stage1', 'adapted_script') ? (
+                                            <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
+                                        )}
+                                        {renderImportButton('subject_index', canImportSubjectIndex)}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -16968,39 +18102,100 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('场景拆解', 'Scene Breakdown')}</span>
                                 {!!getStageOutputContent('stage2', 'scene_markdown') ? (
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors">
+                                        {renderImportButton('scene_beats', canImportSceneBeats)}
+                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className={diagnosticBtnClass}>
                                             {t('重排', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
-                                    !!getStageOutputContent('stage2', 'subject_index') ? (
-                                        <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                            {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
-                                        </button>
-                                    ) : (
-                                        <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                    )
+                                    <div className="flex flex-col items-center gap-1">
+                                        {!!getStageOutputContent('stage2', 'subject_index') ? (
+                                            <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
+                                        )}
+                                        {renderImportButton('scene_beats', canImportSceneBeats)}
+                                    </div>
                                 )}
                             </div>
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${storyboardAutoStarted ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (storyboardCanStart ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {storyboardAutoStarted ? <Check className="w-4 h-4" /> : 4}
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
+                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                    : storyboardSettled
+                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                        : (storyboardInFlight || storyboardAutoStarted || storyboardCanStart
+                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                             }`}>
+                                {storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
+                                    ? <X className="w-4 h-4" />
+                                    : (storyboardSettled
+                                        ? <Check className="w-4 h-4" />
+                                        : (storyboardInFlight ? <Loader2 className="w-4 h-4 animate-spin" /> : 4))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('镜头任务', 'Storyboard Tasks')}</span>
                                 {storyboardAutoStarted ? (
-                                    <span className="text-[10px] text-emerald-400/80">{t('已启动', 'Started')}</span>
+                                    <div className="flex flex-col items-center gap-1">
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            <span className={`text-[10px] ${
+                                                storyboardFailedCount > 0 && storyboardCompletedCount <= 0 && storyboardSettled
+                                                    ? 'text-red-300'
+                                                    : storyboardInFlight
+                                                        ? 'text-purple-300'
+                                                        : 'text-emerald-400/80'
+                                            }`}>
+                                                {storyboardInFlight
+                                                    ? t(
+                                                        `进行中 ${storyboardCompletedCount}/${storyboardStartedCount}（运行 ${storyboardRunningCount}）`,
+                                                        `Running ${storyboardCompletedCount}/${storyboardStartedCount} (${storyboardRunningCount} active)`
+                                                    )
+                                                    : storyboardFailedCount > 0
+                                                        ? t(
+                                                            `完成 ${storyboardCompletedCount}/${storyboardStartedCount}（失败 ${storyboardFailedCount}）`,
+                                                            `Done ${storyboardCompletedCount}/${storyboardStartedCount} (${storyboardFailedCount} failed)`
+                                                        )
+                                                        : t(
+                                                            `完成 ${storyboardCompletedCount}/${storyboardStartedCount}`,
+                                                            `Done ${storyboardCompletedCount}/${storyboardStartedCount}`
+                                                        )}
+                                            </span>
+                                            {renderImportButton('storyboard', canImportStoryboard)}
+                                            <button
+                                                onClick={handleRerunStoryboardTasks}
+                                                disabled={isAnalyzing || isRerunningStoryboard || storyboardRerunModal.loading}
+                                                className={diagnosticBtnClass}
+                                            >
+                                                {t('重跑', 'Rerun')}
+                                            </button>
+                                        </div>
+                                    </div>
                                 ) : (
-                                    storyboardCanStart ? (
-                                        <span className="text-[10px] text-purple-300">{t('待触发', 'Pending')}</span>
-                                    ) : (
-                                        <span className="text-[10px] text-white/30">{t('待场景拆解完成', 'Wait scene breakdown')}</span>
-                                    )
+                                    <div className="flex flex-col items-center gap-1">
+                                        {storyboardCanStart ? (
+                                            <button
+                                                onClick={handleRerunStoryboardTasks}
+                                                disabled={isAnalyzing || isRerunningStoryboard || storyboardRerunModal.loading}
+                                                className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1"
+                                            >
+                                                {(isRerunningStoryboard || storyboardRerunModal.loading) ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {(isRerunningStoryboard || storyboardRerunModal.loading)
+                                                    ? t('处理中', 'Processing')
+                                                    : t('可重跑', 'Ready')}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-white/30">{t('待场景拆解完成', 'Wait scene breakdown')}</span>
+                                        )}
+                                        {renderImportButton('storyboard', canImportStoryboard)}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -17023,28 +18218,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <span className="text-[10px] text-red-300 font-semibold">
                                             {t('失败：', 'Failed: ')}{workflowCompletenessStats.failedCategories.map((row) => t(row.labelZh, row.labelEn)).join('、')}
                                         </span>
-                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
-                                        </button>
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('assets', canImportAssets)}
+                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
+                                            </button>
+                                        </div>
                                     </div>
                                 ) : !!getStageOutputContent('stage3', 'asset_design_json') ? (
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-1 py-0.5 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 disabled:opacity-50 hover:text-white transition-colors flex items-center gap-1">
+                                        {renderImportButton('assets', canImportAssets)}
+                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className={`${diagnosticBtnClass} flex items-center gap-1`}>
                                             {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                             {t('重跑', 'Rerun')}
                                         </button>
                                     </div>
                                 ) : (
-                                    hasAssetGenerationPrerequisite ? (
-                                         <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
-                                        </button>
-                                    ) : (
-                                        <span className="text-[10px] text-white/30">{t('待清单整理完成', 'Wait list preparation')}</span>
-                                    )
+                                    <div className="flex flex-col items-center gap-1">
+                                        {hasAssetGenerationPrerequisite ? (
+                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-white/30">{t('待清单整理完成', 'Wait list preparation')}</span>
+                                        )}
+                                        {renderImportButton('assets', canImportAssets)}
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -17139,13 +18341,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
-                                                                        {(() => {
-                            const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted);
-                            return [
+                        {(() => {
+                            const progress = pickRicherStoryboardTaskProgress(
+                                storyboardTaskProgress,
+                                storyboardTaskProgressRef.current,
+                                analysisUiReport?.storyboardTaskProgress,
+                            );
+                            const storyboardStartedCount = Number(progress?.started || 0);
+                            const storyboardCompletedCount = Number(progress?.completed || 0);
+                            const storyboardFailedCount = Number(progress?.failed || 0);
+                            const storyboardRunningCount = Number(progress?.running || 0);
+                            const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted)
+                                || storyboardStartedCount > 0;
+                            const storyboardInFlight = storyboardRunningCount > 0
+                                || (storyboardStartedCount > (storyboardCompletedCount + storyboardFailedCount));
+                            const storyboardSettled = storyboardAutoStarted
+                                && !storyboardInFlight
+                                && storyboardStartedCount > 0;
+                            const storyboardItems = Object.values(progress?.items || {});
+                            return (
+                                <>
+                            {[
                             { key: 'script_opt', label: t('剧本统筹', 'Script Opt') },
                             { key: 'extract_assets', label: t('清单整理', 'List Preparation') },
                             { key: 'scene_beats', label: t('场景拆解', 'Scene Breakdown') },
-                            { key: 'storyboard', label: t('镜头任务', 'Storyboard Tasks') },
+                            {
+                                key: 'storyboard',
+                                label: storyboardAutoStarted && storyboardStartedCount > 0
+                                    ? t(
+                                        `镜头任务 ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardInFlight ? ` · 运行${storyboardRunningCount}` : ''}${storyboardFailedCount > 0 ? ` · 失败${storyboardFailedCount}` : ''}`,
+                                        `Storyboard ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardInFlight ? ` · ${storyboardRunningCount} active` : ''}${storyboardFailedCount > 0 ? ` · ${storyboardFailedCount} failed` : ''}`
+                                    )
+                                    : t('镜头任务', 'Storyboard Tasks'),
+                            },
                             { key: 'assets_gen', label: t('视觉资产', 'Visual Assets') },
                             { key: 'completed', label: t('AI 总结报告', 'Report') },
                         ].map((step, idx) => {
@@ -17161,19 +18389,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (key === 'script_opt') return !!getStageOutputContent('stage1', 'adapted_script');
                                 if (key === 'extract_assets') return !!getStageOutputContent('stage2', 'subject_index');
                                 if (key === 'scene_beats') return !!getStageOutputContent('stage2', 'scene_markdown');
-                                if (key === 'storyboard') return storyboardAutoStarted;
+                                if (key === 'storyboard') return storyboardSettled;
                                 if (key === 'assets_gen') return !!getStageOutputContent('stage3', 'asset_design_json');
-                                if (key === 'completed') return hasFinalReport;
+                                if (key === 'completed') return hasFinalReport && !storyboardInFlight;
                                 return false;
                             };
                             
-                            const isDone = !isTerminalFailed && (
-                                hasFinalReport
-                                    ? stepIndex <= 4
-                                    : (isTerminalWarning ? stepIndex <= 2 : ((currentIndex > stepIndex) || phase === 'completed' || hasArtifact(step.key)))
+                            let isDone = !isTerminalFailed && (
+                                isTerminalWarning
+                                    ? stepIndex <= 2
+                                    : ((currentIndex > stepIndex) || phase === 'completed' || hasArtifact(step.key))
                             );
-                            const isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
-                            const isFailed = isTerminalFailed && step.key === 'analyzing';
+                            let isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
+                            if (step.key === 'storyboard') {
+                                isActive = !isTerminalFailed && (storyboardInFlight || phase === 'storyboard');
+                                isDone = !isTerminalFailed && storyboardSettled;
+                            } else if (step.key === 'completed') {
+                                isActive = !isTerminalFailed && !storyboardInFlight && phase === 'completed';
+                                isDone = !isTerminalFailed && hasFinalReport && !storyboardInFlight;
+                            } else if (hasFinalReport && stepIndex < 3) {
+                                isDone = !isTerminalFailed;
+                            }
+                            const isFailed = (isTerminalFailed && step.key === 'analyzing')
+                                || (step.key === 'storyboard' && storyboardSettled && storyboardFailedCount > 0 && storyboardCompletedCount <= 0);
                             return (
                                 <div
                                     key={step.key}
@@ -17191,7 +18429,54 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <span className="text-xs leading-tight">{step.label}</span>
                                 </div>
                             );
-                        });
+                        })}
+                            {storyboardAutoStarted && storyboardItems.length > 0 && (
+                                <div className="col-span-2 md:col-span-6 rounded-lg border border-purple-400/30 bg-black/20 px-3 py-2">
+                                    <div className="text-[10px] font-semibold text-purple-100/90 mb-1.5">
+                                        {t('镜头任务明细', 'Storyboard task details')}
+                                        <span className="ml-2 opacity-70">
+                                            {t(
+                                                `完成 ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardRunningCount > 0 ? ` · 运行中 ${storyboardRunningCount}` : ''}${storyboardFailedCount > 0 ? ` · 失败 ${storyboardFailedCount}` : ''}`,
+                                                `${storyboardCompletedCount}/${storyboardStartedCount} done${storyboardRunningCount > 0 ? ` · ${storyboardRunningCount} running` : ''}${storyboardFailedCount > 0 ? ` · ${storyboardFailedCount} failed` : ''}`
+                                            )}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {storyboardItems
+                                            .slice()
+                                            .sort((a, b) => String(a?.markerSceneId || '').localeCompare(String(b?.markerSceneId || '')))
+                                            .map((item) => {
+                                                const status = String(item?.status || '').toLowerCase();
+                                                const label = String(item?.markerSceneId || item?.dbSceneId || '?');
+                                                const tone = status === 'completed'
+                                                    ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
+                                                    : status === 'failed'
+                                                        ? 'border-red-400/40 bg-red-500/15 text-red-100'
+                                                        : 'border-purple-400/40 bg-purple-500/15 text-purple-100';
+                                                const statusLabel = status === 'completed'
+                                                    ? t('完成', 'Done')
+                                                    : status === 'failed'
+                                                        ? t('失败', 'Fail')
+                                                        : status === 'importing'
+                                                            ? t('写入', 'Apply')
+                                                            : status === 'generating'
+                                                                ? t('生成', 'Gen')
+                                                                : t('启动', 'Start');
+                                                return (
+                                                    <span
+                                                        key={label}
+                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${tone}`}
+                                                        title={item?.error || label}
+                                                    >
+                                                        {label} · {statusLabel}
+                                                    </span>
+                                                );
+                                            })}
+                                    </div>
+                                </div>
+                            )}
+                                </>
+                            );
                         })()}
                     </div>
 
@@ -17447,6 +18732,302 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         
                 </div>
             </div>
+
+            {stageArtifactEditModal.open && (
+                <div
+                    className="fixed inset-0 z-[59] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => {
+                        if (stageArtifactEditModal.saving) return;
+                        setStageArtifactEditModal((prev) => ({ ...prev, open: false, editing: false }));
+                    }}
+                >
+                    <div
+                        className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-4xl max-h-[88vh] shadow-2xl overflow-hidden flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <Edit3 className="w-5 h-5 text-amber-300" />
+                                {t(stageArtifactEditModal.titleZh, stageArtifactEditModal.titleEn)}
+                            </h3>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    disabled={stageArtifactEditModal.saving}
+                                    onClick={() => setStageArtifactEditModal((prev) => ({
+                                        ...prev,
+                                        editing: !prev.editing,
+                                        content: prev.editing
+                                            ? (
+                                                prev.kind === 'script_opt'
+                                                    ? (resolveScriptOptBeatsContent() || prev.content)
+                                                    : (resolveSubjectIndexEditContent() || prev.content)
+                                            )
+                                            : prev.content,
+                                    }))}
+                                    className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border ${
+                                        stageArtifactEditModal.editing
+                                            ? 'bg-sky-500/20 border-sky-400/40 text-sky-100'
+                                            : 'bg-white/10 hover:bg-white/20 border-white/10 text-white'
+                                    }`}
+                                >
+                                    {stageArtifactEditModal.editing ? t('预览', 'Preview') : t('编辑', 'Edit')}
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={stageArtifactEditModal.saving}
+                                    onClick={() => setStageArtifactEditModal((prev) => ({ ...prev, open: false, editing: false }))}
+                                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white"
+                                >
+                                    {t('关闭', 'Close')}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="px-4 pt-3 text-xs text-white/55">
+                            {t(stageArtifactEditModal.hintZh, stageArtifactEditModal.hintEn)}
+                        </div>
+
+                        <div className="p-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
+                            {stageArtifactEditModal.editing ? (
+                                <textarea
+                                    className="w-full min-h-[52vh] bg-black/40 text-white/90 border border-white/20 rounded-md p-3 text-sm focus:outline-none focus:border-amber-500/50 resize-y custom-scrollbar font-mono"
+                                    value={stageArtifactEditModal.content || ''}
+                                    onChange={(e) => setStageArtifactEditModal((prev) => ({ ...prev, content: e.target.value }))}
+                                    disabled={stageArtifactEditModal.saving}
+                                />
+                            ) : (
+                                <div className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 prose prose-invert prose-p:my-1.5 prose-headings:my-2 prose-li:my-0.5 prose-pre:bg-black/40 prose-pre:border prose-pre:border-white/10 prose-code:text-amber-200 max-w-none text-sm text-white/85">
+                                    {String(stageArtifactEditModal.content || '').trim()
+                                        ? (
+                                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                                {String(stageArtifactEditModal.content || '')}
+                                            </ReactMarkdown>
+                                        )
+                                        : (
+                                            <div className="text-xs text-white/35 italic">
+                                                {t('暂无内容。', 'No content.')}
+                                            </div>
+                                        )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
+                            <span className="text-xs text-white/45">
+                                {t(
+                                    `字符数：${String(stageArtifactEditModal.content || '').length}`,
+                                    `Chars: ${String(stageArtifactEditModal.content || '').length}`
+                                )}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                {stageArtifactEditModal.editing ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            disabled={stageArtifactEditModal.saving}
+                                            onClick={() => setStageArtifactEditModal((prev) => ({
+                                                ...prev,
+                                                editing: false,
+                                                content: prev.kind === 'script_opt'
+                                                    ? (resolveScriptOptBeatsContent() || prev.content)
+                                                    : (resolveSubjectIndexEditContent() || prev.content),
+                                            }))}
+                                            className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white"
+                                        >
+                                            {t('取消', 'Cancel')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={stageArtifactEditModal.saving || !String(stageArtifactEditModal.content || '').trim()}
+                                            onClick={saveStageArtifactEditModal}
+                                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
+                                                stageArtifactEditModal.saving || !String(stageArtifactEditModal.content || '').trim()
+                                                    ? 'bg-white/5 text-white/35 cursor-not-allowed'
+                                                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                                            }`}
+                                        >
+                                            {stageArtifactEditModal.saving
+                                                ? <Loader2 className="w-4 h-4 animate-spin" />
+                                                : <Check className="w-4 h-4" />}
+                                            {t('保存更改', 'Save Changes')}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => setStageArtifactEditModal((prev) => ({ ...prev, editing: true }))}
+                                        className="px-4 py-2 rounded-lg text-sm font-bold bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-2"
+                                    >
+                                        <Edit3 className="w-4 h-4" />
+                                        {t('进入编辑', 'Edit')}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {storyboardRerunModal.open && (
+                <div
+                    className="fixed inset-0 z-[59] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+                    onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, open: false }))}
+                >
+                    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-2xl max-h-[84vh] shadow-2xl overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
+                            <h3 className="text-lg font-bold flex items-center gap-2">
+                                <Film className="w-5 h-5 text-sky-400" />
+                                {t('镜头任务重跑选择', 'Storyboard Rerun')}
+                            </h3>
+                            <button
+                                onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, open: false }))}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-bold transition-colors text-white"
+                            >
+                                {t('退出', 'Exit')}
+                            </button>
+                        </div>
+
+                        <div className="p-4 overflow-y-auto custom-scrollbar space-y-4 text-sm">
+                            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-white/80">
+                                <div className="font-semibold text-white">
+                                    {storyboardRerunModal.loading
+                                        ? t('正在加载已入库场景...', 'Loading imported scenes...')
+                                        : t(
+                                            `基于工作区已入库场景，共 ${storyboardRerunModal.candidates.length} 个可重跑`,
+                                            `${storyboardRerunModal.candidates.length} imported scene(s) available to rerun`
+                                        )}
+                                </div>
+                                <div className="mt-1 text-xs text-white/55">
+                                    {t('将按场景页「生成分镜」相同路径重跑：生成镜头表并自动写入 Shots。', 'Uses the same path as scene-page Generate Shots: generate the shot table and auto-apply into Shots.')}
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {[
+                                    { key: 'all', labelZh: '全部重跑', labelEn: 'Rerun All Scenes' },
+                                    { key: 'single', labelZh: '单场重跑', labelEn: 'Rerun One Scene' },
+                                ].map((mode) => {
+                                    const active = storyboardRerunModal.mode === mode.key;
+                                    return (
+                                        <button
+                                            key={mode.key}
+                                            type="button"
+                                            onClick={() => {
+                                                setStoryboardRerunModal((prev) => ({
+                                                    ...prev,
+                                                    mode: mode.key,
+                                                    sceneId: prev.sceneId || prev.candidates[0]?.sceneId || '',
+                                                }));
+                                            }}
+                                            className={`rounded-lg border px-3 py-2 text-sm font-bold transition-colors ${active ? 'border-sky-300/60 bg-sky-500/25 text-sky-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/75'}`}
+                                        >
+                                            {t(mode.labelZh, mode.labelEn)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {storyboardRerunModal.mode === 'all' && (
+                                <div className="rounded-lg border border-sky-400/25 bg-sky-500/10 px-3 py-3 text-sky-100">
+                                    <div className="font-semibold">{t('将按场调起全部镜头任务', 'All scene storyboard tasks will be kicked off')}</div>
+                                    <div className="mt-1 text-xs text-sky-100/75">
+                                        {t(`共 ${storyboardRerunModal.candidates.length} 场；已在运行中的场景会跳过。`, `${storyboardRerunModal.candidates.length} scene(s); already-running scenes are skipped.`)}
+                                    </div>
+                                </div>
+                            )}
+
+                            {storyboardRerunModal.mode === 'single' && (
+                                <div className="space-y-2">
+                                    <div className="text-xs font-bold text-white/55 uppercase tracking-wide">{t('选择场景', 'Select Scene')}</div>
+                                    <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                                        {storyboardRerunModal.loading ? (
+                                            <div className="text-xs text-white/45 flex items-center gap-2">
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                {t('加载中...', 'Loading...')}
+                                            </div>
+                                        ) : storyboardRerunModal.candidates.length > 0 ? storyboardRerunModal.candidates.map((item) => {
+                                            const active = storyboardRerunModal.sceneId === item.sceneId;
+                                            const statusLabel = item.status === 'completed'
+                                                ? t('已完成', 'Done')
+                                                : item.status === 'failed'
+                                                    ? t('失败', 'Failed')
+                                                    : ['starting', 'generating', 'importing'].includes(item.status)
+                                                        ? t('运行中', 'Running')
+                                                        : t('未启动', 'Idle');
+                                            return (
+                                                <button
+                                                    key={`${item.dbSceneId}-${item.sceneId}`}
+                                                    type="button"
+                                                    onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, sceneId: item.sceneId }))}
+                                                    className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${active ? 'border-sky-300/60 bg-sky-500/20 text-sky-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/80'}`}
+                                                >
+                                                    <div className="text-sm font-semibold">{item.displayLabel || item.sceneId}</div>
+                                                    <div className="text-[11px] text-white/50 mt-0.5">
+                                                        {t(`场次 ${item.sceneOrder}`, `Scene order ${item.sceneOrder}`)}
+                                                        {' · '}
+                                                        {item.sceneId}
+                                                        {' · '}
+                                                        {statusLabel}
+                                                    </div>
+                                                    {item.error ? (
+                                                        <div className="text-[11px] text-red-300/80 mt-0.5 line-clamp-2">{item.error}</div>
+                                                    ) : null}
+                                                </button>
+                                            );
+                                        }) : (
+                                            <div className="text-xs text-white/45">{t('没有可重跑的场景。', 'No scenes available to rerun.')}</div>
+                                        )}
+                                    </div>
+                                    <div className="rounded-lg border border-sky-400/25 bg-sky-500/10 px-3 py-3 text-sky-100 text-xs">
+                                        {t('仅重跑所选场景的镜头生成与写入，不影响其他场次。', 'Only regenerates and applies shots for the selected scene.')}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
+                            <span className="text-xs text-white/45">
+                                {t(`可选场景：${storyboardRerunModal.candidates.length} 个`, `${storyboardRerunModal.candidates.length} selectable scenes`)}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, open: false }))}
+                                    className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white"
+                                >
+                                    {t('取消', 'Cancel')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={confirmStoryboardRerunSelection}
+                                    disabled={
+                                        isAnalyzing
+                                        || isRerunningStoryboard
+                                        || storyboardRerunModal.loading
+                                        || (storyboardRerunModal.mode === 'single' && !String(storyboardRerunModal.sceneId || '').trim())
+                                        || storyboardRerunModal.candidates.length <= 0
+                                    }
+                                    className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
+                                        isAnalyzing
+                                        || isRerunningStoryboard
+                                        || storyboardRerunModal.loading
+                                        || (storyboardRerunModal.mode === 'single' && !String(storyboardRerunModal.sceneId || '').trim())
+                                        || storyboardRerunModal.candidates.length <= 0
+                                            ? 'bg-white/5 text-white/35 cursor-not-allowed'
+                                            : 'bg-sky-600 hover:bg-sky-500 text-white'
+                                    }`}
+                                >
+                                    {(isRerunningStoryboard || storyboardRerunModal.loading)
+                                        ? <Loader2 className="w-4 h-4 animate-spin" />
+                                        : <RefreshCw className="w-4 h-4" />}
+                                    {t('开始重跑', 'Start Rerun')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {sceneBeatsRerunModal.open && (
                 <div
