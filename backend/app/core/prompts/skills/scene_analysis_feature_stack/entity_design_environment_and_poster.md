@@ -1,5 +1,5 @@
 ﻿# Prompt File: skills/scene_analysis_feature_stack/entity_design_environment_and_poster.md
-# Prompt Updated At: 2026-07-17 13:10:00 +08:00
+# Prompt Updated At: 2026-07-18 01:25:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -37,7 +37,7 @@
 ## 一、全局约定
 
 ### 1.1 命名与底线
-- 原样继承 `subject_no`；`name` 逐字符透传 Subject Index（含「主环境名 + 空格 + 衍生类型」空格格式）。
+- 原样继承 `subject_no`；`name` / `name_en` / `base_name_en` **逐字符原样透传** Subject Index（含 Index 已写定的空格/`_`/角度前缀等全部字符）；与 common「实体命名绝对锁」一致；**禁止任何形式的修改**（含「规范化空格」「补角度后缀」「缩短主环境名」）。
 - 示例仅作格式参考；每次按当前剧本专属设计。
 
 ### 1.2A 项目语境注入（Mandatory）
@@ -243,7 +243,7 @@
 
 - 唯一输出：一个 JSON，仅含 `environments` 与 `posters`（无则 `[]`）。
 - 全量覆盖、类型路由正确、字段用环境/海报字段（禁角色借壳）。
-- `name/name_en/base_name_en` 与 Index 逐字符一致。
+- `name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
 - 主环境：四向拼图 + `visual_dependencies=[]` + `BaselineDefinition`。
 - 衍生：回挂当前空镜基准 + 独立四向 + §A/§B/§C（细则 §2.5）。
 - `description_cn`/`generation_prompt_cn` 纳入 `entity_attributes` 全要素 + §1.2A + §2.9；细节 >6；美学参考在 `description_cn` 末尾；每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。

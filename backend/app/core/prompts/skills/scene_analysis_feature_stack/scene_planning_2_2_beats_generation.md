@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-17 23:55:00 +08:00
+# Prompt Updated At: 2026-07-18 01:25:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -64,12 +64,14 @@ Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_
 
 ### Index 命名铁则
 
-1. **白名单闭包**：凡 `CHAR:`/`ENV:`/`PROP:`（含 `{Beats}` 与表格环境/角色/道具列）方括号名须逐字等于 Index `subject_name_zh`（或列明确要求的 `subject_name_en`），可追溯 `subject_no`。**唯一合法前缀**即此三者；Index 无行 → 保留 Stage 1 自然语言、**不加**任何 `TYPE:[...]`。
-2. **类型前缀**：`character` → `CHAR:[@{subject_name_zh}]`；`environment` → `ENV:[{subject_name_zh}]`；`prop` → `PROP:[{subject_name_zh}]`；`cover_poster` 不进 Scene/Beat。
-3. **别名核销**：叙述层别名经 `script_entity_coverage` 核销后换为 `subject_name_zh`（只换称呼字符串）；**台词不适用**。
-4. **双源交集**：Beat 与 Index 均有语义 → 必须 Index 化；名称冲突以 Index 为准。
-5. **只读与缺口**：`base_entity`/`dependency_reference`/`entity_attributes` 仅供同族匹配；禁据此新建行或补入 Beat 未写态。Beat 有而 Index 无 → 保留自然语言、不加前缀；Index 有而 Beat 未写 → 禁补入正文。
-6. **ENV 整场闭包**：`ENV:[{name}]` 须为 Index `environment` 行且 **本场 Beat 已写**该整场名。未升格环境内实体只保留自然语言；已升格写 `PROP:[…]`，禁再套 `ENV:`。
+> **🏆 实体命名绝对锁（最高硬约束）**：生成时，凡写入输出的 `CHAR:`/`ENV:`/`PROP:` 方括号内名称，以及表格 `Environment Name` / `Linked Characters` / `Key Props` / `{登场实体}` 中的实体名，**必须与 Subject Index 对应行 `subject_name_zh`（或列明确要求的 `subject_name_en`）完全一致——逐字符、含空格/标点/大小写/前后缀**。**禁止任何形式的修改**（润色、规范化、翻译、补词、缩写、删词、同义替换、繁简转换、标点/空格/大小写修正、括号补充、去前后缀、合并/拆分称呼）。名称不一致 = 整场废弃重写。
+
+1. **白名单闭包**：凡 `CHAR:`/`ENV:`/`PROP:`（含 `{Beats}` 与表格环境/角色/道具列）方括号名须**逐字符等于** Index `subject_name_zh`（或列明确要求的 `subject_name_en`），可追溯 `subject_no`。**唯一合法前缀**即此三者；Index 无行 → 保留 Stage 1 自然语言、**不加**任何 `TYPE:[...]`。
+2. **类型前缀**：`character` → `CHAR:[@{subject_name_zh}]`；`environment` → `ENV:[{subject_name_zh}]`；`prop` → `PROP:[{subject_name_zh}]`；`cover_poster` 不进 Scene/Beat。前缀可加，**括号内名不得改**。
+3. **别名核销**：叙述层别名经 `script_entity_coverage` 核销后**整串替换为** Index `subject_name_zh`（只换称呼字符串，目标串必须与 Index 逐字符一致）；**台词不适用**。禁止换成「更规范」的近似名。
+4. **双源交集**：Beat 与 Index 均有语义 → 必须 Index 化；名称冲突以 Index 为准（输出侧只许 Index 原名）。
+5. **只读与缺口**：`base_entity`/`dependency_reference`/`entity_attributes` 仅供同族匹配；禁据此新建行或补入 Beat 未写态，亦禁据此改写已选定行的 `subject_name_zh`。Beat 有而 Index 无 → 保留自然语言、不加前缀；Index 有而 Beat 未写 → 禁补入正文。
+6. **ENV 整场闭包**：`ENV:[{name}]` 须为 Index `environment` 行且 **本场 Beat 已写**该整场名；`{name}` 与 Index **逐字符一致**。未升格环境内实体只保留自然语言；已升格写 `PROP:[…]`，禁再套 `ENV:`。
 
 ### 基础/衍生资产映射
 
@@ -136,4 +138,4 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 
 ### 输出前自检
 
-Beat 数/顺序=输入｜编号规范｜Beat 正文原样落入（含 `[BEAT_START/END]` 与 建置/入戏/切换说明分隔符）｜叙述层仅实体名 Index 化｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜Core Scene Info **仅含** `{Beats}`/`{登场实体}`｜未把 `ENV_BLOCK` 或其它非 Beat 说明块写入输出｜无新增 Beat 未写实体/情节。
+Beat 数/顺序=输入｜编号规范｜Beat 正文原样落入（含 `[BEAT_START/END]` 与 建置/入戏/切换说明分隔符）｜叙述层仅实体名 Index 化｜**全部 CHAR/ENV/PROP 方括号名与 Index 逐字符完全一致（无任何改写）**｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜Core Scene Info **仅含** `{Beats}`/`{登场实体}`｜未把 `ENV_BLOCK` 或其它非 Beat 说明块写入输出｜无新增 Beat 未写实体/情节。

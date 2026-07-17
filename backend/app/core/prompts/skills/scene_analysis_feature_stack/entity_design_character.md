@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-07-17 13:10:00 +08:00
+# Prompt Updated At: 2026-07-18 01:25:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -28,7 +28,7 @@
 ## 一、全局约定
 
 ### 1.1 画幅与命名
-- 原样继承 `subject_no`；`name` 逐字符透传 Subject Index。
+- 原样继承 `subject_no`；`name` / `name_en` / `base_name_en` **逐字符原样透传** Subject Index（`subject_name_zh` / `subject_name_en`），与 common「实体命名绝对锁」一致；**禁止任何形式的修改**。
 - **单人四视图（默认）**：16:9 横向纯白、同一横排、连续白画板；禁 2×2/上下两排。第一宫面部特写占 35%（面目绝对重心）；正/侧/背全身共享 65%，鞋履完整可见。`generation_prompt_en=""`。
 - **群演簇例外**：命中 §2.4 时改为左→右四等分全身横排，无第一宫特写。
 - 示例仅作格式参考；每次按当前剧本专属设计。
@@ -155,7 +155,7 @@
 ## 三、输出模板
 
 - 唯一输出：一个 JSON，仅含 `characters`（无则 `[]`）。
-- 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index 逐字符一致。
+- 全量覆盖、类型路由正确；`name/name_en/base_name_en` 与 Index **逐字符完全一致**（任一字不等即废弃重写）。
 - 每实体须有 `visual_dependencies` 与 `dependency_strategy {type, logic}`。
 - 真人：`description_cn` 含内部光学 rationale + 选角参考；`generation_prompt_cn` 含分段标签 + 七必锚 + 五层可检索 + 光线 1 句；细节面目≥8。
 - 三维/二维：按 §2.5/§2.6；仍须分段标签；不适用七必锚与选角参考。

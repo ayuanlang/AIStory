@@ -2688,7 +2688,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return [
             '[Stage 2-1 Subject Index - REQUIRED INPUT]',
             'The following Subject Index is authoritative for Stage 2.2.',
-            'Do not rename / merge / invent entities. Keep ENV/CHAR/PROP names byte-identical.',
+            'NAME LOCK (absolute): every CHAR:/ENV:/PROP: bracket name and every table entity name MUST be character-identical to Subject Index subject_name_zh (or subject_name_en when that column is required).',
+            'Forbidden: any rename, polish, normalize, translate, abbreviate, synonym, punctuation/space/case fix, merge, split, or invent. Mismatch = discard and rewrite.',
             wrapInjectionSection('Subject Index', stableText),
         ].join('\n');
     }, [extractPureSubjectIndexText]);
@@ -5944,6 +5945,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const resetStoryboardKickoffTracking = useCallback(() => {
         storyboardKickoffByMarkerRef.current = new Set();
         storyboardKickoffByDbIdRef.current = new Set();
+        storyboardKickoffPromisesRef.current = new Map();
         stage3AutoStartCacheRef.current = null;
         storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
@@ -6147,7 +6149,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             'info'
         );
 
-        void (async () => {
+        let runPromise;
+        runPromise = (async () => {
             try {
                 const generatingProgress = updateStoryboardTaskItem(stableMarker, { status: 'generating' });
                 publishStoryboardTaskPanelStatus({
@@ -6185,6 +6188,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ),
                     'success'
                 );
+                return true;
             } catch (err) {
                 const errMsg = String(err?.response?.data?.detail || err?.message || err || 'unknown error');
                 const failedProgress = updateStoryboardTaskItem(stableMarker, { status: 'failed', error: errMsg });
@@ -6202,8 +6206,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ),
                     'warning'
                 );
+                return false;
+            } finally {
+                const current = storyboardKickoffPromisesRef.current?.get(stableMarker);
+                if (current === runPromise) {
+                    storyboardKickoffPromisesRef.current.delete(stableMarker);
+                }
             }
         })();
+        storyboardKickoffPromisesRef.current.set(stableMarker, runPromise);
 
         return true;
     }, [
@@ -6260,6 +6271,113 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             totalTracked: storyboardKickoffByDbIdRef.current.size,
         };
     }, [isStoryboardAutoStartEnabled, kickoffStoryboardForImportedScene]);
+
+    const awaitPendingStoryboardTasks = useCallback(async ({
+        importReport = null,
+        ensureResidual = true,
+    } = {}) => {
+        let started = storyboardKickoffByDbIdRef.current.size > 0
+            || Number(normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current).started || 0) > 0
+            || (storyboardKickoffPromisesRef.current?.size || 0) > 0;
+
+        if (ensureResidual) {
+            try {
+                const residual = await ensureStoryboardTasksForImportedScenes(importReport);
+                started = started
+                    || Number(residual?.started || 0) > 0
+                    || Number(residual?.totalTracked || 0) > 0
+                    || storyboardKickoffByDbIdRef.current.size > 0
+                    || (storyboardKickoffPromisesRef.current?.size || 0) > 0;
+            } catch (err) {
+                onLog?.(
+                    t(
+                        `镜头任务补齐调起失败：${err?.message || err}`,
+                        `Failed to kick off residual storyboard tasks: ${err?.message || err}`
+                    ),
+                    'warning'
+                );
+            }
+        }
+
+        if (!started) {
+            return {
+                started: false,
+                progress: normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current),
+            };
+        }
+
+        const publishWaitingStatus = () => {
+            const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+            setAnalysisFlowStatus({
+                phase: 'storyboard',
+                message: t(
+                    `正在等待镜头任务完成（已启动 ${progress.started}，完成 ${progress.completed}，失败 ${progress.failed}，运行中 ${progress.running}）...`,
+                    `Waiting for storyboard tasks (started ${progress.started}, done ${progress.completed}, failed ${progress.failed}, running ${progress.running})...`
+                ),
+            });
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                status: String(prev?.status || '').trim().toLowerCase() === 'failed' ? prev.status : 'running',
+                storyboardAutoStarted: true,
+                storyboardTaskProgress: progress,
+            }));
+            return progress;
+        };
+
+        publishWaitingStatus();
+        onLog?.(
+            t(
+                `分析总结前等待镜头任务完成（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）...`,
+                `Waiting for storyboard tasks before summary (${storyboardKickoffByDbIdRef.current.size} tracked)...`
+            ),
+            'process'
+        );
+
+        const pending = Array.from(storyboardKickoffPromisesRef.current?.values() || []);
+        if (pending.length > 0) {
+            await Promise.allSettled(pending);
+        }
+
+        const maxWaitMs = 30 * 60 * 1000;
+        const pollMs = 500;
+        const waitStartedAt = Date.now();
+        while (Date.now() - waitStartedAt < maxWaitMs) {
+            if (analysisStopRequestedRef.current) break;
+            const progress = publishWaitingStatus();
+            const promiseCount = storyboardKickoffPromisesRef.current?.size || 0;
+            const settled = progress.started <= 0
+                || (progress.running <= 0 && promiseCount <= 0 && (progress.completed + progress.failed) >= progress.started);
+            if (settled) break;
+            if (promiseCount > 0) {
+                await Promise.allSettled(Array.from(storyboardKickoffPromisesRef.current.values()));
+                continue;
+            }
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
+        }
+
+        const finalProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
+        onLog?.(
+            t(
+                `镜头任务等待结束：完成 ${finalProgress.completed}/${finalProgress.started}${finalProgress.failed > 0 ? `，失败 ${finalProgress.failed}` : ''}。`,
+                `Storyboard wait finished: ${finalProgress.completed}/${finalProgress.started} done${finalProgress.failed > 0 ? `, ${finalProgress.failed} failed` : ''}.`
+            ),
+            finalProgress.failed > 0 ? 'warning' : 'success'
+        );
+        return { started: true, progress: finalProgress };
+    }, [ensureStoryboardTasksForImportedScenes, onLog, t]);
+
+    const buildStoryboardCompletionSuffix = useCallback((storyboardResult) => {
+        if (!storyboardResult?.started) return '';
+        const progress = normalizeStoryboardTaskProgress(storyboardResult.progress);
+        const started = Number(progress.started || 0);
+        const completed = Number(progress.completed || 0);
+        const failed = Number(progress.failed || 0);
+        if (started <= 0) return '';
+        return t(
+            ` 镜头任务 ${completed}/${started} 完成${failed > 0 ? `（失败 ${failed}）` : ''}。`,
+            ` Storyboard ${completed}/${started} done${failed > 0 ? ` (${failed} failed)` : ''}.`
+        );
+    }, [t]);
 
     const importScenesFromPerScenePatchMap = useCallback(async (patchMap, options = {}) => {
         const skipSceneIds = new Set(
@@ -8203,6 +8321,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const orchestrationPersistedSceneMarkdownRef = useRef({});
     const storyboardKickoffByMarkerRef = useRef(new Set());
     const storyboardKickoffByDbIdRef = useRef(new Set());
+    const storyboardKickoffPromisesRef = useRef(new Map());
     const stage3AutoStartCacheRef = useRef(null);
     const analysisStopRequestedRef = useRef(false);
     const activeAnalysisTaskIdsRef = useRef(new Set());
@@ -9818,18 +9937,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }))
             );
 
-            let finalSubjectIndexText = extractPureSubjectIndexText(subjectIndexText);
+            const pureSubjectIndexText = extractPureSubjectIndexText(subjectIndexText);
             
             const designProjectContextSection = buildStage1ProjectContextSection()
                 .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
                 .replace('Use this project context as first-class constraints before analyzing the script.', 'Use this project context as first-class constraints before generating the subjects.');
 
-            if (designProjectContextSection) {
-                finalSubjectIndexText = [
-                    designProjectContextSection,
-                    wrapInjectionSection('Subject Index', finalSubjectIndexText),
-                ].join('\n\n');
-            }
+            const subjectIndexNameLockSection = [
+                '[Subject Index Name Lock - ABSOLUTE]',
+                'Output name / name_en / base_name_en and every CHAR:/ENV:/PROP: name inside visual_dependencies MUST be character-identical to Subject Index subject_name_zh / subject_name_en.',
+                'Forbidden: any rename, polish, normalize, translate, abbreviate, synonym, punctuation/space/case fix, merge, split, or invent. Mismatch = discard and rewrite the entity.',
+            ].join('\n');
+
+            const finalSubjectIndexText = [
+                designProjectContextSection || null,
+                subjectIndexNameLockSection,
+                wrapInjectionSection('Subject Index', pureSubjectIndexText),
+            ].filter(Boolean).join('\n\n');
 
             onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
 
@@ -10468,15 +10592,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     },
                 });
 
-                let recoveryStoryboardStarted = false;
-                try {
-                    const residualStoryboard = await ensureStoryboardTasksForImportedScenes(sceneBeatsImportReport);
-                    recoveryStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
-                        || Number(residualStoryboard?.started || 0) > 0
-                        || Number(residualStoryboard?.totalTracked || 0) > 0;
-                } catch (storyboardErr) {
-                    onLog?.(`Failed to auto-start storyboard generation after scene beats recovery: ${storyboardErr?.message || storyboardErr}`, 'warning');
-                }
+                const recoveryStoryboard = await awaitPendingStoryboardTasks({
+                    importReport: sceneBeatsImportReport,
+                    ensureResidual: true,
+                });
+                const recoveryStoryboardStarted = Boolean(recoveryStoryboard?.started);
 
                 setAnalysisUiReport(buildCompletedAnalysisUiReport({
                     status: 'completed',
@@ -10486,15 +10606,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     importReport: sceneBeatsImportReport,
                     runtimeMeta: sceneBeatsRuntimeMeta,
                     storyboardAutoStarted: recoveryStoryboardStarted,
-                    storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
+                    storyboardTaskProgress: recoveryStoryboard?.progress || EMPTY_STORYBOARD_TASK_PROGRESS,
                     warning: '',
                     error: '',
                 }));
                 setAnalysisFlowStatus({
                     phase: 'completed',
-                    message: recoveryStoryboardStarted
-                        ? t('场景编排任务已恢复并导入完成；镜头任务已按场调起。', 'Scene beats task resumed and imported; storyboard tasks started.')
-                        : t('场景编排任务已恢复并导入完成。', 'Scene beats task resumed and imported.'),
+                    message: t('场景编排任务已恢复并导入完成。', 'Scene beats task resumed and imported.')
+                        + buildStoryboardCompletionSuffix(recoveryStoryboard),
                 });
                 clearAnalysisTaskMarker(activeEpisode.id);
             } catch (e) {
@@ -10689,18 +10808,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
 
+            const storyboardWaitResult = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            const aiShotsBatchStarted = Boolean(storyboardWaitResult?.started);
+            const storyboardProgressSnapshot = storyboardWaitResult?.progress || EMPTY_STORYBOARD_TASK_PROGRESS;
+
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
-            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
-            try {
-                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
-                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
-                    || Number(residualStoryboard?.started || 0) > 0
-                    || Number(residualStoryboard?.totalTracked || 0) > 0;
-            } catch (storyboardErr) {
-                onLog?.(`Failed to auto-start storyboard generation on resume: ${storyboardErr?.message || storyboardErr}`, 'warning');
-            }
-            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
                 startedAt,
@@ -10722,21 +10838,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
             const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
             const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
-            
-            const appendStoryboardNotice = (baseZh, baseEn) => {
-                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
-                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
-            };
+            const storyboardSuffix = buildStoryboardCompletionSuffix(storyboardWaitResult);
 
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: postImportMissingItems > 0
+                message: (postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.'),
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + storyboardSuffix,
             });
 
             clearAnalysisTaskMarker(activeEpisode.id);
@@ -10802,13 +10914,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         runAutoImportAndSwitchToScenes,
         showAnalysisWarningStatus,
         t,
-            doImportText,
+        doImportText,
         setLlmAssetRawResultContent,
         setIsRetryingPhase2,
         isRetryingPhase2,
         projectId,
         onLog,
-]);
+        awaitPendingStoryboardTasks,
+        buildStoryboardCompletionSuffix,
+    ]);
 
     useEffect(() => {
         latestIsAnalyzingRef.current = Boolean(isAnalyzing);
@@ -13291,24 +13405,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importWarningMessage,
             });
 
-            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
-            try {
-                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
-                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
-                    || Number(residualStoryboard?.started || 0) > 0
-                    || Number(residualStoryboard?.totalTracked || 0) > 0;
-                if (aiShotsBatchStarted && onLog) {
-                    onLog(
-                        t(
-                            `分镜任务已按场景调起（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）。`,
-                            `Storyboard tasks kicked off per scene (${storyboardKickoffByDbIdRef.current.size} tracked).`
-                        ),
-                        'success'
-                    );
-                }
-            } catch (err) {
-                if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
+            const storyboardWaitResult = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            if (analysisStopRequestedRef.current) {
+                throw createAnalysisCanceledError();
             }
+            const aiShotsBatchStarted = Boolean(storyboardWaitResult?.started);
+            const storyboardProgressSnapshot = storyboardWaitResult?.progress || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
@@ -13318,7 +13423,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .join('；');
             const reviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
-            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -13344,21 +13448,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const reviewSuffix = reviewIssues.length > 0
                 ? t(`（另有 ${reviewIssues.length} 项待复核，见下方问题列表）`, ` (${reviewIssues.length} issue(s) need review; see list below)`)
                 : '';
-            
-            const appendStoryboardNotice = (baseZh, baseEn) => {
-                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
-                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
-            };
+            const storyboardSuffix = buildStoryboardCompletionSuffix(storyboardWaitResult);
 
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: (postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + reviewSuffix,
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + storyboardSuffix + reviewSuffix,
             });
 
             if (onLog) onLog("AI Analysis applied and saved.");
@@ -14305,24 +14405,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importWarningMessage,
             });
 
-            let aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0;
-            try {
-                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
-                aiShotsBatchStarted = storyboardKickoffByDbIdRef.current.size > 0
-                    || Number(residualStoryboard?.started || 0) > 0
-                    || Number(residualStoryboard?.totalTracked || 0) > 0;
-                if (aiShotsBatchStarted && onLog) {
-                    onLog(
-                        t(
-                            `分镜任务已按场景调起（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）。`,
-                            `Storyboard tasks kicked off per scene (${storyboardKickoffByDbIdRef.current.size} tracked).`
-                        ),
-                        'success'
-                    );
-                }
-            } catch (err) {
-                if (onLog) onLog(`Failed to auto-start storyboard generation: ${err?.message || err}`, 'warning');
+            const storyboardWaitResult = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            if (analysisStopRequestedRef.current) {
+                throw createAnalysisCanceledError();
             }
+            const aiShotsBatchStarted = Boolean(storyboardWaitResult?.started);
+            const storyboardProgressSnapshot = storyboardWaitResult?.progress || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
@@ -14332,7 +14423,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 .filter(Boolean)
                 .join('；');
             const advancedReviewWarningText = reviewIssues.length > 0 ? buildAnalysisReviewWarningMessage(reviewIssues) : '';
-            const storyboardProgressSnapshot = storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS;
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -14358,21 +14448,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const advancedReviewSuffix = reviewIssues.length > 0
                 ? t(`（另有 ${reviewIssues.length} 项待复核，见下方问题列表）`, ` (${reviewIssues.length} issue(s) need review; see list below)`)
                 : '';
-            
-            const appendStoryboardNotice = (baseZh, baseEn) => {
-                if (!aiShotsBatchStarted) return t(baseZh, baseEn);
-                return t(`${baseZh} 分镜任务已在后台启动。`, `${baseEn} Storyboard generation started in background.`);
-            };
+            const storyboardSuffix = buildStoryboardCompletionSuffix(storyboardWaitResult);
 
             setAnalysisFlowStatus({
                 phase: 'completed',
                 message: (postImportMissingItems > 0
                     ? (
                         postImportSupplementFailed > 0
-                            ? appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
-                            : appendStoryboardNotice(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
+                            ? t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产，遇到 ${postImportSupplementFailed} 个构建异常）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped, ${postImportSupplementFailed} failed).`)
+                            : t(`🎉 解析大功告成！我们在剧本中识别出 ${postImportMissingItems} 个核心元素，并为您自动化构建了 ${postImportSupplementCreated} 个专属资产（跳过 ${postImportSupplementSkipped} 个已存资产）。`, `Analysis complete! Auto-generated ${postImportSupplementCreated} new assets based on your story (${postImportSupplementSkipped} skipped).`)
                     )
-                    : appendStoryboardNotice('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + advancedReviewSuffix,
+                    : t('✅ 分析管线已完成！该场景暂未发现需要新补充的主体资产。', 'Analysis pipeline completed. No missing entities to construct.')) + storyboardSuffix + advancedReviewSuffix,
             });
 
             setShowAnalysisModal(false);
@@ -14830,15 +14916,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 };
             }
 
-            let restartStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0;
-            try {
-                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
-                restartStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
-                    || Number(residualStoryboard?.started || 0) > 0
-                    || Number(residualStoryboard?.totalTracked || 0) > 0;
-            } catch (storyboardErr) {
-                onLog?.(`Failed to auto-start storyboard generation after Stage 2 restart: ${storyboardErr?.message || storyboardErr}`, 'warning');
-            }
+            const restartStoryboard = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            const restartStoryboardStarted = Boolean(restartStoryboard?.started);
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -14848,15 +14930,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: restartStoryboardStarted,
-                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
+                storyboardTaskProgress: restartStoryboard?.progress || EMPTY_STORYBOARD_TASK_PROGRESS,
                 warning: '',
                 error: '',
             }));
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: restartStoryboardStarted
-                    ? t('已基于第一阶段产物重新完成第二、三阶段；分镜任务已按场景调起。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs; storyboard tasks kicked off per scene.')
-                    : t('已基于第一阶段产物重新完成第二、三阶段。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs.'),
+                message: t('已基于第一阶段产物重新完成第二、三阶段。', 'Stage 2 and Stage 3 completed from saved Stage 1 outputs.')
+                    + buildStoryboardCompletionSuffix(restartStoryboard),
             });
             onLog?.('Stage 2 restart completed using saved Stage 1 outputs.', 'success');
         } catch (error) {
@@ -15316,15 +15397,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 message: t('✅ 场景编排导入完成，正在更新任务状态...', 'Scene beats import completed, updating task status...'),
             });
 
-            let rerunStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0;
-            try {
-                const residualStoryboard = await ensureStoryboardTasksForImportedScenes(importReport);
-                rerunStoryboardStarted = storyboardKickoffByDbIdRef.current.size > 0
-                    || Number(residualStoryboard?.started || 0) > 0
-                    || Number(residualStoryboard?.totalTracked || 0) > 0;
-            } catch (storyboardErr) {
-                onLog?.(`Failed to auto-start storyboard generation after scene beats rerun: ${storyboardErr?.message || storyboardErr}`, 'warning');
-            }
+            const rerunStoryboard = await awaitPendingStoryboardTasks({
+                importReport,
+                ensureResidual: true,
+            });
+            const rerunStoryboardStarted = Boolean(rerunStoryboard?.started);
+            const rerunStoryboardSuffix = buildStoryboardCompletionSuffix(rerunStoryboard);
 
             setAnalysisUiReport(buildCompletedAnalysisUiReport({
                 status: 'completed',
@@ -15334,7 +15412,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport,
                 runtimeMeta,
                 storyboardAutoStarted: rerunStoryboardStarted,
-                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
+                storyboardTaskProgress: rerunStoryboard?.progress || EMPTY_STORYBOARD_TASK_PROGRESS,
                 warning: '',
                 error: '',
                 runTag: 'scene_beats_only_rerun',
@@ -15342,17 +15420,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'completed',
-                message: rerunMode === 'single'
-                    ? (
-                        rerunStoryboardStarted
-                            ? t(`场景 ${targetSceneId} 编排已重排完成，镜头任务已调起。`, `Scene ${targetSceneId} beats rerun completed; storyboard task started.`)
-                            : t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
-                    )
-                    : (
-                        rerunStoryboardStarted
-                            ? t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成，镜头任务已按场调起。`, `All ${orchestrationSceneCount} scene beats reruns completed; storyboard tasks started.`)
-                            : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`)
-                    ),
+                message: (
+                    rerunMode === 'single'
+                        ? t(`场景 ${targetSceneId} 编排已重排完成。`, `Scene ${targetSceneId} beats rerun completed.`)
+                        : t(`全部 ${orchestrationSceneCount} 场场景编排已重排完成。`, `All ${orchestrationSceneCount} scene beats reruns completed.`)
+                ) + rerunStoryboardSuffix,
             });
         } catch (error) {
             const friendlyError = localizeAnalysisFailureMessage(error?.message || String(error));
@@ -15388,12 +15460,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
         beginSceneOrchestrationPanelTracking,
+        buildStoryboardCompletionSuffix,
         clearAnalysisTaskMarker,
         clearSceneMarkdownPatchForScenes,
         endSceneOrchestrationPanelTracking,
         ensureOrchestrationScenesInWorkspace,
         ensurePersistedSubjectIndexForDownstream,
-        ensureStoryboardTasksForImportedScenes,
+        awaitPendingStoryboardTasks,
         extractPureSubjectIndexText,
         extractSceneDisplayLabel,
         extractStage1AdaptedScriptBody,

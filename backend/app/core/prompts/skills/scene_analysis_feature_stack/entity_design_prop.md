@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_prop.md
-# Prompt Updated At: 2026-07-17 13:10:00 +08:00
+# Prompt Updated At: 2026-07-18 01:25:00 +08:00
 
 # Skill 1-3: 资产设计 · 道具专属合同
 
@@ -26,7 +26,7 @@
 
 ### 1.1 画幅与命名
 - 沿用 common §1.1：16:9 横向、绝对纯白连续画板、同一横排四视图；第一宫特写 35% 纵向居中，正/侧/背共享 65%；禁 2×2、换行、错层。`generation_prompt_en` 固定 `""`。
-- `name` 逐字符透传 Subject Index；衍生名与 `base_entity` 可追溯（`{基准}_{状态/面/形态}`）。
+- `name` / `name_en` / `base_name_en` **逐字符原样透传** Subject Index；**禁止任何形式的修改**。衍生实体名须等于 Index 已登记衍生行全名；`base_entity` 仅供追溯，不得据此改写输出名。
 - Clean Plate：禁手/人影/持握残留（除非上游指定为道具组成部分）。
 
 ### 1.2 语境、细节与文字
@@ -69,7 +69,7 @@
 ---
 
 ## 六、输出模板（严格）
-唯一输出：一个 JSON 对象，根键仅 `props`（无实体则 `[]`）。全量覆盖 prop Subject；名称逐字一致；每条含 `visual_dependencies` 与 `dependency_strategy {type, logic}`；`generation_prompt_en` 恒为 `""`。字段禁角色壳；输出中禁写本文章节号（如「§4.1」）。
+唯一输出：一个 JSON 对象，根键仅 `props`（无实体则 `[]`）。全量覆盖 prop Subject；名称与 Index **逐字符完全一致**（任一字不等即废弃）；每条含 `visual_dependencies` 与 `dependency_strategy {type, logic}`；`generation_prompt_en` 恒为 `""`。字段禁角色壳；输出中禁写本文章节号（如「§4.1」）。
 
 #### 统一 JSON 示例（字段形态参考）
 ```json
