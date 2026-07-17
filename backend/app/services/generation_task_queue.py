@@ -791,6 +791,56 @@ def get_generation_task_status(job_id: str) -> Optional[Dict[str, Any]]:
         db.close()
 
 
+_ACTIVE_GENERATION_TASK_STATUSES = (
+    "queued",
+    "submit",
+    "pending",
+    "running",
+    "waiting_callback",
+    "callback_processing",
+)
+
+
+def count_active_generation_tasks_for_user(
+    user_id: int,
+    *,
+    kinds: Optional[List[str]] = None,
+) -> int:
+    """Count in-flight generation queue tasks for one user (optionally by kind)."""
+    _ensure_queue_table_ready()
+    status_list = ", ".join(f"'{status}'" for status in _ACTIVE_GENERATION_TASK_STATUSES)
+    clauses = [
+        "user_id = :user_id",
+        f"status IN ({status_list})",
+    ]
+    params: Dict[str, Any] = {"user_id": int(user_id)}
+    if kinds:
+        normalized_kinds = [str(kind or "").strip().lower() for kind in kinds if str(kind or "").strip()]
+        if normalized_kinds:
+            placeholders: List[str] = []
+            for index, kind in enumerate(normalized_kinds):
+                key = f"kind_{index}"
+                placeholders.append(f":{key}")
+                params[key] = kind
+            clauses.append(f"kind IN ({', '.join(placeholders)})")
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text(
+                f"""
+                SELECT COUNT(*) AS cnt
+                FROM generation_task_queue
+                WHERE {' AND '.join(clauses)}
+                """
+            ),
+            params,
+        ).mappings().first()
+        return int((row or {}).get("cnt") or 0)
+    finally:
+        db.close()
+
+
 def cancel_generation_task(job_id: str, *, reason: str = "Task canceled by user") -> Optional[Dict[str, Any]]:
     _ensure_queue_table_ready()
     now = time.time()

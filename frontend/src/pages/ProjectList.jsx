@@ -105,6 +105,7 @@ import {
     normalizeProjectEpisodeBasePositioning,
     normalizeProjectSceneAnalysisEra,
     normalizeProjectSceneAnalysisSafety,
+    PROJECT_ASPECT_RATIO_OPTIONS,
 } from './editor/projectOptionConfig';
 
 const cinematicImages = [
@@ -162,9 +163,9 @@ const resolveProjectListImageUrl = (url) => {
 
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
-const PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS = ['16:9', '2.35:1', '4:3', '9:16', '1:1'];
+const PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS = [...PROJECT_ASPECT_RATIO_OPTIONS];
 const PROJECT_CREATE_FALLBACK_IMAGE_SIZE_OPTIONS = ['0.5K', '1K', '2K', '4K'];
-const PROJECT_CREATE_PREFERRED_ASPECT_RATIO = '9:16';
+const PROJECT_CREATE_PREFERRED_ASPECT_RATIO = '16:9';
 const PROJECT_CREATE_PREFERRED_IMAGE_SIZE = '2K';
 const PROJECT_CREATE_PREFERRED_TYPE = '实拍（真人剧/电影感8K） / Live Action (Live-Action Drama/Cinematic 8K)';
 const PROJECT_CREATE_PREFERRED_COUNTRY_REGION = '欧美 / Europe & America';
@@ -255,7 +256,6 @@ const normalizeProjectCreateOptions = (payload) => {
     const normalizedBasePositioning = uniqueNonEmptyStrings(
         basePositioning.map(normalizeProjectEpisodeBasePositioning).filter(Boolean)
     );
-    const aspectRatio = uniqueNonEmptyStrings(safe.aspect_ratio);
     const imageSize = uniqueNonEmptyStrings([
         ...(Array.isArray(safe.image_size) ? safe.image_size : []),
         ...PROJECT_CREATE_DEFAULT_OPTIONS.image_size,
@@ -290,7 +290,8 @@ const normalizeProjectCreateOptions = (payload) => {
         country_region: countryRegion.length ? countryRegion : [...PROJECT_CREATE_DEFAULT_OPTIONS.country_region],
         language: language.length ? language : [...PROJECT_CREATE_DEFAULT_OPTIONS.language],
         base_positioning: normalizedBasePositioning.length ? normalizedBasePositioning : [...PROJECT_CREATE_DEFAULT_OPTIONS.base_positioning],
-        aspect_ratio: aspectRatio.length ? aspectRatio : [...PROJECT_CREATE_DEFAULT_OPTIONS.aspect_ratio],
+        // Always Seedance-2 canvas options (ignore stale admin create-option overrides).
+        aspect_ratio: [...PROJECT_ASPECT_RATIO_OPTIONS],
         image_size: imageSize.length ? imageSize : [...PROJECT_CREATE_DEFAULT_OPTIONS.image_size],
         era: normalizedEra.length ? normalizedEra : [...PROJECT_CREATE_DEFAULT_OPTIONS.era],
         season_occurrence: seasonOccurrence.length ? seasonOccurrence : [...PROJECT_CREATE_DEFAULT_OPTIONS.season_occurrence],

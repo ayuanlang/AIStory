@@ -2246,6 +2246,30 @@ export const stopAllGenerationJobs = async (kind = 'all', { force = false } = {}
     return response?.data || {};
 };
 
+const postMediaGenerationSubmitWithParallelLimitRetry = async (path, payload, config = {}, options = {}) => {
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || 6));
+    const baseDelayMs = Math.max(200, Number(options.baseDelayMs || 1500));
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            return await api.post(path, payload, config);
+        } catch (error) {
+            lastError = error;
+            const status = Number(error?.response?.status || 0);
+            if (status !== 429 || attempt >= maxAttempts) {
+                throw error;
+            }
+            const detail = String(error?.response?.data?.detail || error?.message || '');
+            const isParallelLimit = /并行|parallel|上限|is_active/i.test(detail) || status === 429;
+            if (!isParallelLimit) {
+                throw error;
+            }
+            await delay(baseDelayMs * attempt);
+        }
+    }
+    throw lastError || new Error('Media generation submit failed');
+};
+
 export const generateImage = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
     const {
         job_timeout_ms,
@@ -2304,7 +2328,7 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 
     let submitResp;
     try {
-        submitResp = await api.post('/generate/image/submit', payload, {
+        submitResp = await postMediaGenerationSubmitWithParallelLimitRetry('/generate/image/submit', payload, {
             headers: {
                 'X-Idempotency-Key': idempotencyKey,
             },
@@ -2408,7 +2432,7 @@ export const submitImageGenerationJob = async (prompt, provider = null, ref_imag
         ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
-    const response = await api.post('/generate/image/submit', payload);
+    const response = await postMediaGenerationSubmitWithParallelLimitRetry('/generate/image/submit', payload);
     return response.data;
 };
 
@@ -2454,7 +2478,7 @@ const requestOptions = { ...(restOptions || {}) };
 
     let submitResp;
     try {
-        submitResp = await api.post('/generate/video/submit', payload, {
+        submitResp = await postMediaGenerationSubmitWithParallelLimitRetry('/generate/video/submit', payload, {
             headers: {
                 'X-Idempotency-Key': idempotencyKey,
             },

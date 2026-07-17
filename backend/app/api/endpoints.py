@@ -14739,6 +14739,14 @@ _PROJECT_RESOLUTION_PRESETS = {
     ("4:3", "1K"): (1280, 960),
     ("4:3", "2K"): (2048, 1536),
     ("4:3", "4K"): (2880, 2160),
+    ("3:4", "0.5K"): (720, 960),
+    ("3:4", "1K"): (960, 1280),
+    ("3:4", "2K"): (1536, 2048),
+    ("3:4", "4K"): (2160, 2880),
+    ("21:9", "0.5K"): (960, 411),
+    ("21:9", "1K"): (1280, 549),
+    ("21:9", "2K"): (2560, 1097),
+    ("21:9", "4K"): (3840, 1646),
     ("2.35:1", "0.5K"): (960, 409),
     ("2.35:1", "1K"): (1280, 544),
     ("2.35:1", "2K"): (2560, 1089),
@@ -30029,6 +30037,8 @@ class UserPageOut(BaseModel):
 
 USER_ACTIVE_LEVEL_DEFAULT = 1
 USER_BATCH_PARALLEL_LIMIT_MAX = 12
+USER_MEDIA_GENERATION_PARALLEL_BONUS = 2
+USER_MEDIA_GENERATION_PARALLEL_LIMIT_MAX = USER_BATCH_PARALLEL_LIMIT_MAX + USER_MEDIA_GENERATION_PARALLEL_BONUS
 SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
 SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
 SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 1
@@ -30051,6 +30061,114 @@ def _resolve_user_batch_parallel_limit(value: Any, default: int = USER_ACTIVE_LE
     if normalized <= 0:
         normalized = max(1, int(default or USER_ACTIVE_LEVEL_DEFAULT))
     return min(USER_BATCH_PARALLEL_LIMIT_MAX, max(1, normalized))
+
+
+def _resolve_user_media_generation_parallel_limit(value: Any, default: int = USER_ACTIVE_LEVEL_DEFAULT) -> int:
+    """Image/video submit parallel cap: is_active + 2 (clamped)."""
+    active_level = _resolve_user_batch_parallel_limit(value, default)
+    return min(
+        USER_MEDIA_GENERATION_PARALLEL_LIMIT_MAX,
+        max(1, int(active_level) + int(USER_MEDIA_GENERATION_PARALLEL_BONUS)),
+    )
+
+
+_USER_MEDIA_GENERATION_ACTIVE_STATUSES = frozenset(
+    {"queued", "submit", "pending", "running", "waiting_callback", "callback_processing"}
+)
+
+
+def _count_user_active_media_jobs_in_memory(user_id: int) -> int:
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return 0
+    active_ids: set[str] = set()
+    with IMAGE_JOB_LOCK:
+        for job_id, job in IMAGE_JOB_STORE.items():
+            if int((job or {}).get("user_id") or 0) != uid:
+                continue
+            status = str((job or {}).get("status") or "").strip().lower()
+            if status in _USER_MEDIA_GENERATION_ACTIVE_STATUSES:
+                active_ids.add(str(job_id))
+    with VIDEO_JOB_LOCK:
+        for job_id, job in VIDEO_JOB_STORE.items():
+            if int((job or {}).get("user_id") or 0) != uid:
+                continue
+            status = str((job or {}).get("status") or "").strip().lower()
+            if status in _USER_MEDIA_GENERATION_ACTIVE_STATUSES:
+                active_ids.add(str(job_id))
+    return len(active_ids)
+
+
+def _count_user_active_media_generation_jobs(user_id: int) -> int:
+    """Active image+video jobs for one user (queue DB + local job stores)."""
+    from app.services.generation_task_queue import count_active_generation_tasks_for_user
+
+    db_count = count_active_generation_tasks_for_user(int(user_id), kinds=["image", "video"])
+    mem_count = _count_user_active_media_jobs_in_memory(int(user_id))
+    # max covers single-process lag before enqueue and multi-worker DB visibility
+    return max(int(db_count or 0), int(mem_count or 0))
+
+
+def _enforce_user_media_generation_parallel_limit(user: "User") -> int:
+    """Reject new image/video submits when user is_active+2 parallel slots are full."""
+    active_level = _resolve_user_batch_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
+    limit = _resolve_user_media_generation_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
+    active = _count_user_active_media_generation_jobs(int(getattr(user, "id", 0) or 0))
+    if active >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"并行图片/视频生成已达上限（当前 {active}/{limit}）。"
+                f"启用级别 is_active={active_level}（上限=is_active+2），请等待进行中的任务完成后再提交。"
+            ),
+        )
+    return limit
+
+
+def _release_media_generation_job_after_limit_race(
+    *,
+    kind: str,
+    job_id: str,
+    user: "User",
+    limit: int,
+) -> None:
+    """If a race pushed the user over the parallel limit, cancel the just-queued job."""
+    active = _count_user_active_media_generation_jobs(int(getattr(user, "id", 0) or 0))
+    if active <= limit:
+        return
+    active_level = _resolve_user_batch_parallel_limit(getattr(user, "is_active", USER_ACTIVE_LEVEL_DEFAULT))
+    reason = (
+        f"并行图片/视频生成已达上限（当前 {active}/{limit}）。"
+        f"启用级别 is_active={active_level}（上限=is_active+2），请等待进行中的任务完成后再提交。"
+    )
+    try:
+        from app.services.generation_task_queue import cancel_generation_task
+
+        cancel_generation_task(str(job_id), reason=reason)
+    except Exception:
+        logger.warning(
+            "[MediaParallelLimit] cancel after race failed | kind=%s job_id=%s user_id=%s",
+            kind,
+            job_id,
+            getattr(user, "id", None),
+            exc_info=True,
+        )
+    safe_kind = str(kind or "").strip().lower()
+    if safe_kind == "image":
+        _set_image_job(job_id, status="failed", error=reason, finished_at=now_bj_iso())
+        with IMAGE_JOB_LOCK:
+            IMAGE_JOB_TASKS.pop(job_id, None)
+            scope_key = str((IMAGE_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+            if scope_key and IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                IMAGE_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+    elif safe_kind == "video":
+        _set_video_job(job_id, status="failed", error=reason, finished_at=now_bj_iso())
+        with VIDEO_JOB_LOCK:
+            VIDEO_JOB_TASKS.pop(job_id, None)
+            scope_key = str((VIDEO_JOB_STORE.get(job_id) or {}).get("task_scope") or "").strip()
+            if scope_key and VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) == job_id:
+                VIDEO_ACTIVE_SCOPE_STORE.pop(scope_key, None)
+    raise HTTPException(status_code=429, detail=reason)
 
 
 def _is_valid_email_format(email: str) -> bool:
@@ -37843,6 +37961,7 @@ async def generate_image_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    _enforce_user_media_generation_parallel_limit(current_user)
     try:
         _release_db_connection(db, "generate_image_sync_wait")
         return await asyncio.wait_for(_run_generate_image(req, current_user, db), timeout=IMAGE_SYNC_TIMEOUT_SECONDS)
@@ -39576,8 +39695,7 @@ async def submit_generate_image_endpoint(
     store_keys.append(_build_image_idempotency_store_key(current_user.id, fingerprint_token))
     store_keys = list(dict.fromkeys([k for k in store_keys if str(k or "").strip()]))
 
-    with IMAGE_JOB_LOCK:
-        _prune_image_jobs_locked()
+    def _image_dedup_response_locked() -> Optional[Dict[str, Any]]:
         active_scope_job_id = str(IMAGE_ACTIVE_SCOPE_STORE.get(scope_key) or "").strip()
         if active_scope_job_id:
             active_scope_job = dict(IMAGE_JOB_STORE.get(active_scope_job_id) or {})
@@ -39620,7 +39738,20 @@ async def submit_generate_image_endpoint(
                     "created_at": existing_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                 }
+        return None
 
+    with IMAGE_JOB_LOCK:
+        _prune_image_jobs_locked()
+        deduped = _image_dedup_response_locked()
+        if deduped is not None:
+            return deduped
+
+    parallel_limit = _enforce_user_media_generation_parallel_limit(current_user)
+
+    with IMAGE_JOB_LOCK:
+        deduped = _image_dedup_response_locked()
+        if deduped is not None:
+            return deduped
         job_id = uuid.uuid4().hex
         for store_key in store_keys:
             IMAGE_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
@@ -39679,7 +39810,7 @@ async def submit_generate_image_endpoint(
     )
 
     logger.info(
-        "[ImageJob] queued | job_id=%s user_id=%s scope=%s idempotency=%s mode=%s asset_type=%s shot_id=%s size=%sx%s aspect_ratio=%s prompt_preview=%s",
+        "[ImageJob] queued | job_id=%s user_id=%s scope=%s idempotency=%s mode=%s asset_type=%s shot_id=%s size=%sx%s aspect_ratio=%s prompt_preview=%s parallel_limit=%s",
         job_id,
         current_user.id,
         scope_key,
@@ -39691,6 +39822,7 @@ async def submit_generate_image_endpoint(
         req_payload.get("height") or None,
         str(req_payload.get("aspect_ratio") or "").strip() or None,
         str(req_payload.get("prompt") or "").strip().replace("\n", " ")[:160] or None,
+        parallel_limit,
     )
 
     image_task = _submit_generation_background_task(
@@ -39701,6 +39833,12 @@ async def submit_generate_image_endpoint(
     )
     with IMAGE_JOB_LOCK:
         IMAGE_JOB_TASKS[job_id] = image_task
+    _release_media_generation_job_after_limit_race(
+        kind="image",
+        job_id=job_id,
+        user=current_user,
+        limit=parallel_limit,
+    )
     return {"job_id": job_id, "status": "queued", "created_at": now}
 
 
@@ -40155,6 +40293,7 @@ async def generate_video_endpoint(
 
         existing_task = _VIDEO_INFLIGHT_BY_KEY.get(dedup_key)
         if existing_task is None:
+            _enforce_user_media_generation_parallel_limit(current_user)
             _release_db_connection(db, "generate_video_sync_wait")
             try:
                 callback_ticket_val = f"video-shot-{req.shot_id}" if getattr(req, "shot_id", None) else None
@@ -42544,8 +42683,7 @@ async def submit_generate_video_endpoint(
     store_keys.append(_build_video_idempotency_store_key(current_user.id, fingerprint_token))
     store_keys = list(dict.fromkeys([k for k in store_keys if str(k or "").strip()]))
 
-    with VIDEO_JOB_LOCK:
-        _prune_video_jobs_locked()
+    def _video_dedup_response_locked() -> Optional[Dict[str, Any]]:
         active_scope_job_id = str(VIDEO_ACTIVE_SCOPE_STORE.get(scope_key) or "").strip()
         if active_scope_job_id:
             active_scope_job = dict(VIDEO_JOB_STORE.get(active_scope_job_id) or {})
@@ -42588,7 +42726,20 @@ async def submit_generate_video_endpoint(
                     "created_at": existing_job.get("created_at") or now_bj_iso(),
                     "deduplicated": True,
                 }
+        return None
 
+    with VIDEO_JOB_LOCK:
+        _prune_video_jobs_locked()
+        deduped = _video_dedup_response_locked()
+        if deduped is not None:
+            return deduped
+
+    parallel_limit = _enforce_user_media_generation_parallel_limit(current_user)
+
+    with VIDEO_JOB_LOCK:
+        deduped = _video_dedup_response_locked()
+        if deduped is not None:
+            return deduped
         job_id = uuid.uuid4().hex
         for store_key in store_keys:
             VIDEO_SUBMIT_IDEMPOTENCY_STORE[store_key] = {
@@ -42641,6 +42792,12 @@ async def submit_generate_video_endpoint(
     )
     with VIDEO_JOB_LOCK:
         VIDEO_JOB_TASKS[job_id] = video_task
+    _release_media_generation_job_after_limit_race(
+        kind="video",
+        job_id=job_id,
+        user=current_user,
+        limit=parallel_limit,
+    )
     return {"job_id": job_id, "status": "queued", "created_at": now}
 
 

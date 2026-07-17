@@ -1079,3 +1079,5 @@ export const PROJECT_EP_RESOLUTION_OPTIONS = ['1080p', '2K', '4K', '8K'];
 
 export const PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS = ['首尾帧 / First and Last Frame', '参考图 / Reference Image'];
 export const PROJECT_EP_CREATIVITY_OPTIONS = ['正常 / Normal', '增加想象力 / Increase Imagination', '遵守剧本优先 / Strict to Script'];
+/** Seedance-2 aligned project canvas options; 16:9 / 9:16 first. */
+export const PROJECT_ASPECT_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'];

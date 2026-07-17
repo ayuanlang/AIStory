@@ -1938,7 +1938,8 @@ export function normalizeImageSizeOption(value) {
 export function normalizeAspectRatioOption(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (['16:9', '9:16', '4:3', '2.35:1', '1:1'].includes(raw)) return raw;
+    // Seedance-2 ratios + legacy 2.35:1 (mapped to 21:9 at video submit).
+    if (['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '2.35:1'].includes(raw)) return raw;
     return '';
 }
 
@@ -2389,6 +2390,14 @@ export function getResolutionByAspectAndImageSize(aspectRatio, imageSize) {
         '4:3|1K': { width: '1440', height: '1080' },
         '4:3|2K': { width: '2048', height: '1536' },
         '4:3|4K': { width: '2880', height: '2160' },
+        '3:4|0.5K': { width: '720', height: '960' },
+        '3:4|1K': { width: '1080', height: '1440' },
+        '3:4|2K': { width: '1536', height: '2048' },
+        '3:4|4K': { width: '2160', height: '2880' },
+        '21:9|0.5K': { width: '960', height: '411' },
+        '21:9|1K': { width: '1920', height: '823' },
+        '21:9|2K': { width: '2560', height: '1097' },
+        '21:9|4K': { width: '3840', height: '1646' },
         '2.35:1|0.5K': { width: '960', height: '409' },
         '2.35:1|1K': { width: '1920', height: '817' },
         '2.35:1|2K': { width: '2560', height: '1089' },
