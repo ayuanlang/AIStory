@@ -4,8 +4,6 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'r
 import { LogProvider } from './context/LogContext';
 import LogPanel from './components/LogPanel';
 import GlobalMessageHost from './components/GlobalMessageHost';
-import GlobalAIAssistant from './components/GlobalAIAssistant';
-import ErrorBoundary from './components/ErrorBoundary';
 import { getUiLang, tUI, UI_LANG_EVENT, UI_LANG_KEY } from './lib/uiLang';
 import { getMaintenanceStatus } from './services/api';
 
@@ -50,7 +48,6 @@ function App() {
   const AUTH_LOGIN_SUCCESS_EVENT = 'AUTH_LOGIN_SUCCESS';
   const AUTH_LOGOUT_EVENT = 'AUTH_LOGOUT';
   const [appUiLang, setAppUiLang] = useState(getUiLang());
-  const [aiAssistantInstanceKey, setAiAssistantInstanceKey] = useState(0);
   const [maintenanceStatus, setMaintenanceStatus] = useState({ is_active: false, ends_at: null, message: '' });
   const loadingText = tUI(appUiLang, '加载中...', 'Loading...');
 
@@ -220,25 +217,6 @@ function App() {
               <Route path="/admin/users" element={<SuperuserRoute><UserAdmin /></SuperuserRoute>} />
             </Routes>
           </Suspense>
-          <ErrorBoundary
-            fallbackRender={({ resetErrorBoundary }) => (
-              <div className="fixed right-4 bottom-4 z-[121] rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-200 shadow-lg backdrop-blur-sm">
-                <div>{tUI(appUiLang, 'AI 助手发生异常', 'AI assistant crashed')}</div>
-                <button
-                  type="button"
-                  className="mt-1 inline-flex items-center rounded border border-red-300/50 px-2 py-0.5 text-[11px] hover:bg-red-500/20"
-                  onClick={() => {
-                    setAiAssistantInstanceKey((prev) => prev + 1);
-                    resetErrorBoundary();
-                  }}
-                >
-                  {tUI(appUiLang, '重试', 'Retry')}
-                </button>
-              </div>
-            )}
-          >
-            <GlobalAIAssistant key={`global-ai-${aiAssistantInstanceKey}`} />
-          </ErrorBoundary>
           <GlobalMessageHost />
           <LogPanel />
         </div>

@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-17 08:55:00 +08:00
+# Prompt Updated At: 2026-07-17 13:25:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -52,13 +52,13 @@
 | :--- | :---: | :--- |
 | `[SCENE_START]` / `[SCENE_END]` | **是** | Scene ID / 场序权威源 |
 | `[BEAT_START:{n}]`…`[BEAT_END:{n}]` | **是** | **内容唯一源**；须保留内外部分隔符 |
-| `[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`（【主环境】/【衍生环境】） | **否** | 归 Stage 1 成稿 / Stage 2.1；本环节不接收 |
-| 【故事内核】【观察视角与空间建置】【Scene实体覆盖】等其它 Scene 级【】块 | **否** | 表格对应字段写 `None`，**禁止**补创或从 Index 回填 |
+| `[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`（【主环境】/【衍生环境】） | **否** | 归 Stage 1 成稿 / Stage 2.1；本环节不接收、不输出 |
+| 【故事内核】【节拍时间规划】【Duration Estimate Basis】【决战 Beat 规划】【宏观 Beat 规划】【细节特写规划】【Scene识别】【主环境】【衍生环境】【Scene实体覆盖】【观察视角与空间建置】【场景切换与首节拍转场】等 Scene 级【】块 | **否** | 上游不输入；本环节**禁止**接收、补创、从 Index 回填，也**禁止**写入 Core Scene Info |
 | **Subject Index** | **是** | 命名唯一白名单（只读、不新建/改属性） |
 
 Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
 
-> **兜底说明（只读）**：若上游因 Beat 分割失败而注入整场正文，仍**只**对其中可识别的 `[BEAT_START]`…`[BEAT_END]`（或 legacy `- Beat N`）做 Index 化；**禁止**把【主环境】/【衍生环境】等说明块写入 `{Beats}` 或补进其它 `{字段}`。
+> **兜底说明（只读）**：若上游因 Beat 分割失败而注入整场正文，仍**只**对其中可识别的 `[BEAT_START]`…`[BEAT_END]`（或 legacy `- Beat N`）做 Index 化；**禁止**把【主环境】/【衍生环境】及其它 Scene 级【】说明块写入 `{Beats}` 或另起废弃字段。
 
 ## 硬约束
 
@@ -122,7 +122,6 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 | 字段 | 规则 |
 | :--- | :--- |
 | `{Beats}` | **强制主责**：输入全部 Beat 块原样落入（仅叙述层实体名 Index 化；保留外层/内层分隔符；台词原样） |
-| `{故事内核}` / `{节拍时间规划}` / `{Duration Estimate Basis}` / `{决战 Beat 规划}` / `{宏观 Beat 规划}` / `{细节特写规划}` / `{Scene识别}` / `{主环境}` / `{衍生环境}` / `{Scene实体覆盖}` / `{观察视角与空间建置}` / `{场景切换与首节拍转场}` | 本环节输入不含 → **`None`**（禁止从 Index 或 ENV_BLOCK 回填） |
 | `{登场实体}` | 从本场 `{Beats}` 已 Index 化实体汇总；无则 `None` |
 | `{覆盖核销}` | 名称校正、编号规范化、资产缺口等工程备注 |
 | `Entry State` / `Exit State` | Beat 首/末已写状态可摘录；未写→`None` |
@@ -130,12 +129,14 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 | `Environment Name` / `Linked Characters` / `Key Props` | 仅从本场 Beat 可核销实体汇总（Index 名）；无则 `None` |
 | `Environment Relation` / `Base Environment Reference` / `Environment Delta` | Beat 未写→`None`；禁补创 |
 
+> **已废弃（禁止出现在 Core Scene Info）**：`{故事内核}` / `{节拍时间规划}` / `{Duration Estimate Basis}` / `{决战 Beat 规划}` / `{宏观 Beat 规划}` / `{细节特写规划}` / `{Scene识别}` / `{主环境}` / `{衍生环境}` / `{Scene实体覆盖}` / `{观察视角与空间建置}` / `{场景切换与首节拍转场}`——上游不输入，本环节**不输出**（含禁止写 `None` 占位）。
+
 ### 结构示例
 
 （仅示格式；`…` 须替换为输入 Beat 真实全文，禁照抄占位、禁借示例扩写）
 
-| EP01 | EP01_SC01 | 1 | {场名或None} | {Xs或None} | - **{故事内核}**: None<br>- **{主环境}**: None<br>- **{衍生环境}**: None<br>- **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（叙述层 Index 化）…<br>────【入戏】────<br>…（台词原样）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{覆盖核销}**: …<br>- **{登场实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
+| EP01 | EP01_SC01 | 1 | {场名或None} | {Xs或None} | - **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（叙述层 Index 化）…<br>────【入戏】────<br>…（台词原样）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{覆盖核销}**: …<br>- **{登场实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
 
 ### 输出前自检
 
-Beat 数/顺序=输入｜编号规范｜Beat 正文原样落入（含 `[BEAT_START/END]` 与 建置/入戏/切换说明分隔符）｜叙述层仅实体名 Index 化｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜`{主环境}`/`{衍生环境}` 等未提供字段为 `None`｜未把 `ENV_BLOCK` 或其它 Scene 级【】块写入输出｜缺口已标｜无新增 Beat 未写实体/情节。
+Beat 数/顺序=输入｜编号规范｜Beat 正文原样落入（含 `[BEAT_START/END]` 与 建置/入戏/切换说明分隔符）｜叙述层仅实体名 Index 化｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜Core Scene Info **仅含** `{Beats}`/`{覆盖核销}`/`{登场实体}`（无废弃 Scene 级字段、无 `None` 占位）｜未把 `ENV_BLOCK` 或其它 Scene 级【】块写入输出｜缺口已标｜无新增 Beat 未写实体/情节。
