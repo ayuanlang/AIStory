@@ -48336,7 +48336,8 @@ async def admin_update_queue_config(config: QueueConfigBase, current_user: User 
     payload = config.model_dump() if hasattr(config, "model_dump") else config.dict()
     saved_config = save_queue_config(payload)
     
-    # Reload locally and let user know it applies on restart
+    # Keep process-local runtime config in sync for flags that are read live.
+    # queue_threads / callback_threads still require a backend restart to resize workers.
     global _q_conf
     _q_conf = dict(saved_config)
     return QueueConfigBase(**saved_config)

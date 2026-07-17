@@ -22,6 +22,8 @@ npm-debug.log
 backend/uploads/
 backend/data/uploads/
 backend/logs/
+data/queue_config.json
+backend/queue_config.json
 frontend/dist/
 
 # Editor

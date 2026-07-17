@@ -6,8 +6,6 @@ import json
 
 from app.core.queue_config import DEFAULT_QUEUE_CONFIG, load_queue_config
 
-_q_conf = load_queue_config()
-
 import threading
 import time
 import atexit
@@ -40,17 +38,9 @@ _POOL_CAPACITY = max(1, int(DB_POOL_CAPACITY_EFFECTIVE or 0))
 _WEB_CONCURRENCY = max(1, int(os.getenv("WEB_CONCURRENCY", "1") or 1))
 _PER_PROCESS_POOL_BUDGET = max(1, _POOL_CAPACITY // _WEB_CONCURRENCY)
 _DEFAULT_WORKER_THREADS = min(8, max(2, int(DB_POOL_SIZE_EFFECTIVE or 2)))
-_REQUESTED_WORKER_THREADS = max(
-    1,
-    int(
-        _q_conf.get("queue_threads", DEFAULT_QUEUE_CONFIG["queue_threads"])
-        or DEFAULT_QUEUE_CONFIG["queue_threads"]
-    ),
-)
 # Keep the default queue target at 20 for dedicated worker processes, while
 # still degrading safely when the DB pool is smaller than that target.
 _WORKER_THREAD_CAP = max(1, min(20, _PER_PROCESS_POOL_BUDGET // 2))
-_QUEUE_WORKER_THREADS = max(1, min(_REQUESTED_WORKER_THREADS, _WORKER_THREAD_CAP))
 _QUEUE_ADVISORY_LOCK_ID = int(os.getenv("GENERATION_QUEUE_ADVISORY_LOCK_ID", "918240157") or 918240157)
 _QUEUE_LEADER_CONN = None
 _QUEUE_FILE_LOCK_FD = None
@@ -59,15 +49,42 @@ _QUEUE_FILE_LOCK_PATH = os.getenv("GENERATION_QUEUE_LEADER_LOCK_FILE", "").strip
     "aistory_generation_queue.lock",
 )
 
-if _REQUESTED_WORKER_THREADS > _QUEUE_WORKER_THREADS:
-    logger.warning(
-        "generation queue workers capped to avoid DB pool starvation | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
-        _REQUESTED_WORKER_THREADS,
-        _QUEUE_WORKER_THREADS,
-        _POOL_CAPACITY,
-        _WEB_CONCURRENCY,
-        _PER_PROCESS_POOL_BUDGET,
+_q_conf: Dict[str, Any] = {}
+_REQUESTED_WORKER_THREADS = 1
+_QUEUE_WORKER_THREADS = 1
+
+
+def _refresh_queue_worker_thread_settings(force_reload: bool = True) -> int:
+    """Resolve worker thread count from live DB/file config (not stale import-time defaults)."""
+    global _q_conf, _REQUESTED_WORKER_THREADS, _QUEUE_WORKER_THREADS
+    if force_reload or not _q_conf:
+        try:
+            _q_conf = load_queue_config()
+        except Exception:
+            _q_conf = dict(DEFAULT_QUEUE_CONFIG)
+    requested = max(
+        1,
+        int(
+            (_q_conf or {}).get("queue_threads", DEFAULT_QUEUE_CONFIG["queue_threads"])
+            or DEFAULT_QUEUE_CONFIG["queue_threads"]
+        ),
     )
+    effective = max(1, min(requested, _WORKER_THREAD_CAP))
+    _REQUESTED_WORKER_THREADS = requested
+    _QUEUE_WORKER_THREADS = effective
+    if requested > effective:
+        logger.warning(
+            "generation queue workers capped to avoid DB pool starvation | requested=%s capped=%s pool_capacity=%s web_concurrency=%s per_process_pool_budget=%s",
+            requested,
+            effective,
+            _POOL_CAPACITY,
+            _WEB_CONCURRENCY,
+            _PER_PROCESS_POOL_BUDGET,
+        )
+    return effective
+
+
+_refresh_queue_worker_thread_settings(force_reload=True)
 
 
 def _release_queue_leader_lock() -> None:
@@ -1301,6 +1318,9 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
         if _QUEUE_STARTED:
             return
 
+        # Re-read after DB bootstrap so admin-saved thread counts actually apply.
+        effective_threads = _refresh_queue_worker_thread_settings(force_reload=True)
+
         try:
             repaired = _repair_waiting_callback_worker_leases()
             if repaired > 0:
@@ -1321,5 +1341,5 @@ def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, A
         _QUEUE_STARTED = True
         logger.info(
             "generation queue async event loop thread started, waiting for %s concurrent workers to become leader",
-            _QUEUE_WORKER_THREADS,
+            effective_threads,
         )

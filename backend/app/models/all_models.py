@@ -746,6 +746,21 @@ class SMTPSystemConfig(Base):
     updated_at = Column(String, default=now_bj_iso)
 
 
+class QueueSystemConfig(Base):
+    """Global generation-queue / callback thread configuration.
+
+    Stored in DB so admin changes survive process restarts and deploys.
+    Single active row (lowest id) is the source of truth.
+    """
+
+    __tablename__ = "queue_system_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    config_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(String, default=now_bj_iso)
+    updated_at = Column(String, default=now_bj_iso)
+
+
 class WechatPayConfig(Base):
     """Dedicated WeChat payment configuration storage.
 

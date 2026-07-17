@@ -312,7 +312,7 @@ export default function QueueAdmin() {
         callback_compensation_scan_batch_size: Number(config.callback_compensation_scan_batch_size),
       });
       setConfig(savedConfig);
-      notifyUiMessage('Configuration saved. Some changes require a backend restart to fully apply.', 'success');
+      notifyUiMessage('Saved to DB. On Render: restart aistory-generation-worker for Queue threads, and aistory-backend for Callback threads.', 'success');
     } catch (e) {
       notifyUiMessage('Failed to save config', 'error');
     } finally {
