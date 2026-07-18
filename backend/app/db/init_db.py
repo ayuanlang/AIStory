@@ -596,6 +596,46 @@ def _ensure_user_group_schema(*, is_postgres: bool) -> dict:
                 _note("Created user_groups table")
             else:
                 status["actions"].append("user_groups already exists")
+            # Explicit DEFAULT FALSE so existing groups do not bill from pool until opted in.
+            try:
+                ug_cols = {c["name"] for c in inspect(engine).get_columns("user_groups")}
+                if "allow_group_credit_billing" not in ug_cols:
+                    with engine.begin() as conn:
+                        if is_postgres:
+                            conn.execute(
+                                text(
+                                    "ALTER TABLE user_groups "
+                                    "ADD COLUMN IF NOT EXISTS allow_group_credit_billing "
+                                    "BOOLEAN NOT NULL DEFAULT FALSE"
+                                )
+                            )
+                        else:
+                            conn.execute(
+                                text(
+                                    "ALTER TABLE user_groups "
+                                    "ADD COLUMN allow_group_credit_billing "
+                                    "BOOLEAN NOT NULL DEFAULT 0"
+                                )
+                            )
+                    _note("Added user_groups.allow_group_credit_billing (default false)")
+                else:
+                    with engine.begin() as conn:
+                        if is_postgres:
+                            conn.execute(
+                                text(
+                                    "UPDATE user_groups SET allow_group_credit_billing = FALSE "
+                                    "WHERE allow_group_credit_billing IS NULL"
+                                )
+                            )
+                        else:
+                            conn.execute(
+                                text(
+                                    "UPDATE user_groups SET allow_group_credit_billing = 0 "
+                                    "WHERE allow_group_credit_billing IS NULL"
+                                )
+                            )
+            except Exception as col_exc:
+                _fail(f"Failed to ensure user_groups.allow_group_credit_billing: {col_exc}")
             _ensure_missing_table_columns("user_groups", models.UserGroup, is_postgres=is_postgres)
             status["user_groups"] = inspect(engine).has_table("user_groups")
 

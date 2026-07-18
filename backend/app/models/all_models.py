@@ -53,7 +53,9 @@ class UserGroup(Base):
     name = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
     credits = Column(Integer, default=0)
-    
+    # When False (default), billing only uses members' personal credits.
+    allow_group_credit_billing = Column(Boolean, default=False, nullable=False)
+
     owner_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", foreign_keys=[owner_id])
     

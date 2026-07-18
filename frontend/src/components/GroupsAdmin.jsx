@@ -306,6 +306,21 @@ export default function GroupsAdmin() {
                                 </button>
                             </div>
                         </div>
+                        <label className="flex items-center justify-between gap-3 rounded-lg bg-black/20 border border-white/5 px-3 py-2 text-sm">
+                            <span className="text-gray-300">
+                                {t('允许扣组积分', 'Allow group credit billing')}
+                            </span>
+                            <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-primary"
+                                checked={Boolean(group.allow_group_credit_billing)}
+                                onChange={(e) => {
+                                    const next = e.target.checked;
+                                    patchGroupLocal(group.id, { allow_group_credit_billing: next });
+                                    saveGroupField(group.id, { allow_group_credit_billing: next });
+                                }}
+                            />
+                        </label>
                         <div className="flex flex-wrap gap-2">
                             <button
                                 onClick={() => openMembers(group)}
@@ -339,6 +354,9 @@ export default function GroupsAdmin() {
                             <th className="p-3">{t('所有者', 'Owner')}</th>
                             <th className="p-3 text-right">{t('成员数', 'Members')}</th>
                             <th className="p-3 text-right">{t('积分', 'Credits')}</th>
+                            <th className="p-3 text-center whitespace-nowrap" title={t('是否允许扣用户组积分', 'Allow deducting group credits')}>
+                                {t('扣组积分', 'Group bill')}
+                            </th>
                             <th className="p-3">{t('创建时间', 'Created')}</th>
                             <th className="p-3">{t('操作', 'Actions')}</th>
                         </tr>
@@ -377,6 +395,19 @@ export default function GroupsAdmin() {
                                         <Edit2 size={12} className="inline" />
                                     </button>
                                 </td>
+                                <td className="p-3 text-center">
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 accent-primary"
+                                        title={t('允许扣组积分（默认关）', 'Allow group credit billing (off by default)')}
+                                        checked={Boolean(group.allow_group_credit_billing)}
+                                        onChange={(e) => {
+                                            const next = e.target.checked;
+                                            patchGroupLocal(group.id, { allow_group_credit_billing: next });
+                                            saveGroupField(group.id, { allow_group_credit_billing: next });
+                                        }}
+                                    />
+                                </td>
                                 <td className="p-3 text-xs text-gray-400">{group.created_at || '-'}</td>
                                 <td className="p-3">
                                     <div className="flex items-center gap-2 flex-wrap">
@@ -404,7 +435,7 @@ export default function GroupsAdmin() {
                         ))}
                         {!loading && groups.length === 0 && (
                             <tr>
-                                <td colSpan={8} className="p-8 text-center text-gray-400">
+                                <td colSpan={9} className="p-8 text-center text-gray-400">
                                     {t('暂无用户组', 'No groups')}
                                 </td>
                             </tr>

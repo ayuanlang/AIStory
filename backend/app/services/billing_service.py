@@ -485,6 +485,13 @@ class BillingService:
             return int(default)
 
     @staticmethod
+    def _group_allows_credit_billing(group: Optional[UserGroup]) -> bool:
+        """Group pool billing is opt-in; default / missing flag means personal-only."""
+        if group is None:
+            return False
+        return bool(getattr(group, "allow_group_credit_billing", False))
+
+    @staticmethod
     def _safe_json_dict(value: Any) -> Dict[str, Any]:
         if value is None:
             return {}
@@ -3478,10 +3485,12 @@ class BillingService:
         allocation = None
         billed_group_credits = 0
         billed_personal_credits = 0
+        can_use_group_credits = False
 
         if user.current_group_id:
             group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
-            if group and project_id:
+            can_use_group_credits = BillingService._group_allows_credit_billing(group)
+            if can_use_group_credits and project_id:
                 allocation = db.query(ProjectGroupCreditAllocation).filter(
                     ProjectGroupCreditAllocation.group_id == group.id,
                     ProjectGroupCreditAllocation.project_id == project_id
@@ -3491,7 +3500,7 @@ class BillingService:
                         raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
                         
         remaining_cost = reserved_cost
-        if group and (group.credits or 0) > 0 and remaining_cost > 0:
+        if can_use_group_credits and group and (group.credits or 0) > 0 and remaining_cost > 0:
             if group.credits >= remaining_cost:
                 billed_group_credits = remaining_cost
                 group.credits -= remaining_cost
@@ -3514,6 +3523,7 @@ class BillingService:
         reserve_details["billed_personal_credits"] = billed_personal_credits
         if group:
             reserve_details["group_id"] = group.id
+            reserve_details["allow_group_credit_billing"] = can_use_group_credits
 
         tx = TransactionHistory(
             user_id=user_id,
@@ -4004,7 +4014,7 @@ class BillingService:
 
         if db and user.current_group_id:
             group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
-            if group and (group.credits or 0) > 0:
+            if BillingService._group_allows_credit_billing(group) and (group.credits or 0) > 0:
                 # Need to also check allocation if project_id is provided
                 if project_id:
                     allocation = db.query(ProjectGroupCreditAllocation).filter(
@@ -4074,10 +4084,12 @@ class BillingService:
         allocation = None
         billed_group_credits = 0
         billed_personal_credits = 0
+        can_use_group_credits = False
 
         if user.current_group_id:
             group = db.query(UserGroup).filter(UserGroup.id == user.current_group_id).first()
-            if group and project_id:
+            can_use_group_credits = BillingService._group_allows_credit_billing(group)
+            if can_use_group_credits and project_id:
                 allocation = db.query(ProjectGroupCreditAllocation).filter(
                     ProjectGroupCreditAllocation.group_id == group.id,
                     ProjectGroupCreditAllocation.project_id == project_id
@@ -4087,7 +4099,7 @@ class BillingService:
                         raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
         
         remaining_cost = final_cost
-        if group and (group.credits or 0) > 0 and remaining_cost > 0:
+        if can_use_group_credits and group and (group.credits or 0) > 0 and remaining_cost > 0:
             if group.credits >= remaining_cost:
                 billed_group_credits = remaining_cost
                 group.credits -= remaining_cost
@@ -4126,6 +4138,7 @@ class BillingService:
         tx_details["billed_personal_credits"] = billed_personal_credits
         if group:
             tx_details["group_id"] = group.id
+            tx_details["allow_group_credit_billing"] = can_use_group_credits
 
         transaction = TransactionHistory(
             user_id=user_id,

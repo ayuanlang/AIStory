@@ -65,6 +65,7 @@ class GroupUpdate(BaseModel):
     description: Optional[str] = None
     credits: Optional[int] = None
     owner_id: Optional[int] = None
+    allow_group_credit_billing: Optional[bool] = None
 
 class GroupCreditsUpdate(BaseModel):
     amount: int
@@ -156,6 +157,7 @@ def _serialize_group(group: UserGroup, member_count: int = 0) -> dict:
         "name": group.name,
         "description": group.description,
         "credits": group.credits or 0,
+        "allow_group_credit_billing": bool(getattr(group, "allow_group_credit_billing", False)),
         "owner_id": group.owner_id,
         "owner_username": owner.username if owner else None,
         "owner_email": owner.email if owner else None,
@@ -236,7 +238,8 @@ def create_group(
         new_group = UserGroup(
             name=group_in.name,
             description=group_in.description,
-            owner_id=current_user.id
+            owner_id=current_user.id,
+            allow_group_credit_billing=False,
         )
         db.add(new_group)
         db.flush()  # to get id
@@ -328,6 +331,7 @@ def get_my_groups(
                 "permission_level": m.permission_level,
                 "is_current": (getattr(current_user, "current_group_id", None) == m.group.id),
                 "credits": m.group.credits or 0,
+                "allow_group_credit_billing": bool(getattr(m.group, "allow_group_credit_billing", False)),
                 "member_count": member_counts.get(m.group.id, 0),
             })
     return results
@@ -357,6 +361,9 @@ def update_group(
 
     if group_in.credits is not None:
         group.credits = int(group_in.credits)
+
+    if group_in.allow_group_credit_billing is not None:
+        group.allow_group_credit_billing = bool(group_in.allow_group_credit_billing)
 
     if group_in.owner_id is not None:
         new_owner = db.query(User).filter(User.id == group_in.owner_id).first()
