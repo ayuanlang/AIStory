@@ -3233,6 +3233,16 @@ export const deleteAdminOrphanFiles = async (userIds = null) => {
     return response.data;
 };
 
+export const getAdminProjectRetentionCandidates = async (params = {}) => {
+    const response = await api.get('/admin/project-retention/candidates', { params });
+    return response.data;
+};
+
+export const purgeAdminProjectRetention = async (payload = {}) => {
+    const response = await api.post('/admin/project-retention/purge', payload || {});
+    return response.data;
+};
+
 export const getAdminMaintenanceConfig = async () => {
     const response = await api.get('/admin/maintenance-config');
     return response.data;

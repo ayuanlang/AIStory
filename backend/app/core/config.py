@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     PROJECT_RETENTION_REQUIRE_SOFT_DELETED: bool = os.getenv(
         "PROJECT_RETENTION_REQUIRE_SOFT_DELETED", "0"
     ) not in {"0", "false", "False"}
+
+    # Nightly billing reconcile (query provider actual usage for recent API txs)
+    BILLING_RECONCILE_ENABLED: bool = os.getenv("BILLING_RECONCILE_ENABLED", "1") not in {"0", "false", "False"}
+    BILLING_RECONCILE_LOOKBACK_DAYS: int = max(1, int(os.getenv("BILLING_RECONCILE_LOOKBACK_DAYS", "3") or 3))
+    BILLING_RECONCILE_MAX_ROWS: int = max(1, int(os.getenv("BILLING_RECONCILE_MAX_ROWS", "500") or 500))
     
     class Config:
         env_file = ".env"

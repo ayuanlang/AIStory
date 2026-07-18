@@ -55,10 +55,11 @@ def should_catch_up_missed_run(now: Optional[datetime] = None) -> bool:
 
 async def maintenance_scheduler_loop(stop_event: asyncio.Event) -> None:
     logger.info(
-        "Maintenance scheduler started | timezone=Asia/Shanghai hour=%02d:%02d backup_keep=%s (project retention is manual)",
+        "Maintenance scheduler started | timezone=Asia/Shanghai hour=%02d:%02d backup_keep=%s billing_reconcile_days=%s (project retention is manual)",
         _MAINTENANCE_HOUR,
         _MAINTENANCE_MINUTE,
         settings.DB_BACKUP_KEEP_COUNT,
+        getattr(settings, "BILLING_RECONCILE_LOOKBACK_DAYS", 3),
     )
     # Catch up if the web process was down during the 03:00 window.
     if should_catch_up_missed_run():

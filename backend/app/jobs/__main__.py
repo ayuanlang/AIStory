@@ -10,6 +10,7 @@ import sys
 from app.jobs.db_backup import run_full_db_backup
 from app.jobs.maintenance import run_daily_maintenance
 from app.jobs.project_retention import run_stale_project_retention
+from app.jobs.billing_reconcile import run_nightly_billing_reconcile
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +28,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--retention-only",
         action="store_true",
-        help="Only run stale project backup+purge",
+        help="Only run stale project backup+purge (manual/CLI; not scheduled)",
+    )
+    parser.add_argument(
+        "--reconcile-only",
+        action="store_true",
+        help="Only run nightly billing reconcile (provider actual usage query)",
     )
     args = parser.parse_args(argv)
 
@@ -36,14 +42,17 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if args.backup_only and args.retention_only:
-        print("Choose at most one of --backup-only / --retention-only", file=sys.stderr)
+    exclusive = sum(bool(x) for x in (args.backup_only, args.retention_only, args.reconcile_only))
+    if exclusive > 1:
+        print("Choose at most one of --backup-only / --retention-only / --reconcile-only", file=sys.stderr)
         return 2
 
     if args.backup_only:
         result = run_full_db_backup()
     elif args.retention_only:
         result = run_stale_project_retention()
+    elif args.reconcile_only:
+        result = run_nightly_billing_reconcile()
     else:
         result = run_daily_maintenance(force=bool(args.force))
 

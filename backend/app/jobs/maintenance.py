@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from app.core.config import settings
 from app.core.time_utils import now_bj
 from app.jobs.db_backup import run_full_db_backup
+from app.jobs.billing_reconcile import run_nightly_billing_reconcile
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ def already_ran_today() -> bool:
 
 def run_daily_maintenance(*, force: bool = False) -> Dict[str, Any]:
     """
-    Run full DB backup (circular overwrite).
+    Run full DB backup (circular overwrite) and nightly billing reconcile.
 
     Project retention is manual via admin UI and is not scheduled.
     When force=False, skips if already completed for today's Beijing date.
@@ -190,6 +191,18 @@ def run_daily_maintenance(*, force: bool = False) -> Dict[str, Any]:
         result["ok"] = False
         result["db_backup"] = {"ok": False, "error": str(exc)}
 
+    if getattr(settings, "BILLING_RECONCILE_ENABLED", True):
+        try:
+            result["billing_reconcile"] = run_nightly_billing_reconcile()
+            if not result["billing_reconcile"].get("ok", True):
+                result["ok"] = False
+        except Exception as exc:
+            logger.exception("Nightly billing reconcile failed")
+            result["ok"] = False
+            result["billing_reconcile"] = {"ok": False, "error": str(exc)}
+    else:
+        result["billing_reconcile"] = {"ok": True, "skipped": True, "reason": "disabled"}
+
     result["finished_at"] = now_bj().isoformat(timespec="seconds")
     if result.get("ok"):
         _write_state(
@@ -198,13 +211,15 @@ def run_daily_maintenance(*, force: bool = False) -> Dict[str, Any]:
                 "last_result": {
                     "ok": True,
                     "db_backup_created": (result.get("db_backup") or {}).get("created"),
+                    "billing_reconciled_ok": (result.get("billing_reconcile") or {}).get("reconciled_ok"),
                     "finished_at": result["finished_at"],
                 },
             }
         )
     logger.info(
-        "Daily maintenance finished | ok=%s db_backup=%s",
+        "Daily maintenance finished | ok=%s db_backup=%s billing_reconciled=%s",
         result.get("ok"),
         (result.get("db_backup") or {}).get("created"),
+        (result.get("billing_reconcile") or {}).get("reconciled_ok"),
     )
     return result

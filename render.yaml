@@ -76,7 +76,13 @@ services:
       - key: PROJECT_BACKUP_KEEP_DAYS
         value: "60"
       - key: PROJECT_RETENTION_REQUIRE_SOFT_DELETED
+        value: "0"
+      - key: BILLING_RECONCILE_ENABLED
         value: "1"
+      - key: BILLING_RECONCILE_LOOKBACK_DAYS
+        value: "3"
+      - key: BILLING_RECONCILE_MAX_ROWS
+        value: "500"
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT

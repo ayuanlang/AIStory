@@ -7,8 +7,9 @@ import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
 import GroupsAdmin from '../components/GroupsAdmin';
+import ProjectRetentionAdmin from '../components/ProjectRetentionAdmin';
 import UserEditModal from '../components/UserEditModal';
-import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search } from 'lucide-react';
+import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search, Archive } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -4771,6 +4772,12 @@ const UserAdmin = () => {
             has_video_input: details.has_video_input,
             use_prev_video: details.use_prev_video,
             draft_mode: details.draft_mode,
+            provider_cost_time_seconds: details.provider_cost_time_seconds
+                ?? details.cost_time
+                ?? details.taskCostTime,
+            kie_credits_consumed: isSettled
+                ? (details.kie_credits_consumed ?? details.creditsConsumed ?? details.credits_consumed)
+                : undefined,
             reserved_cost: details.reserved_cost,
             // Settled-only pricing fields (avoid showing reserve estimates as "actual")
             actual_cost: isSettled ? details.actual_cost : undefined,
@@ -5489,6 +5496,7 @@ const UserAdmin = () => {
         { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
+        { id: 'project_retention', label: t('项目清理', 'Project Cleanup'), icon: Archive },
         { id: 'runtime_logs', label: t('运行日志', 'Runtime Logs'), icon: List },
         { id: 'llm_logs', label: t('LLM 调用日志', 'LLM Call Logs'), icon: List },
         { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
@@ -9490,6 +9498,10 @@ const UserAdmin = () => {
                         </div>
                     )}
 
+
+                    {activeTab === 'project_retention' && (
+                        <ProjectRetentionAdmin />
+                    )}
                     {activeTab === 'prompt_skills' && (
                         <div className="space-y-4">
                             <div className="flex items-center justify-between gap-3">

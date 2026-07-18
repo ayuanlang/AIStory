@@ -3286,10 +3286,11 @@ def _hydrate_video_job_record(job_id: str, job: Optional[Dict[str, Any]] = None)
             for key in (
                 "shot_id", "project_id", "episode_id", "scene_id", "shot_number", "shot_name",
                 "asset_type", "provider", "model", "prompt", "username",
+                "reservation_tx_id", "billing_pending", "billing_settled", "billing_context",
             ):
-                if task_payload.get(key) in (None, ""):
+                if task_payload.get(key) in (None, "", {}, []):
                     continue
-                if merged.get(key) in (None, ""):
+                if merged.get(key) in (None, "", {}, []):
                     merged[key] = task_payload.get(key)
                     recovered_fields[key] = task_payload.get(key)
             if recovered_fields:
@@ -5323,12 +5324,47 @@ def _build_result_from_provider_callback(
                 metadata["creditsConsumed"] = kie_credits
                 metadata["credits_consumed"] = kie_credits
                 metadata["kie_credits_consumed"] = kie_credits
+            data_obj = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            for cost_key in ("costTime", "cost_time", "taskCostTime"):
+                cost_val = data_obj.get(cost_key) if data_obj.get(cost_key) not in (None, "") else payload.get(cost_key)
+                if cost_val in (None, ""):
+                    continue
+                try:
+                    metadata["taskCostTime"] = float(cost_val)
+                    metadata["provider_cost_time_seconds"] = float(cost_val)
+                    metadata["cost_time"] = float(cost_val)
+                except Exception:
+                    pass
+                break
+            # Ark Seedance callback fields on webhook root.
+            if payload.get("duration") not in (None, ""):
+                metadata["duration"] = payload.get("duration")
+            if payload.get("ratio") not in (None, ""):
+                metadata["aspect_ratio"] = payload.get("ratio")
+            if payload.get("resolution") not in (None, ""):
+                metadata["resolution"] = payload.get("resolution")
+            if payload.get("framespersecond") not in (None, ""):
+                metadata["fps"] = payload.get("framespersecond")
+            if metadata.get("taskCostTime") is None:
+                try:
+                    created_at = float(payload.get("created_at") or 0)
+                    updated_at = float(payload.get("updated_at") or 0)
+                    if created_at > 0 and updated_at >= created_at:
+                        metadata["taskCostTime"] = updated_at - created_at
+                        metadata["provider_cost_time_seconds"] = updated_at - created_at
+                        metadata["cost_time"] = updated_at - created_at
+                except Exception:
+                    pass
             metadata["raw"] = {
                 "id": callback_task_id,
                 "status": metadata.get("status"),
                 "usage": callback_usage,
                 "model": resolved_model or None,
                 "creditsConsumed": kie_credits,
+                "costTime": metadata.get("taskCostTime"),
+                "duration": payload.get("duration"),
+                "ratio": payload.get("ratio"),
+                "resolution": payload.get("resolution"),
             }
     except Exception:
         pass
@@ -5895,6 +5931,14 @@ def _maybe_retry_video_job_result_persistence(job_id: str, job: Dict[str, Any]) 
                 job_id,
                 persisted_url,
             )
+            # Persistence may finish after the first settle attempt raced/missed reservation.
+            if not updated.get("billing_settled"):
+                ticket = _extract_job_provider_callback_ticket(updated)
+                _schedule_video_job_billing_settle(
+                    job_id,
+                    updated,
+                    _get_generation_callback_payload(ticket) if ticket else {},
+                )
             return updated
 
         if isinstance(persisted, dict) and persisted != result:
@@ -6449,6 +6493,342 @@ def _reservation_already_closed(db: Session, reservation_tx_id: int) -> bool:
         return False
 
 
+def _persist_video_job_billing_reservation(
+    *,
+    provider_callback_ticket: Optional[str] = None,
+    job_id: Optional[str] = None,
+    reservation_tx_id: Optional[int],
+    billing_context: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+) -> None:
+    """Persist open reservation onto video job + task payload before provider callback can race."""
+    try:
+        tx_id = int(reservation_tx_id or 0) or None
+    except Exception:
+        tx_id = None
+    if not tx_id:
+        return
+
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        stable_job_id = _extract_generation_job_id_from_ticket("video", str(provider_callback_ticket or ""))
+    if not stable_job_id:
+        return
+
+    context = dict(billing_context or {}) if isinstance(billing_context, dict) else {}
+    fields: Dict[str, Any] = {
+        "reservation_tx_id": int(tx_id),
+        "billing_pending": True,
+        "billing_settled": False,
+        "billing_context": context,
+    }
+    if user_id is not None:
+        try:
+            fields["user_id"] = int(user_id)
+        except Exception:
+            pass
+    if provider_callback_ticket:
+        fields["provider_callback_ticket"] = str(provider_callback_ticket).strip()
+    try:
+        _set_video_job(stable_job_id, **fields)
+    except Exception as exc:
+        logger.warning(
+            "[VideoJob] persist billing reservation to job failed | job_id=%s reservation_tx_id=%s err=%s",
+            stable_job_id,
+            tx_id,
+            exc,
+        )
+    try:
+        from app.services.generation_task_queue import patch_generation_task_payload
+
+        patch_generation_task_payload(
+            stable_job_id,
+            {
+                "reservation_tx_id": int(tx_id),
+                "billing_pending": True,
+                "billing_settled": False,
+                "billing_context": context,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "[VideoJob] persist billing reservation to task payload failed | job_id=%s reservation_tx_id=%s err=%s",
+            stable_job_id,
+            tx_id,
+            exc,
+        )
+
+
+def _find_open_video_reservation_tx_id(
+    db: Session,
+    *,
+    user_id: Optional[int] = None,
+    shot_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+) -> Optional[int]:
+    """Recover a still-open video_gen reservation when job lost reservation_tx_id (multi-worker race)."""
+    try:
+        from app.models.all_models import TransactionHistory
+
+        uid = int(user_id or 0)
+        if uid <= 0:
+            return None
+        rows = (
+            db.query(TransactionHistory)
+            .filter(
+                TransactionHistory.user_id == uid,
+                TransactionHistory.amount < 0,
+            )
+            .order_by(TransactionHistory.id.desc())
+            .limit(60)
+            .all()
+        )
+    except Exception:
+        return None
+
+    want_shot = int(shot_id or 0) or None
+    want_project = int(project_id or 0) or None
+    want_episode = int(episode_id or 0) or None
+    for row in rows or []:
+        details = dict(getattr(row, "details", None) or {}) if isinstance(getattr(row, "details", None), dict) else {}
+        status = str(details.get("status") or "").strip().upper()
+        if status != "RESERVED":
+            continue
+        desc = str(getattr(row, "description", "") or "").strip().lower()
+        task_hint = str(details.get("task_type") or details.get("description") or desc or "").strip().lower()
+        if "video" not in task_hint and desc and "video" not in desc:
+            # Prefer video_gen rows; description is usually the task_type.
+            if desc not in {"video_gen", "video"}:
+                continue
+        row_shot = int(details.get("shot_id") or 0) or None
+        row_project = int(details.get("project_id") or getattr(row, "project_id", 0) or 0) or None
+        row_episode = int(details.get("episode_id") or getattr(row, "episode_id", 0) or 0) or None
+        if want_shot and row_shot and row_shot != want_shot:
+            continue
+        if want_shot and not row_shot:
+            continue
+        if want_project and row_project and row_project != want_project:
+            continue
+        if want_episode and row_episode and row_episode != want_episode:
+            continue
+        if want_shot and row_shot == want_shot:
+            return int(row.id)
+        if not want_shot and want_project and row_project == want_project:
+            return int(row.id)
+    return None
+
+
+def _extract_kie_callback_settle_fields(
+    callback_payload: Optional[Dict[str, Any]],
+    *,
+    result_meta: Optional[Dict[str, Any]] = None,
+    usage: Optional[Dict[str, Any]] = None,
+    billing_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Pull KIE/Ark callback actuals: credits, tokens, costTime, duration/ratio/resolution."""
+    out: Dict[str, Any] = {}
+    callback_payload = callback_payload if isinstance(callback_payload, dict) else {}
+    result_meta = result_meta if isinstance(result_meta, dict) else {}
+    usage = usage if isinstance(usage, dict) else {}
+    billing_context = billing_context if isinstance(billing_context, dict) else {}
+
+    data = callback_payload.get("data") if isinstance(callback_payload.get("data"), dict) else {}
+    sources = (usage, result_meta, data, callback_payload)
+
+    kie_credits = 0.0
+    try:
+        from app.services.billing_pricing import resolve_provider_kie_credits
+
+        for src in sources:
+            kie_credits = float(resolve_provider_kie_credits(src) or 0.0)
+            if kie_credits > 0:
+                break
+    except Exception:
+        kie_credits = 0.0
+    if kie_credits > 0:
+        out["kie_credits_consumed"] = kie_credits
+        out["credits_consumed"] = kie_credits
+        out["creditsConsumed"] = kie_credits
+        out["billing_basis"] = "provider_kie_credits"
+
+    # Ark Seedance callback: usage.completion_tokens / total_tokens.
+    token_usage = usage if usage else {}
+    if not token_usage:
+        for src in sources:
+            if isinstance(src, dict) and isinstance(src.get("usage"), dict):
+                token_usage = dict(src.get("usage") or {})
+                break
+    actual_tokens = _resolve_usage_token_total(token_usage)
+    if actual_tokens > 0:
+        out["output_tokens"] = int(actual_tokens)
+        out["total_tokens"] = int(actual_tokens)
+        out["completion_tokens"] = int(
+            _safe_int_token(token_usage.get("completion_tokens") or token_usage.get("output_tokens") or actual_tokens)
+        )
+        out["token_source"] = "api_usage"
+        out.setdefault("billing_basis", "provider_tokens")
+
+    cost_time = None
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        for key in ("costTime", "cost_time", "taskCostTime", "task_cost_time"):
+            if src.get(key) in (None, ""):
+                continue
+            try:
+                cost_time = float(src.get(key))
+            except Exception:
+                cost_time = None
+            if cost_time is not None and cost_time >= 0:
+                break
+        if cost_time is not None and cost_time >= 0:
+            break
+    # Ark: wall-clock from created_at → updated_at (unix seconds).
+    if cost_time is None:
+        try:
+            created_at = float(callback_payload.get("created_at") or data.get("created_at") or 0)
+            updated_at = float(callback_payload.get("updated_at") or data.get("updated_at") or 0)
+            if created_at > 0 and updated_at >= created_at:
+                cost_time = updated_at - created_at
+        except Exception:
+            cost_time = None
+    if cost_time is not None and cost_time >= 0:
+        out["provider_cost_time_seconds"] = cost_time
+        out["cost_time"] = cost_time
+        out["taskCostTime"] = cost_time
+
+    # Nested KIE param JSON often carries actual duration / aspect / resolution.
+    param_obj: Dict[str, Any] = {}
+    raw_param = data.get("param") if isinstance(data, dict) else None
+    if raw_param is None:
+        raw_param = callback_payload.get("param")
+    if isinstance(raw_param, str) and raw_param.strip():
+        try:
+            parsed_param = json.loads(raw_param)
+            if isinstance(parsed_param, dict):
+                param_obj = parsed_param
+                nested_input = parsed_param.get("input")
+                if isinstance(nested_input, str) and nested_input.strip():
+                    try:
+                        nested_parsed = json.loads(nested_input)
+                        if isinstance(nested_parsed, dict):
+                            param_obj = {**param_obj, **nested_parsed}
+                    except Exception:
+                        pass
+                elif isinstance(nested_input, dict):
+                    param_obj = {**param_obj, **nested_input}
+        except Exception:
+            param_obj = {}
+    elif isinstance(raw_param, dict):
+        param_obj = dict(raw_param)
+
+    # Ark puts duration/ratio/resolution on the webhook root.
+    duration = (
+        callback_payload.get("duration")
+        or data.get("duration")
+        or param_obj.get("duration")
+        or result_meta.get("duration")
+        or billing_context.get("duration_seconds")
+        or billing_context.get("duration")
+    )
+    if duration not in (None, ""):
+        try:
+            out["duration"] = float(duration)
+            out["duration_seconds"] = float(duration)
+        except Exception:
+            pass
+    aspect_ratio = (
+        callback_payload.get("ratio")
+        or callback_payload.get("aspect_ratio")
+        or data.get("ratio")
+        or param_obj.get("aspect_ratio")
+        or result_meta.get("aspect_ratio")
+        or billing_context.get("aspect_ratio")
+    )
+    if aspect_ratio not in (None, ""):
+        out["aspect_ratio"] = str(aspect_ratio).strip()
+    resolution = (
+        callback_payload.get("resolution")
+        or data.get("resolution")
+        or param_obj.get("resolution")
+        or result_meta.get("resolution")
+        or billing_context.get("resolution")
+    )
+    if resolution not in (None, ""):
+        out["resolution"] = str(resolution).strip()
+    fps = (
+        callback_payload.get("framespersecond")
+        or callback_payload.get("fps")
+        or data.get("framespersecond")
+        or billing_context.get("fps")
+    )
+    if fps not in (None, ""):
+        try:
+            out["fps"] = int(float(fps))
+        except Exception:
+            pass
+    if callback_payload.get("draft") is not None:
+        out["draft_mode"] = bool(callback_payload.get("draft"))
+        out["draft"] = bool(callback_payload.get("draft"))
+    if callback_payload.get("generate_audio") is not None:
+        out["has_audio"] = bool(callback_payload.get("generate_audio"))
+
+    for ts_key, out_key in (
+        ("createTime", "provider_create_time_ms"),
+        ("completeTime", "provider_complete_time_ms"),
+        ("updateTime", "provider_update_time_ms"),
+        ("created_at", "provider_create_time_s"),
+        ("updated_at", "provider_update_time_s"),
+    ):
+        for src in (data, callback_payload, result_meta):
+            if isinstance(src, dict) and src.get(ts_key) not in (None, ""):
+                try:
+                    out[out_key] = int(src.get(ts_key))
+                except Exception:
+                    pass
+                break
+
+    return out
+
+
+def _schedule_video_job_billing_settle(
+    job_id: str,
+    job: Optional[Dict[str, Any]] = None,
+    callback_payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Fire-and-forget settle from sync persistence paths (best effort)."""
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return
+    payload = callback_payload if isinstance(callback_payload, dict) else {}
+    job_snapshot = dict(job or {})
+
+    async def _runner() -> None:
+        try:
+            current = _hydrate_video_job_record(stable_job_id, job_snapshot)
+            await _settle_or_cancel_video_job_billing_from_callback(stable_job_id, current, payload)
+        except Exception as exc:
+            logger.warning(
+                "[VideoJob] scheduled settle failed | job_id=%s err=%s",
+                stable_job_id,
+                exc,
+            )
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_runner())
+    except RuntimeError:
+        try:
+            asyncio.run(_runner())
+        except Exception as exc:
+            logger.warning(
+                "[VideoJob] scheduled settle (asyncio.run) failed | job_id=%s err=%s",
+                stable_job_id,
+                exc,
+            )
+
+
 def _cancel_video_job_pending_reservation(job_id: str, job: Optional[Dict[str, Any]], reason: str) -> None:
     job = job if isinstance(job, dict) else {}
     if job.get("billing_settled"):
@@ -6502,18 +6882,32 @@ async def _settle_or_cancel_video_job_billing_from_callback(
     if job.get("billing_settled"):
         return job
 
-    try:
-        reservation_tx_id = int(job.get("reservation_tx_id") or 0) or None
-    except Exception:
-        reservation_tx_id = None
-    if not reservation_tx_id:
-        return job
-
     status = _normalize_generation_status(job.get("status"))
     billing_context = job.get("billing_context") if isinstance(job.get("billing_context"), dict) else {}
     callback_payload = callback_payload if isinstance(callback_payload, dict) else {}
 
+    try:
+        reservation_tx_id = int(job.get("reservation_tx_id") or 0) or None
+    except Exception:
+        reservation_tx_id = None
+
     if status in {"failed", "error", "canceled", "cancelled"}:
+        if not reservation_tx_id:
+            # Best-effort recover reservation before cancel.
+            db_probe = SessionLocal()
+            try:
+                reservation_tx_id = _find_open_video_reservation_tx_id(
+                    db_probe,
+                    user_id=job.get("user_id"),
+                    shot_id=job.get("shot_id") or billing_context.get("shot_id"),
+                    project_id=job.get("project_id") or billing_context.get("project_id"),
+                    episode_id=job.get("episode_id") or billing_context.get("episode_id"),
+                )
+                if reservation_tx_id:
+                    job = dict(job)
+                    job["reservation_tx_id"] = reservation_tx_id
+            finally:
+                db_probe.close()
         reason = str(job.get("error") or callback_payload.get("failure_reason") or callback_payload.get("error") or status)
         _cancel_video_job_pending_reservation(job_id, job, reason)
         with VIDEO_JOB_LOCK:
@@ -6522,14 +6916,47 @@ async def _settle_or_cancel_video_job_billing_from_callback(
     if status not in {"succeeded", "completed", "done"}:
         return job
 
-    # Allow settle even when billing_pending was not set yet (callback-before-return race).
-    if not job.get("billing_pending"):
-        _set_video_job(job_id, billing_pending=True)
-        job = dict(job)
-        job["billing_pending"] = True
-
     db = SessionLocal()
     try:
+        if not reservation_tx_id:
+            reservation_tx_id = _find_open_video_reservation_tx_id(
+                db,
+                user_id=job.get("user_id"),
+                shot_id=job.get("shot_id") or billing_context.get("shot_id"),
+                project_id=job.get("project_id") or billing_context.get("project_id"),
+                episode_id=job.get("episode_id") or billing_context.get("episode_id"),
+            )
+            if reservation_tx_id:
+                _set_video_job(
+                    job_id,
+                    reservation_tx_id=int(reservation_tx_id),
+                    billing_pending=True,
+                    billing_context=billing_context,
+                )
+                job = dict(job)
+                job["reservation_tx_id"] = int(reservation_tx_id)
+                job["billing_pending"] = True
+                logger.info(
+                    "[VideoJob] recovered open reservation for settle | job_id=%s reservation_tx_id=%s shot_id=%s",
+                    job_id,
+                    reservation_tx_id,
+                    job.get("shot_id") or billing_context.get("shot_id"),
+                )
+        if not reservation_tx_id:
+            logger.warning(
+                "[VideoJob] skip settle: no reservation_tx_id | job_id=%s shot_id=%s user_id=%s",
+                job_id,
+                job.get("shot_id") or billing_context.get("shot_id"),
+                job.get("user_id"),
+            )
+            return job
+
+        # Allow settle even when billing_pending was not set yet (callback-before-return race).
+        if not job.get("billing_pending"):
+            _set_video_job(job_id, billing_pending=True)
+            job = dict(job)
+            job["billing_pending"] = True
+
         if _reservation_already_closed(db, reservation_tx_id):
             _set_video_job(job_id, billing_settled=True, billing_pending=False, reservation_tx_id=None)
             with VIDEO_JOB_LOCK:
@@ -6546,6 +6973,12 @@ async def _settle_or_cancel_video_job_billing_from_callback(
             or billing_context.get("model")
             or ""
         ).strip() or None
+        provider_lower = str(provider or "").strip().lower()
+        is_kie_provider = (
+            provider_lower == "kie"
+            or provider_lower.startswith("kie/")
+            or "kie.ai" in provider_lower
+        )
         provider_task_id = _extract_job_provider_task_id(job) or _extract_callback_task_id(callback_payload)
 
         usage: Dict[str, Any] = {}
@@ -6563,6 +6996,35 @@ async def _settle_or_cancel_video_job_billing_from_callback(
                 usage = {}
 
         usage_source = str(result_meta.get("usage_source") or "").strip() or ("callback" if usage else "")
+        # Prefer raw callback usage (Ark: usage.completion_tokens) over sparse metadata.
+        if callback_payload and _resolve_usage_token_total(usage) <= 0:
+            try:
+                from app.services.media_service import _extract_provider_task_usage, _normalize_provider_task_usage
+
+                callback_usage = _normalize_provider_task_usage(_extract_provider_task_usage(callback_payload))
+                if _resolve_usage_token_total(callback_usage) > 0:
+                    usage = callback_usage
+                    usage_source = "callback"
+            except Exception:
+                pass
+
+        kie_fields = _extract_kie_callback_settle_fields(
+            callback_payload,
+            result_meta=result_meta,
+            usage=usage,
+            billing_context=billing_context,
+        )
+        # KIE credits → non-token settle; Ark callback tokens → token settle.
+        if kie_fields.get("kie_credits_consumed"):
+            is_token_billing = False
+        elif (
+            kie_fields.get("total_tokens")
+            or kie_fields.get("completion_tokens")
+            or _resolve_usage_token_total(usage) > 0
+        ):
+            is_token_billing = True
+        elif is_kie_provider and not is_token_billing:
+            pass
 
         # Re-query provider task for Ark/ZLHub-style token usage when callback omits it.
         if is_token_billing and _resolve_usage_token_total(usage) <= 0 and provider_task_id:
@@ -6687,43 +7149,30 @@ async def _settle_or_cancel_video_job_billing_from_callback(
             if billing_context.get("aspect_ratio"):
                 settle_details["aspect_ratio"] = billing_context.get("aspect_ratio")
 
-            # KIE webhook: data.creditsConsumed → actual supplier credits → system credits settle.
-            kie_credits = 0.0
-            try:
-                from app.services.billing_pricing import resolve_provider_kie_credits
-
-                kie_credits = float(resolve_provider_kie_credits(usage) or 0.0)
-            except Exception:
-                kie_credits = 0.0
-            if kie_credits <= 0:
-                for src in (result_meta, callback_payload, (callback_payload or {}).get("data")):
-                    if not isinstance(src, dict):
-                        continue
-                    for credit_key in ("kie_credits_consumed", "credits_consumed", "creditsConsumed"):
-                        if src.get(credit_key) in (None, ""):
-                            continue
-                        try:
-                            kie_credits = float(src.get(credit_key) or 0)
-                        except Exception:
-                            kie_credits = 0.0
-                        if kie_credits > 0:
-                            break
-                    if kie_credits > 0:
-                        break
-            if kie_credits > 0:
-                settle_details["kie_credits_consumed"] = kie_credits
-                settle_details["credits_consumed"] = kie_credits
-                settle_details["creditsConsumed"] = kie_credits
-                settle_details["billing_basis"] = "provider_kie_credits"
+        # Overlay callback actuals (KIE credits / Ark tokens / costTime / duration).
+        if kie_fields:
+            for key, value in kie_fields.items():
+                if value not in (None, ""):
+                    settle_details[key] = value
+            if kie_fields.get("kie_credits_consumed"):
                 settle_details["usage_source"] = usage_source or "callback"
                 if not usage:
                     usage = {
-                        "creditsConsumed": kie_credits,
-                        "credits_consumed": kie_credits,
-                        "kie_credits_consumed": kie_credits,
-                        "credits": kie_credits,
+                        "creditsConsumed": kie_fields.get("kie_credits_consumed"),
+                        "credits_consumed": kie_fields.get("kie_credits_consumed"),
+                        "kie_credits_consumed": kie_fields.get("kie_credits_consumed"),
+                        "credits": kie_fields.get("kie_credits_consumed"),
                     }
                     usage_source = settle_details["usage_source"]
+            elif kie_fields.get("total_tokens") or kie_fields.get("completion_tokens"):
+                settle_details["usage_source"] = usage_source or "callback"
+                settle_details["token_source"] = settle_details.get("token_source") or "api_usage"
+                if _resolve_usage_token_total(usage) <= 0:
+                    usage = {
+                        "completion_tokens": kie_fields.get("completion_tokens"),
+                        "output_tokens": kie_fields.get("output_tokens") or kie_fields.get("total_tokens"),
+                        "total_tokens": kie_fields.get("total_tokens"),
+                    }
 
         if usage:
             settle_details["provider_usage"] = usage
@@ -6740,6 +7189,11 @@ async def _settle_or_cancel_video_job_billing_from_callback(
             settle_details["episode_id"] = billing_context.get("episode_id")
         if billing_context.get("shot_id"):
             settle_details["shot_id"] = billing_context.get("shot_id")
+        elif job.get("shot_id"):
+            settle_details["shot_id"] = job.get("shot_id")
+        if provider_task_id:
+            settle_details["provider_task_id"] = provider_task_id
+            settle_details["task_id"] = provider_task_id
 
         billing_service.settle_reservation(db, reservation_tx_id, settle_details)
         _set_video_job(
@@ -6751,15 +7205,19 @@ async def _settle_or_cancel_video_job_billing_from_callback(
             billing_settle_usage_source=settle_details.get("usage_source"),
             billing_settle_kie_credits=settle_details.get("kie_credits_consumed"),
             billing_basis=settle_details.get("billing_basis"),
+            billing_settle_cost_time=settle_details.get("provider_cost_time_seconds"),
         )
         logger.info(
-            "[VideoJob] settled pending reservation from callback | job_id=%s reservation_tx_id=%s token_source=%s usage_source=%s total_tokens=%s kie_credits=%s billing_basis=%s",
+            "[VideoJob] settled pending reservation from callback | job_id=%s reservation_tx_id=%s "
+            "token_source=%s usage_source=%s total_tokens=%s kie_credits=%s cost_time=%s billing_basis=%s "
+            "actual_cost_basis=supplier×multiplier",
             job_id,
             reservation_tx_id,
             settle_details.get("token_source"),
             settle_details.get("usage_source"),
             settle_details.get("total_tokens"),
             settle_details.get("kie_credits_consumed"),
+            settle_details.get("provider_cost_time_seconds"),
             settle_details.get("billing_basis"),
         )
     except Exception as exc:
@@ -42573,6 +43031,47 @@ async def _run_generate_video(
         except Exception:
             reservation_tx_id = None
 
+        # Persist reservation onto job/task immediately so multi-worker callbacks can settle.
+        if reservation_tx_id and provider_callback_ticket:
+            early_billing_context = {
+                "is_token_billing": bool(_is_token_billing),
+                "estimated_tokens": int(_estimated_tokens or 0),
+                "duration": req.duration,
+                "duration_seconds": req.duration,
+                "aspect_ratio": str(aspect_ratio or "").strip() or None,
+                "draft_mode": bool(req.draft_mode),
+                "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                "shot_continuation": bool(getattr(req, "use_prev_video", False)),
+                "has_video_input": bool(
+                    getattr(req, "use_prev_video", False)
+                    or (
+                        isinstance(getattr(req, "ref_video_urls", None), (list, tuple))
+                        and len(getattr(req, "ref_video_urls") or []) > 0
+                    )
+                ),
+                "width": int(resolved_video_width) if resolved_video_width else None,
+                "height": int(resolved_video_height) if resolved_video_height else None,
+                "fps": int((_video_token_cfg or {}).get("default_fps", 24) or 24),
+                "resolution": str(resolved_video_resolution or "") or None,
+                "provider": reserve_provider or req.provider,
+                "model": reserve_model or req.model,
+                "system_api_id": reserve_system_api_id,
+                "project_id": int(resolved_project_id) if resolved_project_id else None,
+                "episode_id": int(resolved_episode_id) if resolved_episode_id else None,
+                "shot_id": int(resolved_shot_id) if resolved_shot_id else None,
+                "is_seedance_2": bool((_video_token_cfg or {}).get("is_seedance_2"))
+                or billing_service.is_seedance_2_model(reserve_provider, reserve_model),
+                "draft_token_coefficient": float(
+                    (_video_token_cfg or {}).get("draft_token_coefficient", 1.0) or 1.0
+                ),
+            }
+            _persist_video_job_billing_reservation(
+                provider_callback_ticket=provider_callback_ticket,
+                reservation_tx_id=reservation_tx_id,
+                billing_context=early_billing_context,
+                user_id=getattr(current_user, "id", None),
+            )
+
         project_seed = _ensure_project_generation_seed(db, resolved_project_id, current_user)
         explicit_seed = _normalize_seed_value(getattr(req, "seed", None))
 
@@ -43610,10 +44109,25 @@ async def _run_generate_video_job(
             timeout=VIDEO_JOB_MAX_RUNNING_SECONDS,
         )
         if isinstance(result, dict) and result.get("pending_callback"):
-            with VIDEO_JOB_LOCK:
-                current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+            # Hydrate from file/task — multi-worker callbacks may have already succeeded
+            # on another instance while this worker still has stale in-memory status.
+            current_job = _hydrate_video_job_record(job_id, None)
             current_status = _normalize_generation_status(current_job.get("status"))
             current_result_url = _extract_job_result_url(current_job.get("result"))
+            callback_payload = {}
+            if provider_callback_ticket:
+                callback_payload = _get_generation_callback_payload(provider_callback_ticket) or {}
+            # Callback store may prove success even if local job status lagged.
+            if (not current_result_url) and callback_payload:
+                built = _build_result_from_provider_callback(
+                    callback_payload,
+                    fallback_provider=req_provider,
+                    fallback_model=req_model,
+                )
+                if built and _extract_job_result_url(built):
+                    current_result_url = _extract_job_result_url(built)
+                    if current_status not in {"succeeded", "completed", "done"}:
+                        current_status = "succeeded"
 
             metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             provider_task_id = str(
@@ -43622,41 +44136,50 @@ async def _run_generate_video_job(
                 or result.get("provider_task_id")
                 or ""
             ).strip()
-            reservation_tx_id_pending = result.get("reservation_tx_id")
+            reservation_tx_id_pending = result.get("reservation_tx_id") or current_job.get("reservation_tx_id")
             try:
                 reservation_tx_id_pending = int(reservation_tx_id_pending) if reservation_tx_id_pending is not None else None
             except Exception:
                 reservation_tx_id_pending = None
             billing_context = result.get("billing_context") if isinstance(result.get("billing_context"), dict) else {}
+            if not billing_context and isinstance(current_job.get("billing_context"), dict):
+                billing_context = dict(current_job.get("billing_context") or {})
 
-            # Callback may finalize the job before submit returns. Always attach reservation
-            # first, then settle — do not skip billing on the "already succeeded" race.
-            if current_status == "succeeded" and current_result_url:
+            already_settled = bool(current_job.get("billing_settled"))
+            callback_already_done = (
+                current_status in {"succeeded", "completed", "done"} and bool(current_result_url)
+            ) or bool(callback_payload and _extract_job_result_url(
+                _build_result_from_provider_callback(callback_payload) or {}
+            ))
+
+            # Callback may finalize before submit returns. Attach reservation then settle.
+            # Never downgrade a succeeded job back to waiting_callback (multi-worker race).
+            if callback_already_done or already_settled:
                 attach_fields: Dict[str, Any] = {
-                    "billing_pending": bool(reservation_tx_id_pending),
                     "billing_context": billing_context,
                 }
                 if reservation_tx_id_pending:
                     attach_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
+                    attach_fields["billing_pending"] = not already_settled
                 if provider_task_id and not _extract_job_provider_task_id(current_job):
                     attach_fields["provider_task_id"] = provider_task_id
+                if current_status not in {"succeeded", "completed", "done"} and current_result_url:
+                    attach_fields["status"] = "succeeded"
                 if attach_fields:
                     _set_video_job(job_id, **attach_fields)
-                with VIDEO_JOB_LOCK:
-                    current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
-                callback_payload = {}
-                if provider_callback_ticket:
-                    callback_payload = _get_generation_callback_payload(provider_callback_ticket) or {}
-                await _settle_or_cancel_video_job_billing_from_callback(
-                    job_id,
-                    current_job,
-                    callback_payload,
-                )
+                current_job = _hydrate_video_job_record(job_id, None)
+                if not already_settled:
+                    await _settle_or_cancel_video_job_billing_from_callback(
+                        job_id,
+                        current_job,
+                        callback_payload,
+                    )
                 logger.info(
-                    "[VideoJob] settled reservation after callback-before-return race | job_id=%s reservation_tx_id=%s provider_task_id=%s",
+                    "[VideoJob] settled reservation after callback-before-return race | job_id=%s reservation_tx_id=%s provider_task_id=%s already_settled=%s",
                     job_id,
                     reservation_tx_id_pending,
                     _extract_job_provider_task_id(current_job) or provider_task_id or None,
+                    already_settled,
                 )
                 return {"defer_completion": False}
 
@@ -43665,9 +44188,11 @@ async def _run_generate_video_job(
                 "error": None,
                 "upstream_submit_state": "callback_pending",
                 "billing_pending": bool(result.get("billing_pending") and reservation_tx_id_pending),
-                "billing_settled": False,
                 "billing_context": billing_context,
             }
+            # Do not clobber billing_settled=True from another worker.
+            if not already_settled:
+                update_fields["billing_settled"] = False
             if reservation_tx_id_pending:
                 update_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
             if provider_task_id:

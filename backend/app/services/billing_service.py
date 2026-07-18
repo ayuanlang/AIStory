@@ -3316,6 +3316,7 @@ class BillingService:
         "use_prev_video", "estimation_method", "token_source", "billing_basis", "usage_source",
         "kie_credits_consumed", "credits_consumed", "creditsConsumed", "credits",
         "is_seedance_2", "is_seedance_video", "is_kie_provider", "generation_mode",
+        "provider_task_id", "task_id", "taskId", "query_endpoint",
     }
 
     @staticmethod
@@ -4526,6 +4527,15 @@ class BillingService:
             "draft_mode",
             "generation_mode",
             "usage_source",
+            "provider_task_id",
+            "task_id",
+            "taskId",
+            "query_endpoint",
+            "provider_cost_time_seconds",
+            "cost_time",
+            "taskCostTime",
+            "provider_create_time_ms",
+            "provider_complete_time_ms",
         ):
             if details.get(copy_key) not in (None, ""):
                 res_details[copy_key] = details.get(copy_key)
