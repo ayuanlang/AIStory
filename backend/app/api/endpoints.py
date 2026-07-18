@@ -38359,6 +38359,14 @@ def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
 
     raw_payload = metadata.get("raw")
     if isinstance(raw_payload, dict):
+        try:
+            from app.services.media_service import _extract_provider_task_usage, _normalize_provider_task_usage
+
+            normalized = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+            if normalized:
+                return normalized
+        except Exception:
+            pass
         raw_usage = raw_payload.get("usage")
         if isinstance(raw_usage, dict) and raw_usage:
             return dict(raw_usage)
@@ -38383,6 +38391,107 @@ def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
                             }
 
     return {}
+
+
+async def _maybe_refresh_kie_credits_from_record_info(
+    metadata: Any,
+    provider: Optional[str] = None,
+) -> float:
+    """For KIE non-callback/jobs tasks: GET recordInfo?taskId=... when credits missing."""
+    if not isinstance(metadata, dict):
+        return 0.0
+    provider_l = str(provider or metadata.get("provider") or "").strip().lower()
+    if not (provider_l == "kie" or provider_l.startswith("kie/") or "kie.ai" in provider_l):
+        return 0.0
+
+    task_id = str(
+        metadata.get("task_id")
+        or metadata.get("taskId")
+        or metadata.get("provider_task_id")
+        or ""
+    ).strip()
+    if not task_id or task_id.lower() in {"undefined", "null", "none"}:
+        return 0.0
+
+    query_endpoint = str(
+        metadata.get("query_endpoint")
+        or metadata.get("queryEndpoint")
+        or "https://api.kie.ai/api/v1/jobs/recordInfo"
+    ).strip()
+    api_key = ""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.all_models import SystemAPISetting
+
+        db = SessionLocal()
+        try:
+            system_api_id = metadata.get("system_api_id")
+            row = None
+            try:
+                sid = int(system_api_id) if system_api_id is not None else 0
+            except Exception:
+                sid = 0
+            if sid > 0:
+                row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
+            if row is None:
+                candidates = (
+                    db.query(SystemAPISetting)
+                    .filter(SystemAPISetting.provider.isnot(None))
+                    .order_by(SystemAPISetting.id.desc())
+                    .limit(40)
+                    .all()
+                )
+                for candidate in candidates:
+                    provider_text = str(getattr(candidate, "provider", "") or "").strip().lower()
+                    base_url = str(getattr(candidate, "base_url", "") or "").strip().lower()
+                    if provider_text == "kie" or provider_text.startswith("kie/") or "kie.ai" in base_url:
+                        row = candidate
+                        break
+            if row is not None:
+                raw_key = str(getattr(row, "api_key", "") or "").strip()
+                api_key = raw_key.split(",")[0].strip() if raw_key else ""
+                conf = getattr(row, "config", None)
+                if isinstance(conf, dict):
+                    query_endpoint = str(conf.get("query_endpoint") or query_endpoint).strip()
+        finally:
+            db.close()
+    except Exception:
+        api_key = ""
+    if not api_key:
+        return 0.0
+
+    try:
+        from app.services.media_service import media_service
+        from app.services.billing_pricing import resolve_provider_kie_credits
+
+        usage = await asyncio.to_thread(
+            media_service.fetch_provider_task_usage,
+            task_id=task_id,
+            api_key=api_key,
+            query_endpoint=query_endpoint,
+            provider="kie",
+            refresh_if_missing=True,
+        )
+        credits = float(resolve_provider_kie_credits(usage) or 0.0)
+        if credits > 0:
+            metadata["provider_usage"] = usage
+            metadata["usage_source"] = "kie_recordInfo_settle_refresh"
+            metadata["creditsConsumed"] = credits
+            metadata["credits_consumed"] = credits
+            metadata["kie_credits_consumed"] = credits
+            logger.info(
+                "[Billing] KIE recordInfo settle refresh | task_id=%s creditsConsumed=%s",
+                task_id,
+                credits,
+            )
+        return credits
+    except Exception as exc:
+        logger.warning(
+            "[Billing] KIE recordInfo settle refresh failed | task_id=%s error=%s",
+            task_id,
+            exc,
+        )
+        return 0.0
 
 
 def _resolve_usage_token_total(usage: Any) -> int:
@@ -39908,6 +40017,34 @@ async def _run_generate_image(
             if provider_usage:
                 settle_details["provider_usage"] = provider_usage
                 settle_details["usage_source"] = str(result_meta.get("usage_source") or "provider").strip() or "provider"
+
+            # KIE non-callback: recordInfo data.creditsConsumed → actual supplier credits settle.
+            try:
+                from app.services.billing_pricing import resolve_provider_kie_credits
+
+                _kie_credits = float(
+                    resolve_provider_kie_credits(provider_usage)
+                    or resolve_provider_kie_credits(result_meta if isinstance(result_meta, dict) else {})
+                    or 0.0
+                )
+            except Exception:
+                _kie_credits = 0.0
+            if _kie_credits <= 0 and isinstance(result_meta, dict):
+                _kie_credits = await _maybe_refresh_kie_credits_from_record_info(result_meta, billing_provider)
+            if _kie_credits > 0:
+                settle_details["kie_credits_consumed"] = _kie_credits
+                settle_details["credits_consumed"] = _kie_credits
+                settle_details["creditsConsumed"] = _kie_credits
+                settle_details["billing_basis"] = "provider_kie_credits"
+                settle_details.setdefault(
+                    "provider_usage",
+                    {
+                        "creditsConsumed": _kie_credits,
+                        "credits_consumed": _kie_credits,
+                        "kie_credits_consumed": _kie_credits,
+                        "credits": _kie_credits,
+                    },
+                )
 
             if billing_provider:
                 settle_details["provider"] = billing_provider
@@ -43220,6 +43357,8 @@ async def _run_generate_video(
                     _kie_credits = float(resolve_provider_kie_credits(_kie_usage) or resolve_provider_kie_credits(final_meta) or 0.0)
                 except Exception:
                     _kie_credits = 0.0
+                if _kie_credits <= 0:
+                    _kie_credits = await _maybe_refresh_kie_credits_from_record_info(final_meta, final_provider)
                 if _kie_credits > 0:
                     settle_details["kie_credits_consumed"] = _kie_credits
                     settle_details["credits_consumed"] = _kie_credits

@@ -263,7 +263,37 @@ def _attach_provider_usage_metadata(
         meta["usage"] = resolved
         meta["provider_usage"] = resolved
         meta["usage_source"] = str(source or "provider").strip() or "provider"
+        for credit_key in ("creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits"):
+            if resolved.get(credit_key) not in (None, "") and meta.get(credit_key) in (None, ""):
+                meta[credit_key] = resolved.get(credit_key)
     return meta
+
+
+def _is_kie_record_info_endpoint(endpoint: Optional[str], provider: Optional[str] = None) -> bool:
+    provider_l = str(provider or "").strip().lower()
+    endpoint_l = str(endpoint or "").strip().lower()
+    if provider_l == "kie" or provider_l.startswith("kie/") or "kie.ai" in provider_l:
+        return True
+    return any(token in endpoint_l for token in ("recordinfo", "record-info", "record_detail", "record-detail", "kie.ai"))
+
+
+def _kie_response_looks_successful(payload: Any) -> bool:
+    """KIE docs sometimes show non-200 business codes with msg=success + data."""
+    if not isinstance(payload, dict):
+        return False
+    code = payload.get("code")
+    if code in (None, 200, "200", 0, "0"):
+        return True
+    try:
+        if int(str(code).strip()) == 200:
+            return True
+    except Exception:
+        pass
+    msg = str(payload.get("msg") or payload.get("message") or "").strip().lower()
+    data = payload.get("data")
+    if msg in {"success", "ok", "succeeded"} and isinstance(data, (dict, list)):
+        return True
+    return False
 
 
 class MediaGenerationService:
@@ -2058,37 +2088,92 @@ class MediaGenerationService:
         provider: Optional[str] = None,
         refresh_if_missing: bool = True,
     ) -> Dict[str, Any]:
-        """GET provider task once (optionally twice) and return normalized usage for billing."""
+        """GET provider task once (optionally twice) and return normalized usage for billing.
+
+        KIE Market uses: GET /api/v1/jobs/recordInfo?taskId=...
+        (not path-appended /{taskId}).
+        """
         stable_task_id = str(task_id or "").strip()
         stable_key = str(api_key or "").strip()
         if not stable_task_id or not stable_key:
             return {}
 
         provider_l = str(provider or "").strip().lower()
-        endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
+        endpoint = str(query_endpoint or "").strip()
+        if not _is_kie_record_info_endpoint(endpoint, provider_l):
+            endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
         # RunningHub uses POST query bodies; skip GET re-query for that family.
         if "runninghub" in provider_l:
             return {}
 
         headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
-        target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+        is_kie = _is_kie_record_info_endpoint(endpoint, provider_l)
+        endpoint_candidates = [endpoint] if endpoint else []
+        if is_kie and endpoint:
+            if "/recordInfo" in endpoint:
+                endpoint_candidates.append(endpoint.replace("/recordInfo", "/record-info"))
+            elif "/record-info" in endpoint:
+                endpoint_candidates.append(endpoint.replace("/record-info", "/recordInfo"))
+        # de-dupe while preserving order
+        seen_endpoints = set()
+        endpoint_candidates = [
+            item for item in endpoint_candidates
+            if item and not (item in seen_endpoints or seen_endpoints.add(item))
+        ]
 
-        def _get(use_proxy: bool = True):
+        def _request_once(use_proxy: bool = True):
             kwargs = {"headers": headers, "timeout": 30, "verify": False}
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
+
+            last_resp = None
+            if is_kie:
+                param_candidates = (
+                    {"taskId": stable_task_id},
+                    {"task_id": stable_task_id},
+                    {"id": stable_task_id},
+                )
+                for url in endpoint_candidates:
+                    for params in param_candidates:
+                        try:
+                            resp = requests.get(url, params=params, **kwargs)
+                            last_resp = resp
+                            if getattr(resp, "status_code", None) == 200:
+                                return resp
+                        except Exception:
+                            continue
+                # Fallback: some deployments accept path-style ids.
+                for url in endpoint_candidates:
+                    try:
+                        resp = requests.get(f"{url.rstrip('/')}/{urllib.parse.quote(stable_task_id)}", **kwargs)
+                        last_resp = resp
+                        if getattr(resp, "status_code", None) == 200:
+                            return resp
+                    except Exception:
+                        continue
+                return last_resp
+
+            target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
             return requests.get(target_url, **kwargs)
+
+        def _load_payload(resp) -> Dict[str, Any]:
+            if not resp or getattr(resp, "status_code", None) != 200:
+                return {}
+            try:
+                data = resp.json() if resp.content else {}
+            except Exception:
+                return {}
+            return data if isinstance(data, dict) else {}
 
         raw_payload: Dict[str, Any] = {}
         try:
             try:
-                resp = _get(True)
+                resp = _request_once(True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
-                resp = _get(False)
-            if getattr(resp, "status_code", None) == 200:
-                data = resp.json() if resp.content else {}
-                if isinstance(data, dict):
-                    raw_payload = data
+                resp = _request_once(False)
+            raw_payload = _load_payload(resp)
+            if is_kie and raw_payload and not _kie_response_looks_successful(raw_payload):
+                raw_payload = {}
         except Exception as exc:
             logger.warning(
                 "[TaskUsage] provider task query failed | provider=%s task_id=%s error=%s",
@@ -2101,24 +2186,24 @@ class MediaGenerationService:
         usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
         if usage or not refresh_if_missing:
             if usage:
+                data_obj = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
                 usage["raw_task"] = {
-                    "id": raw_payload.get("id") or stable_task_id,
-                    "status": raw_payload.get("status") or raw_payload.get("state"),
-                    "model": raw_payload.get("model"),
+                    "id": data_obj.get("taskId") or raw_payload.get("id") or stable_task_id,
+                    "status": data_obj.get("state") or raw_payload.get("status") or raw_payload.get("state"),
+                    "model": data_obj.get("model") or raw_payload.get("model"),
                 }
             return usage
 
         try:
             time.sleep(0.5)
             try:
-                resp = _get(True)
+                resp = _request_once(True)
             except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
-                resp = _get(False)
-            if getattr(resp, "status_code", None) == 200:
-                data = resp.json() if resp.content else {}
-                if isinstance(data, dict):
-                    raw_payload = data
-                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+                resp = _request_once(False)
+            raw_payload = _load_payload(resp)
+            if is_kie and raw_payload and not _kie_response_looks_successful(raw_payload):
+                raw_payload = {}
+            usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
         except Exception as exc:
             logger.warning(
                 "[TaskUsage] provider task usage refresh failed | provider=%s task_id=%s error=%s",
@@ -2128,12 +2213,77 @@ class MediaGenerationService:
             )
 
         if usage:
+            data_obj = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
             usage["raw_task"] = {
-                "id": raw_payload.get("id") or stable_task_id,
-                "status": raw_payload.get("status") or raw_payload.get("state"),
-                "model": raw_payload.get("model"),
+                "id": data_obj.get("taskId") or raw_payload.get("id") or stable_task_id,
+                "status": data_obj.get("state") or raw_payload.get("status") or raw_payload.get("state"),
+                "model": data_obj.get("model") or raw_payload.get("model"),
             }
         return usage
+
+    def _finalize_kie_poll_metadata(
+        self,
+        *,
+        base_metadata: Optional[Dict[str, Any]],
+        poll_data: Any,
+        record: Any,
+        task_id: str,
+        api_key: str,
+        query_url: str,
+        refresh_if_missing_credits: bool = True,
+    ) -> Dict[str, Any]:
+        """Attach KIE recordInfo usage (creditsConsumed) for non-callback settle."""
+        meta = dict(base_metadata or {})
+        stable_task_id = str(task_id or "").strip()
+        meta.update(
+            {
+                "raw": poll_data if isinstance(poll_data, dict) else {"value": poll_data},
+                "task_id": stable_task_id,
+                "taskId": stable_task_id,
+                "query_endpoint": str(query_url or "").strip() or None,
+            }
+        )
+        if isinstance(record, dict):
+            if record.get("costTime") is not None:
+                meta["taskCostTime"] = record.get("costTime")
+            if record.get("completeTime") is not None:
+                meta["completeTime"] = record.get("completeTime")
+            if record.get("model"):
+                meta["provider_task_model"] = record.get("model")
+
+        meta = _attach_provider_usage_metadata(
+            meta,
+            task_payload=poll_data,
+            source="kie_recordInfo",
+        )
+        usage = meta.get("provider_usage") if isinstance(meta.get("provider_usage"), dict) else {}
+        credits = _safe_usage_float(
+            (usage or {}).get("creditsConsumed")
+            or (usage or {}).get("kie_credits_consumed")
+            or meta.get("creditsConsumed")
+        )
+
+        if credits <= 0 and refresh_if_missing_credits and stable_task_id and api_key and query_url:
+            refreshed = self.fetch_provider_task_usage(
+                task_id=stable_task_id,
+                api_key=api_key,
+                query_endpoint=query_url,
+                provider="kie",
+                refresh_if_missing=True,
+            )
+            if refreshed:
+                meta = _attach_provider_usage_metadata(
+                    meta,
+                    usage=refreshed,
+                    source="kie_recordInfo_refresh",
+                )
+                logger.info(
+                    "KIE recordInfo credits refresh | task_id=%s creditsConsumed=%s source=%s",
+                    stable_task_id,
+                    refreshed.get("creditsConsumed") or refreshed.get("kie_credits_consumed"),
+                    meta.get("usage_source"),
+                )
+        return meta
 
     def _normalize_zlhub_moderation_endpoint(self, endpoint: Optional[str]) -> str:
         raw = (endpoint or "").strip()
@@ -14841,6 +14991,8 @@ class MediaGenerationService:
             "submit_image_count": int(submitted_image_count_value or 0),
             "mode_source": resolved_mode_source or None,
             "standard_resolution_trace": tool_conf.get("__standard_resolution_trace") if isinstance(tool_conf, dict) else None,
+            "system_api_id": int(resolved_setting_id) if resolved_setting_id else None,
+            "query_endpoint": str(query_url or "").strip() or None,
         }
 
         code = data.get("code")
@@ -15014,6 +15166,17 @@ class MediaGenerationService:
                 return int(str(value).strip()) == 200
             except Exception:
                 return False
+
+        def _build_success_meta(poll_data_obj: Any, record_obj: Any) -> Dict[str, Any]:
+            return self._finalize_kie_poll_metadata(
+                base_metadata=base_metadata,
+                poll_data=poll_data_obj,
+                record=record_obj,
+                task_id=str(task_id),
+                api_key=api_key,
+                query_url=query_url,
+                refresh_if_missing_credits=True,
+            )
 
         def _pick_preferred_kie_media_url(candidates: List[str]) -> Optional[str]:
             ordered: List[str] = []
@@ -15226,7 +15389,8 @@ class MediaGenerationService:
                 continue
 
             poll_code = poll_data.get("code")
-            if not _is_ok_code(poll_code):
+            # Official docs may show non-200 business codes with msg=success + data.creditsConsumed.
+            if not _is_ok_code(poll_code) and not _kie_response_looks_successful(poll_data):
                 continue
 
             record_raw = poll_data.get("data") or poll_data.get("result") or poll_data
@@ -15256,13 +15420,14 @@ class MediaGenerationService:
             poll_state_marker = f"{state or '<empty>'}|{success_flag}|{len(video_urls)}"
             if poll_state_marker != last_poll_state_marker:
                 logger.info(
-                    "KIE poll state change | task_id=%s attempt=%s/%s state=%s success_flag=%s media_url_count=%s record_keys=%s",
+                    "KIE poll state change | task_id=%s attempt=%s/%s state=%s success_flag=%s media_url_count=%s creditsConsumed=%s record_keys=%s",
                     task_id,
                     i + 1,
                     poll_attempts,
                     state or None,
                     success_flag,
                     len(video_urls),
+                    record.get("creditsConsumed") if isinstance(record, dict) else None,
                     sorted([str(key) for key in record.keys()])[:20] if isinstance(record, dict) else [],
                 )
                 last_poll_state_marker = poll_state_marker
@@ -15284,18 +15449,14 @@ class MediaGenerationService:
                 if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
                     if selected_video_url:
-                        meta = {"raw": poll_data}
-                        meta.update(base_metadata)
-                        return {"url": selected_video_url, "metadata": meta}
+                        return {"url": selected_video_url, "metadata": _build_success_meta(poll_data, record)}
 
             if state in {"success", "succeeded", "completed", "done", "finish", "finished", "complete", "successed"}:
 
                 if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
                     if selected_video_url:
-                        meta = {"raw": poll_data}
-                        meta.update(base_metadata)
-                        return {"url": selected_video_url, "metadata": meta}
+                        return {"url": selected_video_url, "metadata": _build_success_meta(poll_data, record)}
 
                 urls = self._extract_urls_from_payload(result_payload)
                 if not urls:
@@ -15311,9 +15472,7 @@ class MediaGenerationService:
                     )
                     return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
 
-                meta = {"raw": poll_data}
-                meta.update(base_metadata)
-                return {"url": selected_url, "metadata": meta}
+                return {"url": selected_url, "metadata": _build_success_meta(poll_data, record)}
             if success_flag in {1, "1", True, "true", "success", "succeeded"}:
                 video_urls = _extract_kie_video_urls(record.get("resultUrls"))
                 if not video_urls:
@@ -15324,9 +15483,7 @@ class MediaGenerationService:
                 if gen_type == "video" or gen_type == "audio":
                     selected_video_url = _pick_preferred_kie_media_url(video_urls)
                     if selected_video_url:
-                        meta = {"raw": poll_data}
-                        meta.update(base_metadata)
-                        return {"url": selected_video_url, "metadata": meta}
+                        return {"url": selected_video_url, "metadata": _build_success_meta(poll_data, record)}
 
                 urls = self._extract_urls_from_payload(record.get("resultUrls"))
                 if not urls:
@@ -15343,9 +15500,7 @@ class MediaGenerationService:
                         _truncate_kie_log_value(poll_data),
                     )
                     return {"error": "KIE task succeeded but no media URL found", "details": poll_data}
-                meta = {"raw": poll_data}
-                meta.update(base_metadata)
-                return {"url": selected_url, "metadata": meta}
+                return {"url": selected_url, "metadata": _build_success_meta(poll_data, record)}
 
             if state in {"fail", "failed", "error", "canceled", "cancelled", "abort", "aborted", "timeout"}:
                 logger.error(

@@ -436,8 +436,13 @@ class BillingService:
         costs: List[int] = []
         for row in rows or []:
             details = BillingService._safe_json_dict(getattr(row, "details", {}))
+            # Prefer lean history fields; fall back to legacy fat billing_breakdown.
             billing_breakdown = details.get("billing_breakdown") if isinstance(details.get("billing_breakdown"), dict) else {}
-            phase = str(billing_breakdown.get("phase") or details.get("phase") or "").strip().lower()
+            phase = str(
+                details.get("phase")
+                or billing_breakdown.get("phase")
+                or ""
+            ).strip().lower()
             status = str(details.get("status") or "").strip().upper()
             reason = str(details.get("reason") or "").strip().upper()
 
@@ -448,8 +453,8 @@ class BillingService:
                 continue
 
             row_system_api_id = (
-                BillingService._to_int(billing_breakdown.get("system_api_id"), 0)
-                or BillingService._to_int(details.get("system_api_id"), 0)
+                BillingService._to_int(details.get("system_api_id"), 0)
+                or BillingService._to_int(billing_breakdown.get("system_api_id"), 0)
             )
             if row_system_api_id > 0 and row_system_api_id != int(system_api_id):
                 continue
@@ -1911,6 +1916,67 @@ class BillingService:
         )
         return compacted if isinstance(compacted, dict) else {}
 
+    # Heavy nested blobs belong in TransactionAction / process logs, not history UI details.
+    _HISTORY_DETAILS_DROP_KEYS = {
+        "billing_breakdown",
+        "billing_trace",
+        "billing_process",
+        "usage_metadata",
+        "provider_usage",
+        "video_token_estimate",
+        "selected_rule_detail",
+        "matched_rule_details",
+        "matched_rule_ids",
+        "audit_summary",
+        "system_api_ref",
+        "reservation_billing_breakdown",
+        "runtime_price_adjustments",
+        "standard_resolution_trace",
+        "function_billing",
+        "supplier_pricing",
+        "api_pricing_source_detail",
+    }
+
+    @staticmethod
+    def _slim_pricing_program_for_history(
+        *,
+        breakdown: Optional[Dict[str, Any]] = None,
+        selected_rule_detail: Optional[Dict[str, Any]] = None,
+        existing: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        breakdown = breakdown if isinstance(breakdown, dict) else {}
+        rule = selected_rule_detail if isinstance(selected_rule_detail, dict) else {}
+        prev = existing if isinstance(existing, dict) else {}
+        user_cost = breakdown.get("api_cost")
+        if user_cost is None:
+            user_cost = rule.get("computed_cost", prev.get("user_cost"))
+        return BillingService._compact_audit_payload(
+            {
+                "base_cost": rule.get("computed_base_cost", prev.get("base_cost")),
+                "charge_multiplier": rule.get("rule_charge_multiplier", prev.get("charge_multiplier")),
+                "runtime_price_multiplier": rule.get("runtime_price_multiplier", prev.get("runtime_price_multiplier")),
+                "user_cost": user_cost,
+                "billing_unit_type": (
+                    ((rule.get("pricing") or {}) if isinstance(rule.get("pricing"), dict) else {}).get("unit_type")
+                    or prev.get("billing_unit_type")
+                ),
+                "base_credit_source": rule.get("base_credit_source", prev.get("base_credit_source")),
+            }
+        )
+
+    @staticmethod
+    def _compact_history_ledger_details(details: Optional[dict]) -> dict:
+        """Keep history-row details short; drop duplicated stage audit trees."""
+        payload = dict(details or {}) if isinstance(details, dict) else {}
+        for key in BillingService._HISTORY_DETAILS_DROP_KEYS:
+            payload.pop(key, None)
+        # Keep only a slim pricing_program for UI columns.
+        program = payload.get("pricing_program")
+        if isinstance(program, dict):
+            payload["pricing_program"] = BillingService._slim_pricing_program_for_history(existing=program)
+        compacted = BillingService._compact_audit_payload(payload)
+        return compacted if isinstance(compacted, dict) else payload
+
     @staticmethod
     def _rule_specificity_score(rule: SystemAPIBillingRule) -> int:
         score = 0
@@ -3212,91 +3278,188 @@ class BillingService:
             return compacted
         return {}
 
+    _USAGE_STORAGE_KEEP_KEYS = {
+        "input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens",
+        "width", "height", "pixels", "image_count", "duration_seconds", "duration", "fps",
+        "resolution", "resolution_tier", "has_video_input", "has_audio", "draft_mode",
+        "use_prev_video", "estimation_method", "token_source", "billing_basis", "usage_source",
+        "kie_credits_consumed", "credits_consumed", "creditsConsumed", "credits",
+        "is_seedance_2", "is_seedance_video", "is_kie_provider",
+    }
+
     @staticmethod
-    def _build_billing_breakdown_for_audit(breakdown: Dict[str, Any], *, phase: str) -> Dict[str, Any]:
+    def _slim_usage_metadata_for_storage(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Persist only billable usage scalars — no rate maps / nested estimate trees."""
+        payload = usage if isinstance(usage, dict) else {}
+        out: Dict[str, Any] = {}
+        for key in BillingService._USAGE_STORAGE_KEEP_KEYS:
+            if key not in payload or payload.get(key) in (None, ""):
+                continue
+            out[key] = payload.get(key)
+        # Flatten nested provider_usage token/credit scalars once (no deep copy of raw task).
+        nested = payload.get("provider_usage")
+        if isinstance(nested, dict):
+            for key in (
+                "input_tokens", "output_tokens", "total_tokens", "completion_tokens",
+                "creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits",
+            ):
+                if out.get(key) in (None, "", 0, 0.0) and nested.get(key) not in (None, ""):
+                    out[key] = nested.get(key)
+        compacted = BillingService._compact_audit_payload(
+            out,
+            drop_zero_keys=BillingService._AUDIT_USAGE_DROP_ZERO_KEYS,
+        )
+        return compacted if isinstance(compacted, dict) else out
+
+    @staticmethod
+    def _slim_selected_rule_for_storage(rule: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Keep rule identity + pricing numbers; drop match_dimensions / rate matrices."""
+        if not isinstance(rule, dict) or not rule:
+            return {}
+        pricing = rule.get("pricing") if isinstance(rule.get("pricing"), dict) else {}
+        return BillingService._compact_audit_payload(
+            {
+                "id": rule.get("id"),
+                "name": rule.get("name"),
+                "priority": rule.get("priority"),
+                "is_base_pricing": rule.get("is_base_pricing"),
+                "pricing": {
+                    "unit_type": pricing.get("unit_type"),
+                    "cost": pricing.get("cost"),
+                    "cost_input": pricing.get("cost_input"),
+                    "cost_output": pricing.get("cost_output"),
+                },
+                "rule_charge_multiplier": rule.get("rule_charge_multiplier"),
+                "runtime_price_multiplier": rule.get("runtime_price_multiplier"),
+                "base_credit_source": rule.get("base_credit_source"),
+                "computed_base_cost": rule.get("computed_base_cost"),
+                "computed_cost": rule.get("computed_cost"),
+            }
+        )
+
+    @staticmethod
+    def _slim_source_detail_for_storage(detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(detail, dict) or not detail:
+            return {}
+        # Keep identifiers/reason only — drop embedded rate maps / adjustments trees.
+        return BillingService._compact_audit_payload(
+            {
+                "rule_id": detail.get("rule_id") or detail.get("base_rule_id"),
+                "rule_name": detail.get("rule_name") or detail.get("base_rule_name"),
+                "base_rule_id": detail.get("base_rule_id"),
+                "base_rule_name": detail.get("base_rule_name"),
+                "reason": detail.get("reason"),
+                "priority": detail.get("priority"),
+            }
+        )
+
+    @staticmethod
+    def _build_billing_audit_for_storage(
+        breakdown: Optional[Dict[str, Any]],
+        *,
+        phase: str,
+        task_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Single compact audit blob for TransactionAction.billing_metadata.
+
+        Replaces the old duplicated trio: billing_breakdown + billing_trace + nested
+        billing_process/usage/audit_summary copies.
+        """
+        breakdown = breakdown if isinstance(breakdown, dict) else {}
+        selected = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
+        function_billing = breakdown.get("function_billing") if isinstance(breakdown.get("function_billing"), dict) else {}
+        process = breakdown.get("billing_process") if isinstance(breakdown.get("billing_process"), dict) else {}
+        pricing = selected.get("pricing") if isinstance(selected.get("pricing"), dict) else {}
         minimum_charge = breakdown.get("minimum_charge") if isinstance(breakdown.get("minimum_charge"), dict) else {}
-        minimum_required = int(minimum_charge.get("required") or 0)
-        minimum_delta = int(minimum_charge.get("delta") or 0)
-        minimum_applied = bool(minimum_charge.get("applied"))
-        minimum_enabled = bool(minimum_charge.get("enabled"))
-        minimum_payload: Optional[Dict[str, Any]] = None
-        if minimum_applied or minimum_enabled or minimum_required > 0 or minimum_delta > 0:
+
+        minimum_payload = None
+        if (
+            bool(minimum_charge.get("applied"))
+            or bool(minimum_charge.get("enabled"))
+            or BillingService._to_int(minimum_charge.get("required"), 0) > 0
+            or BillingService._to_int(minimum_charge.get("delta"), 0) > 0
+        ):
             minimum_payload = {
-                "enabled": minimum_enabled,
-                "required": minimum_required,
-                "applied": minimum_applied,
-                "delta": max(0, minimum_delta),
+                "enabled": bool(minimum_charge.get("enabled")),
+                "required": BillingService._to_int(minimum_charge.get("required"), 0),
+                "applied": bool(minimum_charge.get("applied")),
+                "delta": max(0, BillingService._to_int(minimum_charge.get("delta"), 0)),
             }
 
         payload = {
-            "feature_cost": int(breakdown.get("feature_cost") or 0),
-            "api_cost": int(breakdown.get("api_cost") or 0),
-            "api_cost_before_function": int(breakdown.get("api_cost_before_function") or breakdown.get("api_cost") or 0),
-            "function_billing": breakdown.get("function_billing") or {},
-            "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
-            "total_cost": int(breakdown.get("total_cost") or 0),
-            "resolved_provider": breakdown.get("resolved_provider"),
-            "resolved_model": breakdown.get("resolved_model"),
-            "api_pricing_source": breakdown.get("api_pricing_source"),
-            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
+            "phase": str(phase or "").strip() or None,
+            "task_type": str(task_type or breakdown.get("task_type") or "").strip() or None,
+            "logic_branch": process.get("logic_branch"),
+            "provider": breakdown.get("resolved_provider") or breakdown.get("provider"),
+            "model": breakdown.get("resolved_model") or breakdown.get("model"),
             "system_api_id": breakdown.get("system_api_id"),
             "matched_rule_id": breakdown.get("matched_rule_id"),
             "matched_rule_name": breakdown.get("matched_rule_name"),
-            "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
-            "matched_rule_details": breakdown.get("matched_rule_details") or [],
-            "selected_rule_detail": breakdown.get("selected_rule_detail"),
-            "rule_match_count": int(breakdown.get("rule_match_count") or 0),
             "rule_selection_status": breakdown.get("rule_selection_status"),
             "rule_selection_reason": breakdown.get("rule_selection_reason"),
+            "api_pricing_source": breakdown.get("api_pricing_source"),
+            "api_pricing_source_detail": BillingService._slim_source_detail_for_storage(
+                breakdown.get("api_pricing_source_detail")
+            ),
+            "unit_type": pricing.get("unit_type") or process.get("unit_type"),
+            "base_cost": selected.get("computed_base_cost") or process.get("base_cost"),
+            "charge_multiplier": selected.get("rule_charge_multiplier") or process.get("charge_multiplier"),
+            "runtime_price_multiplier": selected.get("runtime_price_multiplier") or process.get("runtime_price_multiplier"),
+            "feature_cost": int(breakdown.get("feature_cost") or 0),
+            "api_cost": int(breakdown.get("api_cost") or 0),
+            "api_cost_before_function": int(
+                breakdown.get("api_cost_before_function") or breakdown.get("api_cost") or 0
+            ),
+            "total_cost": int(breakdown.get("total_cost") or 0),
+            "function_billing": {
+                "applied": bool(function_billing.get("applied")),
+                "multiplier": function_billing.get("function_multiplier"),
+                "add_credits": function_billing.get("function_add_credits"),
+                "source": function_billing.get("source"),
+                "function_name": function_billing.get("function_name"),
+            },
+            "selected_rule": BillingService._slim_selected_rule_for_storage(selected),
             "minimum_charge": minimum_payload,
-            "used_reserved_fallback": bool(breakdown.get("used_reserved_fallback")),
+            "used_reserved_fallback": bool(breakdown.get("used_reserved_fallback")) or None,
             "settlement_fallback_reason": breakdown.get("settlement_fallback_reason"),
-            "system_api_ref": breakdown.get("system_api_ref") or {},
-            "phase": str(phase or "").strip() or None,
-            "audit_summary": breakdown.get("audit_summary") or {},
-            "billing_process": breakdown.get("billing_process") or {},
         }
-        compacted = BillingService._compact_audit_payload(
+        return BillingService._compact_audit_payload(
             payload,
             drop_zero_keys=BillingService._AUDIT_BREAKDOWN_DROP_ZERO_KEYS,
         )
-        if isinstance(compacted, dict) and breakdown.get("billing_process"):
-            compacted["billing_process"] = breakdown.get("billing_process")
-        return compacted if isinstance(compacted, dict) else {}
 
     @staticmethod
-    def _build_billing_trace(breakdown: Dict[str, Any], *, task_type: str, provider: Optional[str], model: Optional[str], phase: str) -> Dict[str, Any]:
-        resolved_provider = str(
-            breakdown.get("resolved_provider")
-            or breakdown.get("provider")
-            or provider
-            or ""
-        ).strip() or None
-        resolved_model = str(
-            breakdown.get("resolved_model")
-            or breakdown.get("model")
-            or model
-            or ""
-        ).strip() or None
-        payload = {
-            "task_type": str(task_type or "").strip(),
-            "provider": resolved_provider,
-            "model": resolved_model,
-            "phase": str(phase or "").strip() or None,
-            "system_api_ref": breakdown.get("system_api_ref") or {},
-            "system_api_id": breakdown.get("system_api_id"),
-            "api_pricing_source": breakdown.get("api_pricing_source"),
-            "api_pricing_source_detail": breakdown.get("api_pricing_source_detail") or {},
-            "matched_rule_id": breakdown.get("matched_rule_id"),
-            "matched_rule_name": breakdown.get("matched_rule_name"),
-            "matched_rule_ids": breakdown.get("matched_rule_ids") or [],
-            "rule_match_count": int(breakdown.get("rule_match_count") or 0),
-            "rule_selection_status": breakdown.get("rule_selection_status"),
-            "rule_selection_reason": breakdown.get("rule_selection_reason"),
-            "audit_summary": breakdown.get("audit_summary") or {},
-        }
-        compacted = BillingService._compact_audit_payload(payload)
-        return compacted if isinstance(compacted, dict) else {}
+    def _build_billing_breakdown_for_audit(breakdown: Dict[str, Any], *, phase: str) -> Dict[str, Any]:
+        """Backward-compatible alias — storage now uses the slim unified audit."""
+        return BillingService._build_billing_audit_for_storage(breakdown, phase=phase)
+
+    @staticmethod
+    def _build_billing_trace(
+        breakdown: Dict[str, Any],
+        *,
+        task_type: str,
+        provider: Optional[str],
+        model: Optional[str],
+        phase: str,
+    ) -> Dict[str, Any]:
+        """Deprecated duplicate of audit identity fields — return slim pointer only."""
+        audit = BillingService._build_billing_audit_for_storage(
+            breakdown,
+            phase=phase,
+            task_type=task_type,
+        )
+        return BillingService._compact_audit_payload(
+            {
+                "phase": audit.get("phase"),
+                "task_type": audit.get("task_type") or str(task_type or "").strip() or None,
+                "provider": audit.get("provider") or provider,
+                "model": audit.get("model") or model,
+                "system_api_id": audit.get("system_api_id"),
+                "matched_rule_id": audit.get("matched_rule_id"),
+                "matched_rule_name": audit.get("matched_rule_name"),
+                "api_pricing_source": audit.get("api_pricing_source"),
+            }
+        )
 
     @staticmethod
     def _log_transaction_action(
@@ -3323,7 +3486,38 @@ class BillingService:
         matched_rule_ids: Optional[List[int]] = None,
         usage_metadata: Optional[Dict[str, Any]] = None,
         billing_metadata: Optional[Dict[str, Any]] = None,
+        breakdown: Optional[Dict[str, Any]] = None,
+        phase: Optional[str] = None,
     ) -> None:
+        # Prefer a single slim audit blob. If callers still pass nested
+        # {"phase","breakdown":...}, unwrap and re-slim.
+        meta_in = dict(billing_metadata or {}) if isinstance(billing_metadata, dict) else {}
+        nested_breakdown = meta_in.get("breakdown") if isinstance(meta_in.get("breakdown"), dict) else None
+        source_breakdown = breakdown if isinstance(breakdown, dict) else nested_breakdown
+        stage_phase = str(phase or meta_in.get("phase") or "").strip() or None
+        if source_breakdown is not None:
+            slim_meta = BillingService._build_billing_audit_for_storage(
+                source_breakdown,
+                phase=stage_phase or str(stage or "").strip().lower() or "audit",
+                task_type=task_type,
+            )
+        else:
+            # Already a compact payload (cancel/refund) — strip known heavy nests.
+            slim_meta = dict(meta_in)
+            for heavy in (
+                "breakdown", "billing_breakdown", "billing_trace", "billing_process",
+                "usage_metadata", "matched_rule_details", "selected_rule_detail",
+                "audit_summary", "reservation_billing_breakdown",
+            ):
+                slim_meta.pop(heavy, None)
+            slim_meta = BillingService._compact_audit_payload(slim_meta)
+
+        slim_usage = BillingService._slim_usage_metadata_for_storage(usage_metadata)
+        # Avoid duplicating usage inside billing_metadata.
+        if isinstance(slim_meta, dict):
+            slim_meta.pop("usage", None)
+            slim_meta.pop("usage_metadata", None)
+
         action = TransactionAction(
             user_id=int(user_id),
             project_id=project_id,
@@ -3344,8 +3538,8 @@ class BillingService:
             refunded_amount=max(0, int(refunded_amount or 0)),
             outstanding_amount=max(0, int(outstanding_amount or 0)),
             matched_rule_ids=list(matched_rule_ids or []),
-            usage_metadata=dict(usage_metadata or {}),
-            billing_metadata=dict(billing_metadata or {}),
+            usage_metadata=slim_usage if isinstance(slim_usage, dict) else {},
+            billing_metadata=slim_meta if isinstance(slim_meta, dict) else {},
         )
         db.add(action)
 
@@ -3706,31 +3900,13 @@ class BillingService:
         reserve_details.update({
             "resolved_provider": reserve_breakdown.get("resolved_provider"),
             "resolved_model": reserve_breakdown.get("resolved_model"),
-            "billing_breakdown": BillingService._build_billing_breakdown_for_audit(reserve_breakdown, phase="reserve"),
-            "usage_metadata": BillingService._compact_usage_metadata_for_audit(reserve_breakdown.get("usage_metadata") or {}),
-            "billing_trace": BillingService._build_billing_trace(
-                reserve_breakdown,
-                task_type=task_type,
-                provider=resolved_provider,
-                model=resolved_model,
-                phase="reserve",
+            "matched_rule_id": reserve_breakdown.get("matched_rule_id"),
+            "matched_rule_name": reserve_breakdown.get("matched_rule_name"),
+            "system_api_id": reserve_breakdown.get("system_api_id"),
+            "pricing_program": BillingService._slim_pricing_program_for_history(
+                breakdown=reserve_breakdown,
+                selected_rule_detail=selected_rule_detail,
             ),
-            # Pricing program layers: supplier → base → odds → function markup → user charge
-            "pricing_program": {
-                "supplier_pricing": selected_rule_detail.get("supplier_pricing") or {},
-                "base_credit_source": selected_rule_detail.get("base_credit_source"),
-                "base_cost": selected_rule_detail.get("computed_base_cost"),
-                "charge_multiplier": selected_rule_detail.get("rule_charge_multiplier"),
-                "runtime_price_multiplier": selected_rule_detail.get("runtime_price_multiplier"),
-                "user_cost_before_function": (reserve_breakdown.get("api_cost_before_function")
-                                              if isinstance(reserve_breakdown, dict) else None),
-                "function_billing": (reserve_breakdown.get("function_billing")
-                                    if isinstance(reserve_breakdown, dict) else {}) or {},
-                "user_cost": (reserve_breakdown.get("api_cost")
-                             if isinstance(reserve_breakdown, dict) and reserve_breakdown.get("api_cost") is not None
-                             else selected_rule_detail.get("computed_cost")),
-                "billing_unit_type": ((selected_rule_detail.get("pricing") or {}) if isinstance(selected_rule_detail.get("pricing"), dict) else {}).get("unit_type"),
-            },
         })
 
         project_id = reserve_details.get("project_id")
@@ -3781,6 +3957,7 @@ class BillingService:
         reserve_details = BillingService._attach_balance_snapshots(
             reserve_details, user=user, group=group if can_use_group_credits else None
         )
+        reserve_details = BillingService._compact_history_ledger_details(reserve_details)
 
         tx = TransactionHistory(
             user_id=user_id,
@@ -3814,10 +3991,8 @@ class BillingService:
             outstanding_amount=0,
             matched_rule_ids=reserve_breakdown.get("matched_rule_ids") or [],
             usage_metadata=reserve_breakdown.get("usage_metadata") or {},
-            billing_metadata={
-                "phase": "reserve",
-                "breakdown": reserve_details.get("billing_breakdown") or {},
-            },
+            breakdown=reserve_breakdown,
+            phase="reserve",
         )
         db.commit()
         db.refresh(tx)
@@ -3908,14 +4083,17 @@ class BillingService:
             "reservation_tx_id": tx.id,
             "refunded_group_credits": restored_group,
             "refunded_personal_credits": restored_personal,
-            "reservation_billing_breakdown": tx_details_dict.get("billing_breakdown") or {},
             "group_id": group_id or None,
+            "system_api_id": tx_details_dict.get("system_api_id"),
+            "matched_rule_id": tx_details_dict.get("matched_rule_id"),
+            "matched_rule_name": tx_details_dict.get("matched_rule_name"),
         }
         if error_msg:
             refund_details["error"] = str(error_msg)[:500]
         refund_details = BillingService._attach_balance_snapshots(
             refund_details, user=user, group=refund_group
         )
+        refund_details = BillingService._compact_history_ledger_details(refund_details)
 
         refund_tx = TransactionHistory(
             user_id=tx.user_id,
@@ -3941,8 +4119,8 @@ class BillingService:
             transaction_id=tx.id,
             reservation_tx_id=tx.id,
             settlement_tx_id=refund_tx.id,
-            system_api_id=None,
-            matched_rule_id=None,
+            system_api_id=BillingService._to_int(tx_details_dict.get("system_api_id"), 0) or None,
+            matched_rule_id=BillingService._to_int(tx_details_dict.get("matched_rule_id"), 0) or None,
             reserved_cost=reserved_cost,
             actual_cost=0,
             delta=-reserved_cost,
@@ -3951,7 +4129,16 @@ class BillingService:
             outstanding_amount=0,
             matched_rule_ids=[],
             usage_metadata={},
-            billing_metadata=refund_details,
+            billing_metadata={
+                "phase": "cancel",
+                "reason": "RESERVATION_CANCELED",
+                "refunded_group_credits": restored_group,
+                "refunded_personal_credits": restored_personal,
+                "system_api_id": tx_details_dict.get("system_api_id"),
+                "matched_rule_id": tx_details_dict.get("matched_rule_id"),
+                "matched_rule_name": tx_details_dict.get("matched_rule_name"),
+            },
+            phase="cancel",
         )
 
         tx_details = dict(tx.details or {})
@@ -3991,11 +4178,27 @@ class BillingService:
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        reserved_cost = int(abs(reservation_tx.amount or 0))
         res_action = db.query(TransactionAction).filter(TransactionAction.transaction_id == reservation_tx.id).order_by(TransactionAction.id.desc()).first()
         res_task_type = res_action.task_type if res_action else ""
         res_provider = res_action.provider if res_action else ""
         res_model = res_action.model if res_action else ""
+        res_details_dict = dict(reservation_tx.details or {}) if isinstance(reservation_tx.details, dict) else {}
+
+        # Prefer original reserved_cost from details/action — amount may already be rewritten to actual.
+        reserved_cost = BillingService._to_int(res_details_dict.get("reserved_cost"), 0)
+        if reserved_cost <= 0 and res_action is not None:
+            reserved_cost = BillingService._to_int(getattr(res_action, "reserved_cost", 0), 0)
+        if reserved_cost <= 0:
+            reserved_cost = int(abs(reservation_tx.amount or 0))
+        if str(res_details_dict.get("status") or "").strip().upper() == "SETTLED":
+            return {
+                "reserved_cost": reserved_cost,
+                "actual_cost": BillingService._to_int(res_details_dict.get("actual_cost"), reserved_cost),
+                "delta": BillingService._to_int(res_details_dict.get("delta"), 0),
+                "reservation_tx_id": reservation_tx.id,
+                "settlement_tx_id": res_details_dict.get("settlement_tx_id"),
+                "already_settled": True,
+            }
 
         details = dict(actual_details or {})
         details.setdefault("billing_mode", "ACTUAL")
@@ -4022,7 +4225,7 @@ class BillingService:
             details["output_tokens"] = details.get("completion_tokens", 0)
 
         # Fallback input_tokens from reservation if missing
-        res_details_dict = dict(reservation_tx.details or {})
+        # res_details_dict already loaded above
         missing_input = BillingService._to_int(details.get("input_tokens", 0), 0) <= 0
         missing_output = BillingService._to_int(details.get("output_tokens", 0), 0) <= 0
 
@@ -4124,13 +4327,18 @@ class BillingService:
 
             settlement_tx = TransactionHistory(
                 user_id=user.id,
-                amount=refund,
+                # Net cost is rewritten onto the reservation row; keep adjustment amount=0
+                # so ledger SUM(amount) is not double-counted.
+                amount=0,
                 balance_after=user.credits or 0,
                 description=f"Partial refund for {reservation_tx.description or 'task'}",
                 details=BillingService._attach_balance_snapshots(
                     {
                         "status": "REFUND",
                         "reason": "RESERVATION_SETTLEMENT",
+                        "ledger_role": "settlement_adjustment",
+                        "hide_in_history": True,
+                        "wallet_delta": refund,
                         "reservation_tx_id": reservation_tx.id,
                         "reserved_cost": reserved_cost,
                         "actual_cost": actual_cost,
@@ -4189,13 +4397,18 @@ class BillingService:
 
                 settlement_tx = TransactionHistory(
                     user_id=user.id,
-                    amount=-charged_amount,
+                    # Net cost is rewritten onto the reservation row; keep adjustment amount=0
+                    # so ledger SUM(amount) is not double-counted.
+                    amount=0,
                     balance_after=user.credits or 0,
                     description=f"Extra charge for {reservation_tx.description or 'task'}",
                     details=BillingService._attach_balance_snapshots(
                         {
                             "status": "CHARGE",
                             "reason": "RESERVATION_SETTLEMENT",
+                            "ledger_role": "settlement_adjustment",
+                            "hide_in_history": True,
+                            "wallet_delta": -charged_amount,
                             "reservation_tx_id": reservation_tx.id,
                             "reserved_cost": reserved_cost,
                             "actual_cost": actual_cost,
@@ -4248,40 +4461,23 @@ class BillingService:
             # Will be populated after commit/refresh, but keep placeholder for clarity.
             res_details["settlement_tx_id"] = None
 
-        # Add actual usage details (token counts, etc)
+        # Add actual usage details — keep history row lean (full audit lives on TransactionAction).
         selected_rule_detail = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
         res_details.update({
             "resolved_provider": settle_provider,
             "resolved_model": settle_model,
+            "matched_rule_id": breakdown.get("matched_rule_id"),
+            "matched_rule_name": breakdown.get("matched_rule_name"),
+            "system_api_id": breakdown.get("system_api_id"),
             "actual_input_tokens": int(details.get("input_tokens", 0) or 0),
             "actual_output_tokens": int(details.get("output_tokens", 0) or 0),
             "actual_total_tokens": int(details.get("total_tokens", 0) or 0),
-            "billing_breakdown": BillingService._build_billing_breakdown_for_audit(breakdown, phase="settle"),
-            "usage_metadata": BillingService._compact_usage_metadata_for_audit(breakdown.get("usage_metadata") or {}),
-            "billing_trace": BillingService._build_billing_trace(
-                breakdown,
-                task_type=res_task_type,
-                provider=settle_provider,
-                model=settle_model,
-                phase="settle",
+            "pricing_program": BillingService._slim_pricing_program_for_history(
+                breakdown=breakdown,
+                selected_rule_detail=selected_rule_detail,
             ),
-            "pricing_program": {
-                "supplier_pricing": selected_rule_detail.get("supplier_pricing") or {},
-                "base_credit_source": selected_rule_detail.get("base_credit_source"),
-                "base_cost": selected_rule_detail.get("computed_base_cost"),
-                "charge_multiplier": selected_rule_detail.get("rule_charge_multiplier"),
-                "runtime_price_multiplier": selected_rule_detail.get("runtime_price_multiplier"),
-                "user_cost_before_function": (breakdown.get("api_cost_before_function")
-                                              if isinstance(breakdown, dict) else None),
-                "function_billing": (breakdown.get("function_billing")
-                                    if isinstance(breakdown, dict) else {}) or {},
-                "user_cost": (breakdown.get("api_cost")
-                             if isinstance(breakdown, dict) and breakdown.get("api_cost") is not None
-                             else selected_rule_detail.get("computed_cost")),
-                "billing_unit_type": ((selected_rule_detail.get("pricing") or {}) if isinstance(selected_rule_detail.get("pricing"), dict) else {}).get("unit_type"),
-            },
         })
-        # Persist settle-time quantity markers used by UI / audits.
+        # Persist settle-time quantity markers used by UI / audits (scalars only).
         for copy_key in (
             "item",
             "image_count",
@@ -4297,16 +4493,19 @@ class BillingService:
             "duration",
             "duration_seconds",
             "has_video_input",
+            "usage_source",
         ):
             if details.get(copy_key) not in (None, ""):
                 res_details[copy_key] = details.get(copy_key)
-        provider_usage = details.get("provider_usage")
-        if isinstance(provider_usage, dict) and provider_usage:
-            res_details["provider_usage"] = BillingService._compact_audit_payload(provider_usage)
-        usage_source = str(details.get("usage_source") or "").strip()
-        if usage_source:
-            res_details["usage_source"] = usage_source
+        # Do not store provider_usage / usage_metadata trees on history — they live on TransactionAction.
+        # Rewrite ledger amount to actual user charge (supplier × multiplier), not reserve estimate.
+        reservation_tx.amount = -int(max(0, actual_cost))
+        res_details = BillingService._attach_balance_snapshots(
+            res_details, user=user, group=settle_group
+        )
+        res_details = BillingService._compact_history_ledger_details(res_details)
         reservation_tx.details = res_details
+        reservation_tx.balance_after = user.credits or 0
         res_provider = settle_provider
         res_model = settle_model
 
@@ -4335,10 +4534,8 @@ class BillingService:
             outstanding_amount=outstanding,
             matched_rule_ids=breakdown.get("matched_rule_ids") or [],
             usage_metadata=breakdown.get("usage_metadata") or {},
-            billing_metadata={
-                "phase": "settle",
-                "breakdown": res_details.get("billing_breakdown") or {},
-            },
+            breakdown=breakdown,
+            phase="settle",
         )
 
         db.commit()
@@ -4500,32 +4697,29 @@ class BillingService:
         if allocation and final_cost > 0:
             allocation.used_credits = (allocation.used_credits or 0) + final_cost
         
-        # Log Transaction
+        # Log Transaction (lean history details; full audit on TransactionAction)
+        selected_rule_detail = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
         tx_details = dict(details or {})
-        tx_details["billing_breakdown"] = BillingService._build_billing_breakdown_for_audit(
-            breakdown,
-            phase="direct_deduct",
-        )
-        tx_details["usage_metadata"] = BillingService._compact_usage_metadata_for_audit(
-            breakdown.get("usage_metadata") or {}
-        )
-        tx_details["billing_trace"] = BillingService._build_billing_trace(
-            breakdown,
-            task_type=task_type,
-            provider=resolved_provider,
-            model=resolved_model,
-            phase="direct_deduct",
+        tx_details["matched_rule_id"] = breakdown.get("matched_rule_id")
+        tx_details["matched_rule_name"] = breakdown.get("matched_rule_name")
+        tx_details["system_api_id"] = breakdown.get("system_api_id")
+        tx_details["pricing_program"] = BillingService._slim_pricing_program_for_history(
+            breakdown=breakdown,
+            selected_rule_detail=selected_rule_detail,
         )
         tx_details["billed_group_credits"] = billed_group_credits
         tx_details["billed_personal_credits"] = billed_personal_credits
         tx_details["reserved_cost"] = final_cost
         tx_details["actual_cost"] = final_cost
+        tx_details["status"] = "SETTLED"
+        tx_details["billing_mode"] = "ACTUAL"
         if group:
             tx_details["group_id"] = group.id
             tx_details["allow_group_credit_billing"] = can_use_group_credits
         tx_details = BillingService._attach_balance_snapshots(
             tx_details, user=user, group=group if can_use_group_credits else None
         )
+        tx_details = BillingService._compact_history_ledger_details(tx_details)
 
         transaction = TransactionHistory(
             user_id=user_id,
@@ -4559,10 +4753,8 @@ class BillingService:
             outstanding_amount=0,
             matched_rule_ids=breakdown.get("matched_rule_ids") or [],
             usage_metadata=breakdown.get("usage_metadata") or {},
-            billing_metadata={
-                "phase": "direct_deduct",
-                "breakdown": tx_details.get("billing_breakdown") or {},
-            },
+            breakdown=breakdown,
+            phase="direct_deduct",
         )
         db.commit()
         db.refresh(transaction)

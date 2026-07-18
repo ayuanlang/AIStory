@@ -4716,12 +4716,23 @@ const UserAdmin = () => {
             ? null
             : toNullableNonNegInt(groupBalanceRaw);
 
+        const status = String(details?.status || '').toUpperCase();
+        // 流水：已结算显示实际用户价（供应商价×倍率）；未结算显示预留额
+        let ledgerAmount = typeof txn?.amount === 'number' ? txn.amount : null;
+        if (status === 'SETTLED' && userCost !== null) {
+            ledgerAmount = -Math.abs(userCost);
+        } else if ((status === 'RESERVED' || status === 'RESERVE') && estimatedCost !== null) {
+            ledgerAmount = -Math.abs(estimatedCost);
+        }
+
         return {
             estimatedCost,
             supplierCost,
             userCost,
             personalBalance,
             groupBalance,
+            ledgerAmount,
+            status,
             // legacy aliases used elsewhere
             baseCost: supplierCost,
             multiplier,
@@ -4729,9 +4740,78 @@ const UserAdmin = () => {
         };
     };
 
+    const buildTransactionDetailsSummary = (txn) => {
+        const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
+        const program = details?.pricing_program && typeof details.pricing_program === 'object'
+            ? details.pricing_program
+            : {};
+        const usage = details?.provider_usage && typeof details.provider_usage === 'object'
+            ? details.provider_usage
+            : {};
+        const summary = {
+            status: details.status || undefined,
+            project_id: details.project_id ?? txn?.project_id,
+            episode_id: details.episode_id ?? txn?.episode_id,
+            shot_id: details.shot_id,
+            reserved_cost: details.reserved_cost,
+            actual_cost: details.actual_cost,
+            delta: details.delta,
+            base_cost: program.base_cost ?? details.base_cost,
+            charge_multiplier: program.charge_multiplier,
+            user_cost: program.user_cost ?? details.actual_cost,
+            token_source: details.token_source,
+            billing_basis: details.billing_basis,
+            actual_total_tokens: details.actual_total_tokens ?? details.total_tokens,
+            usage_source: details.usage_source,
+            matched_rule_id: details.matched_rule_id,
+            matched_rule_name: details.matched_rule_name,
+            system_api_id: details.system_api_id,
+            billed_group_credits: details.billed_group_credits,
+            billed_personal_credits: details.billed_personal_credits,
+            personal_balance_after: details.personal_balance_after,
+            group_balance_after: details.group_balance_after,
+        };
+        if (usage && Object.keys(usage).length) {
+            const slimUsage = {};
+            for (const key of [
+                'output_tokens', 'completion_tokens', 'total_tokens', 'input_tokens',
+                'creditsConsumed', 'kie_credits_consumed', 'credits_consumed',
+            ]) {
+                if (usage[key] !== undefined && usage[key] !== null && usage[key] !== '') {
+                    slimUsage[key] = usage[key];
+                }
+            }
+            if (Object.keys(slimUsage).length) summary.provider_usage = slimUsage;
+        }
+        // Drop empty / null fields for readability.
+        return Object.fromEntries(
+            Object.entries(summary).filter(([, value]) => (
+                value !== undefined && value !== null && value !== ''
+            ))
+        );
+    };
+
+    const isHiddenSettlementAdjustment = (txn) => {
+        const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
+        return Boolean(
+            details.hide_in_history
+            || details.ledger_role === 'settlement_adjustment'
+            || (
+                String(details.reason || '').toUpperCase() === 'RESERVATION_SETTLEMENT'
+                && ['CHARGE', 'REFUND'].includes(String(details.status || '').toUpperCase())
+            )
+        );
+    };
+
     const formatCreditsCell = (value) => (
         value === null || value === undefined ? '-' : String(value)
     );
+
+    const formatLedgerAmount = (amount) => {
+        if (amount === null || amount === undefined || !Number.isFinite(Number(amount))) return '-';
+        const n = Number(amount);
+        return `${n > 0 ? '+' : ''}${n}`;
+    };
 
     const getTransactionProviderUsage = (txn) => {
         const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
@@ -6695,8 +6775,9 @@ const UserAdmin = () => {
                                 </div>
                              </div>
                              <div className="md:hidden space-y-3">
-                                    {transactions.map(txn => {
+                                    {transactions.filter((txn) => !isHiddenSettlementAdjustment(txn)).map(txn => {
                                       const pricing = getTransactionPricingSummary(txn);
+                                      const detailSummary = buildTransactionDetailsSummary(txn);
                                       return (
                                       <div key={`txn-card-${txn.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                                           <div className="flex items-start justify-between gap-3">
@@ -6727,7 +6808,7 @@ const UserAdmin = () => {
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('流水', 'Ledger')}</div>
-                                                    <div className={`font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{txn.amount > 0 ? '+' : ''}{txn.amount}</div>
+                                                    <div className={`font-mono ${Number(pricing.ledgerAmount) < 0 ? 'text-red-400' : 'text-green-400'}`}>{formatLedgerAmount(pricing.ledgerAmount)}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('组积分余额', 'Group Balance')}</div>
@@ -6744,7 +6825,7 @@ const UserAdmin = () => {
                                                 {renderTransactionProviderUsage(txn)}
                                             </div>
                                             <div className="max-h-[180px] overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-900/50 p-2 border border-gray-800 font-mono text-[11px] text-gray-400">
-                                                    {JSON.stringify(txn.details, null, 2)}
+                                                    {JSON.stringify(detailSummary, null, 2)}
                                             </div>
                                         </div>
                                     </div>
@@ -6770,8 +6851,9 @@ const UserAdmin = () => {
                                           </tr>
                                       </thead>
                                       <tbody>
-                                          {transactions.map(txn => {
+                                          {transactions.filter((txn) => !isHiddenSettlementAdjustment(txn)).map(txn => {
                                               const pricing = getTransactionPricingSummary(txn);
+                                              const detailSummary = buildTransactionDetailsSummary(txn);
                                               return (
                                               <tr key={txn.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                                                   <td className="p-3 text-gray-400 whitespace-nowrap">
@@ -6789,7 +6871,7 @@ const UserAdmin = () => {
                                                           {renderTransactionProviderUsage(txn)}
                                                       </div>
                                                       <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all bg-gray-900/50 p-1 w-full rounded border border-gray-800 font-mono">
-                                                          {JSON.stringify(txn.details, null, 2)}
+                                                          {JSON.stringify(detailSummary, null, 2)}
                                                       </div>
                                                   </td>
                                                   <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200">
@@ -6804,8 +6886,8 @@ const UserAdmin = () => {
                                                   <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200">
                                                       {formatCreditsCell(pricing.userCost)}
                                                   </td>
-                                                  <td className={`p-3 text-right font-mono whitespace-nowrap ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                                      {txn.amount > 0 ? '+' : ''}{txn.amount}
+                                                  <td className={`p-3 text-right font-mono whitespace-nowrap ${Number(pricing.ledgerAmount) < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                                      {formatLedgerAmount(pricing.ledgerAmount)}
                                                   </td>
                                                   <td className="p-3 text-right font-mono text-violet-200 whitespace-nowrap">{formatCreditsCell(pricing.groupBalance)}</td>
                                                   <td className="p-3 text-right font-mono text-gray-400 whitespace-nowrap">{formatCreditsCell(pricing.personalBalance)}</td>
