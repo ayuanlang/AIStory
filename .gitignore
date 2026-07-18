@@ -51,3 +51,5 @@ update_*.py
 validation.py
 
 backup_temp/
+backend/backups/
+backend/uploads/_system_backups/

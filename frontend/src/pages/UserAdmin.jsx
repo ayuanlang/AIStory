@@ -4671,39 +4671,41 @@ const UserAdmin = () => {
         );
         const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : null;
 
-        // 预估价：预留/预估扣费
+        const status = String(details?.status || '').toUpperCase();
+        const isSettled = status === 'SETTLED';
+
+        // 预估价：预留/预估扣费（预留阶段即可显示）
         let estimatedCost = toNullableNonNegInt(
             details?.reserved_cost
             ?? txn?.reserved_cost
             ?? program?.user_cost_before_function
         );
-        // 实际供应商价：倍率前基础成本
-        let supplierCost = toNullableNonNegInt(
-            program?.base_cost
-            ?? ruleDetail?.computed_base_cost
-            ?? breakdown?.selected_rule_detail?.computed_base_cost
-            ?? details?.base_cost
-            ?? txn?.base_cost
-        );
-        // 实际用户价：结算后用户实扣（未结算时回退用户价/预留）
-        let userCost = toNullableNonNegInt(
-            details?.actual_cost
-            ?? txn?.actual_cost
-            ?? program?.user_cost
-            ?? ruleDetail?.computed_cost
-            ?? breakdown?.total_cost
-            ?? details?.reserved_cost
-            ?? txn?.user_cost
-        );
-
-        if (userCost === null && typeof txn?.amount === 'number' && txn.amount !== 0) {
-            userCost = Math.abs(Math.floor(txn.amount));
-        }
-        if (estimatedCost === null && userCost !== null && String(details?.status || '').toUpperCase() !== 'SETTLED') {
-            estimatedCost = userCost;
-        }
-        if (supplierCost === null && userCost !== null && multiplier) {
-            supplierCost = Math.max(0, Math.round(userCost / multiplier));
+        // 实际供应商价 / 实际用户价：仅结算后显示；未结算一律为 null（UI 显示 -）
+        let supplierCost = null;
+        let userCost = null;
+        if (isSettled) {
+            supplierCost = toNullableNonNegInt(
+                program?.base_cost
+                ?? ruleDetail?.computed_base_cost
+                ?? breakdown?.selected_rule_detail?.computed_base_cost
+                ?? details?.base_cost
+                ?? txn?.base_cost
+            );
+            userCost = toNullableNonNegInt(
+                details?.actual_cost
+                ?? txn?.actual_cost
+                ?? program?.user_cost
+                ?? ruleDetail?.computed_cost
+                ?? breakdown?.total_cost
+            );
+            if (userCost === null && typeof txn?.amount === 'number' && txn.amount !== 0) {
+                userCost = Math.abs(Math.floor(txn.amount));
+            }
+            if (supplierCost === null && userCost !== null && multiplier) {
+                supplierCost = Math.max(0, Math.round(userCost / multiplier));
+            }
+        } else if (estimatedCost === null && typeof txn?.amount === 'number' && txn.amount < 0) {
+            estimatedCost = Math.abs(Math.floor(txn.amount));
         }
 
         const personalBalance = toNullableNonNegInt(
@@ -4716,10 +4718,9 @@ const UserAdmin = () => {
             ? null
             : toNullableNonNegInt(groupBalanceRaw);
 
-        const status = String(details?.status || '').toUpperCase();
-        // 流水：已结算显示实际用户价（供应商价×倍率）；未结算显示预留额
+        // 流水：已结算显示实际用户价；未结算显示预留额
         let ledgerAmount = typeof txn?.amount === 'number' ? txn.amount : null;
-        if (status === 'SETTLED' && userCost !== null) {
+        if (isSettled && userCost !== null) {
             ledgerAmount = -Math.abs(userCost);
         } else if ((status === 'RESERVED' || status === 'RESERVE') && estimatedCost !== null) {
             ledgerAmount = -Math.abs(estimatedCost);
@@ -4748,21 +4749,44 @@ const UserAdmin = () => {
         const usage = details?.provider_usage && typeof details.provider_usage === 'object'
             ? details.provider_usage
             : {};
+        const statusText = String(details.status || '').toUpperCase();
+        const isSettled = statusText === 'SETTLED';
+        const durationSeconds = details.duration_seconds ?? details.duration;
+        const inputDurationSeconds = details.input_duration_seconds ?? details.input_duration;
+        const resolution = details.resolution_tier || details.resolution
+            || ((details.width && details.height) ? `${details.width}x${details.height}` : undefined);
         const summary = {
             status: details.status || undefined,
             project_id: details.project_id ?? txn?.project_id,
             episode_id: details.episode_id ?? txn?.episode_id,
             shot_id: details.shot_id,
+            // Video / media generation context
+            duration_seconds: durationSeconds,
+            input_duration_seconds: inputDurationSeconds,
+            aspect_ratio: details.aspect_ratio || details.aspectRatio,
+            resolution,
+            width: details.width,
+            height: details.height,
+            fps: details.fps,
+            has_video_input: details.has_video_input,
+            use_prev_video: details.use_prev_video,
+            draft_mode: details.draft_mode,
             reserved_cost: details.reserved_cost,
-            actual_cost: details.actual_cost,
-            delta: details.delta,
-            base_cost: program.base_cost ?? details.base_cost,
+            // Settled-only pricing fields (avoid showing reserve estimates as "actual")
+            actual_cost: isSettled ? details.actual_cost : undefined,
+            delta: isSettled ? details.delta : undefined,
+            base_cost: isSettled ? (program.base_cost ?? details.base_cost) : undefined,
             charge_multiplier: program.charge_multiplier,
-            user_cost: program.user_cost ?? details.actual_cost,
-            token_source: details.token_source,
-            billing_basis: details.billing_basis,
-            actual_total_tokens: details.actual_total_tokens ?? details.total_tokens,
-            usage_source: details.usage_source,
+            user_cost: isSettled ? (program.user_cost ?? details.actual_cost) : undefined,
+            token_source: isSettled ? details.token_source : undefined,
+            billing_basis: isSettled ? details.billing_basis : undefined,
+            actual_total_tokens: isSettled
+                ? (details.actual_total_tokens ?? details.total_tokens)
+                : undefined,
+            estimated_total_tokens: (!isSettled && details.total_tokens)
+                ? details.total_tokens
+                : undefined,
+            usage_source: isSettled ? details.usage_source : undefined,
             matched_rule_id: details.matched_rule_id,
             matched_rule_name: details.matched_rule_name,
             system_api_id: details.system_api_id,

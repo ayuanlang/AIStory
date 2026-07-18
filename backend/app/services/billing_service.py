@@ -61,8 +61,10 @@ class BillingService:
     # Legacy reserve used 1.5x input for output; pre-deduct at ~30% of that (0.45x).
     RESERVE_OUTPUT_RATIO = 0.45
     KIE_STANDARD_PROVIDER = "kie"
-    DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER = 0.7
-    DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER = 1.5
+    # Legacy Seedance runtime odds (draft 0.7 / continuation 1.5) are retired.
+    # Draft bills via 480p (or native token dims); continuation via with-video rates / input duration.
+    DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER = 1.0
+    DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER = 1.0
 
     @staticmethod
     def _system_setting_query(db: Session):
@@ -1820,8 +1822,19 @@ class BillingService:
             usage_out["usage_source"] = str(payload.get("usage_source") or "").strip()
         if payload.get("resolution"):
             usage_out["resolution"] = payload.get("resolution")
+        if payload.get("resolution_tier"):
+            usage_out["resolution_tier"] = payload.get("resolution_tier")
         if payload.get("has_video_input") is not None:
             usage_out["has_video_input"] = bool(payload.get("has_video_input"))
+        aspect_ratio = payload.get("aspect_ratio") or payload.get("aspectRatio")
+        if aspect_ratio not in (None, ""):
+            usage_out["aspect_ratio"] = str(aspect_ratio).strip()
+        input_duration = BillingService._safe_non_negative_float(
+            payload.get("input_duration_seconds", payload.get("input_duration", 0)),
+            0.0,
+        )
+        if input_duration > 0:
+            usage_out["input_duration_seconds"] = float(input_duration)
         return usage_out
 
     @staticmethod
@@ -1965,9 +1978,73 @@ class BillingService:
         )
 
     @staticmethod
+    def _promote_media_context_for_history(
+        details: Optional[dict],
+        *,
+        usage: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        """Lift video/image generation scalars onto history details before dropping nested trees."""
+        payload = dict(details or {}) if isinstance(details, dict) else {}
+        sources: List[Dict[str, Any]] = []
+        if isinstance(usage, dict) and usage:
+            sources.append(usage)
+        nested_usage = payload.get("usage_metadata")
+        if isinstance(nested_usage, dict) and nested_usage:
+            sources.append(nested_usage)
+        process = payload.get("billing_process")
+        if isinstance(process, dict):
+            process_usage = process.get("usage")
+            if isinstance(process_usage, dict) and process_usage:
+                sources.append(process_usage)
+        sources.append(payload)
+
+        def _first(*keys: str) -> Any:
+            for source in sources:
+                for key in keys:
+                    value = source.get(key)
+                    if value not in (None, ""):
+                        return value
+            return None
+
+        duration = _first("duration_seconds", "duration")
+        if duration not in (None, ""):
+            payload["duration_seconds"] = duration
+            payload["duration"] = duration
+
+        input_duration = _first("input_duration_seconds", "input_duration", "reference_duration_seconds")
+        if input_duration not in (None, ""):
+            payload["input_duration_seconds"] = input_duration
+
+        aspect_ratio = _first("aspect_ratio", "aspectRatio", "size")
+        if aspect_ratio not in (None, ""):
+            # Prefer explicit ratios like 16:9 over raw size enums when both exist.
+            explicit = _first("aspect_ratio", "aspectRatio")
+            payload["aspect_ratio"] = explicit if explicit not in (None, "") else aspect_ratio
+
+        resolution = _first("resolution", "resolution_tier", "video_resolution", "image_resolution")
+        if resolution not in (None, ""):
+            payload["resolution"] = resolution
+        resolution_tier = _first("resolution_tier")
+        if resolution_tier not in (None, ""):
+            payload["resolution_tier"] = resolution_tier
+
+        for key in ("width", "height", "fps", "image_count", "generation_mode"):
+            value = _first(key)
+            if value not in (None, ""):
+                payload[key] = value
+
+        for key in ("has_video_input", "use_prev_video", "draft_mode"):
+            for source in sources:
+                if key in source and source.get(key) is not None:
+                    payload[key] = bool(source.get(key))
+                    break
+
+        return payload
+
+    @staticmethod
     def _compact_history_ledger_details(details: Optional[dict]) -> dict:
         """Keep history-row details short; drop duplicated stage audit trees."""
-        payload = dict(details or {}) if isinstance(details, dict) else {}
+        payload = BillingService._promote_media_context_for_history(details)
         for key in BillingService._HISTORY_DETAILS_DROP_KEYS:
             payload.pop(key, None)
         # Keep only a slim pricing_program for UI columns.
@@ -2290,18 +2367,6 @@ class BillingService:
             or str(usage.get("estimation_method") or "").startswith("video_token")
             or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
         )
-        uses_second_cny_matrix = bool(
-            (
-                isinstance(usage.get("video_second_cny_resolution_rates"), dict)
-                and usage.get("video_second_cny_resolution_rates")
-            )
-            or (
-                isinstance(extra.get("video_second_cny_resolution_rates"), dict)
-                and extra.get("video_second_cny_resolution_rates")
-            )
-            or str(usage.get("estimation_method") or "").startswith("video_second_cny")
-            or str(usage.get("estimation_method") or "").startswith("sparkvideo_second_cny")
-        )
         runtime_enabled = extra.get("seedance_runtime_price_adjustment_enabled")
         runtime_enabled = True if runtime_enabled is None else bool(BillingService._normalize_bool_value(runtime_enabled))
         cny_rates_audit = extra.get("video_second_cny_resolution_rates")
@@ -2341,38 +2406,7 @@ class BillingService:
             if est.get("with_video_addon_cny") is not None:
                 runtime_adjustments["sparkvideo_with_video_addon_cny"] = est.get("with_video_addon_cny")
         if is_seedance_video and runtime_enabled:
-            # Token formula folds draft into tokens; KIE/SparkVideo second CNY matrix
-            # already bills draft as the 480p tier — do not stack legacy 0.7 draft odds.
-            if (
-                bool(usage.get("draft_mode"))
-                and not uses_video_token_formula
-                and not uses_second_cny_matrix
-            ):
-                draft_multiplier = BillingService._first_positive_float(
-                    extra,
-                    [
-                        "seedance_draft_price_multiplier",
-                        "draft_price_multiplier",
-                        "seedance_draft_discount_multiplier",
-                    ],
-                    BillingService.DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER,
-                )
-                runtime_multiplier *= draft_multiplier
-                runtime_adjustments["seedance_draft_price_multiplier"] = draft_multiplier
-            if bool(usage.get("use_prev_video")) and not (
-                is_seedance_2 or uses_video_token_formula or uses_second_cny_matrix
-            ):
-                continuation_multiplier = BillingService._first_positive_float(
-                    extra,
-                    [
-                        "seedance_continuation_price_multiplier",
-                        "continuation_price_multiplier",
-                        "use_prev_video_price_multiplier",
-                    ],
-                    BillingService.DEFAULT_SEEDANCE_CONTINUATION_PRICE_MULTIPLIER,
-                )
-                runtime_multiplier *= continuation_multiplier
-                runtime_adjustments["seedance_continuation_price_multiplier"] = continuation_multiplier
+            # Draft / continuation runtime odds removed: no 0.7 draft or 1.5 continuation markup.
             second_rates = extra.get("video_second_resolution_rates")
             if isinstance(second_rates, dict) and second_rates and raw_cfg["unit_type"] == "per_second":
                 from app.services.billing_pricing import (
@@ -2671,6 +2705,25 @@ class BillingService:
         return "unknown"
 
     @staticmethod
+    def _slim_runtime_adjustments_for_process(adj: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Keep tier/multiplier scalars; drop resolution rate matrices from process snapshots/logs."""
+        if not isinstance(adj, dict) or not adj:
+            return {}
+        out: Dict[str, Any] = {}
+        for key in (
+            "resolution_tier",
+            "runtime_price_multiplier",
+            "price_multiplier",
+            "draft_mode",
+            "has_video_input",
+            "has_audio",
+            "reason",
+        ):
+            if adj.get(key) not in (None, ""):
+                out[key] = adj.get(key)
+        return out
+
+    @staticmethod
     def _build_billing_process_snapshot(breakdown: Dict[str, Any], *, phase: str = "reserve") -> Dict[str, Any]:
         usage = breakdown.get("usage_metadata") if isinstance(breakdown.get("usage_metadata"), dict) else {}
         selected = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
@@ -2708,6 +2761,7 @@ class BillingService:
         matched_rule_name = breakdown.get("matched_rule_name")
         if not matched_rule_name:
             matched_rule_name = source_detail.get("base_rule_name") or source_detail.get("rule_name")
+        # Compact snapshot for API/logs — no rate maps / nested estimate trees.
         return {
             "phase": str(phase or "").strip() or None,
             "logic_branch": logic,
@@ -2719,14 +2773,13 @@ class BillingService:
             "model": breakdown.get("resolved_model") or breakdown.get("model"),
             "system_api_id": breakdown.get("system_api_id"),
             "api_pricing_source": breakdown.get("api_pricing_source"),
-            "api_pricing_source_detail": source_detail,
             "matched_rule_id": matched_rule_id,
             "matched_rule_name": matched_rule_name,
             "unit_type": unit_type,
             "charge_multiplier": selected.get("rule_charge_multiplier"),
             "base_cost": selected.get("computed_base_cost"),
             "runtime_price_multiplier": selected.get("runtime_price_multiplier"),
-            "runtime_price_adjustments": adj,
+            "runtime_price_adjustments": BillingService._slim_runtime_adjustments_for_process(adj),
             "function_billing": {
                 "applied": bool(function_billing.get("applied")),
                 "multiplier": function_billing.get("function_multiplier"),
@@ -2734,16 +2787,19 @@ class BillingService:
             },
             "usage": {
                 "duration_seconds": usage.get("duration_seconds", usage.get("duration")),
-                "input_duration_seconds": usage.get("input_duration_seconds"),
+                "input_duration_seconds": usage.get("input_duration_seconds", usage.get("input_duration")),
+                "aspect_ratio": usage.get("aspect_ratio"),
                 "width": usage.get("width"),
                 "height": usage.get("height"),
                 "resolution": usage.get("resolution"),
                 "resolution_tier": usage.get("resolution_tier") or adj.get("resolution_tier"),
                 "has_video_input": usage.get("has_video_input"),
+                "use_prev_video": usage.get("use_prev_video"),
                 "draft_mode": usage.get("draft_mode"),
                 "estimation_method": usage.get("estimation_method"),
                 "output_tokens": usage.get("output_tokens"),
                 "total_tokens": usage.get("total_tokens"),
+                "kie_credits_consumed": usage.get("kie_credits_consumed") or usage.get("creditsConsumed"),
             },
             "new_logic": logic in {
                 "video_second_cny_sparkvideo",
@@ -2756,48 +2812,36 @@ class BillingService:
 
     @staticmethod
     def _log_billing_process(snapshot: Dict[str, Any], *, context: str = "billing") -> None:
+        """One short line to the billing logger — no JSON dump, no multi-logger fan-out."""
         try:
-            import json as _json
-            api_logger = logging.getLogger("api_logger")
-            activity_logger = logging.getLogger("functional_activity")
-            logic = snapshot.get("logic_branch") or "unknown"
-            msg = (
-                "[BillingProcess] ctx=%s phase=%s logic=%s new_logic=%s total=%s api=%s feature=%s "
-                "provider=%s model=%s system_api_id=%s rule_id=%s unit=%s multiplier=%s "
-                "tier=%s has_video_input=%s duration=%s draft=%s source=%s | detail=%s"
-            )
-            args = (
+            usage = snapshot.get("usage") if isinstance(snapshot.get("usage"), dict) else {}
+            logger.info(
+                "[BillingProcess] %s phase=%s logic=%s total=%s api=%s rule=%s unit=%s "
+                "x%s %s/%s api_id=%s tier=%s dur=%s draft=%s v_in=%s src=%s%s",
                 context,
                 snapshot.get("phase"),
-                logic,
-                snapshot.get("new_logic"),
+                snapshot.get("logic_branch") or "unknown",
                 snapshot.get("total_cost"),
                 snapshot.get("api_cost"),
-                snapshot.get("feature_cost"),
-                snapshot.get("provider"),
-                snapshot.get("model"),
-                snapshot.get("system_api_id"),
                 snapshot.get("matched_rule_id"),
                 snapshot.get("unit_type"),
                 snapshot.get("charge_multiplier"),
-                (snapshot.get("usage") or {}).get("resolution_tier"),
-                (snapshot.get("usage") or {}).get("has_video_input"),
-                (snapshot.get("usage") or {}).get("duration_seconds"),
-                (snapshot.get("usage") or {}).get("draft_mode"),
+                snapshot.get("provider"),
+                snapshot.get("model"),
+                snapshot.get("system_api_id"),
+                usage.get("resolution_tier"),
+                usage.get("duration_seconds"),
+                usage.get("draft_mode"),
+                usage.get("has_video_input"),
                 snapshot.get("api_pricing_source"),
-                _json.dumps(snapshot, ensure_ascii=False, default=str)[:4000],
+                (
+                    f" user={snapshot.get('user_id')} tx={snapshot.get('reservation_tx_id')}"
+                    if snapshot.get("user_id") or snapshot.get("reservation_tx_id")
+                    else ""
+                ),
             )
-            try:
-                text = msg % args
-            except Exception:
-                text = f"{msg} | args={args!r}"
-            # All backend diagnostics go to app_info.log (root RotatingFileHandler).
-            api_logger.info("%s", text)
-            activity_logger.info("%s", text)
-            if logger is not api_logger:
-                logger.info("%s", text)
         except Exception as exc:
-            logging.getLogger("api_logger").warning("[BillingProcess] log failed ctx=%s err=%s", context, exc)
+            logger.warning("[BillingProcess] log failed ctx=%s err=%s", context, exc)
 
     @staticmethod
     def estimate_cost_breakdown(
@@ -2925,7 +2969,7 @@ class BillingService:
                         input_duration_seconds=usage.get("input_duration_seconds"),
                         draft_token_coefficient=BillingService._safe_float(
                             usage.get("draft_token_coefficient"),
-                            1.0 if not usage.get("draft_mode") else BillingService.DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER,
+                            1.0,
                         ),
                         method=("seedance2_video_token_formula" if usage.get("is_seedance_2") else "video_token_formula"),
                     )
@@ -3257,34 +3301,21 @@ class BillingService:
         payload["billing_process"] = billing_process
         compacted = BillingService._compact_audit_payload(payload)
         if isinstance(compacted, dict):
-            # Always keep process snapshot for logs / estimate UI even if compaction drops zeros.
+            # Keep slim process snapshot for estimate API responses.
+            # Money-moving stages (reserve/settle/deduct) log once at their boundary —
+            # do not log every estimate_cost_breakdown call (UI preview spam).
             compacted["billing_process"] = billing_process
-            billing_mode = str(payload_details.get("billing_mode") or "").strip().upper()
-            # Skip cache warm-up / average-price probes; log real estimates & reserves only.
-            should_log = billing_mode in {
-                "ESTIMATE_PREVIEW",
-                "ESTIMATE",
-                "RESERVE",
-                "SETTLE",
-            } or any(
-                payload_details.get(key) not in (None, "", 0, "0")
-                for key in ("shot_id", "episode_id", "project_id", "task_id")
-            )
-            if should_log and (str(task_type or "").strip().lower() in {"video_gen", "image_gen"} or mode == "video"):
-                BillingService._log_billing_process(
-                    billing_process,
-                    context=billing_mode or str(phase or "estimate"),
-                )
             return compacted
         return {}
 
     _USAGE_STORAGE_KEEP_KEYS = {
         "input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens",
         "width", "height", "pixels", "image_count", "duration_seconds", "duration", "fps",
+        "input_duration_seconds", "input_duration", "aspect_ratio",
         "resolution", "resolution_tier", "has_video_input", "has_audio", "draft_mode",
         "use_prev_video", "estimation_method", "token_source", "billing_basis", "usage_source",
         "kie_credits_consumed", "credits_consumed", "creditsConsumed", "credits",
-        "is_seedance_2", "is_seedance_video", "is_kie_provider",
+        "is_seedance_2", "is_seedance_video", "is_kie_provider", "generation_mode",
     }
 
     @staticmethod
@@ -3724,7 +3755,11 @@ class BillingService:
         draft_token_coefficient: float = 1.0,
         method: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Estimate video tokens via Ark Seedance 2.0 / video-token fallback formula."""
+        """Estimate video tokens via Ark Seedance 2.0 / video-token fallback formula.
+
+        draft_token_coefficient is ignored (always 1.0); draft no longer discounts tokens.
+        """
+        _ = draft_token_coefficient  # retired discount; callers may still pass legacy values
         w = max(1, int(width or 1))
         h = max(1, int(height or 1))
         f = max(1, int(fps or 1))
@@ -3750,9 +3785,6 @@ class BillingService:
             }
 
         raw = (float(w) * float(h) * float(f) * float(billable_duration)) / 1024.0
-        coeff = float(draft_token_coefficient or 1.0)
-        if 0 < coeff < 1.0:
-            raw *= coeff
         tokens = max(1, int(math.ceil(raw))) if raw > 0 else 0
         return {
             "tokens": tokens,
@@ -3763,7 +3795,7 @@ class BillingService:
             "input_duration_seconds": in_d,
             "billable_duration_seconds": float(billable_duration),
             "has_video_input": bool(has_video_input),
-            "draft_token_coefficient": coeff,
+            "draft_token_coefficient": 1.0,
             "estimation_method": method or ("seedance2_video_token_formula" if has_video_input else "video_token_formula"),
             "formula": "(width * height * fps * (input+output duration)) / 1024" if has_video_input else "(width * height * fps * output_duration) / 1024",
         }
@@ -3859,10 +3891,8 @@ class BillingService:
             defaults["default_fps"] = max(1, int(vtd.get("fps", 24)))
         except Exception:
             pass
-        try:
-            defaults["draft_token_coefficient"] = max(0.0, float(vtd.get("draft_token_coefficient", 1.0)))
-        except Exception:
-            pass
+        # Draft token discount retired; keep key for callers but always 1.0.
+        defaults["draft_token_coefficient"] = 1.0
         return defaults
 
     @staticmethod
@@ -3908,6 +3938,10 @@ class BillingService:
                 selected_rule_detail=selected_rule_detail,
             ),
         })
+        reserve_details = BillingService._promote_media_context_for_history(
+            reserve_details,
+            usage=reserve_breakdown.get("usage_metadata") if isinstance(reserve_breakdown.get("usage_metadata"), dict) else None,
+        )
 
         project_id = reserve_details.get("project_id")
         group = None
@@ -4004,18 +4038,8 @@ class BillingService:
                 **process_snapshot,
                 "user_id": user_id,
                 "reservation_tx_id": int(getattr(tx, "id", 0) or 0) or None,
-                "balance_after": user.credits,
             },
-            context="reserve",
-        )
-        logger.info(
-            "Reserved %s credits from user %s for %s (logic=%s new_logic=%s). New Balance: %s",
-            reserved_cost,
-            user_id,
-            task_type,
-            process_snapshot.get("logic_branch"),
-            process_snapshot.get("new_logic"),
-            user.credits,
+            context=f"reserve:{task_type}",
         )
         return tx
 
@@ -4489,14 +4513,26 @@ class BillingService:
             "completion_tokens",
             "width",
             "height",
+            "fps",
             "resolution",
+            "resolution_tier",
+            "aspect_ratio",
             "duration",
             "duration_seconds",
+            "input_duration_seconds",
+            "input_duration",
             "has_video_input",
+            "use_prev_video",
+            "draft_mode",
+            "generation_mode",
             "usage_source",
         ):
             if details.get(copy_key) not in (None, ""):
                 res_details[copy_key] = details.get(copy_key)
+        res_details = BillingService._promote_media_context_for_history(
+            res_details,
+            usage=breakdown.get("usage_metadata") if isinstance(breakdown.get("usage_metadata"), dict) else None,
+        )
         # Do not store provider_usage / usage_metadata trees on history — they live on TransactionAction.
         # Rewrite ledger amount to actual user charge (supplier × multiplier), not reserve estimate.
         reservation_tx.amount = -int(max(0, actual_cost))
@@ -4536,6 +4572,19 @@ class BillingService:
             usage_metadata=breakdown.get("usage_metadata") or {},
             breakdown=breakdown,
             phase="settle",
+        )
+
+        process_snapshot = breakdown.get("billing_process") if isinstance(breakdown.get("billing_process"), dict) else {}
+        if not process_snapshot:
+            process_snapshot = BillingService._build_billing_process_snapshot(breakdown, phase="settle")
+        BillingService._log_billing_process(
+            {
+                **process_snapshot,
+                "total_cost": actual_cost,
+                "user_id": user.id,
+                "reservation_tx_id": reservation_tx.id,
+            },
+            context=f"settle:{res_task_type}:delta={delta}",
         )
 
         db.commit()
@@ -4716,6 +4765,10 @@ class BillingService:
         if group:
             tx_details["group_id"] = group.id
             tx_details["allow_group_credit_billing"] = can_use_group_credits
+        tx_details = BillingService._promote_media_context_for_history(
+            tx_details,
+            usage=breakdown.get("usage_metadata") if isinstance(breakdown.get("usage_metadata"), dict) else None,
+        )
         tx_details = BillingService._attach_balance_snapshots(
             tx_details, user=user, group=group if can_use_group_credits else None
         )
@@ -4756,10 +4809,19 @@ class BillingService:
             breakdown=breakdown,
             phase="direct_deduct",
         )
+        process_snapshot = breakdown.get("billing_process") if isinstance(breakdown.get("billing_process"), dict) else {}
+        if not process_snapshot:
+            process_snapshot = BillingService._build_billing_process_snapshot(breakdown, phase="direct_deduct")
+        BillingService._log_billing_process(
+            {
+                **process_snapshot,
+                "user_id": user_id,
+                "reservation_tx_id": transaction.id,
+            },
+            context=f"deduct:{task_type}",
+        )
         db.commit()
         db.refresh(transaction)
-        
-        logger.info(f"Deducted {final_cost} credits from user {user_id} for {task_type}. New Balance: {user.credits}")
         return transaction
 
     @staticmethod

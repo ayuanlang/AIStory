@@ -62,6 +62,21 @@ services:
         value: "2"
       - key: RUN_GENERATION_QUEUE_WORKER_ON_START
         value: "0"
+      - key: RUN_MAINTENANCE_SCHEDULER
+        value: "1"
+      # Persist under the uploads disk mount so redeploys do not wipe backups.
+      - key: DB_BACKUP_DIR
+        value: "uploads/_system_backups/db"
+      - key: DB_BACKUP_KEEP_COUNT
+        value: "7"
+      - key: PROJECT_BACKUP_DIR
+        value: "uploads/_system_backups/projects"
+      - key: PROJECT_RETENTION_DAYS
+        value: "60"
+      - key: PROJECT_BACKUP_KEEP_DAYS
+        value: "60"
+      - key: PROJECT_RETENTION_REQUIRE_SOFT_DELETED
+        value: "1"
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -172,6 +187,8 @@ services:
         value: "0"
       - key: RUN_GENERATION_QUEUE_WORKER_ON_START
         value: "1"
+      - key: RUN_MAINTENANCE_SCHEDULER
+        value: "0"
       - key: GENERATION_QUEUE_WORKER_THREADS
         value: "2"
       - key: GUNICORN_TIMEOUT

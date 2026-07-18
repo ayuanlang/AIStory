@@ -18,43 +18,19 @@ from app.services.billing_service import billing_service
 User = models.User
 Project = models.Project
 logger = logging.getLogger(__name__)
-api_logger = logging.getLogger("api_logger")
-activity_logger = logging.getLogger("functional_activity")
 
 router = APIRouter(tags=["billing"])
 
 
 def _log_video_estimate(message: str, *args: Any) -> None:
-    """Write estimate diagnostics to app_info.log via shared loggers."""
+    """Single-logger estimate diagnostic (no multi-logger fan-out)."""
     try:
-        text = message % args if args else str(message)
+        logger.info(message, *args)
     except Exception:
-        text = f"{message} | args={args!r}"
-    # Ensure file handlers exist even if this module loaded before logging bootstrap.
-    try:
-        from app.core.logging import _ensure_runtime_info_file_logging
-        _ensure_runtime_info_file_logging()
-    except Exception:
-        pass
-    for target in (
-        api_logger,
-        activity_logger,
-        logger,
-        logging.getLogger(),
-    ):
         try:
-            target.info("%s", text)
+            logger.info("%s | args=%s", message, args)
         except Exception:
             pass
-    # Force flush so lines appear immediately in app_info.log during local debug.
-    try:
-        for handler in list(logging.getLogger().handlers):
-            try:
-                handler.flush()
-            except Exception:
-                pass
-    except Exception:
-        pass
 
 
 def _is_per_second_provider(provider: Any) -> bool:
@@ -304,8 +280,8 @@ def _build_video_credit_estimate_details(
         reserve_height = int(resolved_video_height) if resolved_video_height else int(_video_token_cfg.get("default_height", 720))
         reserve_fps = int(_video_token_cfg.get("default_fps", 24))
         _draft_coeff = float(_video_token_cfg.get("draft_token_coefficient", 1.0) or 1.0)
-        if draft_mode and not (0 < _draft_coeff < 1.0):
-            _draft_coeff = float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+        if not (0 < _draft_coeff):
+            _draft_coeff = 1.0
         _is_seedance_2 = bool(_video_token_cfg.get("is_seedance_2")) or billing_service.is_seedance_2_model(
             reserve_provider, reserve_model
         )
@@ -357,24 +333,11 @@ def estimate_video_generation_credits(
     current_user: User = Depends(get_current_user),
 ):
     """Dry-run estimate of user credits for one video generation (no reserve/deduct)."""
-    _log_video_estimate(
-        "[BillingProcess] video_estimate_hit user=%s system_api_id=%s duration=%s draft=%s has_video_input=%s "
-        "width=%s height=%s project_id=%s shot_id=%s",
-        getattr(current_user, "id", None),
-        req.system_api_id,
-        req.duration,
-        req.draft_mode,
-        req.has_video_input if req.has_video_input is not None else req.use_prev_video,
-        req.width,
-        req.height,
-        req.project_id,
-        req.shot_id,
-    )
     try:
         details, meta = _build_video_credit_estimate_details(db, current_user, req)
     except Exception as exc:
         _log_video_estimate(
-            "[BillingProcess] video_estimate_build_failed user=%s err=%s",
+            "[BillingProcess] video_estimate_failed user=%s err=%s",
             getattr(current_user, "id", None),
             exc,
         )
@@ -393,27 +356,18 @@ def estimate_video_generation_credits(
     if not billing_process:
         billing_process = billing_service._build_billing_process_snapshot(breakdown, phase="estimate")
     usage_meta = billing_process.get("usage") if isinstance(billing_process.get("usage"), dict) else {}
-    _log_video_estimate(
-        "[BillingProcess] video_estimate user=%s credits=%s logic=%s new_logic=%s rule=%s "
-        "unit=%s tier=%s has_video_input=%s duration=%s source=%s provider=%s model=%s "
-        "system_api_id=%s token_billing=%s tokens=%s",
+    # Preview estimates: one short debug line (UI can poll often). Failures stay at info.
+    logger.debug(
+        "[BillingProcess] estimate user=%s credits=%s logic=%s rule=%s unit=%s tier=%s dur=%s %s/%s",
         getattr(current_user, "id", None),
         estimated,
         billing_process.get("logic_branch"),
-        billing_process.get("new_logic"),
         billing_process.get("matched_rule_id"),
         billing_process.get("unit_type"),
         usage_meta.get("resolution_tier") or meta.get("resolution"),
-        usage_meta.get("has_video_input"),
         usage_meta.get("duration_seconds") or meta.get("duration_seconds"),
-        billing_process.get("api_pricing_source") or breakdown.get("api_pricing_source"),
         billing_process.get("provider") or meta.get("resolved_provider"),
         billing_process.get("model") or meta.get("resolved_model"),
-        breakdown.get("system_api_id") or meta.get("resolved_system_api_id"),
-        meta.get("is_token_billing"),
-        (details.get("video_token_estimate") or {}).get("tokens")
-        if isinstance(details.get("video_token_estimate"), dict)
-        else details.get("output_tokens"),
     )
     return {
         "ok": True,

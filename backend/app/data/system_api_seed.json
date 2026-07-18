@@ -2140,7 +2140,7 @@
           "width": 854,
           "height": 480,
           "fps": 24,
-          "draft_token_coefficient": 0.6
+          "draft_token_coefficient": 1.0
         }
       },
       "deprecated": false,
@@ -2179,7 +2179,7 @@
           "width": 854,
           "height": 480,
           "fps": 24,
-          "draft_token_coefficient": 0.7
+          "draft_token_coefficient": 1.0
         }
       },
       "deprecated": false,

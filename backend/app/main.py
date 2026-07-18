@@ -81,6 +81,7 @@ def _runtime_version_info() -> Dict[str, Any]:
         "render_instance_id": os.getenv("RENDER_INSTANCE_ID") or None,
         "run_generation_queue_worker": _RUN_GENERATION_QUEUE_WORKER_ON_START if "_RUN_GENERATION_QUEUE_WORKER_ON_START" in globals() else None,
         "run_db_bootstrap": _RUN_DB_BOOTSTRAP_ON_START if "_RUN_DB_BOOTSTRAP_ON_START" in globals() else None,
+        "run_maintenance_scheduler": _RUN_MAINTENANCE_SCHEDULER if "_RUN_MAINTENANCE_SCHEDULER" in globals() else None,
     }
 
 
@@ -317,6 +318,10 @@ def _bootstrap_db_post_init() -> None:
 
 _RUN_DB_BOOTSTRAP_ON_START = os.getenv("RUN_DB_BOOTSTRAP_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
 _RUN_GENERATION_QUEUE_WORKER_ON_START = os.getenv("RUN_GENERATION_QUEUE_WORKER_ON_START", "1").strip().lower() in {"1", "true", "yes", "on"}
+_RUN_MAINTENANCE_SCHEDULER = os.getenv(
+    "RUN_MAINTENANCE_SCHEDULER",
+    "1" if os.getenv("RENDER") else "0",
+).strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_LOG_ENABLED = os.getenv("RUNTIME_DIAG_LOG_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_HEARTBEAT_ENABLED = os.getenv("RUNTIME_DIAG_HEARTBEAT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 _RUNTIME_DIAG_LOG_INTERVAL_SECONDS = max(15, int(os.getenv("RUNTIME_DIAG_LOG_INTERVAL_SECONDS", "60") or 60))
@@ -349,7 +354,7 @@ def _env_for_log(name: str) -> str:
 def _log_runtime_startup_profile() -> None:
     version_info = _runtime_version_info()
     logger.info(
-        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
+        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s run_maintenance_scheduler=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
         os.getpid(),
         version_info.get("commit_short") or "unknown",
         version_info.get("render_service_name") or "unset",
@@ -363,6 +368,7 @@ def _log_runtime_startup_profile() -> None:
         _env_for_log("GUNICORN_MAX_REQUESTS_JITTER"),
         _RUN_DB_BOOTSTRAP_ON_START,
         _RUN_GENERATION_QUEUE_WORKER_ON_START,
+        _RUN_MAINTENANCE_SCHEDULER,
         str(_read_queue_worker_threads_setting() or "").strip() or "unset",
         _RUNTIME_DIAG_LOG_ENABLED,
         _RUNTIME_DIAG_LOG_INTERVAL_SECONDS,
@@ -785,9 +791,30 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(endpoints_module.start_generation_queue_worker)
     else:
         logger.info("Application startup: generation queue worker disabled in web process")
+    maintenance_stop_event: asyncio.Event | None = None
+    maintenance_task: asyncio.Task | None = None
+    if _RUN_MAINTENANCE_SCHEDULER:
+        from app.jobs.scheduler import maintenance_scheduler_loop
+
+        maintenance_stop_event = asyncio.Event()
+        maintenance_task = asyncio.create_task(maintenance_scheduler_loop(maintenance_stop_event))
+        logger.info("Application startup: maintenance scheduler enabled (daily 03:00 Asia/Shanghai)")
+    else:
+        logger.info("Application startup: maintenance scheduler disabled")
     try:
         yield
     finally:
+        if maintenance_stop_event is not None:
+            maintenance_stop_event.set()
+        if maintenance_task is not None:
+            try:
+                await asyncio.wait_for(maintenance_task, timeout=5)
+            except Exception:
+                maintenance_task.cancel()
+                try:
+                    await maintenance_task
+                except Exception:
+                    pass
         if runtime_diag_stop_event is not None:
             runtime_diag_stop_event.set()
         if runtime_diag_task is not None:
@@ -1280,6 +1307,8 @@ app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 app.include_router(groups_api.router, prefix=settings.API_V1_STR)
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
+from app.api.project_retention_admin import router as project_retention_admin_router
+app.include_router(project_retention_admin_router, prefix=settings.API_V1_STR)
 
 # --- 静态 SPA (React Vite) 前端挂载配置 ---
 # Vite 建立的 Dist 目录通常在这个路径（基于 Dockerfile 第阶段配置）

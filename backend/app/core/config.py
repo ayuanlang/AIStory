@@ -102,6 +102,23 @@ class Settings(BaseSettings):
     DISABLE_DDG_HTML_SEARCH: str = os.getenv("DISABLE_DDG_HTML_SEARCH", "").strip()
     # Optional override, comma-separated: serper,brave,tavily,ddg_html,ddgs,bing_html,searxng
     SEARCH_BACKENDS: str = os.getenv("SEARCH_BACKENDS", "").strip()
+
+    # Daily DB backup + stale project retention (Asia/Shanghai 03:00 scheduler).
+    # Default on for Render; off for local/dev unless explicitly enabled.
+    RUN_MAINTENANCE_SCHEDULER: bool = os.getenv(
+        "RUN_MAINTENANCE_SCHEDULER",
+        "1" if os.getenv("RENDER") else "0",
+    ) not in {"0", "false", "False"}
+    DB_BACKUP_DIR: str = _path_env_or_default("DB_BACKUP_DIR", "backups/db")
+    DB_BACKUP_KEEP_COUNT: int = max(1, int(os.getenv("DB_BACKUP_KEEP_COUNT", "7") or 7))
+    PROJECT_BACKUP_DIR: str = _path_env_or_default("PROJECT_BACKUP_DIR", "backups/projects")
+    PROJECT_RETENTION_DAYS: int = max(1, int(os.getenv("PROJECT_RETENTION_DAYS", "60") or 60))
+    PROJECT_BACKUP_KEEP_DAYS: int = max(1, int(os.getenv("PROJECT_BACKUP_KEEP_DAYS", "60") or 60))
+    # Manual admin purge default filter: 0 = all projects idle for PROJECT_RETENTION_DAYS.
+    # Set to 1 to only list/purge soft-deleted projects.
+    PROJECT_RETENTION_REQUIRE_SOFT_DELETED: bool = os.getenv(
+        "PROJECT_RETENTION_REQUIRE_SOFT_DELETED", "0"
+    ) not in {"0", "false", "False"}
     
     class Config:
         env_file = ".env"

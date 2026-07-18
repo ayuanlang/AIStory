@@ -6499,7 +6499,7 @@ async def _settle_or_cancel_video_job_billing_from_callback(
     job = _hydrate_video_job_record(job_id, job) if job_id else (job or {})
     if not isinstance(job, dict):
         return job or {}
-    if job.get("billing_settled") or not job.get("billing_pending"):
+    if job.get("billing_settled"):
         return job
 
     try:
@@ -6521,6 +6521,12 @@ async def _settle_or_cancel_video_job_billing_from_callback(
 
     if status not in {"succeeded", "completed", "done"}:
         return job
+
+    # Allow settle even when billing_pending was not set yet (callback-before-return race).
+    if not job.get("billing_pending"):
+        _set_video_job(job_id, billing_pending=True)
+        job = dict(job)
+        job["billing_pending"] = True
 
     db = SessionLocal()
     try:
@@ -6623,12 +6629,19 @@ async def _settle_or_cancel_video_job_billing_from_callback(
                 "height": billing_context.get("height"),
                 "fps": billing_context.get("fps") or 24,
             }
+            if billing_context.get("aspect_ratio"):
+                settle_details["aspect_ratio"] = billing_context.get("aspect_ratio")
+            if billing_context.get("resolution"):
+                settle_details["resolution"] = billing_context.get("resolution")
+            if billing_context.get("duration_seconds") or billing_context.get("duration"):
+                settle_details["duration"] = billing_context.get("duration_seconds") or billing_context.get("duration")
+                settle_details["duration_seconds"] = settle_details["duration"]
             if actual_tokens <= 0:
                 settle_duration = max(5, int(billing_context.get("duration_seconds") or billing_context.get("duration") or 5))
                 draft_mode = bool(billing_context.get("draft_mode"))
                 draft_coeff = float(billing_context.get("draft_token_coefficient") or 1.0)
-                if draft_mode and not (0 < draft_coeff < 1.0):
-                    draft_coeff = float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+                if not (0 < draft_coeff):
+                    draft_coeff = 1.0
                 settle_estimate = billing_service.estimate_video_token_usage(
                     width=int(billing_context.get("width") or 1280),
                     height=int(billing_context.get("height") or 720),
@@ -6636,7 +6649,7 @@ async def _settle_or_cancel_video_job_billing_from_callback(
                     output_duration_seconds=settle_duration,
                     has_video_input=bool(billing_context.get("has_video_input")),
                     input_duration_seconds=None,
-                    draft_token_coefficient=draft_coeff if draft_mode else float(billing_context.get("draft_token_coefficient") or 1.0),
+                    draft_token_coefficient=draft_coeff,
                     method=(
                         "seedance2_video_token_formula"
                         if billing_context.get("is_seedance_2") or billing_service.is_seedance_2_model(provider, model)
@@ -6671,6 +6684,8 @@ async def _settle_or_cancel_video_job_billing_from_callback(
                 settle_details["height"] = billing_context.get("height")
             if billing_context.get("resolution"):
                 settle_details["resolution"] = billing_context.get("resolution")
+            if billing_context.get("aspect_ratio"):
+                settle_details["aspect_ratio"] = billing_context.get("aspect_ratio")
 
             # KIE webhook: data.creditsConsumed → actual supplier credits → system credits settle.
             kie_credits = 0.0
@@ -42467,8 +42482,8 @@ async def _run_generate_video(
             except Exception:
                 _input_duration = None
             _draft_coeff = float(_video_token_cfg.get("draft_token_coefficient", 1.0) or 1.0)
-            if bool(req.draft_mode) and not (0 < _draft_coeff < 1.0):
-                _draft_coeff = float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+            if not (0 < _draft_coeff):
+                _draft_coeff = 1.0
             _is_seedance_2 = bool(_video_token_cfg.get("is_seedance_2")) or billing_service.is_seedance_2_model(
                 reserve_provider, reserve_model
             )
@@ -43131,6 +43146,7 @@ async def _run_generate_video(
                     "estimated_tokens": int(_estimated_tokens or 0),
                     "duration": req.duration,
                     "duration_seconds": req.duration,
+                    "aspect_ratio": str(aspect_ratio or "").strip() or None,
                     "draft_mode": bool(req.draft_mode),
                     "use_prev_video": bool(getattr(req, "use_prev_video", False)),
                     "shot_continuation": bool(getattr(req, "use_prev_video", False)),
@@ -43308,10 +43324,8 @@ async def _run_generate_video(
                         output_duration_seconds=settle_duration,
                         has_video_input=settle_has_video_input,
                         input_duration_seconds=None,
-                        draft_token_coefficient=(
-                            float((_video_token_cfg or {}).get("draft_token_coefficient", 1.0) or 1.0)
-                            if not req.draft_mode
-                            else float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+                        draft_token_coefficient=float(
+                            (_video_token_cfg or {}).get("draft_token_coefficient", 1.0) or 1.0
                         ),
                         method=(
                             "seedance2_video_token_formula"
@@ -43414,6 +43428,8 @@ async def _run_generate_video(
             if req.duration is not None:
                 settle_details["duration"] = req.duration
                 settle_details["duration_seconds"] = req.duration
+            if aspect_ratio:
+                settle_details["aspect_ratio"] = str(aspect_ratio).strip()
             if normalized_mode:
                 settle_details["mode"] = normalized_mode
                 settle_details["generation_mode"] = normalized_mode
@@ -43598,14 +43614,6 @@ async def _run_generate_video_job(
                 current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
             current_status = _normalize_generation_status(current_job.get("status"))
             current_result_url = _extract_job_result_url(current_job.get("result"))
-            if current_status == "succeeded" and current_result_url:
-                logger.info(
-                    "[VideoJob] pending-callback downgrade skipped after callback finalization | job_id=%s provider_task_id=%s result_url=%s",
-                    job_id,
-                    _extract_job_provider_task_id(current_job) or None,
-                    current_result_url,
-                )
-                return
 
             metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             provider_task_id = str(
@@ -43620,6 +43628,38 @@ async def _run_generate_video_job(
             except Exception:
                 reservation_tx_id_pending = None
             billing_context = result.get("billing_context") if isinstance(result.get("billing_context"), dict) else {}
+
+            # Callback may finalize the job before submit returns. Always attach reservation
+            # first, then settle — do not skip billing on the "already succeeded" race.
+            if current_status == "succeeded" and current_result_url:
+                attach_fields: Dict[str, Any] = {
+                    "billing_pending": bool(reservation_tx_id_pending),
+                    "billing_context": billing_context,
+                }
+                if reservation_tx_id_pending:
+                    attach_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
+                if provider_task_id and not _extract_job_provider_task_id(current_job):
+                    attach_fields["provider_task_id"] = provider_task_id
+                if attach_fields:
+                    _set_video_job(job_id, **attach_fields)
+                with VIDEO_JOB_LOCK:
+                    current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+                callback_payload = {}
+                if provider_callback_ticket:
+                    callback_payload = _get_generation_callback_payload(provider_callback_ticket) or {}
+                await _settle_or_cancel_video_job_billing_from_callback(
+                    job_id,
+                    current_job,
+                    callback_payload,
+                )
+                logger.info(
+                    "[VideoJob] settled reservation after callback-before-return race | job_id=%s reservation_tx_id=%s provider_task_id=%s",
+                    job_id,
+                    reservation_tx_id_pending,
+                    _extract_job_provider_task_id(current_job) or provider_task_id or None,
+                )
+                return {"defer_completion": False}
+
             update_fields: Dict[str, Any] = {
                 "status": "waiting_callback",
                 "error": None,
