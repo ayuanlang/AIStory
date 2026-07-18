@@ -14670,16 +14670,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 if (onLog) onLog(t('剧本统筹已完成，开始生成资产清单…', 'Script coordination finished; generating asset inventory...'), 'info');
 
+                // Flip phase immediately so the Stage-1 "Edit" control becomes available
+                // while Stage 2.1 prompt fetch / inventory generation are still in flight.
+                setAnalysisFlowStatus({
+                    phase: 'extract_assets',
+                    message: t('📝 正在整理本集资产清单（角色/道具/环境/封面）…', 'Building this episode’s asset inventory (characters/props/environments/covers)...'),
+                });
+
                 const stage2_1PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md');
                 let finalStage2_1Prompt = stage2_1PromptRes?.content || '';
                 let finalStage2_1UserInput = stage2UserInput;
 
                 if (onLog) onLog(t('正在生成资产清单…', 'Generating asset inventory...'), 'info');
-
-                setAnalysisFlowStatus({
-                    phase: 'extract_assets',
-                    message: t('📝 正在整理本集资产清单（角色/道具/环境/封面）…', 'Building this episode’s asset inventory (characters/props/environments/covers)...'),
-                });
 
                 const runStage2_1Attempt = async () => (
                     await awaitAnalyzeSceneWithRecovery(
@@ -14713,6 +14715,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 );
                 const stage2_1SubjectIndexText = String(stage2_1Validation.subjectIndexText || '').trim() || extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
                 globalStage2_1Text = stage2_1SubjectIndexText;
+                // Local state so the Stage-2.1 Edit control unlocks immediately during live analysis
+                // (episode→subjectIndexText sync is skipped while isAnalyzing).
+                if (stage2_1SubjectIndexText) {
+                    setSubjectIndexText(extractPureSubjectIndexText(stage2_1SubjectIndexText) || stage2_1SubjectIndexText);
+                }
                 
                 // --- 第一时间保存 Stage 2.1 (提取的美术资产/Subject Index) 对应卡片！---
                 try {
@@ -14726,6 +14733,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                 if (onLog) onLog(t('资产清单已就绪，正在同时进行场景编排与资产设计…', 'Asset inventory ready; scene orchestration and asset design are running together...'), 'info');
 
+                // Flip phase immediately so the Subject Index "Edit" control becomes available
+                // while scene orchestration / asset design continue in parallel.
                 setAnalysisFlowStatus({
                     phase: 'scene_beats',
                     message: t(
@@ -19065,8 +19074,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const livePhase = analysisFlowStatus?.phase || 'idle';
                         const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: isAnalyzing });
                         const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: isAnalyzing });
-                        const hasScriptOptArtifact = !!getStageOutputContent('stage1', 'adapted_script');
-                        const hasSubjectIndexArtifact = !!getStageOutputContent('stage2', 'subject_index');
+                        const hasScriptOptArtifact = Boolean(
+                            getStageOutputContent('stage1', 'adapted_script')
+                            || String(adaptationText || '').trim()
+                            || resolveScriptOptBeatsContent()
+                        );
+                        const hasSubjectIndexArtifact = Boolean(
+                            getStageOutputContent('stage2', 'subject_index')
+                            || String(subjectIndexText || '').trim()
+                            || resolveSubjectIndexEditContent()
+                        );
                         const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
                         const hasSceneMarkdownArtifact = Boolean(
                             getStageOutputContent('stage2', 'scene_markdown')
@@ -19092,10 +19109,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const storyboardSettled = storyboardAutoStarted
                             && !storyboardInFlight
                             && storyboardStartedCount > 0;
-                        const canImportScriptOpt = Boolean(
-                            resolveScriptOptBeatsContent()
-                            || getStageOutputContent('stage1', 'adapted_script')
-                        );
+                        // Stage 1 has no workspace import; edit stays enabled after Stage 1 finishes,
+                        // even while later analysis stages are still running.
+                        const canEditScriptOpt = Boolean(scriptOptReady && hasScriptOptArtifact);
+                        // Same for Subject Index: unlock Edit as soon as 2.1 is trusted/ready.
+                        const canEditSubjectIndex = Boolean(subjectIndexReady && hasSubjectIndexArtifact);
                         const canImportSubjectIndex = Boolean(resolveSubjectIndexEditContent());
                         const canImportSceneBeats = Boolean(String(
                             getStageOutputContent('stage2', 'scene_markdown')
@@ -19139,11 +19157,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {scriptOptReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        {renderImportButton('script_opt', canImportScriptOpt)}
                                         <button
+                                            type="button"
                                             onClick={() => openStageArtifactEditModal('script_opt')}
-                                            disabled={isAnalyzing}
+                                            disabled={!canEditScriptOpt}
                                             className={diagnosticBtnClass}
+                                            title={canEditScriptOpt
+                                                ? t('编辑剧本统筹节拍内容', 'Edit script-coordination beat content')
+                                                : t('暂无可编辑内容', 'No editable content yet')}
                                         >
                                             {t('编辑', 'Edit')}
                                         </button>
@@ -19153,7 +19174,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         {scriptOptActive ? renderProcessingLabel() : (
                                             <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
                                         )}
-                                        {renderImportButton('script_opt', canImportScriptOpt)}
                                     </div>
                                 )}
                             </div>
@@ -19170,9 +19190,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                          {renderImportButton('subject_index', canImportSubjectIndex)}
                                          <button
+                                            type="button"
                                             onClick={() => openStageArtifactEditModal('subject_index')}
-                                            disabled={isAnalyzing}
+                                            disabled={!canEditSubjectIndex}
                                             className={diagnosticBtnClass}
+                                            title={canEditSubjectIndex
+                                                ? t('编辑资产清单', 'Edit asset inventory')
+                                                : t('暂无可编辑内容', 'No editable content yet')}
                                          >
                                             {t('编辑', 'Edit')}
                                          </button>

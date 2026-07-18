@@ -1736,6 +1736,125 @@ class BillingService:
             row = query_any_category.order_by(SystemAPISetting.id.desc()).first()
         return row
 
+
+    @staticmethod
+    def _extract_provider_task_ref(*payloads: Any) -> Dict[str, str]:
+        """Pull provider taskId / query endpoint from settle details or nested provider payloads."""
+        task_id = ""
+        query_endpoint = ""
+
+        def _scan(obj: Any, *, depth: int = 0) -> None:
+            nonlocal task_id, query_endpoint
+            if depth > 3 or not isinstance(obj, dict):
+                return
+            if not task_id:
+                for key in ("provider_task_id", "task_id", "taskId", "job_task_id"):
+                    val = str(obj.get(key) or "").strip()
+                    if val:
+                        task_id = val
+                        break
+            if not query_endpoint:
+                for key in ("query_endpoint", "queryEndpoint"):
+                    val = str(obj.get(key) or "").strip()
+                    if val:
+                        query_endpoint = val
+                        break
+            if task_id and query_endpoint:
+                return
+            for nest_key in ("provider_usage", "raw", "submit_raw", "metadata", "data", "output"):
+                nested = obj.get(nest_key)
+                if isinstance(nested, dict):
+                    _scan(nested, depth=depth + 1)
+                    if task_id and query_endpoint:
+                        return
+
+        for payload in payloads:
+            _scan(payload)
+            if task_id and query_endpoint:
+                break
+
+        out: Dict[str, str] = {}
+        if task_id:
+            out["provider_task_id"] = task_id
+            out["task_id"] = task_id
+            out["taskId"] = task_id
+        if query_endpoint:
+            out["query_endpoint"] = query_endpoint
+        return out
+
+    @staticmethod
+    def ensure_provider_task_ids(details: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalize provider taskId fields onto a settle/deduct details dict."""
+        payload = dict(details or {}) if isinstance(details, dict) else {}
+        ref = BillingService._extract_provider_task_ref(payload)
+        if ref:
+            payload.update(ref)
+        return payload
+
+    @staticmethod
+    def attach_provider_task_id_to_reservation(
+        db: Session,
+        reservation_tx_id: int,
+        task_id: str,
+        *,
+        query_endpoint: Optional[str] = None,
+    ) -> bool:
+        """Persist provider taskId onto an open reservation as soon as API submit returns it."""
+        stable_task_id = str(task_id or "").strip()
+        if not stable_task_id:
+            return False
+        try:
+            tx_id = int(reservation_tx_id)
+        except Exception:
+            return False
+        if tx_id <= 0:
+            return False
+
+        reservation_tx = db.query(TransactionHistory).filter(TransactionHistory.id == tx_id).first()
+        if reservation_tx is None:
+            return False
+
+        details = dict(reservation_tx.details or {}) if isinstance(reservation_tx.details, dict) else {}
+        status = str(details.get("status") or "").strip().upper()
+        changed = False
+        for key in ("provider_task_id", "task_id", "taskId"):
+            if str(details.get(key) or "").strip() != stable_task_id:
+                details[key] = stable_task_id
+                changed = True
+        qe = str(query_endpoint or "").strip()
+        if qe and str(details.get("query_endpoint") or "").strip() != qe:
+            details["query_endpoint"] = qe
+            changed = True
+        if changed:
+            reservation_tx.details = details
+            db.add(reservation_tx)
+
+        # Also stamp the latest RESERVED action usage_metadata when still open.
+        action = (
+            db.query(TransactionAction)
+            .filter(TransactionAction.reservation_tx_id == tx_id)
+            .order_by(TransactionAction.id.desc())
+            .first()
+        )
+        if action is not None and str(getattr(action, "stage", "") or "").upper() in {"RESERVED", "RESERVE", ""}:
+            usage = dict(action.usage_metadata or {}) if isinstance(action.usage_metadata, dict) else {}
+            usage_changed = False
+            for key in ("provider_task_id", "task_id", "taskId"):
+                if str(usage.get(key) or "").strip() != stable_task_id:
+                    usage[key] = stable_task_id
+                    usage_changed = True
+            if qe and str(usage.get("query_endpoint") or "").strip() != qe:
+                usage["query_endpoint"] = qe
+                usage_changed = True
+            if usage_changed:
+                action.usage_metadata = BillingService._slim_usage_metadata_for_storage(usage)
+                db.add(action)
+                changed = True
+
+        if changed:
+            db.commit()
+        return changed
+
     @staticmethod
     def _extract_usage_metadata(details: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         payload = dict(details or {})
@@ -1849,6 +1968,13 @@ class BillingService:
         )
         if input_duration > 0:
             usage_out["input_duration_seconds"] = float(input_duration)
+        # Persist provider task ids for later supplier usage reconcile.
+        usage_out.update(
+            BillingService._extract_provider_task_ref(
+                payload,
+                payload.get("provider_usage") if isinstance(payload.get("provider_usage"), dict) else None,
+            )
+        )
         return usage_out
 
     @staticmethod
@@ -3367,6 +3493,7 @@ class BillingService:
                 "creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits",
                 "consumeMoney", "consumeCoins", "thirdPartyConsumeMoney",
                 "taskCostTime", "provider_cost_time_seconds", "cost_time",
+                "provider_task_id", "task_id", "taskId", "query_endpoint",
             ):
                 if out.get(key) in (None, "") and nested.get(key) not in (None, ""):
                     out[key] = nested.get(key)
@@ -4321,7 +4448,7 @@ class BillingService:
                 "already_settled": True,
             }
 
-        details = dict(actual_details or {})
+        details = BillingService.ensure_provider_task_ids(dict(actual_details or {}))
         details.setdefault("billing_mode", "ACTUAL")
         smart_routing = details.get("smart_routing") if isinstance(details.get("smart_routing"), dict) else {}
         settle_provider = str(
@@ -4376,6 +4503,9 @@ class BillingService:
             phase="settle",
             reserved_cost_fallback=reserved_cost,
         )
+        usage_meta = dict(breakdown.get("usage_metadata") or {}) if isinstance(breakdown.get("usage_metadata"), dict) else {}
+        usage_meta = BillingService.ensure_provider_task_ids({**usage_meta, **details})
+        breakdown["usage_metadata"] = usage_meta
         settle_provider = str(breakdown.get("provider") or settle_provider or res_provider or "").strip() or None
         settle_model = str(breakdown.get("model") or settle_model or res_model or "").strip() or None
         actual_cost = int(breakdown.get("total_cost") or 0)
@@ -4793,6 +4923,7 @@ class BillingService:
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
             
+        details = BillingService.ensure_provider_task_ids(details if isinstance(details, dict) else {})
         breakdown = BillingService.estimate_cost_breakdown(
             db,
             task_type,
@@ -4801,6 +4932,9 @@ class BillingService:
             details=details,
             phase="reserve",
         )
+        usage_meta = dict(breakdown.get("usage_metadata") or {}) if isinstance(breakdown.get("usage_metadata"), dict) else {}
+        usage_meta = BillingService.ensure_provider_task_ids({**usage_meta, **details})
+        breakdown["usage_metadata"] = usage_meta
         final_cost = int(max(0, breakdown.get("total_cost") or 0))
 
         resolved_provider = str(

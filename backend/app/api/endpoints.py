@@ -5159,6 +5159,37 @@ def _extract_job_result_url(result: Any) -> str:
     return ""
 
 
+def _merge_provider_task_ids_into_settle(settle_details: Dict[str, Any], *sources: Any) -> Dict[str, Any]:
+    """Copy provider taskId / query_endpoint from result metadata into settle details."""
+    payload = settle_details if isinstance(settle_details, dict) else {}
+    merged = dict(payload)
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        for key in ("provider_task_id", "task_id", "taskId", "query_endpoint", "queryEndpoint"):
+            val = src.get(key)
+            if val not in (None, "") and merged.get(key) in (None, ""):
+                merged[key] = val
+        nested = src.get("provider_usage") if isinstance(src.get("provider_usage"), dict) else None
+        if nested:
+            for key in ("provider_task_id", "task_id", "taskId", "query_endpoint", "queryEndpoint"):
+                val = nested.get(key)
+                if val not in (None, "") and merged.get(key) in (None, ""):
+                    merged[key] = val
+        for nest_key in ("raw", "submit_raw", "metadata", "data", "output"):
+            nested2 = src.get(nest_key)
+            if isinstance(nested2, dict):
+                for key in ("provider_task_id", "task_id", "taskId", "query_endpoint", "queryEndpoint"):
+                    val = nested2.get(key)
+                    if val not in (None, "") and merged.get(key) in (None, ""):
+                        merged[key] = val
+    try:
+        from app.services.billing_service import BillingService
+        return BillingService.ensure_provider_task_ids(merged)
+    except Exception:
+        return merged
+
+
 def _extract_job_provider_task_id(job: Dict[str, Any]) -> str:
     if not isinstance(job, dict):
         return ""
@@ -7313,6 +7344,13 @@ async def _settle_or_cancel_video_job_billing_from_callback(
         if provider_task_id:
             settle_details["provider_task_id"] = provider_task_id
             settle_details["task_id"] = provider_task_id
+            settle_details["taskId"] = provider_task_id
+        settle_details = _merge_provider_task_ids_into_settle(
+            settle_details,
+            callback_payload if isinstance(callback_payload, dict) else {},
+            job if isinstance(job, dict) else {},
+            billing_context if isinstance(billing_context, dict) else {},
+        )
 
         billing_service.settle_reservation(db, reservation_tx_id, settle_details)
         _set_video_job(
@@ -40740,6 +40778,12 @@ async def _run_generate_image(
             if req.episode_id:
                 settle_details["episode_id"] = int(req.episode_id)
 
+            settle_details = _merge_provider_task_ids_into_settle(
+                settle_details,
+                result_meta if isinstance(result_meta, dict) else {},
+                result if isinstance(result, dict) else {},
+            )
+
             billing_service.settle_reservation(
                 db,
                 reservation_tx_id,
@@ -41136,6 +41180,26 @@ async def _run_generate_image_job(
         if not normalized_task_id:
             return
         _set_image_job(job_id, provider_task_id=normalized_task_id)
+        try:
+            with IMAGE_JOB_LOCK:
+                current = dict(IMAGE_JOB_STORE.get(job_id) or {})
+            reservation_tx_id_for_task = int(current.get("reservation_tx_id") or 0) or None
+            if reservation_tx_id_for_task:
+                attach_db = SessionLocal()
+                try:
+                    billing_service.attach_provider_task_id_to_reservation(
+                        attach_db,
+                        reservation_tx_id_for_task,
+                        normalized_task_id,
+                    )
+                finally:
+                    attach_db.close()
+        except Exception:
+            logger.exception(
+                "[ImageJob] persist provider taskId to reservation failed | job_id=%s provider_task_id=%s",
+                job_id,
+                normalized_task_id,
+            )
         logger.info(
             "[ImageJob] provider task linked | job_id=%s provider=%s provider_task_id=%s",
             job_id,
@@ -41244,6 +41308,25 @@ async def _run_generate_image_job(
             }
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
+            reservation_tx_id_pending = int(current_job.get("reservation_tx_id") or result.get("reservation_tx_id") or 0) or None
+            if provider_task_id and reservation_tx_id_pending:
+                try:
+                    attach_db = SessionLocal()
+                    try:
+                        billing_service.attach_provider_task_id_to_reservation(
+                            attach_db,
+                            int(reservation_tx_id_pending),
+                            provider_task_id,
+                        )
+                    finally:
+                        attach_db.close()
+                except Exception:
+                    logger.exception(
+                        "[ImageJob] persist provider taskId on waiting_callback failed | job_id=%s reservation_tx_id=%s provider_task_id=%s",
+                        job_id,
+                        reservation_tx_id_pending,
+                        provider_task_id,
+                    )
             _set_image_job(job_id, **update_fields)
             mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
@@ -42579,6 +42662,12 @@ async def generate_voice_endpoint(
                 settle_details["project_id"] = voice_project_id
             if voice_episode_id:
                 settle_details["episode_id"] = voice_episode_id
+
+            settle_details = _merge_provider_task_ids_into_settle(
+                settle_details,
+                final_meta if isinstance(final_meta, dict) else {},
+                smart_meta if isinstance(smart_meta, dict) else {},
+            )
 
             billing_service.settle_reservation(
                 db,
@@ -44122,6 +44211,13 @@ async def _run_generate_video(
             if smart_meta:
                 settle_details["smart_routing"] = smart_meta
 
+            settle_details = _merge_provider_task_ids_into_settle(
+                settle_details,
+                final_meta if isinstance(final_meta, dict) else {},
+                smart_meta if isinstance(smart_meta, dict) else {},
+                result if isinstance(result, dict) else {},
+            )
+
             billing_service.settle_reservation(
                 db,
                 reservation_tx_id,
@@ -44330,6 +44426,24 @@ async def _run_generate_video_job(
                     attach_fields["billing_pending"] = not already_settled
                 if provider_task_id and not _extract_job_provider_task_id(current_job):
                     attach_fields["provider_task_id"] = provider_task_id
+                if provider_task_id and reservation_tx_id_pending:
+                    try:
+                        attach_db = SessionLocal()
+                        try:
+                            billing_service.attach_provider_task_id_to_reservation(
+                                attach_db,
+                                int(reservation_tx_id_pending),
+                                provider_task_id,
+                            )
+                        finally:
+                            attach_db.close()
+                    except Exception:
+                        logger.exception(
+                            "[VideoJob] persist provider taskId to reservation failed | job_id=%s reservation_tx_id=%s provider_task_id=%s",
+                            job_id,
+                            reservation_tx_id_pending,
+                            provider_task_id,
+                        )
                 if current_status not in {"succeeded", "completed", "done"} and current_result_url:
                     attach_fields["status"] = "succeeded"
                 if attach_fields:
@@ -44364,6 +44478,24 @@ async def _run_generate_video_job(
                 update_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
+            if provider_task_id and reservation_tx_id_pending:
+                try:
+                    attach_db = SessionLocal()
+                    try:
+                        billing_service.attach_provider_task_id_to_reservation(
+                            attach_db,
+                            int(reservation_tx_id_pending),
+                            provider_task_id,
+                        )
+                    finally:
+                        attach_db.close()
+                except Exception:
+                    logger.exception(
+                        "[VideoJob] persist provider taskId on waiting_callback failed | job_id=%s reservation_tx_id=%s provider_task_id=%s",
+                        job_id,
+                        reservation_tx_id_pending,
+                        provider_task_id,
+                    )
             _set_video_job(job_id, **update_fields)
             mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
             return {"defer_completion": True}
