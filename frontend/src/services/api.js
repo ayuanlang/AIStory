@@ -3617,9 +3617,14 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     return result;
 };
 
-export const fetchProjectSubjectInventoryPrompt = async (projectId) => {
+export const fetchProjectSubjectInventoryPrompt = async (projectId, episodeId = null) => {
     try {
-        const response = await api.get(`/projects/${projectId}/subject_inventory_prompt`);
+        const params = {};
+        const scopedEpisodeId = Number(episodeId || 0);
+        if (Number.isFinite(scopedEpisodeId) && scopedEpisodeId > 0) {
+            params.episode_id = scopedEpisodeId;
+        }
+        const response = await api.get(`/projects/${projectId}/subject_inventory_prompt`, { params });
         return response.data;
     } catch (error) {
         console.error("Failed to load subject inventory prompt:", error);

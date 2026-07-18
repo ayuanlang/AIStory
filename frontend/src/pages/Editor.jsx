@@ -396,6 +396,15 @@ const Editor = ({
         'character_profiles',
     ]), []);
 
+    const ANALYSIS_DEFERRED_EPISODE_FIELDS = useMemo(() => ([
+        'ai_scene_analysis_result',
+        'ai_scene_analysis_scene_markdown',
+        'ai_scene_analysis_subject_index',
+        'ai_scene_analysis_adaptation',
+        'ai_entity_design_result',
+        'ai_stage_outputs',
+    ]), []);
+
     const mergeEpisodeListWithCachedFields = useCallback((incomingEps, previousEps, options = {}) => {
         const invalidateSet = new Set(
             (Array.isArray(options.invalidateEpisodeIds) ? options.invalidateEpisodeIds : [])
@@ -411,6 +420,22 @@ const Editor = ({
             const merged = { ...previous, ...ep };
             if (invalidateSet.has(String(ep.id))) {
                 delete merged._fullLoaded;
+                // List endpoint omits deferred analysis fields; drop stale analysis cache
+                // so a post-clear refresh cannot resurrect pre-restart stage outputs.
+                // Keep script_content / character_profiles from the prior full load.
+                for (const field of ANALYSIS_DEFERRED_EPISODE_FIELDS) {
+                    if (ep[field] === undefined || ep[field] === null) {
+                        merged[field] = '';
+                    }
+                }
+                for (const field of DEFERRED_EPISODE_FIELDS) {
+                    if (ANALYSIS_DEFERRED_EPISODE_FIELDS.includes(field)) continue;
+                    const incomingValue = ep[field];
+                    const cachedValue = previous[field];
+                    if ((incomingValue === undefined || incomingValue === null) && cachedValue != null) {
+                        merged[field] = cachedValue;
+                    }
+                }
                 return merged;
             }
             for (const field of DEFERRED_EPISODE_FIELDS) {
@@ -425,7 +450,7 @@ const Editor = ({
             }
             return merged;
         });
-    }, [DEFERRED_EPISODE_FIELDS, sortEpisodesForEditor]);
+    }, [ANALYSIS_DEFERRED_EPISODE_FIELDS, DEFERRED_EPISODE_FIELDS, sortEpisodesForEditor]);
 
     const resolveEpisodeDisplayNumber = useCallback((episode) => {
         const directNumber = Number(episode?.episode_number);

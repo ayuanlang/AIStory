@@ -70,7 +70,6 @@ import {
     fetchAssets, 
     generateSceneShots,
     regenerateSceneShots,
-    fetchSceneShotsPrompt,
     createAsset,
     uploadAsset,
     getSettings,
@@ -634,7 +633,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
 
     // AI Prompt Preview Modal State
-    const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [shotReviewModal, setShotReviewModal] = useState({ open: false, sceneId: null, data: null, loading: false });
 
     // Media Handling
@@ -4740,75 +4738,85 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         });
     };
 
+    const ensureSceneHasNoExistingShots = async (sceneId) => {
+        try {
+            const existing = await fetchShots(sceneId);
+            const count = Array.isArray(existing) ? existing.length : 0;
+            if (count <= 0) return true;
+
+            await confirmUiMessage(
+                t(
+                    `本场景已存在 ${count} 条分镜，无法重复生成。如需重做，请先删除现有分镜。`,
+                    `This scene already has ${count} shot(s). Generation skipped. Delete existing shots first if you need to regenerate.`
+                ),
+                {
+                    title: t('已有分镜', 'Shots Already Exist'),
+                    confirmText: t('知道了', 'OK'),
+                    cancelText: t('关闭', 'Close'),
+                }
+            );
+            onLog?.(
+                t(`场景 ${sceneId} 已有分镜（${count}），跳过生成。`, `Scene ${sceneId} already has ${count} shot(s); generation skipped.`),
+                'warning'
+            );
+            return false;
+        } catch (e) {
+            const detail = e?.message || String(e);
+            onLog?.(`Failed to check existing shots - ${detail}`, 'error');
+            notifyUiMessage(t(`检查现有分镜失败：${detail}`, `Failed to check existing shots: ${detail}`), 'error');
+            return false;
+        }
+    };
+
     const handleGenerateShots = async (sceneId) => {
         if (sceneId === 'all') {
             onLog?.("Please select a specific scene to generate shots.", "warning");
             return;
         }
-        setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
+        const canGenerate = await ensureSceneHasNoExistingShots(sceneId);
+        if (!canGenerate) return;
+
+        onLog?.(`Generating shots for Scene ${sceneId}...`, 'info');
         try {
-            const data = await fetchSceneShotsPrompt(sceneId);
-            setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
+            const result = await generateSceneShots(sceneId, { function_name: 'script_analysis' });
+            const generatedRows = Array.isArray(result?.content) ? result.content : [];
+            const generatedRaw = String(result?.raw_text || '').trim();
+            const generatedWarnings = Array.isArray(result?.warnings) ? result.warnings.map(w => String(w || '').trim()).filter(Boolean) : [];
+            if (generatedRows.length === 0) {
+                if (generatedRaw) {
+                    const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
+                    onLog?.(`Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
+                    console.warn('[ShotsView] Generate Shots parse-empty with raw_text preview', {
+                        sceneId,
+                        rawLen: generatedRaw.length,
+                        rawPreview,
+                    });
+                    throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
+                }
+                throw new Error('Generate Shots returned empty result (no rows and no raw text)');
+            }
+            onLog?.(`Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
+            generatedWarnings.forEach((msg) => onLog?.(msg, 'warning'));
+
+            setShotReviewModal({
+                open: true,
+                sceneId: sceneId,
+                data: generatedRows,
+                loading: false
+            });
+
+            try {
+                onLog?.(`Auto-importing shots for Scene ${sceneId}...`, 'info');
+                await applySceneAIResult(sceneId, { content: generatedRows });
+                onLog?.(`Auto-import finished for Scene ${sceneId}.`, 'success');
+            } catch (e) {
+                onLog?.(`Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
+            }
         } catch (e) {
-             onLog?.(`Failed to fetch prompt preview - ${e.message}`, 'error');
-             setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
+            console.error(e);
+            onLog?.(`Failed to generate shots - ${e.message}`, 'error');
+            alert("Failed to generate shots: " + e.message);
         }
-    };
-
-    const handleConfirmGenerateShots = async () => {
-         const { sceneId, data } = shotPromptModal;
-         if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) return;
-         
-         setShotPromptModal(prev => ({ ...prev, loading: true }));
-         onLog?.(`Generating shots for Scene ${sceneId}...`, 'info');
-         try {
-             // Now returns { content: [], timestamp }
-             const result = await generateSceneShots(sceneId, { function_name: 'script_analysis', 
-                 user_prompt: data.user_prompt,
-                 system_prompt: data.system_prompt 
-             });
-             const generatedRows = Array.isArray(result?.content) ? result.content : [];
-             const generatedRaw = String(result?.raw_text || '').trim();
-             const generatedWarnings = Array.isArray(result?.warnings) ? result.warnings.map(w => String(w || '').trim()).filter(Boolean) : [];
-             if (generatedRows.length === 0) {
-                 if (generatedRaw) {
-                     const rawPreview = generatedRaw.replace(/\s+/g, ' ').slice(0, 300);
-                     onLog?.(`Generate Shots returned 0 parsed rows. Raw preview: ${rawPreview}`, 'warning');
-                     console.warn('[ShotsView] Generate Shots parse-empty with raw_text preview', {
-                         sceneId,
-                         rawLen: generatedRaw.length,
-                         rawPreview,
-                     });
-                     throw new Error(`Generate Shots returned 0 parsed rows; raw preview: ${rawPreview}`);
-                 }
-                 throw new Error('Generate Shots returned empty result (no rows and no raw text)');
-             }
-             onLog?.(`Shot list generated for Scene ${sceneId}. Please Review/Apply.`, 'success');
-             generatedWarnings.forEach((msg) => onLog?.(msg, 'warning'));
-             
-             setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-             
-             setShotReviewModal({
-                 open: true,
-                 sceneId: sceneId,
-                 data: generatedRows,
-                 loading: false
-             });
-
-             try {
-                 onLog?.(`Auto-importing shots for Scene ${sceneId}...`, 'info');
-                 await applySceneAIResult(sceneId, { content: generatedRows });
-                 onLog?.(`Auto-import finished for Scene ${sceneId}.`, 'success');
-             } catch (e) {
-                 onLog?.(`Auto-import failed - ${(e?.response?.data?.detail || e?.message)}`, 'error');
-             }
-             
-         } catch (e) {
-             console.error(e);
-             onLog?.(`Failed to generate shots - ${e.message}`, 'error');
-             alert("Failed to generate shots: " + e.message);
-             setShotPromptModal(prev => ({ ...prev, loading: false }));
-         }
     };
 
     const handleMediaSelect = useCallback((url, type, selectedItems) => {
@@ -13562,101 +13570,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     </motion.div>
                 )}
              </AnimatePresence>
-
-             {shotPromptModal.open && (
-                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                            <h3 className="font-bold flex items-center gap-2"><Wand2 size={16} className="text-primary"/> Generate AI Shots</h3>
-                            <button onClick={() => setShotPromptModal({open: false, sceneId: null, data: null, loading: false})}><X size={18}/></button>
-                        </div>
-                        
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                            {shotPromptModal.loading && !shotPromptModal.data ? (
-                                <div className="flex items-center justify-center h-40"><Loader2 className="animate-spin text-primary" size={32}/></div>
-                            ) : (
-                                <>
-                                    <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200 flex items-start gap-2">
-                                        <Info size={14} className="shrink-0 mt-0.5" />
-                                        Review and edit the prompt before generation. Only the User Prompt (scenario context) is typically edited.
-                                    </div>
-
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
-                                        <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono min-h-[256px] focus:outline-none focus:border-primary/50 resize-y"
-                                            value={shotPromptModal.data?.user_prompt || ''}
-                                            onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, user_prompt: e.target.value}}))}
-                                        />
-                                    </div>
-                                    
-                                     <div className="flex flex-col gap-2">
-                                         <div className="flex items-center justify-between">
-                                              <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（指令）', 'System Prompt (Instructions)')}</label>
-                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
-                                         </div>
-                                        <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono min-h-[128px] focus:outline-none focus:border-primary/50 resize-y"
-                                            value={shotPromptModal.data?.system_prompt || ''}
-                                            onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, system_prompt: e.target.value}}))}
-                                        />
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                        
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
-                            <button 
-                                onClick={() => {
-                                    const full = (shotPromptModal.data?.system_prompt || '') + "\n\n" + (shotPromptModal.data?.user_prompt || '');
-                                    navigator.clipboard.writeText(full);
-                                    onLog?.(t('完整提示词已复制到剪贴板', 'Full prompt copied to clipboard'), "success");
-                                }}
-                                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium flex items-center gap-2 mr-auto"
-                            >
-                                <Copy size={16}/> {t('复制完整提示词', 'Copy Full Prompt')}
-                            </button>
-                            <button 
-                                onClick={() => setShotPromptModal({open: false, sceneId: null, data: null, loading: false})}
-                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
-                            >
-                                {t('取消', 'Cancel')}
-                            </button>
-                            <button 
-                                onClick={handleConfirmGenerateShots}
-                                disabled={shotPromptModal.loading}
-                                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-2"
-                            >
-                                {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
-                                {shotPromptModal.loading ? t('生成中...', 'Generating...') : t('生成镜头', 'Generate Shots')}
-                            </button>
-                        </div>
-
-                        <div className="mt-2 flex items-center gap-2">
-                            <input
-                                type="text"
-                                value={sceneCodeFilter}
-                                onChange={(e) => setSceneCodeFilter(e.target.value)}
-                                placeholder={t('筛选场景编码（EPxx_SCyy）', 'Filter Scene Code (EPxx_SCyy)')}
-                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs min-w-[200px] text-white"
-                            />
-                            <input
-                                type="text"
-                                value={shotIdFilter}
-                                onChange={(e) => setShotIdFilter(e.target.value)}
-                                placeholder={t('筛选镜头ID（EPxx_SCyy_SHzz）', 'Filter Shot ID (EPxx_SCyy_SHzz)')}
-                                className="bg-black/40 border border-white/20 rounded px-2.5 py-1.5 text-xs w-full sm:w-auto sm:min-w-[220px] text-white"
-                            />
-                            <button
-                                onClick={() => { setSceneCodeFilter(''); setShotIdFilter(''); }}
-                                className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded text-[11px] text-white border border-white/10"
-                            >
-                                {t('清除镜头筛选', 'Clear Shot Filters')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {shotReviewModal.open && (
                 <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">

@@ -466,7 +466,10 @@ const normalizeStoryboardTaskProgress = (value) => {
         const running = itemList.filter((item) => (
             ['starting', 'generating', 'importing'].includes(String(item?.status || '').toLowerCase())
         )).length;
-        return { started, completed, failed, running, items };
+        const waiting = itemList.filter((item) => (
+            String(item?.status || '').toLowerCase() === 'waiting_env'
+        )).length;
+        return { started, completed, failed, running, waiting, items };
     }
     return {
         started: Number(value.started || 0) || 0,
@@ -1764,6 +1767,56 @@ const clearAnalysisSessionProgressSnapshot = (episodeId) => {
     }
 };
 
+/** `endedAt: null` must NOT count as finished — Number(null) === 0 is finite. */
+const hasAnalysisHistoryEndedAt = (item) => {
+    const endedAt = Number(item?.endedAt);
+    return Number.isFinite(endedAt) && endedAt > 0;
+};
+
+const ANALYSIS_LIVE_STEP_ORDER = [
+    'script_opt',
+    'extract_assets',
+    'scene_beats',
+    'storyboard',
+    'assets_gen',
+    'completed',
+];
+
+const normalizeAnalysisLivePhase = (phase) => {
+    const key = String(phase || '').trim().toLowerCase();
+    if (key === 'supplement') return 'assets_gen';
+    if (key === 'running') return 'script_opt';
+    return key;
+};
+
+/** During a live run, ignore leftover artifacts from stages not yet reached. */
+const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } = {}) => {
+    if (!isLive) return true;
+    const normalizedPhase = normalizeAnalysisLivePhase(phase);
+    if (['failed', 'warning', 'completed', 'idle'].includes(normalizedPhase)) return true;
+    const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
+    const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
+    if (phaseIdx < 0 || stepIdx < 0) return false;
+    // After 2.1, scene orchestration and asset design run concurrently.
+    if (phaseIdx >= 2 && (stepKey === 'scene_beats' || stepKey === 'assets_gen')) return true;
+    if (stepKey === 'script_opt' || stepKey === 'extract_assets') return phaseIdx > stepIdx;
+    return phaseIdx > stepIdx;
+};
+
+const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false } = {}) => {
+    if (!isLive) return false;
+    const normalizedPhase = normalizeAnalysisLivePhase(phase);
+    if (['failed', 'warning', 'completed', 'idle'].includes(normalizedPhase)) return false;
+    const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
+    const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
+    if (phaseIdx < 0 || stepIdx < 0) return false;
+    if (phaseIdx === stepIdx) return true;
+    // Mirror concurrent fan-out after Subject Index.
+    if (phaseIdx === 2 && stepKey === 'assets_gen') return true;
+    if (phaseIdx === 4 && stepKey === 'scene_beats') return true;
+    return false;
+};
+
 const isPersistedAnalysisProgressRunning = (progressUi) => {
     if (!progressUi || progressUi.dismissed === true) return false;
     const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
@@ -1775,7 +1828,7 @@ const isPersistedAnalysisProgressRunning = (progressUi) => {
     const reportStatus = String(uiReport?.status || '').trim().toLowerCase();
     if (reportStatus === 'running') return true;
     if (phase && !['idle', 'completed', 'failed', 'warning'].includes(phase)) return true;
-    if (flowHistory.some((item) => !item?.endedAt)) return true;
+    if (flowHistory.some((item) => !hasAnalysisHistoryEndedAt(item))) return true;
     return false;
 };
 
@@ -2597,7 +2650,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             : String(extractStage1AdaptedScriptBody(stage1Text) || '').trim();
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2_2InputParts = [
-            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 Subject Index + 单场 Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，不含 Scene 级【主环境】等说明块）。仅对 Beat 叙述层做 Index 名称转译并落入《Scenes Table》的 `{Beats}`；禁止改情节/对白/建置/补实体。',
+            '请执行第二阶段的第二步：节拍工程映射（Stage 2.2）。输入为 Subject Index + 单场 `【场景名称】{短名}｜{日·内/外}` 场景头 + Beat 块（`[BEAT_START:…]`…`[BEAT_END:…]`，不含 Scene 级【主环境】等其它说明块）。将 `{短名}｜{日·内/外}` 原样落入 Scene Name；仅对 Beat 叙述层做 Index 名称转译并落入《Scenes Table》的 `{Beats}`；禁止改情节/对白/建置/补实体。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -2633,10 +2686,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             sceneText = String(unit?.sceneMarkdown || unit?.scene_markdown || '').trim();
         }
         // Prefer Beat blocks; fall back to full scene when split fails / too short.
-        const { bodyText } = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
+        const { bodyText, usedSceneFallback } = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
+        // Inject Stage 1 scene header only for beats-only body; full-scene fallback already contains it.
+        const sceneNameMatch = !usedSceneFallback
+            ? String(sceneText || '').match(/【场景名称】\s*[^\n【]+/)
+            : null;
+        const sceneNameHeader = sceneNameMatch ? String(sceneNameMatch[0] || '').trim() : '';
         return [
             SCENES_BLOCK_START_TOKEN,
             markerStartToken,
+            sceneNameHeader,
             bodyText,
             markerEndToken,
             SCENES_BLOCK_END_TOKEN,
@@ -2976,13 +3035,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
             const now = Date.now();
-            const next = [...prev];
-            if (next.length > 0) {
-                const prevLast = next[next.length - 1];
-                if (!Number.isFinite(Number(prevLast?.endedAt))) {
-                    next[next.length - 1] = { ...prevLast, endedAt: now };
-                }
-            }
+            // Close every open entry — Number(null)===0 must not count as ended.
+            const next = prev.map((item) => (
+                hasAnalysisHistoryEndedAt(item) ? item : { ...item, endedAt: now }
+            ));
             next.push({
                 id: `${now}-${prev.length}`,
                 phase,
@@ -3012,10 +3068,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!isTerminal) return;
         setAnalysisFlowStatusHistory((prev) => {
             if (!Array.isArray(prev) || prev.length === 0) return prev;
-            const last = prev[prev.length - 1];
-            if (Number.isFinite(Number(last?.endedAt))) return prev;
+            if (prev.every((item) => hasAnalysisHistoryEndedAt(item))) return prev;
             const now = Date.now();
-            return [...prev.slice(0, -1), { ...last, endedAt: now }];
+            return prev.map((item) => (
+                hasAnalysisHistoryEndedAt(item) ? item : { ...item, endedAt: now }
+            ));
         });
     }, [analysisFlowStatus?.phase, analysisUiReport?.status, isAnalyzing]);
 
@@ -3070,14 +3127,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const now = Date.now();
             let lastOpenIdx = -1;
             prev.forEach((item, idx) => {
-                if (String(item?.phase || '').trim() === targetPhase && !Number.isFinite(Number(item?.endedAt))) {
+                if (String(item?.phase || '').trim() === targetPhase && !hasAnalysisHistoryEndedAt(item)) {
                     lastOpenIdx = idx;
                 }
             });
             if (lastOpenIdx < 0) return prev;
             return prev.map((item, idx) => {
                 if (String(item?.phase || '').trim() !== targetPhase) return item;
-                if (Number.isFinite(Number(item?.endedAt))) return item;
+                if (hasAnalysisHistoryEndedAt(item)) return item;
                 return {
                     ...item,
                     ...(idx === lastOpenIdx && completionMessage ? { message: completionMessage } : {}),
@@ -5946,6 +6003,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         storyboardKickoffByMarkerRef.current = new Set();
         storyboardKickoffByDbIdRef.current = new Set();
         storyboardKickoffPromisesRef.current = new Map();
+        pendingStoryboardKickoffsRef.current = [];
+        environmentAssetReadyRef.current = false;
         stage3AutoStartCacheRef.current = null;
         storyboardTaskProgressRef.current = EMPTY_STORYBOARD_TASK_PROGRESS;
         setStoryboardTaskProgress(EMPTY_STORYBOARD_TASK_PROGRESS);
@@ -5964,6 +6023,93 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             stage3AutoStartCacheRef.current = { storyboard_generation: true };
             return true;
         }
+    }, []);
+
+    const ensureStage3AutoStartCache = useCallback(async () => {
+        if (stage3AutoStartCacheRef.current && typeof stage3AutoStartCacheRef.current === 'object') {
+            return stage3AutoStartCacheRef.current;
+        }
+        try {
+            const flowRegistry = await getSceneAnalysisFlowRegistry();
+            const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
+            stage3AutoStartCacheRef.current = configured && typeof configured === 'object' ? configured : {};
+        } catch (_) {
+            stage3AutoStartCacheRef.current = {
+                storyboard_generation: true,
+                asset_design_environment: true,
+            };
+        }
+        return stage3AutoStartCacheRef.current || {};
+    }, []);
+
+    const hasEnvironmentRowsInSubjectIndex = useCallback(() => {
+        const subjectIndexText = String(activeEpisode?.ai_scene_analysis_subject_index || '').trim();
+        if (!subjectIndexText) return false;
+        // Lightweight row scan: Subject Index type column contains environment/场景/环境.
+        return /(?:^|\n)\s*\|[^|\n]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(subjectIndexText)
+            || /(?:^|\n)\s*S\d+[^\n|]*\|\s*(?:environment|environments|env|场景|环境)\s*\|/i.test(subjectIndexText);
+    }, [activeEpisode?.ai_scene_analysis_subject_index]);
+
+    const hasPersistedEnvironmentAssetDesign = useCallback(() => {
+        const assetRaw = String(
+            activeEpisode?.ai_entity_design_result
+            || llmAssetRawResultContent
+            || ''
+        ).trim();
+        if (!assetRaw) return false;
+        if (/"environments"\s*:\s*\[\s*\{/i.test(assetRaw)) return true;
+        try {
+            const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
+            return Array.isArray(payload.environments) && payload.environments.length > 0;
+        } catch (_) {
+            return false;
+        }
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        getAnalysisEntitiesPayloadFromJsonText,
+        llmAssetRawResultContent,
+    ]);
+
+    const isEnvironmentAssetDesignReady = useCallback(async () => {
+        if (environmentAssetReadyRef.current) return true;
+        if (hasPersistedEnvironmentAssetDesign()) {
+            environmentAssetReadyRef.current = true;
+            return true;
+        }
+        const stage3Config = await ensureStage3AutoStartCache();
+        // Env auto-start off → do not block storyboard forever.
+        if (stage3Config?.asset_design_environment === false) {
+            environmentAssetReadyRef.current = true;
+            return true;
+        }
+        // No ENV rows in Subject Index → nothing to wait for.
+        if (!hasEnvironmentRowsInSubjectIndex()) {
+            environmentAssetReadyRef.current = true;
+            return true;
+        }
+        return false;
+    }, [
+        ensureStage3AutoStartCache,
+        hasEnvironmentRowsInSubjectIndex,
+        hasPersistedEnvironmentAssetDesign,
+    ]);
+
+    const enqueuePendingStoryboardKickoff = useCallback((item = {}) => {
+        const marker = String(item?.markerSceneId || '').trim();
+        if (!marker) return;
+        const list = Array.isArray(pendingStoryboardKickoffsRef.current)
+            ? pendingStoryboardKickoffsRef.current
+            : [];
+        const nextItem = {
+            markerSceneId: marker,
+            sceneOrder: item?.sceneOrder,
+            importReport: item?.importReport || null,
+            dbSceneIdHint: item?.dbSceneIdHint ?? null,
+        };
+        const idx = list.findIndex((row) => String(row?.markerSceneId || '').trim() === marker);
+        if (idx >= 0) list[idx] = { ...list[idx], ...nextItem };
+        else list.push(nextItem);
+        pendingStoryboardKickoffsRef.current = list;
     }, []);
 
     const updateStoryboardTaskItem = useCallback((markerSceneId, patch = {}) => {
@@ -6051,6 +6197,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }));
     }, [t]);
 
+    const flushPendingStoryboardKickoffsRef = useRef(async () => ({ started: 0 }));
+
+    const markEnvironmentAssetDesignReady = useCallback((reason = '') => {
+        const alreadyReady = environmentAssetReadyRef.current;
+        environmentAssetReadyRef.current = true;
+        const pendingCount = Array.isArray(pendingStoryboardKickoffsRef.current)
+            ? pendingStoryboardKickoffsRef.current.length
+            : 0;
+        if (!alreadyReady || pendingCount > 0) {
+            onLog?.(
+                t(
+                    `[镜头任务] 环境视觉资产已就绪${reason ? `（${reason}）` : ''}，待启动分镜 ${pendingCount} 场`,
+                    `[Storyboard] Environment visual assets ready${reason ? ` (${reason})` : ''}; ${pendingCount} scene(s) queued for shot generation`
+                ),
+                'info'
+            );
+        }
+        // Fire-and-forget flush; kickoff itself is async and gated.
+        void flushPendingStoryboardKickoffsRef.current?.(reason);
+    }, [onLog, t]);
+
     const kickoffStoryboardForImportedScene = useCallback(async ({
         markerSceneId,
         sceneOrder,
@@ -6078,6 +6245,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (storyboardKickoffByMarkerRef.current.has(stableMarker)) return true;
             const autoStart = await isStoryboardAutoStartEnabled();
             if (!autoStart) return false;
+            const envReady = await isEnvironmentAssetDesignReady();
+            if (!envReady) {
+                enqueuePendingStoryboardKickoff({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    importReport,
+                    dbSceneIdHint,
+                });
+                const waitingProgress = updateStoryboardTaskItem(stableMarker, {
+                    sceneOrder,
+                    status: 'waiting_env',
+                    error: '',
+                    dbSceneId: Number(dbSceneIdHint || priorItem?.dbSceneId || 0) || undefined,
+                });
+                setAnalysisFlowStatus((prev) => {
+                    const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+                    if (prevPhase === 'completed' || prevPhase === 'failed') return prev;
+                    return {
+                        phase: prevPhase === 'storyboard' ? prevPhase : (prevPhase || 'scene_beats'),
+                        message: t(
+                            '镜头任务等待环境视觉资产完成后再启动...',
+                            'Storyboard tasks waiting for environment visual assets...'
+                        ),
+                        highlightHint: t(
+                            `「${stableMarker}」已入库，等待环境视觉资产完成后启动分镜`,
+                            `"${stableMarker}" imported; waiting for environment visual assets before storyboard`
+                        ),
+                    };
+                });
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    storyboardTaskProgress: waitingProgress,
+                }));
+                onLog?.(
+                    t(
+                        `[镜头任务] ${stableMarker} 已入库，等待环境视觉资产完成后再启动分镜`,
+                        `[Storyboard] ${stableMarker} imported; waiting for environment visual assets before shot generation`
+                    ),
+                    'info'
+                );
+                return false;
+            }
         }
 
         let dbSceneId = Number(dbSceneIdHint || 0);
@@ -6219,13 +6428,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return true;
     }, [
         activeEpisode?.id,
+        enqueuePendingStoryboardKickoff,
         fetchScenes,
+        isEnvironmentAssetDesignReady,
         isStoryboardAutoStartEnabled,
         onLog,
         publishStoryboardTaskPanelStatus,
         t,
         updateStoryboardTaskItem,
     ]);
+
+    const flushPendingStoryboardKickoffs = useCallback(async (reason = '') => {
+        const queued = Array.isArray(pendingStoryboardKickoffsRef.current)
+            ? pendingStoryboardKickoffsRef.current.splice(0)
+            : [];
+        if (!queued.length) return { started: 0, total: 0, reason };
+        let started = 0;
+        for (const item of queued) {
+            const ok = await kickoffStoryboardForImportedScene({
+                ...item,
+                force: false,
+            });
+            if (ok) started += 1;
+        }
+        return { started, total: queued.length, reason };
+    }, [kickoffStoryboardForImportedScene]);
+
+    useEffect(() => {
+        flushPendingStoryboardKickoffsRef.current = flushPendingStoryboardKickoffs;
+    }, [flushPendingStoryboardKickoffs]);
 
     const ensureStoryboardTasksForImportedScenes = useCallback(async (importReport = null) => {
         const autoStart = await isStoryboardAutoStartEnabled();
@@ -6239,6 +6470,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const marker = String(markerSceneId || '').trim();
             if (!marker || seenMarkers.has(marker)) return;
             if (storyboardKickoffByMarkerRef.current.has(marker)) return;
+            // Already queued waiting for env — kickoff will refresh the queue entry.
             seenMarkers.add(marker);
             pending.push({ markerSceneId: marker, dbSceneIdHint, importReport });
         };
@@ -7365,15 +7597,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     useEffect(() => {
         let mounted = true;
         const loadAssets = async () => {
-            if (!projectId) {
+            if (!projectId || !activeEpisode?.id) {
                 if (mounted) setAvailableSubjectAssets([]);
                 return;
             }
             setIsLoadingSubjectAssets(true);
             try {
-                const entities = await fetchEntities(projectId);
+                // Asset injection / reuse UI must stay episode-scoped (never other episodes).
+                const entities = await fetchEntities(projectId, {
+                    episode_id: Number(activeEpisode.id),
+                });
                 if (!mounted) return;
-                setAvailableSubjectAssets(Array.isArray(entities) ? entities : []);
+                const episodeScoped = (Array.isArray(entities) ? entities : []).filter(
+                    (entity) => String(entity?.episode_id || '').trim() === String(activeEpisode.id)
+                );
+                setAvailableSubjectAssets(episodeScoped);
             } catch (e) {
                 console.error(e);
                 if (mounted) setAvailableSubjectAssets([]);
@@ -7383,7 +7621,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         loadAssets();
         return () => { mounted = false; };
-    }, [projectId, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
+    }, [projectId, activeEpisode?.id, analysisUiReport?.importReport, isAnalyzing, isRetryingPhase2]);
+
+    useEffect(() => {
+        // Drop selected reuse IDs that are not in the current episode asset list.
+        // Wait until the episode-scoped fetch settles to avoid clearing during load.
+        if (isLoadingSubjectAssets || !activeEpisode?.id) return;
+        const allowed = new Set((availableSubjectAssets || []).map((asset) => String(asset?.id)));
+        setSelectedReuseSubjectIds((prev) => {
+            const next = (prev || []).filter((id) => allowed.has(String(id)));
+            if (next.length === prev.length && next.every((value, index) => value === prev[index])) {
+                return prev;
+            }
+            return next;
+        });
+    }, [activeEpisode?.id, availableSubjectAssets, isLoadingSubjectAssets]);
 
     useEffect(() => {
         let mounted = true;
@@ -8322,6 +8574,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const storyboardKickoffByMarkerRef = useRef(new Set());
     const storyboardKickoffByDbIdRef = useRef(new Set());
     const storyboardKickoffPromisesRef = useRef(new Map());
+    /** Pending storyboard kickoffs waiting for environment visual assets. */
+    const pendingStoryboardKickoffsRef = useRef([]);
+    /** True once env asset design for this run/episode is ready (or gate skipped). */
+    const environmentAssetReadyRef = useRef(false);
     const stage3AutoStartCacheRef = useRef(null);
     const analysisStopRequestedRef = useRef(false);
     const activeAnalysisTaskIdsRef = useRef(new Set());
@@ -9013,9 +9269,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const selectedReuseSubjectAssets = useMemo(() => {
         if (!Array.isArray(availableSubjectAssets) || availableSubjectAssets.length === 0) return [];
+        const currentEpisodeId = String(activeEpisode?.id || '').trim();
         const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
         return availableSubjectAssets
-            .filter(asset => selected.has(String(asset.id)))
+            .filter((asset) => {
+                if (!selected.has(String(asset.id))) return false;
+                if (!currentEpisodeId) return false;
+                return String(asset?.episode_id || '').trim() === currentEpisodeId;
+            })
             .map(asset => ({
                 id: asset.id,
                 name: asset.name || '',
@@ -9023,7 +9284,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 description: asset.description || asset.narrative_description || '',
                 anchor_description: asset.anchor_description || '',
             }));
-    }, [availableSubjectAssets, selectedReuseSubjectIds]);
+    }, [activeEpisode?.id, availableSubjectAssets, selectedReuseSubjectIds]);
 
     const runStage2_2WithValidationRetry = useCallback(async ({
         label = 'Stage 2.2',
@@ -9250,7 +9511,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
             const singleSceneBody = [
-                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。输入剧本正文**仅含**该场 \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等说明块）；请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${unit.sceneId}\`，不得仅填场次序号或其他别名。`,
+                `【单场处理模式】本次仅处理 Scene ID \`${unit.sceneId}\`。输入剧本正文含该场 \`【场景名称】{短名}｜{日·内/外}\` 场景头 + \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等其它说明块）；请将 \`【场景名称】\` 后的 \`{短名}｜{日·内/外}\` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${unit.sceneId}\`，不得仅填场次序号或其他别名。`,
                 buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
             ].join('\n\n');
             const singleFinalInput = singleSceneBody;
@@ -9377,7 +9638,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const sceneLabel = `${label} [${sceneId}]`;
                     const singleSceneBlock = wrapSceneUnitAsScriptBlock(unit);
                     const singleSceneBody = [
-                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。输入剧本正文**仅含**该场 \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等说明块）；请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${sceneId}\`，不得仅填场次序号或其他别名。`,
+                        `【单场处理模式】本次仅处理 Scene ID \`${sceneId}\`。输入剧本正文含该场 \`【场景名称】{短名}｜{日·内/外}\` 场景头 + \`[BEAT_START:…]\`…\`[BEAT_END:…]\` Beat 块（不含 Scene 级【主环境】等其它说明块）；请将 \`【场景名称】\` 后的 \`{短名}｜{日·内/外}\` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。Scenes Table 的 Scene ID 列必须精确填写 \`${sceneId}\`，不得仅填场次序号或其他别名。`,
                         buildStage2_2UserInputFromStage1(stage1SourceText, singleSceneBlock),
                     ].join('\n\n');
                     let sceneAttempt = null;
@@ -9889,7 +10150,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (!targetFilters && promptFiles.length === 0) {
             onLog?.('[Stage 3 Asset Design] All Stage 3 auto-start switches are disabled; skipping automatic asset design.', 'info');
+            markEnvironmentAssetDesignReady('stage3-auto-start-all-off');
             return emptyReport;
+        }
+        if (!targetFilters && !promptFiles.some((p) => p.key === 'environments')) {
+            // Environment design not part of this run (auto-start off) — do not block storyboard.
+            markEnvironmentAssetDesignReady('env-auto-start-off');
         }
 
 
@@ -10155,6 +10421,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             highlightHint: assetImportReady ? buildAssetReadyHint(pData.key) : '',
                         });
 
+                        // Storyboard gate: release as soon as environment visual assets are ready.
+                        if (pData.key === 'environments' && assetImportReady) {
+                            markEnvironmentAssetDesignReady(`env-subtask-ok:${subtaskTraceId}`);
+                        }
+
                         return {
                             key: pData.key,
                             traceId: subtaskTraceId,
@@ -10339,6 +10610,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         onLog?.(`[Stage 3 Asset Design] Incomplete subtask result detected. Retry missing asset type(s): ${retryTypes || 'unknown'}.`, 'warning');
                     }
 
+                    const envSubtaskOk = subtaskReports.some((report) => (
+                        String(report?.key || '').trim() === 'environments'
+                        && String(report?.status || '').trim().toLowerCase() === 'ok'
+                    ));
+                    if (envSubtaskOk || hasPersistedEnvironmentAssetDesign()) {
+                        markEnvironmentAssetDesignReady(envSubtaskOk ? 'env-subtask-settled-ok' : 'env-design-persisted');
+                    }
+
                     return {
                         checkedSceneCount: importedSceneRows.length,
                         missingSceneCount: 0,
@@ -10379,7 +10658,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
-        hasSubjectIndexStructure,
+        hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,
@@ -12549,7 +12828,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             if (typeof onRefreshEpisodes === 'function') {
                 try {
-                    await onRefreshEpisodes();
+                    await onRefreshEpisodes({
+                        invalidateEpisodeIds: [Number(activeEpisode.id)],
+                    });
                 } catch (refreshErr) {
                     if (onLog) onLog(`AI Script Analysis restart episode refresh warning: ${refreshErr?.message || refreshErr}`, 'warning');
                 }
@@ -17217,7 +17498,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     (subjectIndexEntries || []).map((entry) => String(entry?.category || '').trim()).filter(Boolean)
                 );
 
-                const dbEntities = projectId ? await fetchEntities(projectId).catch(() => []) : [];
+                const dbEntities = (projectId && activeEpisode?.id)
+                    ? await fetchEntities(projectId, { episode_id: Number(activeEpisode.id) }).catch(() => [])
+                    : [];
                 const subtaskReports = Array.isArray(scenePostReport?.subtaskReports) ? scenePostReport.subtaskReports : [];
                 const hasEntityDesignPayload = hasPersistedEntityDesignPayload(activeEpisode?.ai_entity_design_result);
                 const stage3CompletedOk = Boolean(analysisUiReport?.stage3SubtasksOk)
@@ -18059,7 +18342,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         const storyboardFailedCount = Number(progress?.failed || 0);
                         const storyboardRunningCount = Number(progress?.running || 0);
                         const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted) || storyboardStartedCount > 0;
-                        const storyboardCanStart = Boolean(getStageOutputContent('stage2', 'scene_markdown'));
+                        const livePhase = analysisFlowStatus?.phase || 'idle';
+                        const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: isAnalyzing });
+                        const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: isAnalyzing });
+                        const hasScriptOptArtifact = !!getStageOutputContent('stage1', 'adapted_script');
+                        const hasSubjectIndexArtifact = !!getStageOutputContent('stage2', 'subject_index');
+                        const hasSceneMarkdownArtifact = !!getStageOutputContent('stage2', 'scene_markdown');
+                        const hasAssetDesignArtifact = !!getStageOutputContent('stage3', 'asset_design_json');
+                        const scriptOptReady = hasScriptOptArtifact && trustArtifact('script_opt');
+                        const subjectIndexReady = hasSubjectIndexArtifact && trustArtifact('extract_assets');
+                        const sceneMarkdownReady = hasSceneMarkdownArtifact && trustArtifact('scene_beats');
+                        const assetDesignReady = hasAssetDesignArtifact && trustArtifact('assets_gen');
+                        const scriptOptActive = stepActive('script_opt');
+                        const subjectIndexActive = stepActive('extract_assets');
+                        const sceneMarkdownActive = stepActive('scene_beats');
+                        const assetDesignActive = stepActive('assets_gen');
+                        const showAssetFailure = workflowCompletenessStats.hasFailedSubtask && (
+                            !isAnalyzing || assetDesignReady
+                        );
+                        const storyboardCanStart = Boolean(sceneMarkdownReady || hasSceneMarkdownArtifact);
                         const storyboardInFlight = storyboardRunningCount > 0
                             || (storyboardStartedCount > (storyboardCompletedCount + storyboardFailedCount));
                         const storyboardSettled = storyboardAutoStarted
@@ -18093,17 +18394,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     : t('导入', 'Import')}
                             </button>
                         );
+                        const renderProcessingLabel = () => (
+                            <span className="text-[10px] text-purple-300 flex items-center gap-1">
+                                <Loader2 className="w-3 h-3 animate-spin"/>
+                                {t('处理中', 'Processing')}
+                            </span>
+                        );
                         return (
                     <div className="flex-1 w-full flex items-center justify-between relative max-w-4xl px-4 mt-2 md:mt-0">
                         <div className="absolute top-4 left-10 right-10 h-0.5 bg-white/10 -z-10"></div>
                         
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage1', 'adapted_script') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm'}`}>
-                                {!!getStageOutputContent('stage1', 'adapted_script') ? <Check className="w-4 h-4" /> : 1}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${scriptOptReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (scriptOptActive ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {scriptOptReady ? <Check className="w-4 h-4" /> : (scriptOptActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 1)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('剧本优化', 'Script Opt')}</span>
-                                {!!getStageOutputContent('stage1', 'adapted_script') ? (
+                                {scriptOptReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('script_opt', canImportScriptOpt)}
@@ -18117,14 +18424,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        <span className={`text-[10px] ${isAnalyzing ? 'text-purple-300' : 'text-white/30'}`}>
-                                            {isAnalyzing ? (
-                                                <span className="flex items-center gap-1">
-                                                    <Loader2 className="w-3 h-3 animate-spin"/>
-                                                    {t('处理中', 'Processing')}
-                                                </span>
-                                            ) : t('等待中', 'Pending')}
-                                        </span>
+                                        {scriptOptActive ? renderProcessingLabel() : (
+                                            <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
+                                        )}
                                         {renderImportButton('script_opt', canImportScriptOpt)}
                                     </div>
                                 )}
@@ -18132,12 +18434,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'subject_index') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage1', 'adapted_script') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {!!getStageOutputContent('stage2', 'subject_index') ? <Check className="w-4 h-4" /> : 2}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${subjectIndexReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((subjectIndexActive || scriptOptReady) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {subjectIndexReady ? <Check className="w-4 h-4" /> : (subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 2)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('清单整理', 'List Preparation')}</span>
-                                {!!getStageOutputContent('stage2', 'subject_index') ? (
+                                {subjectIndexReady ? (
                                      <div className="flex items-center gap-1 flex-wrap justify-center">
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                          {renderImportButton('subject_index', canImportSubjectIndex)}
@@ -18154,14 +18456,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                      </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {!!getStageOutputContent('stage1', 'adapted_script') ? (
+                                        {subjectIndexActive ? renderProcessingLabel() : (scriptOptReady ? (
                                             <button onClick={handleRestartStage2} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                 {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                        )}
+                                        ))}
                                         {renderImportButton('subject_index', canImportSubjectIndex)}
                                     </div>
                                 )}
@@ -18169,12 +18471,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         </div>
 
                         <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${!!getStageOutputContent('stage2', 'scene_markdown') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (!!getStageOutputContent('stage2', 'subject_index') ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
-                                {!!getStageOutputContent('stage2', 'scene_markdown') ? <Check className="w-4 h-4" /> : 3}
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${sceneMarkdownReady ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : ((sceneMarkdownActive || subjectIndexReady) ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')}`}>
+                                {sceneMarkdownReady ? <Check className="w-4 h-4" /> : (sceneMarkdownActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 3)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('场景拆解', 'Scene Breakdown')}</span>
-                                {!!getStageOutputContent('stage2', 'scene_markdown') ? (
+                                {sceneMarkdownReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('scene_beats', canImportSceneBeats)}
@@ -18184,14 +18486,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {!!getStageOutputContent('stage2', 'subject_index') ? (
+                                        {sceneMarkdownActive ? renderProcessingLabel() : (subjectIndexReady ? (
                                             <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                 {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
-                                        )}
+                                        ))}
                                         {renderImportButton('scene_beats', canImportSceneBeats)}
                                     </div>
                                 )}
@@ -18275,15 +18577,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                workflowCompletenessStats.hasFailedSubtask
+                                showAssetFailure
                                     ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                    : !!getStageOutputContent('stage3', 'asset_design_json') ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]' : (hasAssetGenerationPrerequisite ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]' : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                                    : assetDesignReady
+                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                        : (assetDesignActive || subjectIndexReady || hasAssetGenerationPrerequisite
+                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
                             }`}>
-                                {workflowCompletenessStats.hasFailedSubtask ? <X className="w-4 h-4" /> : (!!getStageOutputContent('stage3', 'asset_design_json') ? <Check className="w-4 h-4" /> : 5)}
+                                {showAssetFailure
+                                    ? <X className="w-4 h-4" />
+                                    : (assetDesignReady
+                                        ? <Check className="w-4 h-4" />
+                                        : (assetDesignActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 5))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
                                 <span className="text-xs font-semibold">{t('视觉资产', 'Visual Assets')}</span>
-                                {workflowCompletenessStats.hasFailedSubtask ? (
+                                {showAssetFailure ? (
                                     <div
                                         className="flex flex-col items-center gap-0.5"
                                         title={workflowCompletenessStats.failedCategories.map((row) => `${t(row.labelZh, row.labelEn)}: ${row.errorMessage || t('生成失败', 'Generation failed')}`).join('\n')}
@@ -18299,7 +18609,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             </button>
                                         </div>
                                     </div>
-                                ) : !!getStageOutputContent('stage3', 'asset_design_json') ? (
+                                ) : assetDesignReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('assets', canImportAssets)}
@@ -18310,14 +18620,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
-                                        {hasAssetGenerationPrerequisite ? (
+                                        {assetDesignActive ? renderProcessingLabel() : ((subjectIndexReady || hasAssetGenerationPrerequisite) ? (
                                              <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
                                                 {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
                                                 {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待清单整理完成', 'Wait list preparation')}</span>
-                                        )}
+                                        ))}
                                         {renderImportButton('assets', canImportAssets)}
                                     </div>
                                 )}
@@ -18328,7 +18638,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     })()}
                 </div>
 
-                {workflowCompletenessStats.hasAnyData && (
+                {workflowCompletenessStats.hasAnyData
+                    && (
+                        !isAnalyzing
+                        || (
+                            !!getStageOutputContent('stage3', 'asset_design_json')
+                            && canTrustStageArtifactDuringLiveRun(analysisFlowStatus?.phase, 'assets_gen', { isLive: true })
+                        )
+                    )
+                    && (
                     <div className="mt-3 pt-3 border-t border-white/10 text-[11px] text-white/70 leading-relaxed">
                         <span className="text-white/55 font-semibold mr-2">
                             {t('完整性', 'Completeness')}:
@@ -18348,7 +18666,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </div>
                 )}
 
-                {workflowCompletenessStats.failedCategories.length > 0 && (
+                {workflowCompletenessStats.failedCategories.length > 0
+                    && (
+                        !isAnalyzing
+                        || (
+                            !!getStageOutputContent('stage3', 'asset_design_json')
+                            && canTrustStageArtifactDuringLiveRun(analysisFlowStatus?.phase, 'assets_gen', { isLive: true })
+                        )
+                    )
+                    && (
                     <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs text-red-100 space-y-1.5">
                         <div className="flex items-center gap-2 font-semibold">
                             <X className="w-3.5 h-3.5" />
@@ -18450,9 +18776,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             { key: 'assets_gen', label: t('视觉资产', 'Visual Assets') },
                             { key: 'completed', label: t('AI 总结报告', 'Report') },
                         ].map((step, idx) => {
-                            const stepOrder = ['script_opt', 'extract_assets', 'scene_beats', 'storyboard', 'assets_gen', 'completed'];
+                            const stepOrder = ANALYSIS_LIVE_STEP_ORDER;
                             const phase = analysisFlowStatus.phase || 'idle';
-                            const currentIndex = stepOrder.indexOf(phase);
+                            const normalizedPhase = normalizeAnalysisLivePhase(phase);
+                            const currentIndex = stepOrder.indexOf(normalizedPhase);
                             const stepIndex = stepOrder.indexOf(step.key);
                             const hasFinalReport = !!(analysisUiReport && analysisUiReport.status !== 'running');
                             const isTerminalWarning = phase === 'warning';
@@ -18467,22 +18794,31 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 if (key === 'completed') return hasFinalReport && !storyboardInFlight;
                                 return false;
                             };
+                            const trustedArtifact = (key) => (
+                                hasArtifact(key)
+                                && canTrustStageArtifactDuringLiveRun(phase, key, { isLive: isAnalyzing })
+                            );
                             
                             let isDone = !isTerminalFailed && (
                                 isTerminalWarning
                                     ? stepIndex <= 2
-                                    : ((currentIndex > stepIndex) || phase === 'completed' || hasArtifact(step.key))
+                                    : ((currentIndex > stepIndex) || phase === 'completed' || trustedArtifact(step.key))
                             );
-                            let isActive = !isTerminalFailed && !isTerminalWarning && currentIndex === stepIndex;
+                            let isActive = !isTerminalFailed && !isTerminalWarning && (
+                                currentIndex === stepIndex
+                                || isAnalysisLiveStepActive(phase, step.key, { isLive: isAnalyzing })
+                            );
                             if (step.key === 'storyboard') {
                                 isActive = !isTerminalFailed && (storyboardInFlight || phase === 'storyboard');
                                 isDone = !isTerminalFailed && storyboardSettled;
                             } else if (step.key === 'completed') {
                                 isActive = !isTerminalFailed && !storyboardInFlight && phase === 'completed';
                                 isDone = !isTerminalFailed && hasFinalReport && !storyboardInFlight;
-                            } else if (hasFinalReport && stepIndex < 3) {
+                            } else if (hasFinalReport && !isAnalyzing && stepIndex < 3) {
                                 isDone = !isTerminalFailed;
                             }
+                            // Concurrent fan-out can mark a step both active and done; prefer done.
+                            if (isDone && step.key !== 'storyboard') isActive = false;
                             const isFailed = (isTerminalFailed && step.key === 'analyzing')
                                 || (step.key === 'storyboard' && storyboardSettled && storyboardFailedCount > 0 && storyboardCompletedCount <= 0);
                             return (
@@ -18525,16 +18861,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
                                                     : status === 'failed'
                                                         ? 'border-red-400/40 bg-red-500/15 text-red-100'
-                                                        : 'border-purple-400/40 bg-purple-500/15 text-purple-100';
+                                                        : status === 'waiting_env'
+                                                            ? 'border-amber-400/40 bg-amber-500/15 text-amber-100'
+                                                            : 'border-purple-400/40 bg-purple-500/15 text-purple-100';
                                                 const statusLabel = status === 'completed'
                                                     ? t('完成', 'Done')
                                                     : status === 'failed'
                                                         ? t('失败', 'Fail')
-                                                        : status === 'importing'
-                                                            ? t('写入', 'Apply')
-                                                            : status === 'generating'
-                                                                ? t('生成', 'Gen')
-                                                                : t('启动', 'Start');
+                                                        : status === 'waiting_env'
+                                                            ? t('等环境', 'Wait ENV')
+                                                            : status === 'importing'
+                                                                ? t('写入', 'Apply')
+                                                                : status === 'generating'
+                                                                    ? t('生成', 'Gen')
+                                                                    : t('启动', 'Start');
                                                 return (
                                                     <span
                                                         key={label}

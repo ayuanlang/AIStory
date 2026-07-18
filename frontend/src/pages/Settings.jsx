@@ -1760,7 +1760,7 @@ const Settings = () => {
                             {isSavingScriptAnalysisFlow && <span className="text-[11px] text-muted-foreground">{t('保存中...', 'Saving...')}</span>}
                         </div>
                         {[
-                            { key: 'storyboard_generation', zh: '自动启动逐场景分镜生成', en: 'Auto-start Per-scene Storyboard Generation' },
+                            { key: 'storyboard_generation', zh: '自动启动逐场景分镜生成（需环境视觉资产完成）', en: 'Auto-start Per-scene Storyboard (requires env visual assets)' },
                             { key: 'asset_design_character', zh: '自动启动角色资产实现', en: 'Auto-start Character Asset Design' },
                             { key: 'asset_design_prop', zh: '自动启动道具资产实现', en: 'Auto-start Prop Asset Design' },
                             { key: 'asset_design_environment', zh: '自动启动场景/海报资产实现', en: 'Auto-start Environment/Poster Asset Design' },

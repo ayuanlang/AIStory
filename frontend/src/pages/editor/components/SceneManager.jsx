@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { parseScenesFromMarkdownTable } from '../../../lib/sceneTableParser';
@@ -70,7 +70,6 @@ import {
     fetchAssets, 
     generateSceneShots,
     regenerateSceneShots,
-    fetchSceneShotsPrompt,
     createAsset,
     uploadAsset,
     getSettings,
@@ -82,8 +81,6 @@ import {
     analyzeScene,
     waitForAsyncTask,
     stopAsyncTask,
-    fetchPrompt,
-    fetchMe,
     fetchShot,
     analyzeEntityImage,
     applySceneAIResult,
@@ -1133,17 +1130,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const [selectedSceneKeys, setSelectedSceneKeys] = useState([]);
     const [entities, setEntities] = useState([]);
     const [sceneSubjectSupplementingMap, setSceneSubjectSupplementingMap] = useState({});
-    const [isSuperuser, setIsSuperuser] = useState(false);
     const [editingScene, setEditingScene] = useState(null);
     const [previewCoreInfo, setPreviewCoreInfo] = useState(true);
     const [sceneRegenRequirements, setSceneRegenRequirements] = useState('');
     const [sceneRegenEntityOnlyMode, setSceneRegenEntityOnlyMode] = useState(true);
     const [sceneRegenerating, setSceneRegenerating] = useState(false);
-    const [sceneRegenPromptModal, setSceneRegenPromptModal] = useState({
-        open: false,
-        loading: false,
-        data: null,
-    });
     const [sceneRegenProgress, setSceneRegenProgress] = useState({
         phase: 'idle',
         percent: 0,
@@ -1153,7 +1144,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const [sceneRegenSubjectsReport, setSceneRegenSubjectsReport] = useState(null);
     const [sceneRegenReimporting, setSceneRegenReimporting] = useState(false);
     const [sceneRegenScenePatching, setSceneRegenScenePatching] = useState(false);
-    const [shotPromptModal, setShotPromptModal] = useState({ open: false, sceneId: null, data: null, loading: false });
     const [shotRegenModal, setShotRegenModal] = useState({
         open: false,
         sceneId: null,
@@ -1165,7 +1155,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const [shotSupplementImportReport, setShotSupplementImportReport] = useState(null);
     const [aiShotsFlowStatus, setAiShotsFlowStatus] = useState({ phase: 'idle', message: '', sceneId: null });
     const aiShotsBusySceneIdsRef = useRef(new Set());
-    const aiShotsPromptPreviewSceneIdsRef = useRef(new Set());
     const [batchAiShotsProgress, setBatchAiShotsProgress] = useState(() => createBatchAiShotsProgressState());
     const [isSceneBatchProgressDismissed, setIsSceneBatchProgressDismissed] = useState(false);
     const [isStoppingBatchAiShots, setIsStoppingBatchAiShots] = useState(false);
@@ -2094,14 +2083,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         setAiShotsStaging(prev => ({ ...prev, content: currentRows }));
         setAiShotRowEditor({ open: false, index: -1, data: null });
     };
-
-    useEffect(() => {
-        fetchMe().then((user) => {
-            setIsSuperuser(!!user?.is_superuser);
-        }).catch(() => {
-            setIsSuperuser(false);
-        });
-    }, []);
 
     const parseScenesFromText = parseScenesFromEpisodeText;
 
@@ -3116,16 +3097,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
     const isSceneAiShotsBusy = useCallback((sceneId) => {
         const stableSceneId = Number(sceneId || 0);
         if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return false;
-        return isSceneAiShotsGenerating(stableSceneId)
-            || aiShotsPromptPreviewSceneIdsRef.current.has(stableSceneId);
+        return isSceneAiShotsGenerating(stableSceneId);
     }, [isSceneAiShotsGenerating]);
-    const closeSceneShotPromptModal = useCallback((sceneIdOverride = null) => {
-        const stableSceneId = Number(sceneIdOverride || shotPromptModal?.sceneId || 0);
-        if (Number.isFinite(stableSceneId) && stableSceneId > 0) {
-            aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
-        }
-        setShotPromptModal({ open: false, sceneId: null, data: null, loading: false });
-    }, [shotPromptModal?.sceneId]);
 
     const resumeAiShotsFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId || !marker?.sceneId) return;
@@ -3186,12 +3159,11 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         resumeAiShotsFromTaskMarker(marker);
     }, [activeEpisode?.id, aiShotsFlowStatus.phase, loadAiShotsTaskMarker, resumeAiShotsFromTaskMarker]);
 
-    const executeGenerateShots = async ({ sceneId, promptData }) => {
+    const executeGenerateShots = async ({ sceneId }) => {
         const stableSceneId = Number(sceneId || 0);
         if (!Number.isFinite(stableSceneId) || stableSceneId <= 0) return;
         if (isSceneAiShotsGenerating(stableSceneId)) return;
 
-        aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
         aiShotsBusySceneIdsRef.current.add(stableSceneId);
         armAiShotsAutoSwitchTicket(activeEpisode?.id, sceneId);
         setAiShotsFlowStatus({
@@ -3205,8 +3177,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             const startedAt = Date.now();
             const result = await generateSceneShots(sceneId, {
                 function_name: 'script_analysis',
-                user_prompt: promptData?.user_prompt,
-                system_prompt: promptData?.system_prompt,
             }, {
                 onTaskCreated: (taskId) => {
                     saveAiShotsTaskMarker(activeEpisode?.id, {
@@ -3228,9 +3198,38 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 message: t(`AI Shots 失败：${e.message}`, `AI Shots failed: ${e.message}`),
             });
             alert("Failed to generate shots: " + e.message);
-            setShotPromptModal(prev => ({ ...prev, loading: false }));
         } finally {
             aiShotsBusySceneIdsRef.current.delete(stableSceneId);
+        }
+    };
+
+    const ensureSceneHasNoExistingShots = async (sceneId) => {
+        try {
+            const existing = await fetchShots(sceneId);
+            const count = Array.isArray(existing) ? existing.length : 0;
+            if (count <= 0) return true;
+
+            await confirmUiMessage(
+                t(
+                    `本场景已存在 ${count} 条分镜，无法重复生成。如需重做，请先删除现有分镜。`,
+                    `This scene already has ${count} shot(s). Generation skipped. Delete existing shots first if you need to regenerate.`
+                ),
+                {
+                    title: t('已有分镜', 'Shots Already Exist'),
+                    confirmText: t('知道了', 'OK'),
+                    cancelText: t('关闭', 'Close'),
+                }
+            );
+            onLog?.(
+                t(`场景 ${sceneId} 已有分镜（${count}），跳过生成。`, `Scene ${sceneId} already has ${count} shot(s); generation skipped.`),
+                'warning'
+            );
+            return false;
+        } catch (e) {
+            const detail = e?.message || String(e);
+            onLog?.(`SceneManager: Failed to check existing shots - ${detail}`, 'error');
+            alert(t(`检查现有分镜失败：${detail}`, `Failed to check existing shots: ${detail}`));
+            return false;
         }
     };
 
@@ -3245,24 +3244,8 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
             return;
         }
 
-        if (isSuperuser) {
-            aiShotsPromptPreviewSceneIdsRef.current.add(Number(sceneId));
-            setShotPromptModal({ open: true, sceneId: sceneId, data: null, loading: true });
-            try {
-                const data = await fetchSceneShotsPrompt(sceneId);
-                setShotPromptModal({ open: true, sceneId: sceneId, data: data, loading: false });
-            } catch (e) {
-                onLog?.(`SceneManager: Failed to fetch prompt preview - ${e.message}`, 'error');
-                setAiShotsFlowStatus({
-                    phase: 'failed',
-                    sceneId,
-                    message: t(`AI Shots 预览加载失败：${e.message}`, `Failed to load AI Shots preview: ${e.message}`),
-                });
-                closeSceneShotPromptModal(sceneId);
-                alert(t(`AI Shots 预览加载失败：${e.message}`, `Failed to load AI Shots preview: ${e.message}`));
-            }
-            return;
-        }
+        const canGenerate = await ensureSceneHasNoExistingShots(sceneId);
+        if (!canGenerate) return;
 
         try {
             setAiShotsFlowStatus({
@@ -3270,8 +3253,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 sceneId,
                 message: t('正在准备 AI Shots 请求...', 'Preparing AI Shots request...'),
             });
-            onLog?.('SceneManager: Non-superuser mode: skip prompt preview and run main AI Shots flow directly.', 'info');
-            await executeGenerateShots({ sceneId, promptData: null });
+            await executeGenerateShots({ sceneId });
         } catch (e) {
             onLog?.(`SceneManager: Failed to start AI shots main flow - ${e.message}`, 'error');
             setAiShotsFlowStatus({
@@ -3306,8 +3288,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         } finally {
             clearAiShotsTaskMarker(activeEpisode?.id, stableSceneId);
             aiShotsBusySceneIdsRef.current.delete(stableSceneId);
-            aiShotsPromptPreviewSceneIdsRef.current.delete(stableSceneId);
-            closeSceneShotPromptModal(stableSceneId);
             setAiShotsFlowStatus({ phase: '', sceneId: null, message: '' });
             onLog?.(t(`已停止场景 ${stableSceneId} 的 AI 镜头任务。`, `Stopped AI Shots task for scene ${stableSceneId}.`), 'warning');
         }
@@ -3347,144 +3327,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
         }
     };
 
-    const buildSceneRegenUserPromptPreview = (sceneRow, requirements) => {
-        const scene = sceneRow || {};
-        const reqText = String(requirements || '').trim() || defaultSceneRegenRequirement;
-        const projectInfo = (project?.global_info && typeof project.global_info === 'object')
-            ? project.global_info
-            : {};
-
-const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.period || projectInfo?.time_setting;
-        const regionKey = projectInfo?.region_culture || projectInfo?.region || projectInfo?.country || projectInfo?.country_region;
-        const shotKey = projectInfo?.shot_preference || projectInfo?.lens_preference || projectInfo?.camera_preference;
-        const safetyKey = projectInfo?.broadcast_security_level || projectInfo?.broadcast_safety_level || projectInfo?.safety_level || projectInfo?.broadcast_safety;
-
-        const projectContextLines = [
-            `Project Title: ${project?.title || ''}`,
-            `Episode Title: ${activeEpisode?.title || ''}`,
-            projectInfo?.script_title ? `Script Title: ${projectInfo.script_title}` : '',
-            projectInfo?.expected_duration ? `Expected Duration: ${projectInfo.expected_duration}s` : '',
-            projectInfo?.series_episode ? `Series Episode: ${projectInfo.series_episode}` : '',
-            projectInfo?.type ? `Type: ${projectInfo.type}` : '',
-            projectInfo?.base_positioning ? `Base Positioning: ${projectInfo.base_positioning}` : '',
-            projectInfo?.language ? `Language: ${projectInfo.language}` : '',   
-            projectInfo?.Global_Style ? `Global Style: ${projectInfo.Global_Style}` : '',
-            projectInfo?.tone ? `Tone: ${projectInfo.tone}` : '',
-            projectInfo?.lighting ? `Lighting: ${projectInfo.lighting}` : '',
-            eraKey ? `Era / Period (年代): ${eraKey}` : '',
-            regionKey ? `Region / Country (国家地域): ${regionKey}` : '',
-            shotKey ? `Shot / Lens Preference (镜头偏好): ${shotKey}` : '',
-            safetyKey ? `Broadcast Security Level (播出安全等级): ${safetyKey}` : '',
-            Array.isArray(projectInfo?.borrowed_films) && projectInfo.borrowed_films.length > 0
-                ? `Borrowed Films: ${projectInfo.borrowed_films.join(', ')}`
-                : '',
-        ].filter(Boolean);
-
-        const bucket = {
-            character: [],
-            environment: [],
-            prop: [],
-        };
-        const seen = new Set();
-        (Array.isArray(entities) ? entities : []).forEach((entity) => {
-            const type = normalizeSubjectType(entity?.type || entity?.subject_type || entity?.entity_type, 'character');
-            if (!bucket[type]) return;
-            const names = [entity?.name, entity?.name_en]
-                .map((v) => String(v || '').trim())
-                .filter(Boolean);
-            names.forEach((name) => {
-                const key = `${type}:${normalizeSubjectKey(name)}`;
-                if (seen.has(key)) return;
-                seen.add(key);
-                bucket[type].push(name);
-            });
-        });
-
-        const formatLine = (typeKey, label) => {
-            const list = bucket[typeKey] || [];
-            if (list.length === 0) return `${label}: (none)`;
-            const shown = list.slice(0, 80);
-            const suffix = list.length > shown.length ? ` ... (+${list.length - shown.length} more)` : '';
-            return `${label} (${list.length}): ${shown.join(', ')}${suffix}`;
-        };
-
-        const existingEntityBlock = [
-            'Existing Entity Inventory By Category (project baseline dependencies; reusable as-is; DO NOT rewrite/rename/redefine):',
-            formatLine('character', 'characters'),
-            formatLine('prop', 'props'),
-            formatLine('environment', 'environments'),
-            'Constraint: Existing entities are immutable references for this regeneration. You may depend on them, but must not overwrite or regenerate them.',
-        ].join('\n');
-
-        return [
-            '[Project Context]',
-            ...projectContextLines,
-            `Source Scene Database ID: ${scene?.id || ''}`,
-            '',
-            '[Current Scene]',
-            `Scene No: ${scene?.scene_no || ''}`,
-            `Scene Name: ${scene?.scene_name || ''}`,
-            `Equivalent Duration: ${scene?.equivalent_duration || ''}`,
-            `Core Scene Info: ${scene?.core_scene_info || ''}`,
-            `Original Script Text: ${scene?.original_script_text || ''}`,
-            `Environment Name: ${scene?.environment_name || ''}`,
-            `Linked Characters: ${scene?.linked_characters || ''}`,
-            `Key Props: ${scene?.key_props || ''}`,
-            '',
-            '[Original Script Grounding]',
-            `${scene?.original_script_text || ''}`,
-            '',
-            '[System-level Subjects Inventory]',
-            existingEntityBlock,
-            '',
-            '[User Supplement Requirements]',
-            reqText,
-            '',
-            '[Grounding Reminder]',
-            'Use Original Script Grounding to verify whether the current scene is missing characters or has major core scene info / visual-guidance omissions or obvious errors. Minor wording differences that do not affect plot or staging may be ignored. If material omissions or obvious errors exist, repair the scene markdown row patch and keep SUBJECTS_JSON consistent with the repaired row.',
-        ].join('\n');
-    };
-
-    const openSceneRegenPromptModal = async (sceneRow, requirements) => {
-        setSceneRegenPromptModal({ open: true, loading: true, data: null });
-        try {
-            const res = await fetchPrompt('scene_regenerate.txt');
-            const sysPrompt = String(res?.content || '').trim();
-            const userPreview = buildSceneRegenUserPromptPreview(sceneRow, requirements);
-            setSceneRegenPromptModal({
-                open: true,
-                loading: false,
-                data: {
-                    system_prompt: sysPrompt,
-                    user_prompt_preview: userPreview,
-                },
-            });
-        } catch (e) {
-            setSceneRegenPromptModal({ open: false, loading: false, data: null });
-            const status = Number(e?.status || 0);
-            const detail = String(e?.message || e || '').trim() || 'Unknown error';
-            console.error('[SceneManager] Failed to load regeneration prompt', {
-                filename: 'scene_regenerate.txt',
-                status: status || null,
-                detail,
-                debug: e?.debug || null,
-                error: e,
-            });
-            onLog?.(
-                `SceneManager: Failed to load regeneration prompt 'scene_regenerate.txt'${status ? ` (HTTP ${status})` : ''} - ${detail}`,
-                'error'
-            );
-            const alertDetail = detail.length > 600 ? `${detail.slice(0, 600)}...` : detail;
-            alert(
-                t(
-                    `加载补充实体提示词失败：${alertDetail}`,
-                    `Failed to load entity supplement prompt: ${alertDetail}`,
-                )
-            );
-        }
-    };
-
-    const handleRegenerateScene = async (superuserPromptData = null, targetSceneParam = null) => {
+    const handleRegenerateScene = async (targetSceneParam = null) => {
         const sceneToProcess = targetSceneParam || editingScene;
         if (!sceneToProcess?.id) {
             alert(t('请先保存当前场景。', 'Please save current scene first.'));
@@ -3492,11 +3335,6 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
         }
 
         const requirements = String(sceneRegenRequirements || '').trim() || defaultSceneRegenRequirement;
-
-        if (isSuperuser && !superuserPromptData) {
-            await openSceneRegenPromptModal(sceneToProcess, requirements);
-            return;
-        }
 
         const label = sceneToProcess.scene_no || sceneToProcess.scene_name || `#${sceneToProcess.id}`;
         const confirmed = await confirmUiMessage(
@@ -3569,7 +3407,6 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
             });
             const result = await regenerateScene(oldSceneId, {
                 user_requirements: requirements,
-                system_prompt: String(superuserPromptData?.system_prompt || '').trim() || undefined,
                 entity_only_mode: !!sceneRegenEntityOnlyMode,
             });
 
@@ -4109,18 +3946,6 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
         }
         setPendingShotSupplementSceneId(null);
     }, [pendingShotSupplementSceneId, editingScene?.id, aiShotsStaging.loading, aiShotsStaging.content]);
-
-        const handleConfirmGenerateShots = async () => {
-            const { sceneId, data } = shotPromptModal;
-            if (!sceneId || isSceneAiShotsGenerating(sceneId)) return;
-            if (!await confirmUiMessage("This will overwrite existing shots for this scene. Continue?")) {
-               setShotPromptModal(prev => ({ ...prev, loading: false }));
-               return;
-            }
-
-         setShotPromptModal(prev => ({ ...prev, loading: true }));
-         await executeGenerateShots({ sceneId, promptData: data });
-    };
 
     const batchAiShotsCurrentOrdinal = (() => {
         const total = Number(batchAiShotsProgress?.total || 0);
@@ -5025,78 +4850,6 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                 )}
             </AnimatePresence>
             
-            {shotPromptModal.open && (
-                <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                            <h3 className="font-bold flex items-center gap-2"><Wand2 size={16} className="text-primary"/> Generate AI Shots</h3>
-                            <button onClick={closeSceneShotPromptModal}><X size={18}/></button>
-                        </div>
-                        
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                            {shotPromptModal.loading && !shotPromptModal.data ? (
-                                <div className="flex items-center justify-center h-40"><Loader2 className="animate-spin text-primary" size={32}/></div>
-                            ) : (
-                                <>
-                                    <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200 flex items-start gap-2">
-                                        <Info size={14} className="shrink-0 mt-0.5" />
-                                        Review and edit the prompt before generation. Only the User Prompt (scenario context) is typically edited.
-                                    </div>
-
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词（场景内容）', 'User Prompt (Scenario content)')}</label>
-                                        <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-sm text-white/90 font-mono h-64 focus:outline-none focus:border-primary/50 resize-y"
-                                            value={shotPromptModal.data?.user_prompt || ''}
-                                            onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, user_prompt: e.target.value}}))}
-                                        />
-                                    </div>
-                                    
-                                     <div className="flex flex-col gap-2">
-                                         <div className="flex items-center justify-between">
-                                              <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（指令）', 'System Prompt (Instructions)')}</label>
-                                              <span className="text-xs text-muted-foreground px-2 py-1 bg-white/5 rounded">{t('默认/模板', 'Default/Template')}</span>
-                                         </div>
-                                        <textarea 
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-32 focus:outline-none focus:border-primary/50 resize-y"
-                                            value={shotPromptModal.data?.system_prompt || ''}
-                                            onChange={e => setShotPromptModal(prev => ({...prev, data: {...prev.data, system_prompt: e.target.value}}))}
-                                        />
-                                    </div>
-                                </>
-                            )}
-                        </div>
-                        
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
-                            <button 
-                                onClick={() => {
-                                    const full = (shotPromptModal.data?.system_prompt || '') + "\n\n" + (shotPromptModal.data?.user_prompt || '');
-                                    navigator.clipboard.writeText(full);
-                                    onLog?.(t('完整提示词已复制到剪贴板', 'Full prompt copied to clipboard'), "success");
-                                }}
-                                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium flex items-center gap-2 mr-auto"
-                            >
-                                <Copy size={16}/> {t('复制完整提示词', 'Copy Full Prompt')}
-                            </button>
-                            <button 
-                                onClick={closeSceneShotPromptModal}
-                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
-                            >
-                                {t('取消', 'Cancel')}
-                            </button>
-                            <button 
-                                onClick={handleConfirmGenerateShots}
-                                disabled={shotPromptModal.loading}
-                                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-2"
-                            >
-                                {shotPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Wand2 size={16}/>}
-                                {shotPromptModal.loading ? t('生成中...', 'Generating...') : t('生成镜头', 'Generate Shots')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {shotRegenModal.open && (
                 <div className="fixed inset-0 z-[52] bg-black/80 flex items-center justify-center p-4">
                     <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl">
@@ -5154,88 +4907,6 @@ const eraKey = projectInfo?.era || projectInfo?.era_setting || projectInfo?.peri
                             >
                                 {shotRegenModal.submitting ? <Loader2 className="animate-spin" size={16} /> : <Sparkles size={16} />}
                                 {shotRegenModal.submitting ? t('生成并导入中...', 'Generating and Importing...') : t('生成并自动导入', 'Generate and Auto-Import')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {sceneRegenPromptModal.open && (
-                <div className="fixed inset-0 z-[55] bg-black/80 flex items-center justify-center p-4">
-                    <div className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-                        <div className="p-4 border-b border-white/10 flex justify-between items-center">
-                            <h3 className="font-bold flex items-center gap-2"><Sparkles size={16} className="text-amber-300"/> {t('确认补充实体提示词', 'Confirm Entity Supplement Prompt')}</h3>
-                            <button onClick={() => setSceneRegenPromptModal({ open: false, loading: false, data: null })}><X size={18}/></button>
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                            {sceneRegenPromptModal.loading && !sceneRegenPromptModal.data ? (
-                                <div className="flex items-center justify-center h-40"><Loader2 className="animate-spin text-amber-300" size={32}/></div>
-                            ) : (
-                                <>
-                                    <div className="bg-amber-500/10 border border-amber-500/20 rounded p-3 text-xs text-amber-100 flex items-start gap-2">
-                                        <Info size={14} className="shrink-0 mt-0.5" />
-                                        {t('超级用户模式：请确认提示词后再提交重生成。', 'Superuser mode: confirm prompt before submitting regeneration.')}
-                                    </div>
-
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('用户提示词预览（只读）', 'User Prompt Preview (Read-only)')}</label>
-                                        <textarea
-                                            readOnly
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-white/80 font-mono h-56 focus:outline-none resize-y"
-                                            value={sceneRegenPromptModal.data?.user_prompt_preview || ''}
-                                        />
-                                    </div>
-
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-xs font-bold text-muted-foreground uppercase">{t('系统提示词（可编辑）', 'System Prompt (Editable)')}</label>
-                                        <textarea
-                                            className="bg-black/30 border border-white/10 rounded-md p-3 text-xs text-muted-foreground font-mono h-48 focus:outline-none focus:border-amber-400/50 resize-y"
-                                            value={sceneRegenPromptModal.data?.system_prompt || ''}
-                                            onChange={e => setSceneRegenPromptModal(prev => ({
-                                                ...prev,
-                                                data: { ...(prev.data || {}), system_prompt: e.target.value },
-                                            }))}
-                                        />
-                                    </div>
-                                </>
-                            )}
-                        </div>
-
-                        <div className="p-4 border-t border-white/10 flex justify-end gap-3 bg-black/20">
-                            <button
-                                onClick={() => {
-                                    const full = String(sceneRegenPromptModal.data?.system_prompt || '');
-                                    navigator.clipboard.writeText(full);
-                                    onLog?.(t('系统提示词已复制到剪贴板', 'System prompt copied to clipboard'), 'success');
-                                }}
-                                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm font-medium flex items-center gap-2 mr-auto"
-                            >
-                                <Copy size={16}/> {t('复制系统提示词', 'Copy System Prompt')}
-                            </button>
-                            <button
-                                onClick={() => setSceneRegenPromptModal({ open: false, loading: false, data: null })}
-                                className="px-4 py-2 rounded hover:bg-white/10 text-sm"
-                            >
-                                {t('取消', 'Cancel')}
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    setSceneRegenPromptModal(prev => ({ ...prev, loading: true }));
-                                    try {
-                                        await handleRegenerateScene({
-                                            system_prompt: sceneRegenPromptModal.data?.system_prompt || '',
-                                        });
-                                        setSceneRegenPromptModal({ open: false, loading: false, data: null });
-                                    } catch {
-                                        setSceneRegenPromptModal(prev => ({ ...prev, loading: false }));
-                                    }
-                                }}
-                                disabled={sceneRegenPromptModal.loading}
-                                className="px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-medium flex items-center gap-2"
-                            >
-                                {sceneRegenPromptModal.loading ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>}
-                                {sceneRegenPromptModal.loading ? t('提交中...', 'Submitting...') : t('确认并重生成', 'Confirm & Regenerate')}
                             </button>
                         </div>
                     </div>

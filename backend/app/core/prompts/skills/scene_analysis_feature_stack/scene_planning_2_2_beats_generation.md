@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-18 01:25:00 +08:00
+# Prompt Updated At: 2026-07-18 10:05:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -8,29 +8,33 @@
 
 ## 核心任务
 
-**【定位】**承接 **Stage 1 单场 Beat 块** + **Stage 2-1 Subject Index** 的工程转译；**非**创作/改编/补洞/资产提取。只读上游；**绝不**改情节、对白、建置、环境拓扑、Beat/Scene 边界，也绝不增删补建实体。
+**【定位】**承接 **Stage 1 单场场景头 + Beat 块** + **Stage 2-1 Subject Index** 的工程转译；**非**创作/改编/补洞/资产提取。只读上游；**绝不**改情节、对白、建置、环境拓扑、Beat/Scene 边界，也绝不增删补建实体。
 
-**【零丢失（Beat 内）】**每个 Beat 正文（含建置/入戏/切换说明与内部分隔符）须**原样**落入 `{Beats}`；禁「同上/同前/见上/略/摘要」。叙述层仅做 Index 名称字符串替换；**台词正文绝不 Index 化**（见「对白豁免」）。
+> **🏆 Beat 正文完全继承（最高硬约束）**：`{Beats}` 内全部正文——含 `────【建置】────` / `────【入戏】────` / `────【Beat切换说明】────` 及其下每一句、每一词、每一标点、站位/姿态/视线/入戏动作/对白/切换说明——**必须完全继承 Stage 1 原文**。除下方「唯一允许改动」外，**禁止任何修改**（润色、改写、概括、补全、删减、重排、同义替换、语序调整、补推断、纠「错」、补漏、合并拆句、改景别/机位表述等）。改一处 = 整场废弃重写。
 
-**【仅此四项】**
-1. **标准表达转译**：Beat 叙述层自然语言具名 → `CHAR:`/`ENV:`/`PROP:`（名逐字取自 Index）。
+**【零丢失（Beat 内）】**每个 Beat 正文（含建置/入戏/切换说明与内部分隔符）须**逐字原样**落入 `{Beats}`；禁「同上/同前/见上/略/摘要」。**唯一允许改动**＝叙述层具名实体 → Index 名字符串替换并套 `CHAR:`/`ENV:`/`PROP:`（见「仅此五项」）；**台词正文绝不 Index 化**（见「对白豁免」）。Index 化只换称呼串，**不得**连带改写周围建置/入戏语句。
+
+**【仅此五项】**
+1. **标准表达转译**：Beat 叙述层自然语言具名 → `CHAR:`/`ENV:`/`PROP:`（名逐字取自 Index）；**只换名，不改句**。
 2. **CHAR/PROP 衍生族证据匹配**：同族多行时**仅**据 Stage 1 本 Beat 明文匹配；无明文→基础版；禁推断/改写剧情迁就 Index。
 3. **ENV 整场名转译**：`ENV:[]` 只标 Index 已有且 **本场 Beat 明文已写**的整场可拍环境；禁补未写衍生；禁把未升格 PROP 的固定陈设单切为 `ENV:[…]`。
 4. **编号与时间落表**：规范 `Episode ID`/`Scene ID`/`Scene No.`；时长若 Beat/输入未写 → `None`。
+5. **场景名称落表**：输入有 `【场景名称】{短名}｜{日·内/外}` 时，将 `{短名}｜{日·内/外}` **逐字原样**写入 `Scene Name` 列；禁润色/改写/拆分/省略日夜内外；输入无该行 → `None`。
 
-**【允许】**表格化落表、名称 Index 化、同族证据匹配、编号规范化、`<br>` 排版压缩（不丢信息、不改语义）。
+**【允许】**表格化落表、名称 Index 化（只换称呼串）、同族证据匹配、编号规范化、场景名称原样落表、`<br>` 排版压缩（不丢字、不改语义、不改语序）。
 
-**【禁止】**改写/概括/补创剧情或建置；改 Scene/Beat 数量/顺序/边界；对 Index 无行实体套任何类型前缀（含自创 `EXTRA:` 等）；用 Index 元数据回填 Stage 1 未写字段；缺项回填/重算/补建；补写输入中不存在的 Scene 级【】说明块或环境块。
+**【禁止】**改写/概括/润色/补创/删减建置或入戏或切换说明或对白；改 Scene/Beat 数量/顺序/边界；对 Index 无行实体套任何类型前缀（含自创 `EXTRA:` 等）；用 Index 元数据回填 Stage 1 未写字段；缺项回填/重算/补建；补写输入中不存在的 Scene 级【】说明块或环境块；改写或省略输入的 `【场景名称】`。
 
-> **职责边界**：Beat 创作、Scene 切分、环境拓扑（`[ENV_BLOCK_*]` /【主环境】/【衍生环境】）、ENV/PROP 归属、`project_visual_backfill` 等归上游（Stage 1 / 2.1）；本环节只转译落表本场 Beat。
+> **职责边界**：Beat 创作、Scene 切分、环境拓扑（`[ENV_BLOCK_*]` /【主环境】/【衍生环境】）、ENV/PROP 归属、`project_visual_backfill` 等归上游（Stage 1 / 2.1）；本环节只转译落表本场场景头与 Beat。
 
 ## 输入形态（强制）
 
-本环节「待分析剧本」**仅含**单场 Beat 块（非整场 Stage 1 全文，也**不含**环境块）。逐场结构：
+本环节「待分析剧本」**仅含**单场场景头 + Beat 块（非整场 Stage 1 全文，也**不含**环境块）。逐场结构：
 
 ```
 [SCENES_BLOCK_START]
 [SCENE_START:EPxx_SCyy]
+【场景名称】{短名}｜{日·内/外}
 [BEAT_START:1]
 - Beat 1（{标签}）
 ────【建置】────
@@ -51,14 +55,15 @@
 | 输入块 | 是否接收 | 说明 |
 | :--- | :---: | :--- |
 | `[SCENE_START]` / `[SCENE_END]` | **是** | Scene ID / 场序权威源 |
-| `[BEAT_START:{n}]`…`[BEAT_END:{n}]` | **是** | **内容唯一源**；须保留内外部分隔符 |
+| `【场景名称】{短名}｜{日·内/外}` | **是** | Stage 1 场景头；原样落入 `Scene Name`（不含 `【场景名称】` 前缀） |
+| `[BEAT_START:{n}]`…`[BEAT_END:{n}]` | **是** | **Beat 内容唯一源**；须保留内外部分隔符 |
 | `[ENV_BLOCK_START]`…`[ENV_BLOCK_END]` | **否** | 归 Stage 1 / 2.1；本环节不接收、不输出 |
-| 其它 Scene 级【】说明块 | **否** | 不接收、不补创、不写入 Core Scene Info |
+| 其它 Scene 级【】说明块 | **否** | 不接收、不补创、不写入 Core Scene Info（`【场景名称】` 除外） |
 | **Subject Index** | **是** | 命名唯一白名单（只读、不新建/改属性） |
 
 Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |`
 
-> **兜底说明（只读）**：若上游因 Beat 分割失败而注入整场正文，仍**只**对其中可识别的 `[BEAT_START]`…`[BEAT_END]`（或 legacy `- Beat N`）做 Index 化；**禁止**把环境块或其它非 Beat 说明块写入 `{Beats}` 或另起字段。
+> **兜底说明（只读）**：若上游因 Beat 分割失败而注入整场正文，仍**只**对其中可识别的 `[BEAT_START]`…`[BEAT_END]`（或 legacy `- Beat N`）做 Index 化，并对可见的 `【场景名称】` 行落表；**禁止**把环境块或其它非 Beat 说明块写入 `{Beats}` 或另起字段。
 
 ## 硬约束
 
@@ -119,11 +124,12 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 
-### Core Scene Info 字段
+### Scene Name 与 Core Scene Info 字段
 
 | 字段 | 规则 |
 | :--- | :--- |
-| `{Beats}` | **强制主责**：输入全部 Beat 块原样落入（仅叙述层实体名 Index 化；保留外层/内层分隔符；台词原样） |
+| `Scene Name` | 输入有 `【场景名称】{短名}｜{日·内/外}` → 写入 `{短名}｜{日·内/外}`（**逐字原样**，含日·内/外；**不含** `【场景名称】` 前缀）；无该行 → `None`；禁自创/润色/拆短名 |
+| `{Beats}` | **强制主责**：输入全部 Beat 块**逐字完全继承**落入（含建置/入戏/切换说明全文；**仅**叙述层实体名 Index 化，其余字句标点零改动；保留外层/内层分隔符；台词原样） |
 | `{登场实体}` | 从本场 `{Beats}` 已 Index 化实体汇总；无则 `None` |
 | `Entry State` / `Exit State` | Beat 首/末已写状态可摘录；未写→`None` |
 | `Adapted Script Text` | 可摘本场 Beat 头尾短片段；禁改写续写 |
@@ -134,8 +140,8 @@ Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等�
 
 （仅示格式；`…` 须替换为输入 Beat 真实全文，禁照抄占位、禁借示例扩写）
 
-| EP01 | EP01_SC01 | 1 | {场名或None} | {Xs或None} | - **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（叙述层 Index 化）…<br>────【入戏】────<br>…（台词原样）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{登场实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
+| EP01 | EP01_SC01 | 1 | {短名}｜{日·内/外} | {Xs或None} | - **{Beats}**:<br>[BEAT_START:1]<br>- Beat 1（{标签}）<br>────【建置】────<br>…（Stage 1 建置原文，仅实体名 Index 化）…<br>────【入戏】────<br>…（Stage 1 入戏/台词原文）…<br>────【Beat切换说明】────<br>[Beat切换说明]：…<br>[BEAT_END:1]<br>[BEAT_START:2]<br>- Beat 2: …<br>[BEAT_END:2]<br>- **{登场实体}**: CHAR:[@…], ENV:[…], PROP:[…] | {Beat头尾片段或None} | {可拍ENV Index名或None} | None | None | None | {入场态或None} | {出场态或None} | CHAR:[@…]或None | PROP:[…]或None |
 
 ### 输出前自检
 
-Beat 数/顺序=输入｜编号规范｜Beat 正文原样落入（含 `[BEAT_START/END]` 与 建置/入戏/切换说明分隔符）｜叙述层仅实体名 Index 化｜**全部 CHAR/ENV/PROP 方括号名与 Index 逐字符完全一致（无任何改写）**｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜Core Scene Info **仅含** `{Beats}`/`{登场实体}`｜未把 `ENV_BLOCK` 或其它非 Beat 说明块写入输出｜无新增 Beat 未写实体/情节。
+Beat 数/顺序=输入｜编号规范｜**Scene Name = 输入 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样（无则 None）**｜**建置/入戏/切换说明全文与 Stage 1 逐字一致（零润色/零改写/零补删）**｜仅叙述层实体名 Index 化（只换称呼串）｜含 `[BEAT_START/END]` 与内层分隔符｜**全部 CHAR/ENV/PROP 方括号名与 Index 逐字符完全一致（无任何改写）**｜**台词无 CHAR/ENV/PROP**｜全部锚点可追溯 `subject_no`｜CHAR/PROP 已做衍生族匹配（无明文→基础版）｜每个 `ENV:[]` 为 Index 整场行且 Beat 已写｜Core Scene Info **仅含** `{Beats}`/`{登场实体}`｜未把 `ENV_BLOCK` 或其它非 Beat 说明块写入输出｜无新增 Beat 未写实体/情节。

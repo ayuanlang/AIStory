@@ -137,7 +137,9 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "phase": 2,
             "title": "逐场景分镜生成",
             "prompt_file": "skills/shot_generation.md",
-            "depends_on": ["scene_markdown"],
+            # Scene import alone is not enough: wait for environment visual assets
+            # (asset_design_environment) so shot prompts can use ENV image baselines.
+            "depends_on": ["scene_markdown", "asset_design_environment"],
             "outputs": ["shots_markdown", "shot_rows"],
             "persist_targets": ["scene.ai_shots_result", "shot_rows"],
             "executor": "shot_generation.batch_per_scene",

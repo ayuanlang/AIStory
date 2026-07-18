@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md
-# Prompt Updated At: 2026-07-17 09:10:00 +08:00
+# Prompt Updated At: 2026-07-18 11:00:00 +08:00
 
 # Skill 1-2-1: 资产分析提取
 
@@ -109,8 +109,8 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - 持续变化：跨多个 Beat/Scene 持续，或可被后续剧集继承；单镜头/短时情绪/临时姿态/瞬时光效不算。
 - 非连续转场时，主要角色可按阶级与经济设定判定是否新增换装衍生；频率必须符合人物社会属性。
 - 先有基础版再有派生版；未过门禁时只写入基础版 `entity_attributes` 或留 Beat，禁止新增 `CHAR`。
-- 服饰信息仅在剧本原文明确提及时填写；若剧本未明确服饰，`subject_name_zh` 与 `entity_attributes` 均不得臆造或补写服饰描述——**直接省略服饰字段，禁止在输出中写「未明示服饰/不新增服装」等规则说明句**。
-- **剧情依存服装属性（强制，服饰例外）**：若 Stage 1 / Beat 保留依赖服装结构的动作或已写「服装要求」（如藏入袖中、抽出袖管、塞入怀中/衣襟、从口袋掏出、掖入腰带/腰封、卷入下摆等），则对应 `character` 行的 `entity_attributes` **必须**写入可核销该动作的**服装属性硬约束**（格式 `clothing_req:`），即使原文未展开完整服饰描写。映射（非穷尽）：藏/抽袖 → `clothing_req:须有可纳物袖管（长袖或广袖）`；塞/取怀或衣襟 → `clothing_req:须有可开合衣襟或可贴身藏物内层`；掏/塞口袋 → `clothing_req:须有可用口袋`；掖腰 → `clothing_req:须有腰带或腰封`；卷入下摆 → `clothing_req:须有足够衣长下摆`。Stage 1 已写「服装要求：…」时**逐字或等价压缩**写入 `clothing_req`；`script_entity_coverage` 须覆盖对应动作/服装要求关键词。**禁止**动作证据已存在却省略 `clothing_req`；**禁止**据此臆造完整时装版型/面料/配色（仅写动作所需属性）。
+- 服饰信息仅在剧本原文明确提及时填写；若剧本未明确服饰，`subject_name_zh` 与 `entity_attributes` 均不得臆造或补写服饰描述——**直接省略服饰字段，禁止在输出中写「未明示服饰/不新增服装」等规则说明句**。**本条不覆盖下条**：服装结构依存动作一旦存在，必须写 `clothing_req`，不得以「原文未展开服饰」为由省略。
+- **剧情依存服装属性（强制，服饰例外；优先于上条省略规则）**：**主动扫描**本场全部 Beat 建置/入戏与 Stage 1「服装要求」——凡角色执行依赖服装结构的动作（如藏入袖中、抽出袖管、塞入怀中/衣襟、从口袋掏出/塞入口袋、掖入腰带/腰封、卷入下摆、扯袖遮挡、衣襟擦拭等），对应 `character` 行的 `entity_attributes` **必须**显式写入可核销该动作的**服装属性硬约束**（格式 `clothing_req:`），即使原文未展开完整服饰描写、也未写「服装要求：…」。映射（非穷尽）：藏/抽袖 → `clothing_req:须有可纳物袖管（长袖或广袖）`；塞/取怀或衣襟 → `clothing_req:须有可开合衣襟或可贴身藏物内层`；掏/塞口袋 → `clothing_req:须有可用口袋`；掖腰 → `clothing_req:须有腰带或腰封`；卷入下摆 → `clothing_req:须有足够衣长下摆`。Stage 1 已写「服装要求：…」时**逐字或等价压缩**写入 `clothing_req`；`script_entity_coverage` 须覆盖对应动作/服装要求关键词。**禁止**动作证据已存在却省略 `clothing_req`；**禁止**只写「常服/制服/时装」而无袖/袋/襟等可核销形制词；**禁止**据此臆造完整时装版型/面料/配色（仅写动作所需属性）。
 - **环境依存着装状态（强制，服饰例外）**：角色处在会显著改变着装/妆发可见态的环境或活动中时——如**游泳/入水/潜水**、暴雨/洪水浸泡、火灾/爆炸/地震等**灾难现场**、泥地/沙尘/雪地、浓烟灰烬、油污工地等——对应 `character` 行的 `entity_attributes` **必须**显式写入环境对衣着与身体表面的可见影响（格式 `clothing_env:`），即使原文未展开完整时装描写。须写清：**场合/活动** + **衣料/鞋履/妆发/皮肤表面的可见落点**（湿贴/滴水、浸湿下垂、沾灰/灰烬/泥渍、轻微焦边、衣料撕裂沾污、发丝湿贴等——须可播出、禁血腥图形化）。映射（非穷尽）：游泳/入水 → `clothing_env:游泳/入水态；衣料湿贴贴身、发丝滴水/湿贴`；暴雨/洪水 → `clothing_env:雨湿/浸水态；外套与裤脚浸湿下垂、鞋履湿痕`；火灾/爆炸/地震等灾难现场 → `clothing_env:灾难现场态；衣料沾灰烬尘土、局部焦边或撕裂、发丝沾灰`；泥地/沙尘 → `clothing_env:泥污/沙尘态；裤脚鞋履沾泥或沙尘`。Stage 1 已写「服装要求：…」含环境衣态时**逐字或等价压缩**写入 `clothing_env`；`script_entity_coverage` 须覆盖对应环境/活动关键词。**与衍生门禁联动**：若该环境着装态跨 Beat/Scene **可持续**且构成重大外观差异 → 须建 CHAR 衍生行（如 `{角色}_游泳态`/`{角色}_灾难沾污态`），`clothing_env` 写在该衍生行；若仅本 Scene 内该实体即处于该态、或未达衍生门禁 → 写在当前对应 `character` 行，**禁止**静默省略。**禁止**环境证据已存在却省略 `clothing_env`；**禁止**据此臆造完整时装版型/面料/配色（仅写环境造成的可见衣态与表面痕迹）；**禁止**把环境着装痕迹写入 ENV 空镜字段。
 - 时序断点（闪回/回忆/往事/蒙太奇时间层/多年后/重生/转世/复活/身份重置等）必须重判 `CHAR`，并同步触发 `ENV`/`PROP` 时序重识别；闪回中首次出现、当下 Scene 未覆盖的 `PROP` 同样按四维评估与硬证据规则提取，不得仅写入闪回 Beat 而不落 Index。
 - 重生/转世默认新角色；仅在文本明确“外观与身份体系无实质变化且可直接继承”时可不新建。多人时必须逐个判定，不得群体合并跳过。
@@ -227,6 +227,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 - **六环节覆盖终检（强制）**：具名可见主体与群演簇均已落表（簇不拆编号、具名不误并簇）；环节 1 已声明的视角/状态衍生 ENV 均已提取；有动作+对白所需可读 ENV：**已声明则已落表，未声明则已回流且无补建行**；环节 3 硬证据 PROP 未漏（一次消耗品除外）；环节 5 微表演未误升格。
 - **年龄层次终检（强制）**：输出前逐 `character` 行核对——`entity_attributes` 均须含 `age_tier:` 且取值 ∈ `幼童|儿童|少年|青年|中年|老年`（群演簇允许 `青年至中年` 等闭集内区间）；缺项、写「不明/待定」或留空 → 补写（无证据则填 `青年`）后再输出。
 - **剧情地位终检（强制）**：输出前逐 `character` 行核对——`entity_attributes` 均须含 `plot_role:` 且取值 ∈ `男主|女主|男二|女二|反派|配角|龙套|群演簇|其他`；群演簇须为 `群演簇`；具名叙事角色不得漏标或用职业词替代；缺项 → 据 Stage 1【角色命名】/戏份补写后再输出。
+- **剧情依存服装属性终检（强制）**：输出前扫描全部 Beat 中袖/怀/袋/腰带/下摆等服装结构依存动作及「服装要求」——凡命中动作的角色，其对应 `character` 行 `entity_attributes` **必须**含可核销的 `clothing_req:`（袖→袖管/长袖/广袖；袋→口袋；怀/襟→衣襟或贴身内层；腰→腰带/腰封；下摆→足够衣长下摆）；有动作证据却缺 `clothing_req`、或仅有泛称无形制词 → 补写后再输出。
 - **闪回/回忆覆盖终检（强制）**：完整闪回 Scene 与快速闪回切片中 Stage 1 已具名可见主体均须在 Index 中有对应行或衍生链。
 
 ----------------*****--------------
@@ -237,7 +238,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
 
 | subject_no | subject_type | subject_name_zh | subject_name_en | base_entity | dependency_reference | entity_attributes | script_entity_coverage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| S001 | character | 角色中文名 | Character English Name | None | None | plot_role:男主；age_tier:青年；约28岁男性·刑侦警探·沉稳克制；阵营/身份/职业。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 剧本中对应的原名 |
+| S001 | character | 角色中文名 | Character English Name | None | None | plot_role:男主；age_tier:青年；约28岁男性·刑侦警探·沉稳克制；clothing_req:须有可纳物袖管（长袖或广袖）；须有可用口袋。若为特效衍生，追加：trigger_source:xx, effect_phase:xx, intensity_level:xx...等 | 原名、藏入袖中、从口袋掏出 |
 | S002 | character | 角色中文名_战损版 | Character English Name Damaged | 角色中文名 | Character English Name | plot_role:男主；clothing_env:灾难/战损现场态；左颊血痕、右肩衣料撕裂、外套沾灰烬尘土；可持续战损外观差异。 | 原名、战损、灾难现场 |
 | S003 | environment | 办公室会客区 | Office Reception Area | None | None | purpose:夜间雨夜刑侦专案组案情会商与文件递交的对峙会客空间；env_role:主环境基准定义；referenceable:No；generatable:Yes；in_out:内；time_of_day:夜；climate:雨；season:冬；space_boundary:xx；zero_degree_axis:桌长边侧面TwoShot（机位落点+Viewing Direction，仅作衍生映射基准）；spatial_anchor_head:180度半开内开木门；spatial_anchor_tail:0度百叶窗墙段；topology_top_down_360:0度=桌长边/90度=桌头/180度=文件柜与白板墙/270度=桌尾…；topology_bottom_up_360:0度=吊顶与主灯/90度=侧墙高窗/180度=后墙梁架/270度=侧墙…；fixed_architecture_and_finish:百叶窗墙段+雨夜窗外；fixed_furniture_and_set_dressing:会议桌(长边沿0度轴)+两把空转椅(主位深棕皮革转椅桌左+客位浅木靠背椅桌右，椅背均朝桌心)+文件柜贴180度墙；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 主环境名、头尾双锚、俯视/仰视360、固定大件家具、夜、内、雨夜 |
 | S004 | environment | 0度办公室会客区 | 0 Deg Office Reception Area | 办公室会客区 | Office Reception Area | purpose:本场 Master Two Shot 建置视角，承载双人对坐会商的全景空镜基准；env_role:衍生环境；referenceable:Yes；generatable:Yes；reference_env:办公室会客区；in_out:内；time_of_day:夜；climate:雨；season:冬；view_angle_from_main:0；derivative_base_zh:办公室会客区；derivative_trigger_type:视角衍生（本场首个全景建置视角，Master Two Shot）；empty_view_delta:Master Two Shot 可见半空间：会议桌与椅区、百叶窗墙；对向半空间不可见（禁点名对向实体）；spatial_axis:会议桌长边轴线+半开木门门槛；lens_profile:Wide；axis_crossing:None；literary_atmosphere:旧木会议桌、百叶窗墙段、冷蓝雨夜映亮窗外。 | 0度办公室会客区、主环境名、Master Two Shot、夜、内、雨 |

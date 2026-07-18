@@ -32,11 +32,16 @@ Stage 2.1: assets_extraction -> persist Subject Index
 scene_markdown    asset_design_character --+
 (per-scene OK)    asset_design_prop         +-- concurrent
                   asset_design_environment --+
-        |
-   each scene import to workspace
-        |
-   storyboard_generation per scene (same as scene page 生成分镜;
-   stage3_auto_start.storyboard_generation; do not wait for all scenes)
+        |                    |
+   each scene import         |
+   to workspace              |
+        |                    v
+        +---- wait for env visual assets ready ----+
+                            |
+                   storyboard_generation per scene
+                   (same as scene page 生成分镜;
+                   stage3_auto_start.storyboard_generation;
+                   do not wait for all scenes / character / prop)
 ```
 
 ## Registry (source of truth)
@@ -45,6 +50,7 @@ File: `backend/app/services/script_analysis_flow/registry.py`
 
 - `assets_extraction.fan_out`: `scene_markdown`, `asset_design_character`, `asset_design_prop`, `asset_design_environment`
 - `assets_extraction.fan_out_mode`: `parallel_after_complete`
+- `storyboard_generation.depends_on`: `scene_markdown`, `asset_design_environment`
 - `stage3_auto_start` toggles auto-start per category and storyboard
 
 ## Frontend (`ScriptEditor.jsx`)
@@ -52,10 +58,10 @@ File: `backend/app/services/script_analysis_flow/registry.py`
 | Entry | Behavior |
 |-------|----------|
 | `executeAdvancedAnalysis` | After 2.1: `Promise.allSettled([runSceneOrchestrationBranch(), runAssetDesignBranch()])` |
-| `runPostImportSceneSubjectPipeline` | character / prop / environment LLM calls concurrent |
+| `runPostImportSceneSubjectPipeline` | character / prop / environment LLM calls concurrent; when env subtask succeeds, flush pending storyboard queue |
 | `handleRestartStage2` | Full scene branch + asset branch in parallel after 2.1 |
 | `tryResumeAnalysisFromExistingArtifacts` | If index exists but scenes missing: scene + assets parallel; if only subjects JSON incomplete: assets only |
-| Per-scene import success | After workspace import: `kickoffStoryboardForImportedScene` → `generateSceneShots` + `applySceneAIResult` (same as scene page 生成分镜); update diagnostics `storyboardTaskProgress` |
+| Per-scene import success | After workspace import: queue/kick `kickoffStoryboardForImportedScene` (gated on env visual assets ready) → `generateSceneShots` + `applySceneAIResult`; update diagnostics `storyboardTaskProgress` |
 
 API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/run-node`
 
@@ -71,7 +77,7 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 2. Resume/restart paths must match main path concurrency
 3. Never `await` scene orchestration before starting asset design after 2.1
 4. Asset design with `explicitSubjectIndexText` / `parallelWithScenes: true` must not require scene import first
-5. After each scene imports to workspace, kick off that scene's storyboard task immediately when `stage3_auto_start.storyboard_generation` is on; do **not** wait for all scenes / asset branch; end-of-pipeline only residual-kicks scenes not yet started
+5. After each scene imports to workspace, start that scene's storyboard only when env visual assets are ready (`asset_design_environment` ok, or no ENV rows / env auto-start off); queue as `waiting_env` until then. Do **not** wait for all scenes / character / prop; end-of-pipeline only residual-kicks scenes not yet started once the env gate is open
 
 ## Scene orchestration asset annotation (prompt contract)
 

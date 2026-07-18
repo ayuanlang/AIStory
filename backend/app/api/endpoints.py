@@ -139,6 +139,7 @@ from app.services.script_analysis_flow import (
     patch_single_scene_markdown_for_orchestration,
     sanitize_scene_markdown_llm_output,
     wrap_scene_unit_as_script_block,
+    extract_scene_name_value_from_scene_text,
     SceneBeatsTooShortError,
     build_assets_extraction_script_from_adapted,
 )
@@ -8336,8 +8337,9 @@ async def _run_scene_markdown_node_per_scene(
             raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
         single_scene_instruction = (
             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 1/1 场）。"
-            "输入剧本正文**仅含**该场 `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块（不含 Scene 级【主环境】等说明块）；"
-            "请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+            "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
+            "（不含 Scene 级【主环境】等其它说明块）；"
+            "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`。"
             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
             "直接以 Markdown 表格输出 Part 1: Scenes Table（仅含表头、分隔行与本场一行数据）。"
@@ -8487,8 +8489,9 @@ async def _run_scene_markdown_node_per_scene(
                             raise HTTPException(status_code=422, detail=beats_exc.detail) from beats_exc
                         single_scene_instruction = (
                             f"【单场处理模式】本次仅处理 Scene ID `{unit.scene_id}`（第 {index}/{total_scenes} 场）。"
-                            "输入剧本正文**仅含**该场 `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块（不含 Scene 级【主环境】等说明块）；"
-                            "请仅对上述 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
+                            "输入剧本正文含该场 `【场景名称】{短名}｜{日·内/外}` 场景头 + `[BEAT_START:…]`…`[BEAT_END:…]` Beat 块"
+                            "（不含 Scene 级【主环境】等其它说明块）；"
+                            "请将 `【场景名称】` 后的 `{短名}｜{日·内/外}` 原样落入 Scene Name 列，并对 Beat 做 Index 化落表，输出该场景对应的一行 Scenes Table，不要处理其他场景。"
                             f"Scenes Table 的 Scene ID 列必须精确填写 `{unit.scene_id}`，"
                             "不得仅填场次序号或其他别名。"
                             "禁止输出思考过程、解释、规划说明或任何非表格内容；"
@@ -8517,6 +8520,9 @@ async def _run_scene_markdown_node_per_scene(
                             scene_text,
                             unit.scene_id,
                             scene_order=index,
+                            scene_name=extract_scene_name_value_from_scene_text(
+                                getattr(unit, "scene_text", "") or ""
+                            ),
                         )
                         if scene_text != raw_scene_text:
                             logger.info(
@@ -10452,19 +10458,48 @@ async def run_scene_analysis_flow_node(
 
 @router.get("/projects/{project_id}/subject_inventory_prompt")
 async def get_project_subject_inventory_prompt(
-    project_id: int, 
-    db: Session = Depends(get_db), 
+    project_id: int,
+    episode_id: Optional[int] = None,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     try:
         _require_project_access(db, project_id, current_user)
-        inventory = _build_project_subject_inventory(db, project_id, limit_per_type=80)
+        scoped_episode_id = None
+        try:
+            if episode_id is not None and int(episode_id) > 0:
+                scoped_episode_id = int(episode_id)
+        except Exception:
+            scoped_episode_id = None
+        if not scoped_episode_id:
+            # Asset injection must stay episode-scoped; refuse project-wide inventory.
+            return {
+                "inventory_block": "",
+                "inventory_guidance": "",
+                "inventory_system_guard": "",
+                "episode_id": None,
+                "scoped": False,
+                "detail": "episode_id is required; inventory injection is episode-scoped only.",
+            }
+        episode_row = db.query(Episode).filter(
+            Episode.id == int(scoped_episode_id),
+            Episode.project_id == int(project_id),
+            _active_episode_clause(),
+        ).first()
+        if not episode_row:
+            raise HTTPException(status_code=404, detail="Episode not found in this project")
+        inventory = _build_project_subject_inventory(
+            db,
+            project_id,
+            limit_per_type=80,
+            episode_id=scoped_episode_id,
+        )
         
         inventory_block = _format_project_subject_inventory_block(inventory)
         inventory_system_guard = (
             "\n\n"
             "[Existing Subjects Reuse Guard - High Priority]\n"
-            "The injected Project Existing Subject Index contains authoritative existing reusable subjects for this project.\n"
+            "The injected Existing Subject Index contains authoritative reusable subjects for THIS episode only.\n"
             "You MUST reuse these existing subjects first whenever they match the script.\n"
             "Do NOT rename, redefine, replace, overwrite, or regenerate them as new entities.\n"
             "Only create a new subject when the script clearly requires an entity that is not already present in the inventory.\n"
@@ -10472,8 +10507,9 @@ async def get_project_subject_inventory_prompt(
             "If you output entity JSON, existing inventory subjects must be reused by reference and MUST NOT be duplicated as newly generated entities."
         )
         inventory_guidance = (
-            "Project Existing Subject Index reuse rules:\n"
-            "- Treat the above Project Existing Subject Index as authoritative identifiers for this project.\n"
+            "Episode Existing Subject Index reuse rules:\n"
+            "- Treat the above Subject Index as authoritative identifiers for the current episode only.\n"
+            "- Do not reuse or invent subjects from other episodes.\n"
             "- This inventory block is always present, even when all categories are empty.\n"
             "- Extract and reuse the Entities as your baselines. Do not duplicate existing inventory subjects in newly generated entity outputs."
         )
@@ -10481,8 +10517,12 @@ async def get_project_subject_inventory_prompt(
         return {
             "inventory_block": inventory_block,
             "inventory_guidance": inventory_guidance,
-            "inventory_system_guard": inventory_system_guard
+            "inventory_system_guard": inventory_system_guard,
+            "episode_id": scoped_episode_id,
+            "scoped": True,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to fetch subject inventory prompt: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
@@ -12418,6 +12458,72 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
 
         reuse_subject_assets = getattr(request, "reuse_subject_assets", None) or []
+        # Drop cross-episode reuse assets: only entities owned by this episode may be injected.
+        if isinstance(reuse_subject_assets, list) and reuse_subject_assets:
+            request_episode_id_for_reuse = None
+            try:
+                raw_ep = getattr(request, "episode_id", None)
+                if raw_ep is not None and str(raw_ep).strip() != "":
+                    request_episode_id_for_reuse = int(raw_ep)
+            except Exception:
+                request_episode_id_for_reuse = None
+            request_project_id_for_reuse = None
+            try:
+                raw_pid = getattr(request, "project_id", None)
+                if raw_pid is not None and str(raw_pid).strip() != "":
+                    request_project_id_for_reuse = int(raw_pid)
+            except Exception:
+                request_project_id_for_reuse = None
+            if request_episode_id_for_reuse and request_episode_id_for_reuse > 0:
+                reuse_ids: List[int] = []
+                for item in reuse_subject_assets:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        eid = int(item.get("id"))
+                    except Exception:
+                        continue
+                    if eid > 0:
+                        reuse_ids.append(eid)
+                owned_ids: set = set()
+                if reuse_ids:
+                    ownership_filters = [
+                        Entity.id.in_(list(set(reuse_ids))),
+                        Entity.episode_id == int(request_episode_id_for_reuse),
+                        _active_entity_clause(),
+                    ]
+                    if request_project_id_for_reuse and request_project_id_for_reuse > 0:
+                        ownership_filters.append(Entity.project_id == int(request_project_id_for_reuse))
+                    owned_ids = {
+                        int(getattr(row, "id", 0) or 0)
+                        for row in db.query(Entity.id).filter(*ownership_filters).all()
+                        if getattr(row, "id", None) is not None
+                    }
+                before_reuse_count = len(reuse_subject_assets)
+                filtered_reuse_assets = []
+                for item in reuse_subject_assets:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        item_id = int(item.get("id"))
+                    except Exception:
+                        continue
+                    if item_id > 0 and item_id in owned_ids:
+                        filtered_reuse_assets.append(item)
+                reuse_subject_assets = filtered_reuse_assets
+                if before_reuse_count != len(reuse_subject_assets):
+                    logger.info(
+                        "[analyze_scene] filtered reuse_subject_assets to current episode episode_id=%s before=%s after=%s",
+                        request_episode_id_for_reuse,
+                        before_reuse_count,
+                        len(reuse_subject_assets),
+                    )
+            else:
+                if reuse_subject_assets:
+                    logger.info(
+                        "[analyze_scene] cleared reuse_subject_assets: episode_id required for episode-scoped injection"
+                    )
+                reuse_subject_assets = []
         if is_subject_index_consumer_stage and persisted_subject_index_for_prompt:
             if isinstance(reuse_subject_assets, list) and reuse_subject_assets:
                 logger.info(
@@ -12516,7 +12622,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 )
 
         # Stage 3 entity design: inject prior same-type/same-name generation_prompt_cn
-        # from project entities (highest episode wins). Poster/cover excluded.
+        # from THIS episode's entities only (never other episodes). Poster/cover excluded.
+        request_episode_id_for_prior = None
+        try:
+            raw_ep = getattr(request, "episode_id", None)
+            if raw_ep is not None and str(raw_ep).strip() != "":
+                request_episode_id_for_prior = int(raw_ep)
+        except Exception:
+            request_episode_id_for_prior = None
         if is_entity_design_phase and getattr(request, "project_id", None):
             prior_prompt_types = {
                 _normalize_prior_entity_design_type(item)
@@ -12532,7 +12645,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 # Fallback when target types were not inferred: allow all non-poster design types.
                 prior_prompt_types = set(_PRIOR_ENTITY_DESIGN_TYPES)
 
-            if prior_prompt_types:
+            if prior_prompt_types and request_episode_id_for_prior and request_episode_id_for_prior > 0:
                 subject_index_for_prior_lookup = (
                     persisted_subject_index_for_prompt
                     or sanitize_subject_index_text(getattr(request, "text", None))
@@ -12544,6 +12657,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                         int(request.project_id),
                         subject_index_for_prior_lookup,
                         allowed_types=prior_prompt_types,
+                        episode_id=request_episode_id_for_prior,
                     )
                 except Exception as prior_prompt_err:
                     logger.warning(
@@ -12554,11 +12668,18 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 if prior_prompts_block:
                     user_content = f"{prior_prompts_block}\n\n{user_content}"
                     logger.info(
-                        "[analyze_scene] injected prior entity generation prompts project_id=%s types=%s chars=%s",
+                        "[analyze_scene] injected prior entity generation prompts project_id=%s episode_id=%s types=%s chars=%s",
                         getattr(request, "project_id", None),
+                        request_episode_id_for_prior,
                         sorted(prior_prompt_types),
                         len(prior_prompts_block),
                     )
+            elif prior_prompt_types:
+                logger.info(
+                    "[analyze_scene] skipped prior entity generation prompts: episode_id required for episode-scoped injection project_id=%s episode_id=%s",
+                    getattr(request, "project_id", None),
+                    getattr(request, "episode_id", None),
+                )
 
         # Construct messages
         messages = [
@@ -20574,17 +20695,19 @@ def update_episode(
         episode.ai_scene_analysis_result = episode_in.ai_scene_analysis_result
     if hasattr(episode_in, 'ai_scene_analysis_scene_markdown') and episode_in.ai_scene_analysis_scene_markdown is not None:
         episode.ai_scene_analysis_scene_markdown = episode_in.ai_scene_analysis_scene_markdown
+    # Apply stage_outputs BEFORE subject_index heal so intentional clears
+    # (empty subject_index + empty stage_outputs in one PUT) do not resurrect
+    # the pre-update stage_outputs Subject Index.
+    if hasattr(episode_in, 'ai_stage_outputs') and episode_in.ai_stage_outputs is not None:
+        episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
         sanitized_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
         if _subject_index_has_usable_content(sanitized_subject_index):
             episode.ai_scene_analysis_subject_index = sanitized_subject_index
         else:
             # Prefer Stage 2 panel Subject Index over empty/contaminated writes.
-            stage_candidate = ""
-            if getattr(episode_in, "ai_stage_outputs", None) is not None:
-                stage_candidate = _extract_subject_index_from_stage_outputs(episode_in.ai_stage_outputs)
-            if not _subject_index_has_usable_content(stage_candidate):
-                stage_candidate = _extract_subject_index_from_stage_outputs(episode.ai_stage_outputs)
+            # episode.ai_stage_outputs already reflects this request when provided.
+            stage_candidate = _extract_subject_index_from_stage_outputs(episode.ai_stage_outputs)
             if _subject_index_has_usable_content(stage_candidate):
                 episode.ai_scene_analysis_subject_index = stage_candidate
                 logger.info(
@@ -20598,8 +20721,6 @@ def update_episode(
         episode.ai_scene_analysis_adaptation = episode_in.ai_scene_analysis_adaptation
     if hasattr(episode_in, 'ai_entity_design_result') and episode_in.ai_entity_design_result is not None:
         episode.ai_entity_design_result = episode_in.ai_entity_design_result
-    if hasattr(episode_in, 'ai_stage_outputs') and episode_in.ai_stage_outputs is not None:
-        episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if episode_in.character_profiles is not None:
         episode.character_profiles = episode_in.character_profiles
     try:
@@ -23608,10 +23729,11 @@ def _build_prior_entity_generation_prompts_block(
     project_id: int,
     subject_index_text: Any,
     allowed_types: Optional[set] = None,
+    episode_id: Optional[int] = None,
 ) -> str:
-    """Look up same-type/same-name project entities and inject generation_prompt_cn.
+    """Look up same-type/same-name entities in the current episode and inject generation_prompt_cn.
 
-    When multiple matches exist, prefer the entity from the highest episode number.
+    Injection is strictly episode-scoped: entities from other episodes are never included.
     Poster/cover entities are never included.
     """
     try:
@@ -23619,6 +23741,16 @@ def _build_prior_entity_generation_prompts_block(
     except Exception:
         return ""
     if project_id_int <= 0:
+        return ""
+    try:
+        episode_id_int = int(episode_id) if episode_id is not None else 0
+    except Exception:
+        episode_id_int = 0
+    if episode_id_int <= 0:
+        logger.info(
+            "[analyze_scene] prior entity prompts skipped: episode_id required project_id=%s",
+            project_id_int,
+        )
         return ""
 
     subject_entries = _parse_subject_index_entries_for_prior_prompts(
@@ -23632,6 +23764,7 @@ def _build_prior_entity_generation_prompts_block(
         db.query(Entity)
         .filter(
             Entity.project_id == project_id_int,
+            Entity.episode_id == episode_id_int,
             _active_entity_clause(),
         )
         .all()
@@ -23639,35 +23772,15 @@ def _build_prior_entity_generation_prompts_block(
     if not entities:
         return ""
 
-    episode_ids = {
-        int(ep_id)
-        for ep_id in (getattr(ent, "episode_id", None) for ent in entities)
-        if ep_id is not None
-    }
     episode_by_id: Dict[int, Episode] = {}
-    if episode_ids:
-        episode_rows = db.query(Episode).filter(Episode.id.in_(list(episode_ids))).all()
-        episode_by_id = {
-            int(getattr(ep, "id", 0) or 0): ep
-            for ep in episode_rows
-            if getattr(ep, "id", None) is not None
-        }
+    episode_row = db.query(Episode).filter(Episode.id == episode_id_int).first()
+    if episode_row is not None:
+        episode_by_id[episode_id_int] = episode_row
 
     def _entity_episode_sort_tuple(ent: Entity) -> Tuple[int, int, int]:
-        """Higher episode number wins; fall back to episode_id then entity id."""
-        ep_id = getattr(ent, "episode_id", None)
-        try:
-            ep_id_int = int(ep_id) if ep_id is not None else 0
-        except Exception:
-            ep_id_int = 0
-        episode = episode_by_id.get(ep_id_int) if ep_id_int else None
-        resolved_number = _resolve_episode_sort_number(episode) if episode else None
+        """Prefer newer entity id when multiple same-name matches exist in-episode."""
         entity_id = int(getattr(ent, "id", 0) or 0)
-        if resolved_number is not None:
-            return (2, int(resolved_number), entity_id)
-        if ep_id_int > 0:
-            return (1, ep_id_int, entity_id)
-        return (0, 0, entity_id)
+        return (1, entity_id, entity_id)
 
     # Index project entities by type + compare-key for O(1) name matching.
     entities_by_type_key: Dict[str, List[Entity]] = {}
@@ -23751,8 +23864,8 @@ def _build_prior_entity_generation_prompts_block(
     body = (
         "# Prior Entity Image Prompts (Design Baseline)\n"
         "The following Chinese image-generation prompts come from existing same-type / same-name "
-        "entities already stored in this project. When multiple matches exist, the entity from the "
-        "highest episode number is selected. Poster/cover entities are excluded.\n"
+        "entities already stored in THIS episode only. Entities from other episodes are never injected. "
+        "Poster/cover entities are excluded.\n"
         "\n"
         "## Mandatory reuse rules (read carefully)\n"
         "1) **Stable / identity attributes MUST follow the injected prior prompt** as the authoritative "
@@ -23777,8 +23890,9 @@ def _build_prior_entity_generation_prompts_block(
         + "\n"
     )
     logger.info(
-        "[analyze_scene] built prior entity generation prompts project_id=%s subjects=%s matched=%s",
+        "[analyze_scene] built prior entity generation prompts project_id=%s episode_id=%s subjects=%s matched=%s",
         project_id_int,
+        episode_id_int,
         len(subject_entries),
         len(prompt_lines),
     )
@@ -26174,9 +26288,10 @@ def _build_shot_prompts(
         return values
 
     def _extract_tagged_scene_subjects(raw_value: Any) -> List[str]:
+        """Extract only scene-related CHAR/PROP/ENV tags (never EXTRA/COVER/poster)."""
         values: List[str] = []
         text = str(raw_value or "")
-        for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV|EXTRA|COVER)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", text):
+        for match in re.finditer(r"(?i)\b(?:CHAR|PROP|ENV)\s*:\s*\[\s*@?([^\]\n]+?)\s*\]", text):
             cleaned = _clean_br(match.group(1))
             if cleaned:
                 values.append(cleaned)
@@ -26188,7 +26303,7 @@ def _build_shot_prompts(
         if not text.strip():
             return values
         row_patterns = [
-            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Environment\s*Anchor|环境锚点)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
+            r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Environment\s*Anchor|环境锚点|Environment\s*Name|环境名)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
             r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Linked\s*Characters|关联角色)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
             r"(?im)^\s*\|\s*(?:\*\*)?\s*(?:Key\s*Props|关键道具)\s*(?:\*\*)?\s*\|\s*(.*?)\s*\|\s*$",
         ]
@@ -26247,9 +26362,10 @@ def _build_shot_prompts(
     # parse them as additional candidates.
     for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
         _register_scene_subject_candidate(part)
-    # Keep the legacy candidate mode: parse tagged subjects from scene content.
-    for part in _extract_tagged_scene_subjects(scene.core_scene_info):
-        _register_scene_subject_candidate(part)
+    # Tagged subjects from scene body / original script grounding (CHAR/PROP/ENV only).
+    for source_text in (scene.core_scene_info, getattr(scene, "original_script_text", None)):
+        for part in _extract_tagged_scene_subjects(source_text):
+            _register_scene_subject_candidate(part)
 
     logger.info(
         "[_build_shot_prompts] scene subject candidates merged scene_id=%s names=%s keys=%s",
@@ -26272,8 +26388,9 @@ def _build_shot_prompts(
                 _add_scene_subject_candidate(part, candidates)
         for part in _extract_scene_subjects_from_markdown_rows(scene.core_scene_info):
             _add_scene_subject_candidate(part, candidates)
-        for part in _extract_tagged_scene_subjects(scene.core_scene_info):
-            _add_scene_subject_candidate(part, candidates)
+        for source_text in (scene.core_scene_info, getattr(scene, "original_script_text", None)):
+            for part in _extract_tagged_scene_subjects(source_text):
+                _add_scene_subject_candidate(part, candidates)
         return candidates
 
     def _normalize_subject_index_row_type(raw_type: Any) -> str:
@@ -26312,6 +26429,11 @@ def _build_shot_prompts(
         return bool(row_type)
 
     def _build_filtered_scene_subject_index(scene_subject_keys: set) -> Tuple[str, set]:
+        """
+        Inject only Subject Index rows that match this scene's related entities
+        (environment / linked characters / key props, plus tagged names in Core Scene Info).
+        Never inject the full episode Subject Index.
+        """
         episode = db.query(Episode).filter(Episode.id == scene.episode_id).first()
         subject_index_text = sanitize_subject_index_text(
             getattr(episode, "ai_scene_analysis_subject_index", None) if episode else ""
@@ -26319,11 +26441,43 @@ def _build_shot_prompts(
         if not subject_index_text:
             return "", set()
 
+        if not scene_subject_keys:
+            logger.info(
+                "[_build_shot_prompts] skip subject index injection: no scene-linked entity candidates "
+                "scene_id=%s env=%s chars=%s props=%s",
+                getattr(scene, "id", None),
+                bool(str(getattr(scene, "environment_name", "") or "").strip()),
+                bool(str(getattr(scene, "linked_characters", "") or "").strip()),
+                bool(str(getattr(scene, "key_props", "") or "").strip()),
+            )
+            return "", set()
+
         header_lines: List[str] = []
         separator_lines: List[str] = []
         kept_rows: List[str] = []
         seen_rows: set = set()
         index_subject_keys: set = set()
+        allowed_row_types = {"character", "prop", "environment"}
+
+        def _row_matches_scene_subjects(parts: List[str]) -> bool:
+            # Match by display names only (zh/en). Do not keep rows merely because
+            # scene candidates are empty, and do not match on subject_no alone.
+            name_cells = []
+            if len(parts) > 2:
+                name_cells.append(parts[2])
+            if len(parts) > 3:
+                name_cells.append(parts[3])
+            for candidate in name_cells:
+                candidate_text = str(candidate or "").strip()
+                if not candidate_text:
+                    continue
+                primary = _scene_subject_compare_key(candidate_text)
+                if primary and primary in scene_subject_keys:
+                    return True
+                variants = _scene_subject_compare_keys(candidate_text)
+                if variants and scene_subject_keys.intersection(variants):
+                    return True
+            return False
 
         for raw_line in str(subject_index_text).splitlines():
             line = str(raw_line or "")
@@ -26335,19 +26489,20 @@ def _build_shot_prompts(
             parts = [part.strip() for part in normalized_line.split("|")]
             is_subject_row = _is_subject_index_row(parts, normalized_line)
             if is_subject_row:
-                row_candidates = [parts[0], parts[2], parts[3]]
-                keep_row = not scene_subject_keys
-                if not keep_row:
-                    keep_row = any(_scene_subject_compare_key(candidate) in scene_subject_keys for candidate in row_candidates)
-                if keep_row:
-                    row_key = re.sub(r"\s+", "", stripped).lower()
-                    if row_key not in seen_rows:
-                        kept_rows.append(line)
-                        seen_rows.add(row_key)
-                        for candidate in row_candidates[1:]:
-                            key = _scene_subject_compare_key(candidate)
-                            if key:
-                                index_subject_keys.add(key)
+                row_type = _normalize_subject_index_row_type(parts[1] if len(parts) > 1 else "")
+                if row_type not in allowed_row_types:
+                    continue
+                if not _row_matches_scene_subjects(parts):
+                    continue
+                row_key = re.sub(r"\s+", "", stripped).lower()
+                if row_key in seen_rows:
+                    continue
+                kept_rows.append(line)
+                seen_rows.add(row_key)
+                for candidate in [parts[2] if len(parts) > 2 else "", parts[3] if len(parts) > 3 else ""]:
+                    key = _scene_subject_compare_key(candidate)
+                    if key:
+                        index_subject_keys.add(key)
                 continue
 
             is_table_header = "|" in stripped and re.search(r"(?i)subject_no|subject_type|subject_name|name_zh|name_en", stripped)
@@ -26358,38 +26513,10 @@ def _build_shot_prompts(
             if is_table_separator:
                 separator_lines = [line]
 
-        if not kept_rows and scene_subject_keys:
-            # Fallback: if scene fields failed to expose candidates, inject the full
-            # subject index so downstream shot generation still receives authoritative entities.
-            for raw_line in str(subject_index_text).splitlines():
-                line = str(raw_line or "")
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                normalized_line = stripped.strip("|").strip()
-                parts = [part.strip() for part in normalized_line.split("|")]
-                is_subject_row = _is_subject_index_row(parts, normalized_line)
-                if not is_subject_row:
-                    continue
-                row_key = re.sub(r"\s+", "", stripped).lower()
-                if row_key in seen_rows:
-                    continue
-                kept_rows.append(line)
-                seen_rows.add(row_key)
-                for candidate in [parts[2], parts[3]]:
-                    key = _scene_subject_compare_key(candidate)
-                    if key:
-                        index_subject_keys.add(key)
-            logger.info(
-                "[_build_shot_prompts] subject index fallback to full list scene_id=%s candidate_count=%s rows=%s",
-                getattr(scene, "id", None),
-                len(scene_subject_keys),
-                len(kept_rows),
-            )
-
         if not kept_rows:
             logger.info(
-                "[_build_shot_prompts] filtered scene subject index has no matching rows scene_id=%s candidate_count=%s",
+                "[_build_shot_prompts] filtered scene subject index has no matching rows "
+                "(full index will NOT be injected) scene_id=%s candidate_count=%s",
                 getattr(scene, "id", None),
                 len(scene_subject_keys),
             )
@@ -26397,7 +26524,10 @@ def _build_shot_prompts(
 
         lines = [
             "# Scene Subject Index",
-            "Authoritative filtered Subject Index for this scene only. Use subject_no/subject_type/subject_name fields as the sole entity naming source; do not infer subjects outside this list.",
+            "Authoritative filtered Subject Index for this scene only "
+            "(environment / linked characters / key props). "
+            "Use subject_no/subject_type/subject_name fields as the sole entity naming source; "
+            "do not infer subjects outside this list.",
         ]
         lines.extend(header_lines)
         lines.extend(separator_lines if header_lines else [])

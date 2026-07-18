@@ -88,6 +88,7 @@ SCENE_MARKER_LINE_PATTERN = re.compile(
 )
 MIN_SCENE_UNIT_BODY_CHARS = 50
 MIN_SCENE_BEATS_CHARS = 20
+SCENE_NAME_HEADER_PATTERN = re.compile(r"【场景名称】\s*[^\n【]+")
 
 ISSUE_SEVERITY_VALUES = {"INFO", "WARNING", "BLOCKER"}
 
@@ -1448,6 +1449,28 @@ def extract_legacy_beat_sections_from_scene_text(scene_text: str) -> str:
     return "\n\n".join(blocks).strip()
 
 
+def extract_scene_name_header_from_scene_text(scene_text: str) -> str:
+    """
+    Extract Stage 1 scene header line `【场景名称】{短名}｜{日·内/外}`.
+    Returns the full header line (including the 【场景名称】 prefix), or empty string.
+    """
+    match = SCENE_NAME_HEADER_PATTERN.search(str(scene_text or ""))
+    if not match:
+        return ""
+    return str(match.group(0) or "").strip()
+
+
+def extract_scene_name_value_from_scene_text(scene_text: str) -> str:
+    """
+    Extract Scenes Table `Scene Name` cell value from Stage 1 header:
+    `{短名}｜{日·内/外}` (without the 【场景名称】 prefix).
+    """
+    header = extract_scene_name_header_from_scene_text(scene_text)
+    if not header:
+        return ""
+    return re.sub(r"^【场景名称】\s*", "", header).strip()
+
+
 def extract_beat_blocks_from_scene_text(scene_text: str) -> str:
     """
     Extract only `[BEAT_START:…]`…`[BEAT_END:…]` blocks from a Stage 1 scene body.
@@ -1547,7 +1570,7 @@ def validate_scene_beats_min_length(
 
 def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
     """
-    Wrap one scene for Stage 2.2 LLM input: Scene markers + Beat blocks.
+    Wrap one scene for Stage 2.2 LLM input: Scene markers + 【场景名称】 + Beat blocks.
     Prefer extracted Beats; on split failure / too-short Beats, fall back to full scene body.
     Raises SceneBeatsTooShortError only when the final body is still shorter than MIN_SCENE_BEATS_CHARS.
     """
@@ -1567,10 +1590,18 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         scene_markdown = str(getattr(unit, "scene_markdown", "") or "").strip()
         if scene_markdown:
             scene_text = scene_markdown
-    body_text, _used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
+    body_text, used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
+    # Inject Stage 1 scene header only for beats-only body; full-scene fallback already contains it.
+    scene_name_header = (
+        ""
+        if used_fallback
+        else extract_scene_name_header_from_scene_text(scene_text)
+    )
     parts = [SCENES_BLOCK_START_TOKEN]
     if marker_start:
         parts.append(marker_start)
+    if scene_name_header:
+        parts.append(scene_name_header)
     if body_text:
         parts.append(body_text)
     if marker_end:
@@ -2129,6 +2160,7 @@ def patch_single_scene_markdown_for_orchestration(
     expected_scene_id: str,
     *,
     scene_order: Optional[int] = None,
+    scene_name: Optional[str] = None,
 ) -> str:
     text = sanitize_scene_markdown_llm_output(scene_text) or str(scene_text or "").strip()
     expected = str(expected_scene_id or "").strip()
@@ -2140,6 +2172,7 @@ def patch_single_scene_markdown_for_orchestration(
         return text
 
     episode_id = _extract_episode_id_from_scene_id(expected)
+    preferred_scene_name = str(scene_name or "").strip()
 
     for block in blocks:
         lines = [line.strip() for line in str(block or "").splitlines() if str(line or "").strip()]
@@ -2195,6 +2228,10 @@ def patch_single_scene_markdown_for_orchestration(
                 row[scene_no_idx] = str(scene_order)
         if episode_id and episode_id_idx >= 0:
             row[episode_id_idx] = episode_id
+        if preferred_scene_name and scene_name_idx >= 0:
+            current_name = _scene_table_cell_value(row, scene_name_idx)
+            if not current_name or current_name.lower() in {"none", "null", "n/a", "-"}:
+                row[scene_name_idx] = preferred_scene_name
         return _build_scene_markdown_from_table_row(headers, row)
 
     return text
@@ -2405,6 +2442,8 @@ __all__ = [
     "extract_scenes_table_markdown_block",
     "sanitize_scene_markdown_llm_output",
     "wrap_scene_unit_as_script_block",
+    "extract_scene_name_header_from_scene_text",
+    "extract_scene_name_value_from_scene_text",
     "extract_beat_blocks_from_scene_text",
     "extract_legacy_beat_sections_from_scene_text",
     "extract_env_block_from_scene_text",
