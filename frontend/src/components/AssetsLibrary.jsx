@@ -10,6 +10,8 @@ import { fetchAssets, fetchProjects, fetchEpisodes, createAsset, uploadAsset, de
 import { useLog } from '../context/LogContext';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import RefineControl from './RefineControl.jsx';
+import FunctionApiSelector from './FunctionApiSelector';
+import { useFunctionApis } from './useFunctionApis';
 import { confirmUiMessage } from '../lib/uiMessage';
 import { getUiLang, tUI } from '../lib/uiLang';
 import { SafeImage, getThumbUrl } from '../pages/editor/editorHelpers';
@@ -1935,13 +1937,17 @@ const AssetDetailModal = ({ asset, onClose, onUpdate }) => {
 const AnalyzeSection = ({ asset }) => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
+    const functionApiConfigs = useFunctionApis();
     const [analyzing, setAnalyzing] = useState(false);
     const [result, setResult] = useState('');
 
     const handleAnalyze = async () => {
         setAnalyzing(true);
         try {
-            const data = await analyzeAssetImage(asset.id);
+            const data = await analyzeAssetImage({
+                asset_id: asset.id,
+                function_name: 'script_analysis',
+            });
             setResult(data.result);
         } catch (e) {
             console.error(e);
@@ -1969,6 +1975,14 @@ const AnalyzeSection = ({ asset }) => {
                         <Copy size={12} />
                     </button>
                 )}
+            </div>
+
+            <div className="mb-3">
+                <FunctionApiSelector
+                    functionName="script_analysis"
+                    configs={functionApiConfigs}
+                    label={t('分析模型: ', 'Analysis: ')}
+                />
             </div>
             
             {!result && !analyzing && (

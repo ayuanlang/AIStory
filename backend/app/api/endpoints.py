@@ -144,7 +144,7 @@ from app.services.script_analysis_flow import (
     build_assets_extraction_script_from_adapted,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
-from app.core.time_utils import now_bj_iso
+from app.core.time_utils import BEIJING_TZ, now_bj_iso
 import os
 
 
@@ -1978,16 +1978,44 @@ def _compact_generation_callback_payload(payload: Dict[str, Any]) -> Dict[str, A
         "payload_truncated": True,
     }
 
+    # Preserve compact usage / KIE creditsConsumed for callback-time billing when truncated.
+    try:
+        from app.services.media_service import _extract_provider_task_usage, _normalize_provider_task_usage
+
+        compact_usage = _normalize_provider_task_usage(_extract_provider_task_usage(payload))
+        if compact_usage:
+            # Drop bulky nested audit blobs if present.
+            compact["usage"] = {
+                k: v
+                for k, v in compact_usage.items()
+                if k not in {"raw_task"} and not isinstance(v, (dict, list))
+            } or compact_usage
+            kie_credits = compact_usage.get("kie_credits_consumed") or compact_usage.get("creditsConsumed")
+            if kie_credits not in (None, ""):
+                compact["creditsConsumed"] = kie_credits
+                compact["credits_consumed"] = kie_credits
+                compact["kie_credits_consumed"] = kie_credits
+    except Exception:
+        pass
+
     data_block = payload.get("data")
     if isinstance(data_block, dict):
         data_status_raw = _extract_callback_status(data_block)
         data_status = _normalize_generation_status(data_status_raw) or data_status_raw
-        compact["data"] = {
+        compact_data = {
             "id": str(data_block.get("id") or data_block.get("task_id") or data_block.get("taskId") or "").strip() or None,
             "status": data_status or None,
             "result_url": _extract_job_result_url(data_block) or None,
             "error": str(data_block.get("error") or data_block.get("message") or "").strip() or None,
         }
+        nested_usage = data_block.get("usage")
+        if isinstance(nested_usage, dict) and nested_usage:
+            compact_data["usage"] = nested_usage
+        for credit_key in ("creditsConsumed", "credits_consumed", "kie_credits_consumed"):
+            if data_block.get(credit_key) not in (None, ""):
+                compact_data[credit_key] = data_block.get(credit_key)
+                compact.setdefault(credit_key, data_block.get(credit_key))
+        compact["data"] = compact_data
 
     if stable_json:
         compact["payload_size_bytes"] = len(stable_json.encode("utf-8", errors="ignore"))
@@ -5275,6 +5303,35 @@ def _build_result_from_provider_callback(
         ):
             if payload_meta.get(key) not in (None, ""):
                 metadata[key] = payload_meta.get(key)
+    try:
+        from app.services.media_service import (
+            _attach_provider_usage_metadata,
+            _extract_provider_task_usage,
+            _normalize_provider_task_usage,
+        )
+
+        callback_usage = _normalize_provider_task_usage(_extract_provider_task_usage(payload))
+        if callback_usage:
+            metadata = _attach_provider_usage_metadata(
+                metadata,
+                usage=callback_usage,
+                source=str(resolved_provider or "callback").strip() or "callback",
+                task_payload=payload,
+            )
+            kie_credits = callback_usage.get("kie_credits_consumed") or callback_usage.get("creditsConsumed")
+            if kie_credits not in (None, ""):
+                metadata["creditsConsumed"] = kie_credits
+                metadata["credits_consumed"] = kie_credits
+                metadata["kie_credits_consumed"] = kie_credits
+            metadata["raw"] = {
+                "id": callback_task_id,
+                "status": metadata.get("status"),
+                "usage": callback_usage,
+                "model": resolved_model or None,
+                "creditsConsumed": kie_credits,
+            }
+    except Exception:
+        pass
     result["metadata"] = metadata
     return result
 
@@ -6378,6 +6435,332 @@ def _find_video_jobs_by_provider_callback_ticket(callback_ticket: str) -> List[T
     return matches
 
 
+def _reservation_already_closed(db: Session, reservation_tx_id: int) -> bool:
+    try:
+        from app.models.all_models import TransactionHistory
+
+        tx = db.query(TransactionHistory).filter(TransactionHistory.id == int(reservation_tx_id)).first()
+        if not tx:
+            return True
+        details = dict(tx.details or {}) if isinstance(tx.details, dict) else {}
+        status = str(details.get("status") or "").strip().upper()
+        return status in {"SETTLED", "CANCELED", "CANCELLED"}
+    except Exception:
+        return False
+
+
+def _cancel_video_job_pending_reservation(job_id: str, job: Optional[Dict[str, Any]], reason: str) -> None:
+    job = job if isinstance(job, dict) else {}
+    if job.get("billing_settled"):
+        return
+    try:
+        reservation_tx_id = int(job.get("reservation_tx_id") or 0) or None
+    except Exception:
+        reservation_tx_id = None
+    if not reservation_tx_id:
+        return
+
+    db = SessionLocal()
+    try:
+        if _reservation_already_closed(db, reservation_tx_id):
+            _set_video_job(job_id, billing_settled=True, billing_pending=False, reservation_tx_id=None)
+            return
+        billing_service.cancel_reservation(db, reservation_tx_id, reason)
+        _set_video_job(
+            job_id,
+            billing_settled=True,
+            billing_pending=False,
+            reservation_tx_id=None,
+            billing_cancel_reason=str(reason or "")[:500] or None,
+        )
+        logger.info(
+            "[VideoJob] canceled pending reservation | job_id=%s reservation_tx_id=%s reason=%s",
+            job_id,
+            reservation_tx_id,
+            str(reason or "")[:200],
+        )
+    except Exception as exc:
+        logger.warning(
+            "[VideoJob] cancel pending reservation failed | job_id=%s reservation_tx_id=%s error=%s",
+            job_id,
+            reservation_tx_id,
+            exc,
+        )
+    finally:
+        db.close()
+
+
+async def _settle_or_cancel_video_job_billing_from_callback(
+    job_id: str,
+    job: Dict[str, Any],
+    callback_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Settle/cancel open video reservation after provider callback using actual usage when possible."""
+    job = _hydrate_video_job_record(job_id, job) if job_id else (job or {})
+    if not isinstance(job, dict):
+        return job or {}
+    if job.get("billing_settled") or not job.get("billing_pending"):
+        return job
+
+    try:
+        reservation_tx_id = int(job.get("reservation_tx_id") or 0) or None
+    except Exception:
+        reservation_tx_id = None
+    if not reservation_tx_id:
+        return job
+
+    status = _normalize_generation_status(job.get("status"))
+    billing_context = job.get("billing_context") if isinstance(job.get("billing_context"), dict) else {}
+    callback_payload = callback_payload if isinstance(callback_payload, dict) else {}
+
+    if status in {"failed", "error", "canceled", "cancelled"}:
+        reason = str(job.get("error") or callback_payload.get("failure_reason") or callback_payload.get("error") or status)
+        _cancel_video_job_pending_reservation(job_id, job, reason)
+        with VIDEO_JOB_LOCK:
+            return dict(VIDEO_JOB_STORE.get(job_id) or job)
+
+    if status not in {"succeeded", "completed", "done"}:
+        return job
+
+    db = SessionLocal()
+    try:
+        if _reservation_already_closed(db, reservation_tx_id):
+            _set_video_job(job_id, billing_settled=True, billing_pending=False, reservation_tx_id=None)
+            with VIDEO_JOB_LOCK:
+                return dict(VIDEO_JOB_STORE.get(job_id) or job)
+
+        is_token_billing = bool(billing_context.get("is_token_billing"))
+        provider = str(
+            job.get("provider")
+            or billing_context.get("provider")
+            or ""
+        ).strip() or None
+        model = str(
+            job.get("model")
+            or billing_context.get("model")
+            or ""
+        ).strip() or None
+        provider_task_id = _extract_job_provider_task_id(job) or _extract_callback_task_id(callback_payload)
+
+        usage: Dict[str, Any] = {}
+        result_meta = {}
+        result_obj = job.get("result") if isinstance(job.get("result"), dict) else {}
+        if isinstance(result_obj.get("metadata"), dict):
+            result_meta = result_obj.get("metadata") or {}
+            usage = _extract_provider_usage_from_metadata(result_meta)
+        if not usage and callback_payload:
+            try:
+                from app.services.media_service import _extract_provider_task_usage, _normalize_provider_task_usage
+
+                usage = _normalize_provider_task_usage(_extract_provider_task_usage(callback_payload))
+            except Exception:
+                usage = {}
+
+        usage_source = str(result_meta.get("usage_source") or "").strip() or ("callback" if usage else "")
+
+        # Re-query provider task for Ark/ZLHub-style token usage when callback omits it.
+        if is_token_billing and _resolve_usage_token_total(usage) <= 0 and provider_task_id:
+            try:
+                user_id = int(job.get("user_id") or 0)
+                user = db.query(User).filter(User.id == user_id).first() if user_id else None
+                runtime = _resolve_media_runtime_target(
+                    provider=provider,
+                    model=model,
+                    media_type="video",
+                    category="Video",
+                    user_id=user_id,
+                    user_credits=int(getattr(user, "credits", 0) or 0) if user else 0,
+                    system_api_id=billing_context.get("system_api_id"),
+                )
+                pre_api_cfg = runtime.get("pre_api_cfg") if isinstance(runtime.get("pre_api_cfg"), dict) else {}
+                cfg_payload = pre_api_cfg.get("config") if isinstance(pre_api_cfg.get("config"), dict) else {}
+                api_key = media_service._pick_runtime_api_key(
+                    cfg_payload or pre_api_cfg,
+                    pre_api_cfg.get("api_key"),
+                    session=db,
+                    provider_name=str(runtime.get("resolved_provider") or provider or ""),
+                )
+                query_endpoint = (
+                    cfg_payload.get("query_endpoint")
+                    or cfg_payload.get("base_url")
+                    or cfg_payload.get("endpoint")
+                    or pre_api_cfg.get("base_url")
+                    or pre_api_cfg.get("endpoint")
+                )
+                fetched = await asyncio.to_thread(
+                    media_service.fetch_provider_task_usage,
+                    task_id=str(provider_task_id),
+                    api_key=str(api_key or ""),
+                    query_endpoint=str(query_endpoint or "") or None,
+                    provider=str(runtime.get("resolved_provider") or provider or ""),
+                    refresh_if_missing=True,
+                )
+                if isinstance(fetched, dict) and fetched:
+                    usage = {k: v for k, v in fetched.items() if k != "raw_task"}
+                    usage_source = "task_query"
+                    provider = str(runtime.get("resolved_provider") or provider or "").strip() or provider
+                    model = str(runtime.get("resolved_model") or model or "").strip() or model
+            except Exception as usage_err:
+                logger.warning(
+                    "[VideoJob] callback task usage query failed | job_id=%s task_id=%s error=%s",
+                    job_id,
+                    provider_task_id,
+                    usage_err,
+                )
+
+        if is_token_billing:
+            actual_tokens = _resolve_usage_token_total(usage)
+            token_source = "api_usage" if actual_tokens > 0 else "estimate"
+            settle_details: Dict[str, Any] = {
+                "status": "SETTLED",
+                "billing_mode": "ACTUAL",
+                "draft_mode": bool(billing_context.get("draft_mode")),
+                "draft": bool(billing_context.get("draft_mode")),
+                "use_prev_video": bool(billing_context.get("use_prev_video")),
+                "shot_continuation": bool(billing_context.get("shot_continuation")),
+                "has_video_input": bool(billing_context.get("has_video_input")),
+                "width": billing_context.get("width"),
+                "height": billing_context.get("height"),
+                "fps": billing_context.get("fps") or 24,
+            }
+            if actual_tokens <= 0:
+                settle_duration = max(5, int(billing_context.get("duration_seconds") or billing_context.get("duration") or 5))
+                draft_mode = bool(billing_context.get("draft_mode"))
+                draft_coeff = float(billing_context.get("draft_token_coefficient") or 1.0)
+                if draft_mode and not (0 < draft_coeff < 1.0):
+                    draft_coeff = float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+                settle_estimate = billing_service.estimate_video_token_usage(
+                    width=int(billing_context.get("width") or 1280),
+                    height=int(billing_context.get("height") or 720),
+                    fps=int(billing_context.get("fps") or 24),
+                    output_duration_seconds=settle_duration,
+                    has_video_input=bool(billing_context.get("has_video_input")),
+                    input_duration_seconds=None,
+                    draft_token_coefficient=draft_coeff if draft_mode else float(billing_context.get("draft_token_coefficient") or 1.0),
+                    method=(
+                        "seedance2_video_token_formula"
+                        if billing_context.get("is_seedance_2") or billing_service.is_seedance_2_model(provider, model)
+                        else "video_token_formula"
+                    ),
+                )
+                actual_tokens = int(settle_estimate.get("tokens") or billing_context.get("estimated_tokens") or 0)
+                settle_details["video_token_estimate"] = settle_estimate
+                settle_details["estimation_method"] = settle_estimate.get("estimation_method")
+            else:
+                settle_details["completion_tokens"] = _safe_int_token(
+                    usage.get("completion_tokens") or usage.get("output_tokens") or actual_tokens
+                )
+            settle_details["output_tokens"] = int(max(0, actual_tokens))
+            settle_details["total_tokens"] = int(max(0, actual_tokens))
+            settle_details["token_source"] = token_source
+        else:
+            settle_details = {
+                "duration": billing_context.get("duration"),
+                "duration_seconds": billing_context.get("duration_seconds") or billing_context.get("duration"),
+                "status": "SETTLED",
+                "billing_mode": "ACTUAL",
+                "draft_mode": bool(billing_context.get("draft_mode")),
+                "draft": bool(billing_context.get("draft_mode")),
+                "use_prev_video": bool(billing_context.get("use_prev_video")),
+                "shot_continuation": bool(billing_context.get("shot_continuation")),
+                "has_video_input": bool(billing_context.get("has_video_input")),
+            }
+            if billing_context.get("width"):
+                settle_details["width"] = billing_context.get("width")
+            if billing_context.get("height"):
+                settle_details["height"] = billing_context.get("height")
+            if billing_context.get("resolution"):
+                settle_details["resolution"] = billing_context.get("resolution")
+
+            # KIE webhook: data.creditsConsumed → actual supplier credits → system credits settle.
+            kie_credits = 0.0
+            try:
+                from app.services.billing_pricing import resolve_provider_kie_credits
+
+                kie_credits = float(resolve_provider_kie_credits(usage) or 0.0)
+            except Exception:
+                kie_credits = 0.0
+            if kie_credits <= 0:
+                for src in (result_meta, callback_payload, (callback_payload or {}).get("data")):
+                    if not isinstance(src, dict):
+                        continue
+                    for credit_key in ("kie_credits_consumed", "credits_consumed", "creditsConsumed"):
+                        if src.get(credit_key) in (None, ""):
+                            continue
+                        try:
+                            kie_credits = float(src.get(credit_key) or 0)
+                        except Exception:
+                            kie_credits = 0.0
+                        if kie_credits > 0:
+                            break
+                    if kie_credits > 0:
+                        break
+            if kie_credits > 0:
+                settle_details["kie_credits_consumed"] = kie_credits
+                settle_details["credits_consumed"] = kie_credits
+                settle_details["creditsConsumed"] = kie_credits
+                settle_details["billing_basis"] = "provider_kie_credits"
+                settle_details["usage_source"] = usage_source or "callback"
+                if not usage:
+                    usage = {
+                        "creditsConsumed": kie_credits,
+                        "credits_consumed": kie_credits,
+                        "kie_credits_consumed": kie_credits,
+                        "credits": kie_credits,
+                    }
+                    usage_source = settle_details["usage_source"]
+
+        if usage:
+            settle_details["provider_usage"] = usage
+            settle_details["usage_source"] = usage_source or settle_details.get("usage_source") or "provider"
+        if provider:
+            settle_details["provider"] = provider
+        if model:
+            settle_details["model"] = model
+        if billing_context.get("system_api_id") is not None:
+            settle_details["system_api_id"] = billing_context.get("system_api_id")
+        if billing_context.get("project_id"):
+            settle_details["project_id"] = billing_context.get("project_id")
+        if billing_context.get("episode_id"):
+            settle_details["episode_id"] = billing_context.get("episode_id")
+        if billing_context.get("shot_id"):
+            settle_details["shot_id"] = billing_context.get("shot_id")
+
+        billing_service.settle_reservation(db, reservation_tx_id, settle_details)
+        _set_video_job(
+            job_id,
+            billing_settled=True,
+            billing_pending=False,
+            reservation_tx_id=None,
+            billing_settle_token_source=settle_details.get("token_source"),
+            billing_settle_usage_source=settle_details.get("usage_source"),
+            billing_settle_kie_credits=settle_details.get("kie_credits_consumed"),
+            billing_basis=settle_details.get("billing_basis"),
+        )
+        logger.info(
+            "[VideoJob] settled pending reservation from callback | job_id=%s reservation_tx_id=%s token_source=%s usage_source=%s total_tokens=%s kie_credits=%s billing_basis=%s",
+            job_id,
+            reservation_tx_id,
+            settle_details.get("token_source"),
+            settle_details.get("usage_source"),
+            settle_details.get("total_tokens"),
+            settle_details.get("kie_credits_consumed"),
+            settle_details.get("billing_basis"),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[VideoJob] settle pending reservation failed | job_id=%s reservation_tx_id=%s error=%s",
+            job_id,
+            reservation_tx_id,
+            exc,
+        )
+    finally:
+        db.close()
+
+    with VIDEO_JOB_LOCK:
+        return dict(VIDEO_JOB_STORE.get(job_id) or job)
+
+
 async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> None:
     from app.services.generation_task_queue import mark_generation_task_status_external
 
@@ -6413,6 +6796,11 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         previous_result_url = _extract_job_result_url(job.get("result"))
         try:
             updated_job = _maybe_finalize_video_job_from_provider_callback(job_id, job)
+            updated_job = await _settle_or_cancel_video_job_billing_from_callback(
+                job_id,
+                updated_job,
+                callback_payload,
+            )
         except Exception as exc:
             logger.exception("[VideoJob] callback processing failed | job_id=%s callback_ticket=%s", job_id, stable_ticket)
             if callback_is_terminal:
@@ -7018,14 +7406,18 @@ def list_ui_system_logs(
         level = str(row.get("level") or "INFO").strip().upper() or "INFO"
         message = str(row.get("message") or "").strip()
         client_time = str(row.get("client_time") or "").strip() or None
-        # Prefer client clock for display; fall back to server stamp time-of-day.
+        # Prefer client clock, always render in Beijing time so order matches live UI (local CST).
         display_time = ""
         if client_time:
             try:
-                display_time = datetime.fromisoformat(client_time.replace("Z", "+00:00")).strftime("%H:%M:%S")
+                parsed = datetime.fromisoformat(client_time.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=BEIJING_TZ)
+                display_time = parsed.astimezone(BEIJING_TZ).strftime("%H:%M:%S")
             except Exception:
                 display_time = client_time[11:19] if len(client_time) >= 19 else client_time
         if not display_time and stamp:
+            # Server stamp is already written as local wall time (CST).
             display_time = stamp[11:19] if len(stamp) >= 19 else stamp
         display = f"[{display_time or '--:--:--'}] [{level}] {message}".strip()
         entries.append(
@@ -15161,6 +15553,72 @@ def _normalize_project_image_size(value: Any) -> str:
     return raw if raw in _PROJECT_IMAGE_SIZE_LONG_EDGE_MAP else ""
 
 
+def _normalize_project_video_resolution(value: Any) -> str:
+    """Normalize project video short-edge tier to '480' or '720'."""
+    raw = str(value or "").strip().lower().replace(" ", "")
+    if not raw:
+        return ""
+    if raw.endswith("p") and raw[:-1].isdigit():
+        raw = raw[:-1]
+    elif raw.startswith("p") and raw[1:].isdigit():
+        raw = raw[1:]
+    if raw in {"480", "sd"}:
+        return "480"
+    if raw in {"720", "hd"}:
+        return "720"
+    return ""
+
+
+def _project_video_resolution_label(value: Any) -> str:
+    tier = _normalize_project_video_resolution(value)
+    return f"{tier}p" if tier else ""
+
+
+def _infer_dims_from_video_resolution_tier(
+    aspect_ratio: Any,
+    video_resolution: Any,
+    *,
+    provider: Any = None,
+    model: Any = None,
+) -> Optional[Tuple[int, int]]:
+    """Derive WxH from official Seedance pixel tables (fallback: short-edge math)."""
+    try:
+        from app.services.billing_pricing import resolve_seedance_pixel_dims
+        table_dims = resolve_seedance_pixel_dims(
+            aspect_ratio=aspect_ratio,
+            resolution=video_resolution,
+            provider=provider,
+            model=model,
+        )
+        if table_dims:
+            return table_dims
+    except Exception:
+        pass
+
+    tier = _normalize_project_video_resolution(video_resolution)
+    if not tier:
+        # Allow 1080 / 4k labels for table-miss fallback.
+        raw = str(video_resolution or "").strip().lower().replace(" ", "")
+        if raw in {"1080", "1080p"}:
+            tier = "1080"
+        elif raw in {"4k", "2160", "2160p"}:
+            tier = "2160"
+    if not tier:
+        return None
+    short_edge = int(tier) if str(tier).isdigit() else 720
+    ratio_pair = _parse_aspect_ratio_pair(aspect_ratio) or (16.0, 9.0)
+    rw, rh = ratio_pair
+    if rw <= 0 or rh <= 0:
+        return None
+    if rw >= rh:
+        height = short_edge
+        width = max(1, int(round(short_edge * rw / rh)))
+        return (width, height)
+    width = short_edge
+    height = max(1, int(round(short_edge * rh / rw)))
+    return (width, height)
+
+
 def _parse_aspect_ratio_pair(value: Any) -> Optional[Tuple[float, float]]:
     raw = str(value or "").strip().lower()
     if not raw:
@@ -15279,6 +15737,14 @@ def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
     if image_size:
         defaults["image_size"] = image_size
         visual_standard.setdefault("image_size", image_size)
+
+    video_resolution = _normalize_project_video_resolution(
+        defaults.get("video_resolution")
+        or visual_standard.get("video_resolution")
+        or gi.get("video_resolution")
+    ) or "720"
+    defaults["video_resolution"] = video_resolution
+    visual_standard["video_resolution"] = video_resolution
 
     current_w = (
         _to_positive_int_or_none(defaults.get("horizontal_resolution"))
@@ -35940,6 +36406,8 @@ class VideoGenerationRequest(BaseModel):
     scene_id: Optional[int] = None
     shot_id: Optional[int] = None
     draft_mode: Optional[bool] = False
+    resolution: Optional[str] = None
+    video_resolution: Optional[str] = None
     shot_number: Optional[str] = None
     shot_name: Optional[str] = None
     entity_name: Optional[str] = None
@@ -37842,13 +38310,61 @@ def _extract_provider_usage_from_metadata(metadata: Any) -> Dict[str, Any]:
         if isinstance(value, dict) and value:
             return dict(value)
 
+    # KIE callback may persist scalar creditsConsumed on metadata root.
+    for key in ("kie_credits_consumed", "credits_consumed", "creditsConsumed"):
+        if metadata.get(key) not in (None, ""):
+            try:
+                amount = float(metadata.get(key) or 0)
+            except Exception:
+                amount = 0.0
+            if amount > 0:
+                return {
+                    "creditsConsumed": amount,
+                    "credits_consumed": amount,
+                    "kie_credits_consumed": amount,
+                    "credits": amount,
+                }
+
     raw_payload = metadata.get("raw")
     if isinstance(raw_payload, dict):
         raw_usage = raw_payload.get("usage")
         if isinstance(raw_usage, dict) and raw_usage:
             return dict(raw_usage)
+        for nested_key in ("data", "output", "result", "content"):
+            nested = raw_payload.get(nested_key)
+            if isinstance(nested, dict):
+                nested_usage = nested.get("usage")
+                if isinstance(nested_usage, dict) and nested_usage:
+                    return dict(nested_usage)
+                for credit_key in ("creditsConsumed", "credits_consumed", "kie_credits_consumed"):
+                    if nested.get(credit_key) not in (None, ""):
+                        try:
+                            amount = float(nested.get(credit_key) or 0)
+                        except Exception:
+                            amount = 0.0
+                        if amount > 0:
+                            return {
+                                "creditsConsumed": amount,
+                                "credits_consumed": amount,
+                                "kie_credits_consumed": amount,
+                                "credits": amount,
+                            }
 
     return {}
+
+
+def _resolve_usage_token_total(usage: Any) -> int:
+    """Resolve billable token total from provider usage (Ark: total_tokens / completion_tokens)."""
+    if not isinstance(usage, dict) or not usage:
+        return 0
+    total = _safe_int_token(usage.get("total_tokens"))
+    if total > 0:
+        return total
+    output = _safe_int_token(usage.get("output_tokens") or usage.get("completion_tokens"))
+    if output > 0:
+        prompt = _safe_int_token(usage.get("input_tokens") or usage.get("prompt_tokens"))
+        return prompt + output if prompt > 0 else output
+    return 0
 
 
 def _build_standard_billing_details(
@@ -38613,12 +39129,17 @@ async def _run_generate_image(
                 "height": vis.get("vertical_resolution") or vis.get("verticalResolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or defaults.get("verticalResolution") or info.get("vertical_resolution") or info.get("verticalResolution") or info.get("v_resolution") or info.get("height"),
                 "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("imageSize") or defaults.get("image_resolution") or defaults.get("imageResolution") or info.get("image_size") or info.get("imageSize"),
                 "resolution": vis.get("resolution") or defaults.get("resolution") or defaults.get("image_resolution") or info.get("resolution"),
+                "video_resolution": (
+                    vis.get("video_resolution")
+                    or defaults.get("video_resolution")
+                    or info.get("video_resolution")
+                ),
             }
 
             nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
             if nested:
                 nested_values = _pick_visual_from_info(nested)
-                for key in ("aspect_ratio", "width", "height", "image_size"):
+                for key in ("aspect_ratio", "width", "height", "image_size", "video_resolution"):
                     if not out.get(key) and nested_values.get(key):
                         out[key] = nested_values.get(key)
 
@@ -39313,21 +39834,17 @@ async def _run_generate_image(
 
         if reservation_tx_id is not None:
             if is_token_billing:
-                raw_resp = (result_meta or {}).get("raw") if isinstance(result_meta, dict) else {}
-                usage = raw_resp.get("usage") if isinstance(raw_resp, dict) else {}
-                actual_total_tokens = int(
-                    (usage or {}).get("total_tokens")
-                    or (usage or {}).get("output_tokens")
-                    or estimated_total_tokens
-                    or 0
-                )
+                usage = _extract_provider_usage_from_metadata(result_meta if isinstance(result_meta, dict) else {})
+                api_tokens = _resolve_usage_token_total(usage)
+                actual_total_tokens = api_tokens or int(estimated_total_tokens or 0)
+                token_source = "api_usage" if api_tokens > 0 else "estimate"
                 settle_details = {
                     "input_tokens": int((usage or {}).get("input_tokens") or (usage or {}).get("prompt_tokens") or 0),
                     "output_tokens": int((usage or {}).get("output_tokens") or (usage or {}).get("completion_tokens") or actual_total_tokens),
                     "total_tokens": actual_total_tokens,
                     "status": "SETTLED",
                     "billing_mode": "ACTUAL",
-                    "token_source": "api_usage" if int((usage or {}).get("total_tokens") or 0) > 0 else "estimate",
+                    "token_source": token_source,
                 }
             else:
                 settle_details = {
@@ -41177,14 +41694,15 @@ async def generate_voice_endpoint(
 
         if reservation_tx:
             if is_token_billing:
-                raw_resp = (final_meta or {}).get("raw") if isinstance(final_meta, dict) else {}
-                usage = raw_resp.get("usage") if isinstance(raw_resp, dict) else {}
+                usage = _extract_provider_usage_from_metadata(final_meta)
+                api_tokens = _resolve_usage_token_total(usage)
                 settle_details = {
                     "input_tokens": int((usage or {}).get("input_tokens") or (usage or {}).get("prompt_tokens") or 0),
-                    "output_tokens": int((usage or {}).get("output_tokens") or (usage or {}).get("completion_tokens") or 0),
-                    "total_tokens": int((usage or {}).get("total_tokens") or 0),
+                    "output_tokens": int((usage or {}).get("output_tokens") or (usage or {}).get("completion_tokens") or api_tokens or 0),
+                    "total_tokens": api_tokens,
                     "status": "SETTLED",
                     "billing_mode": "ACTUAL",
+                    "token_source": "api_usage" if api_tokens > 0 else "estimate",
                 }
             else:
                 settle_details = {
@@ -41364,7 +41882,19 @@ async def _run_generate_video(
     reserve_model = runtime_target.get("resolved_model")
     reserve_system_api_id = runtime_target.get("resolved_system_api_id")
 
-    _is_token_billing = billing_service.is_token_pricing(db, "video_gen", reserve_provider, reserve_model)
+    _provider_lower_for_billing = str(reserve_provider or "").strip().lower()
+    _skip_ark_token_formula = (
+        _provider_lower_for_billing == "kie"
+        or _provider_lower_for_billing.startswith("kie/")
+        or "kie.ai" in _provider_lower_for_billing
+        or _provider_lower_for_billing == "runninghub"
+        or _provider_lower_for_billing.startswith("runninghub/")
+        or "runninghub" in _provider_lower_for_billing
+    )
+    # KIE / RunningHub Seedance bill by resolution-tier CNY (or KIE credits) per second.
+    _is_token_billing = (not _skip_ark_token_formula) and billing_service.is_token_pricing(
+        db, "video_gen", reserve_provider, reserve_model
+    )
     _video_token_cfg = {}
     _estimated_tokens = 0
 
@@ -41414,12 +41944,17 @@ async def _run_generate_video(
                 "height": vis.get("vertical_resolution") or vis.get("verticalResolution") or vis.get("v_resolution") or vis.get("height") or defaults.get("vertical_resolution") or defaults.get("verticalResolution") or info.get("vertical_resolution") or info.get("verticalResolution") or info.get("v_resolution") or info.get("height"),
                 "resolution": vis.get("resolution") or defaults.get("resolution") or defaults.get("image_resolution") or info.get("resolution"),
                 "image_size": vis.get("image_size") or vis.get("imageSize") or defaults.get("image_size") or defaults.get("imageSize") or defaults.get("image_resolution") or defaults.get("imageResolution") or info.get("image_size") or info.get("imageSize"),
+                "video_resolution": (
+                    vis.get("video_resolution")
+                    or defaults.get("video_resolution")
+                    or info.get("video_resolution")
+                ),
             }
 
             nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
             if nested:
                 nested_values = _pick_visual_from_info(nested)
-                for key in ("aspect_ratio", "width", "height", "resolution", "image_size"):
+                for key in ("aspect_ratio", "width", "height", "resolution", "image_size", "video_resolution"):
                     if not out.get(key) and nested_values.get(key):
                         out[key] = nested_values.get(key)
 
@@ -41702,16 +42237,34 @@ async def _run_generate_video(
         if req.draft_mode:
             resolved_video_image_size = "0.5K"
             resolved_video_resolution = "480p"
-            ratio_pair = _parse_aspect_ratio_pair(aspect_ratio)
-            if ratio_pair:
-                rw, rh = ratio_pair
-                if rw > 0 and rh > 0:
-                    if rw >= rh:
-                        resolved_video_height = 480
-                        resolved_video_width = max(1, int(round(480 * rw / rh)))
-                    else:
-                        resolved_video_width = 480
-                        resolved_video_height = max(1, int(round(480 * rh / rw)))
+            draft_dims = _infer_dims_from_video_resolution_tier(
+                aspect_ratio,
+                "480",
+                provider=reserve_provider,
+                model=reserve_model,
+            )
+            if draft_dims:
+                resolved_video_width, resolved_video_height = draft_dims
+        else:
+            # Prefer explicit request / project video_resolution (480|720) over image pixel size.
+            req_video_tier = _normalize_project_video_resolution(
+                getattr(req, "video_resolution", None) or getattr(req, "resolution", None)
+            )
+            project_video_tier = _normalize_project_video_resolution(
+                project_visual.get("video_resolution")
+                or project_global_info.get("video_resolution")
+            ) or "720"
+            video_tier = req_video_tier or project_video_tier
+            if video_tier:
+                resolved_video_resolution = _project_video_resolution_label(video_tier)
+                video_dims = _infer_dims_from_video_resolution_tier(
+                    aspect_ratio,
+                    video_tier,
+                    provider=reserve_provider,
+                    model=reserve_model,
+                )
+                if video_dims:
+                    resolved_video_width, resolved_video_height = video_dims
 
         if (not resolved_video_width or not resolved_video_height) and resolved_video_image_size and aspect_ratio:
             inferred_dims = _infer_project_resolution(aspect_ratio, resolved_video_image_size)
@@ -41721,7 +42274,7 @@ async def _run_generate_video(
                     resolved_video_width = int(inferred_w)
                 if not resolved_video_height and inferred_h:
                     resolved_video_height = int(inferred_h)
-                if resolved_video_width and resolved_video_height:
+                if resolved_video_width and resolved_video_height and not resolved_video_resolution:
                     resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
 
         if _is_token_billing:
@@ -42392,31 +42945,49 @@ async def _run_generate_video(
 
         pending_callback_mode = bool(isinstance(result, dict) and result.get("pending_callback"))
         if pending_callback_mode:
+            # Keep reservation open until provider callback; settle/cancel with actual usage then.
             if reservation_tx_id is not None:
-                if _is_token_billing:
-                    settle_details = {
-                        "output_tokens": int(max(1, _estimated_tokens or 0)),
-                        "total_tokens": int(max(1, _estimated_tokens or 0)),
-                        "status": "SETTLED",
-                        "billing_mode": "ESTIMATE_CALLBACK_PENDING",
-                        "token_source": "estimate_callback_pending",
-                        "draft_mode": bool(req.draft_mode),
-                        "draft": bool(req.draft_mode),
-                        "use_prev_video": bool(getattr(req, "use_prev_video", False)),
-                        "shot_continuation": bool(getattr(req, "use_prev_video", False)),
-                    }
-                else:
-                    settle_details = {
-                        "duration": req.duration,
-                        "duration_seconds": req.duration,
-                        "status": "SETTLED",
-                        "billing_mode": "CALLBACK_PENDING",
-                        "draft_mode": bool(req.draft_mode),
-                        "draft": bool(req.draft_mode),
-                        "use_prev_video": bool(getattr(req, "use_prev_video", False)),
-                        "shot_continuation": bool(getattr(req, "use_prev_video", False)),
-                    }
-                billing_service.settle_reservation(db, reservation_tx_id, settle_details)
+                settle_has_video_input = bool(
+                    getattr(req, "use_prev_video", False)
+                    or (
+                        isinstance(getattr(req, "ref_video_urls", None), (list, tuple))
+                        and len(getattr(req, "ref_video_urls") or []) > 0
+                    )
+                )
+                result = dict(result)
+                result["billing_pending"] = True
+                result["reservation_tx_id"] = int(reservation_tx_id)
+                result["billing_context"] = {
+                    "is_token_billing": bool(_is_token_billing),
+                    "estimated_tokens": int(_estimated_tokens or 0),
+                    "duration": req.duration,
+                    "duration_seconds": req.duration,
+                    "draft_mode": bool(req.draft_mode),
+                    "use_prev_video": bool(getattr(req, "use_prev_video", False)),
+                    "shot_continuation": bool(getattr(req, "use_prev_video", False)),
+                    "has_video_input": settle_has_video_input,
+                    "width": int(resolved_video_width) if resolved_video_width else None,
+                    "height": int(resolved_video_height) if resolved_video_height else None,
+                    "fps": int((_video_token_cfg or {}).get("default_fps", 24) or 24),
+                    "resolution": str(resolved_video_resolution or "") or None,
+                    "provider": reserve_provider or req.provider,
+                    "model": reserve_model or req.model,
+                    "system_api_id": reserve_system_api_id,
+                    "project_id": int(resolved_project_id) if resolved_project_id else None,
+                    "episode_id": int(resolved_episode_id) if resolved_episode_id else None,
+                    "shot_id": int(resolved_shot_id) if resolved_shot_id else None,
+                    "is_seedance_2": bool((_video_token_cfg or {}).get("is_seedance_2"))
+                    or billing_service.is_seedance_2_model(reserve_provider, reserve_model),
+                    "draft_token_coefficient": float(
+                        (_video_token_cfg or {}).get("draft_token_coefficient", 1.0) or 1.0
+                    ),
+                }
+                logger.info(
+                    "[GenerateVideo] callback pending; reservation kept open | reservation_tx_id=%s token_billing=%s estimated_tokens=%s",
+                    reservation_tx_id,
+                    bool(_is_token_billing),
+                    int(_estimated_tokens or 0),
+                )
                 reservation_tx = None
                 reservation_tx_id = None
             return result
@@ -42538,10 +43109,9 @@ async def _run_generate_video(
                 final_system_api_id = None
 
             if _is_token_billing:
-                # Extract actual token usage from API response if available
-                raw_resp = (result.get("metadata") or {}).get("raw") or {}
-                usage = raw_resp.get("usage") or {}
-                actual_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
+                # Prefer actual usage from provider task query (e.g. Ark Seedance GET /tasks/{id}.usage).
+                usage = _extract_provider_usage_from_metadata(final_meta)
+                actual_tokens = _resolve_usage_token_total(usage)
                 token_source = "api_usage" if actual_tokens > 0 else "estimate"
                 settle_has_video_input = bool(
                     getattr(req, "use_prev_video", False)
@@ -42584,6 +43154,10 @@ async def _run_generate_video(
                     settle_details["video_token_estimate"] = settle_estimate
                     settle_details["estimation_method"] = settle_estimate.get("estimation_method")
                     settle_details["input_duration_seconds"] = settle_estimate.get("input_duration_seconds")
+                else:
+                    settle_details["completion_tokens"] = _safe_int_token(
+                        usage.get("completion_tokens") or usage.get("output_tokens") or actual_tokens
+                    )
                 settle_details["output_tokens"] = actual_tokens
                 settle_details["total_tokens"] = actual_tokens
                 settle_details["token_source"] = token_source
@@ -42592,11 +43166,33 @@ async def _run_generate_video(
                     "duration": req.duration,
                     "duration_seconds": req.duration,
                     "status": "SETTLED",
+                    "billing_mode": "ACTUAL",
                     "draft_mode": bool(req.draft_mode),
                     "draft": bool(req.draft_mode),
                     "use_prev_video": bool(getattr(req, "use_prev_video", False)),
                     "shot_continuation": bool(getattr(req, "use_prev_video", False)),
+                    "has_video_input": bool(
+                        getattr(req, "use_prev_video", False)
+                        or (
+                            isinstance(getattr(req, "ref_video_urls", None), (list, tuple))
+                            and len(getattr(req, "ref_video_urls") or []) > 0
+                        )
+                    ),
                 }
+
+                # KIE may return creditsConsumed on poll/callback metadata.
+                try:
+                    from app.services.billing_pricing import resolve_provider_kie_credits
+
+                    _kie_usage = _extract_provider_usage_from_metadata(final_meta)
+                    _kie_credits = float(resolve_provider_kie_credits(_kie_usage) or resolve_provider_kie_credits(final_meta) or 0.0)
+                except Exception:
+                    _kie_credits = 0.0
+                if _kie_credits > 0:
+                    settle_details["kie_credits_consumed"] = _kie_credits
+                    settle_details["credits_consumed"] = _kie_credits
+                    settle_details["creditsConsumed"] = _kie_credits
+                    settle_details["billing_basis"] = "provider_kie_credits"
 
                 raw_meta = final_meta.get("raw") if isinstance(final_meta.get("raw"), dict) else {}
                 raw_payload = raw_meta.get("payload") if isinstance(raw_meta.get("payload"), dict) else {}
@@ -42847,11 +43443,22 @@ async def _run_generate_video_job(
                 or result.get("provider_task_id")
                 or ""
             ).strip()
+            reservation_tx_id_pending = result.get("reservation_tx_id")
+            try:
+                reservation_tx_id_pending = int(reservation_tx_id_pending) if reservation_tx_id_pending is not None else None
+            except Exception:
+                reservation_tx_id_pending = None
+            billing_context = result.get("billing_context") if isinstance(result.get("billing_context"), dict) else {}
             update_fields: Dict[str, Any] = {
                 "status": "waiting_callback",
                 "error": None,
                 "upstream_submit_state": "callback_pending",
+                "billing_pending": bool(result.get("billing_pending") and reservation_tx_id_pending),
+                "billing_settled": False,
+                "billing_context": billing_context,
             }
+            if reservation_tx_id_pending:
+                update_fields["reservation_tx_id"] = int(reservation_tx_id_pending)
             if provider_task_id:
                 update_fields["provider_task_id"] = provider_task_id
             _set_video_job(job_id, **update_fields)
@@ -42885,6 +43492,13 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
         )
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        _cancel_video_job_pending_reservation(
+            job_id,
+            current_job,
+            f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s",
+        )
         mark_generation_task_status_external(job_id, status="failed", error=f"video job timed out after {VIDEO_JOB_MAX_RUNNING_SECONDS}s")
         return {"defer_completion": False}
     except asyncio.CancelledError:
@@ -42906,6 +43520,9 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error="Cancelled by user",
         )
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        _cancel_video_job_pending_reservation(job_id, current_job, "Cancelled by user")
         mark_generation_task_status_external(job_id, status="canceled", error="Cancelled by user")
         raise
     except HTTPException as e:
@@ -42950,6 +43567,9 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e.detail),
         )
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        _cancel_video_job_pending_reservation(job_id, current_job, str(e.detail))
         mark_generation_task_status_external(job_id, status="failed", error=str(e.detail))
         return {"defer_completion": False}
     except Exception as e:
@@ -42976,6 +43596,9 @@ async def _run_generate_video_job(
             finished_at=now_bj_iso(),
             error=str(e),
         )
+        with VIDEO_JOB_LOCK:
+            current_job = dict(VIDEO_JOB_STORE.get(job_id) or {})
+        _cancel_video_job_pending_reservation(job_id, current_job, str(e))
         mark_generation_task_status_external(job_id, status="failed", error=str(e))
         return {"defer_completion": False}
     finally:
@@ -47892,16 +48515,18 @@ async def analyze_asset_image(
     if not image_url_raw:
         raise HTTPException(status_code=400, detail="Asset id or image_url is required")
 
-    function_name = str(getattr(request, "function_name", "") or "").strip() or "script_analysis"
-    llm_config = agent_service.get_active_llm_config(
+    # Asset style/prompt reverse always uses the script_analysis Function API dropdown.
+    llm_config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
         current_user.id,
-        system_api_id=getattr(request, "system_api_id", None),
-        function_name=function_name,
+        "script_analysis",
+        getattr(request, "system_api_id", None),
+        context="analyze_asset_image",
     )
     api_provider = str(llm_config.get("provider") or "").strip()
     api_model = str(llm_config.get("model") or "").strip()
     if not api_provider or not api_model:
-        raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured. Please configure the routed model first.")
+        raise HTTPException(status_code=400, detail="Script analysis API dropdown has no usable Vision/LLM model. Please configure it in Function APIs.")
 
     reservation_tx = None
     # Billing Check (token rules will be reserved later once we have final prompt/messages)
@@ -47918,6 +48543,7 @@ async def analyze_asset_image(
             **((llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}) or {}),
             "response_format": {"type": "json_object"},
             "include_thoughts": False,
+            "__selected_system_api_id": selected_dropdown_id,
         }
     }
 
@@ -48173,25 +48799,22 @@ async def _execute_analyze_entity_image(
 
     logger.info(f"Entity found: {entity.name}, Image: {entity.image_url}")
 
-    # 2. Get Vision Tool Config
-    api_setting = None
-    if system_api_id:
-        api_setting = db.query(SystemAPISetting).filter(SystemAPISetting.id == system_api_id).first()
-
-    if not api_setting:
-        api_setting = get_effective_api_setting(db, current_user, category="Vision")
-    if not api_setting:
-         api_setting = get_effective_api_setting(db, current_user, category="LLM")
-    
-    if not api_setting:
-         raise HTTPException(status_code=400, detail="Vision Tool or LLM not configured.")
-
-    api_provider = str(getattr(api_setting, "provider", "") or "").strip() or None
-    api_model = str(getattr(api_setting, "model", "") or "").strip() or None
-    api_api_key = str(getattr(api_setting, "api_key", "") or "").strip() or None
-    api_base_url = str(getattr(api_setting, "base_url", "") or "").strip() or None
-    raw_api_config = getattr(api_setting, "config", None)
+    # 2. Resolve LLM from script_analysis function API dropdown (same list as script analysis).
+    llm_config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+        db,
+        current_user.id,
+        "script_analysis",
+        system_api_id,
+        context="analyze_entity_image",
+    )
+    api_provider = str(llm_config.get("provider") or "").strip() or None
+    api_model = str(llm_config.get("model") or "").strip() or None
+    api_api_key = str(llm_config.get("api_key") or "").strip() or None
+    api_base_url = str(llm_config.get("base_url") or "").strip() or None
+    raw_api_config = llm_config.get("config")
     api_config = dict(raw_api_config) if isinstance(raw_api_config, dict) else {}
+    if not api_provider or not api_model:
+        raise HTTPException(status_code=400, detail="Script analysis API dropdown has no usable Vision/LLM model. Please configure it in Function APIs.")
     
     reservation_tx = None
     reservation_tx_id: Optional[int] = None
@@ -48205,9 +48828,12 @@ async def _execute_analyze_entity_image(
         "api_key": api_api_key,
         "base_url": api_base_url,
         "model": api_model,
-        "config": api_config,
+        "config": {
+            **api_config,
+            "__selected_system_api_id": selected_dropdown_id,
+        },
     }
-    logger.info(f"Using Model: {api_model}")
+    logger.info(f"Using Model: {api_model} (script_analysis dropdown id={selected_dropdown_id})")
 
     def _build_entity_analysis_error_detail(
         code: str,

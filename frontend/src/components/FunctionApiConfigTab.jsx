@@ -406,7 +406,7 @@ export default function FunctionApiConfigTab() {
                                                     },
                                                 }))}
                                                 className="w-28 bg-black/40 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
-                                                title="在规则赔率结果上再乘以该倍率"
+                                                title="在规则倍率结果上再乘以该倍率"
                                             />
                                         </label>
                                         <label className="text-xs text-gray-400">
@@ -519,7 +519,7 @@ export default function FunctionApiConfigTab() {
                                                         value={item.pricing_description || ''}
                                                         onChange={(e) => handleChangeParams(funcName, originalIndex, 'pricing_description', e.target.value)}
                                                         className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
-                                                        placeholder="定价说明（例：约 120 积分/次，可从计费规则同步）"
+                                                        placeholder="定价说明（例：分档有视频/无视频 720p 176/288 积分/秒，可从计费规则同步）"
                                                     />
                                                 </div>
                                             </div>

@@ -4396,9 +4396,14 @@ Output ONLY the JSON object now."""
 
                 billing_details = {"item": "video_from_tool"}
                 if billing_service.is_token_pricing(db, video_task_type, gen_provider, gen_model):
-                    raw_resp = (gen_result.get("metadata") or {}).get("raw") or {}
-                    usage = raw_resp.get("usage") or {}
-                    actual_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
+                    meta = gen_result.get("metadata") or {}
+                    usage = meta.get("provider_usage") or meta.get("usage") or (meta.get("raw") or {}).get("usage") or {}
+                    actual_tokens = int(
+                        usage.get("total_tokens")
+                        or usage.get("output_tokens")
+                        or usage.get("completion_tokens")
+                        or 0
+                    )
                     if actual_tokens <= 0:
                         vtc = billing_service.resolve_video_token_config(db, gen_provider, gen_model)
                         actual_tokens = billing_service.estimate_video_output_tokens(
@@ -4406,7 +4411,11 @@ Output ONLY the JSON object now."""
                             fps=vtc.get("default_fps", 24), duration_seconds=5,
                             draft_token_coefficient=vtc.get("draft_token_coefficient", 1.0),
                         )
-                    billing_details.update({"output_tokens": actual_tokens, "total_tokens": actual_tokens})
+                    billing_details.update({
+                        "output_tokens": actual_tokens,
+                        "total_tokens": actual_tokens,
+                        "token_source": "api_usage" if int(usage.get("total_tokens") or usage.get("completion_tokens") or 0) > 0 else "estimate",
+                    })
                 billing_service.deduct_credits(db, user_id, video_task_type, gen_provider, gen_model, billing_details)
 
                 return self._save_and_bind_asset(
@@ -4472,9 +4481,14 @@ Output ONLY the JSON object now."""
                 
                 billing_details = {"item": "i2v_from_tool"}
                 if billing_service.is_token_pricing(db, video_task_type, gen_provider, gen_model):
-                    raw_resp = (gen_result.get("metadata") or {}).get("raw") or {}
-                    usage = raw_resp.get("usage") or {}
-                    actual_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
+                    meta = gen_result.get("metadata") or {}
+                    usage = meta.get("provider_usage") or meta.get("usage") or (meta.get("raw") or {}).get("usage") or {}
+                    actual_tokens = int(
+                        usage.get("total_tokens")
+                        or usage.get("output_tokens")
+                        or usage.get("completion_tokens")
+                        or 0
+                    )
                     if actual_tokens <= 0:
                         vtc = billing_service.resolve_video_token_config(db, gen_provider, gen_model)
                         actual_tokens = billing_service.estimate_video_output_tokens(
@@ -4482,7 +4496,11 @@ Output ONLY the JSON object now."""
                             fps=vtc.get("default_fps", 24), duration_seconds=5,
                             draft_token_coefficient=vtc.get("draft_token_coefficient", 1.0),
                         )
-                    billing_details.update({"output_tokens": actual_tokens, "total_tokens": actual_tokens})
+                    billing_details.update({
+                        "output_tokens": actual_tokens,
+                        "total_tokens": actual_tokens,
+                        "token_source": "api_usage" if int(usage.get("total_tokens") or usage.get("completion_tokens") or 0) > 0 else "estimate",
+                    })
                 billing_service.deduct_credits(db, user_id, video_task_type, gen_provider, gen_model, billing_details)
                 
                 return self._save_and_bind_asset(

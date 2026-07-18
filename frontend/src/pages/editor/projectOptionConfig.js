@@ -1077,6 +1077,18 @@ export const normalizeProjectSceneAnalysisSafety = (value) => {
 export const PROJECT_EP_LENS_PREFERENCE_OPTIONS = ['默认 / Default', '长镜头 / Long Take', '短镜头 / Short Take', '特写偏好 / Close-up Preference', '全景偏好 / Wide-shot Preference'];
 export const PROJECT_EP_RESOLUTION_OPTIONS = ['1080p', '2K', '4K', '8K'];
 
+/** Project video generation short-edge tier (provider 480p / 720p). */
+export const PROJECT_VIDEO_RESOLUTION_OPTIONS = ['480', '720'];
+
+export const normalizeProjectVideoResolution = (value) => {
+    const raw = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!raw) return '';
+    const digits = raw.endsWith('p') ? raw.slice(0, -1) : (raw.startsWith('p') ? raw.slice(1) : raw);
+    if (digits === '480' || digits === 'sd') return '480';
+    if (digits === '720' || digits === 'hd') return '720';
+    return '';
+};
+
 export const PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS = ['首尾帧 / First and Last Frame', '参考图 / Reference Image'];
 export const PROJECT_EP_CREATIVITY_OPTIONS = ['正常 / Normal', '增加想象力 / Increase Imagination', '遵守剧本优先 / Strict to Script'];
 /** Seedance-2 aligned project canvas options; 16:9 / 9:16 first. */

@@ -133,6 +133,139 @@ def _debug_log(msg, level="info"):
         text = f"{text[:MEDIA_DEBUG_LOG_MAX_CHARS]}...<TRUNCATED len={len(text)}>"
     method(text)
 
+
+def _safe_usage_int(value: Any) -> int:
+    try:
+        parsed = int(value or 0)
+        return parsed if parsed > 0 else 0
+    except Exception:
+        return 0
+
+
+def _safe_usage_float(value: Any) -> float:
+    try:
+        parsed = float(value or 0)
+        return parsed if parsed > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _extract_scalar_provider_credits(payload: Any) -> Dict[str, Any]:
+    """Pull scalar credit fields (e.g. KIE webhook data.creditsConsumed)."""
+    if not isinstance(payload, dict):
+        return {}
+    for key in (
+        "creditsConsumed",
+        "credits_consumed",
+        "kie_credits_consumed",
+        "consumeCredits",
+        "consume_credits",
+        "credits",
+        "credit",
+        "points",
+    ):
+        if key not in payload or payload.get(key) in (None, ""):
+            continue
+        amount = _safe_usage_float(payload.get(key))
+        if amount <= 0:
+            continue
+        return {
+            "creditsConsumed": amount,
+            "credits_consumed": amount,
+            "kie_credits_consumed": amount,
+            "credits": amount,
+        }
+    return {}
+
+
+def _extract_provider_task_usage(payload: Any, *, _depth: int = 0) -> Dict[str, Any]:
+    """Extract usage/credits from provider task-query / webhook payloads (Ark, KIE, ZLHub, etc.)."""
+    if not isinstance(payload, dict) or _depth > 4:
+        return {}
+    for key in ("usage", "consume", "consumption", "billing", "cost"):
+        value = payload.get(key)
+        if isinstance(value, dict) and value:
+            # Merge scalar credits on the same object when present (KIE sometimes nests both).
+            merged = dict(value)
+            scalar = _extract_scalar_provider_credits(payload)
+            for sk, sv in scalar.items():
+                merged.setdefault(sk, sv)
+            return merged
+
+    scalar = _extract_scalar_provider_credits(payload)
+    if scalar:
+        return scalar
+
+    for nested_key in ("data", "output", "result", "content", "task", "response", "eventData"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            found = _extract_provider_task_usage(nested, _depth=_depth + 1)
+            if found:
+                return found
+    return {}
+
+
+def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
+    """Normalize OpenAI/Ark/KIE usage into billing-friendly token/credit keys."""
+    if not isinstance(usage, dict) or not usage:
+        return {}
+    normalized = dict(usage)
+    prompt = _safe_usage_int(normalized.get("prompt_tokens") or normalized.get("input_tokens"))
+    completion = _safe_usage_int(
+        normalized.get("completion_tokens")
+        or normalized.get("output_tokens")
+        or normalized.get("generated_tokens")
+    )
+    total = _safe_usage_int(normalized.get("total_tokens"))
+    if total <= 0:
+        total = prompt + completion
+    credits = _safe_usage_float(
+        normalized.get("creditsConsumed")
+        or normalized.get("credits_consumed")
+        or normalized.get("kie_credits_consumed")
+        or normalized.get("credits")
+        or normalized.get("credit")
+        or normalized.get("points")
+        or normalized.get("consume_credits")
+        or normalized.get("consumeCredits")
+    )
+    if prompt > 0:
+        normalized["prompt_tokens"] = prompt
+        normalized["input_tokens"] = prompt
+    if completion > 0:
+        normalized["completion_tokens"] = completion
+        normalized["output_tokens"] = completion
+    if total > 0:
+        normalized["total_tokens"] = total
+    if credits > 0:
+        normalized["credits"] = credits
+        normalized["creditsConsumed"] = credits
+        normalized["credits_consumed"] = credits
+        normalized["kie_credits_consumed"] = credits
+    # Keep only payloads that carry at least one billable quantity.
+    if total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0:
+        return {}
+    return normalized
+
+
+def _attach_provider_usage_metadata(
+    metadata: Optional[Dict[str, Any]],
+    *,
+    usage: Optional[Dict[str, Any]] = None,
+    source: str = "provider",
+    task_payload: Any = None,
+) -> Dict[str, Any]:
+    meta = dict(metadata or {})
+    resolved = _normalize_provider_task_usage(usage) if usage else {}
+    if not resolved and task_payload is not None:
+        resolved = _normalize_provider_task_usage(_extract_provider_task_usage(task_payload))
+    if resolved:
+        meta["usage"] = resolved
+        meta["provider_usage"] = resolved
+        meta["usage_source"] = str(source or "provider").strip() or "provider"
+    return meta
+
+
 class MediaGenerationService:
 # ...
     DOUBAO_MIN_IMAGE_PIXELS = 3_686_400
@@ -1313,7 +1446,13 @@ class MediaGenerationService:
             "watermark": True
         }
         is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
-        task_payload["resolution"] = str(tool_conf.get("resolution") or ("480p" if is_draft_mode else "720p")).strip()
+        requested_res = str(tool_conf.get("resolution") or tool_conf.get("video_resolution") or "").strip()
+        if is_draft_mode:
+            task_payload["resolution"] = "480p"
+        elif requested_res:
+            task_payload["resolution"] = requested_res if requested_res.lower().endswith("p") else f"{requested_res}p"
+        else:
+            task_payload["resolution"] = "720p"
         if callback_url and callback_url != "-1":
             task_payload["callback_url"] = callback_url
         
@@ -1909,6 +2048,92 @@ class MediaGenerationService:
         if "/api/v3" in normalized and "contents/generations/tasks" not in normalized:
             return f"{normalized}/contents/generations/tasks"
         return normalized
+
+    def fetch_provider_task_usage(
+        self,
+        *,
+        task_id: str,
+        api_key: str,
+        query_endpoint: Optional[str] = None,
+        provider: Optional[str] = None,
+        refresh_if_missing: bool = True,
+    ) -> Dict[str, Any]:
+        """GET provider task once (optionally twice) and return normalized usage for billing."""
+        stable_task_id = str(task_id or "").strip()
+        stable_key = str(api_key or "").strip()
+        if not stable_task_id or not stable_key:
+            return {}
+
+        provider_l = str(provider or "").strip().lower()
+        endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
+        # RunningHub uses POST query bodies; skip GET re-query for that family.
+        if "runninghub" in provider_l:
+            return {}
+
+        headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
+        target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+
+        def _get(use_proxy: bool = True):
+            kwargs = {"headers": headers, "timeout": 30, "verify": False}
+            if not use_proxy:
+                kwargs["proxies"] = {"http": None, "https": None}
+            return requests.get(target_url, **kwargs)
+
+        raw_payload: Dict[str, Any] = {}
+        try:
+            try:
+                resp = _get(True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                resp = _get(False)
+            if getattr(resp, "status_code", None) == 200:
+                data = resp.json() if resp.content else {}
+                if isinstance(data, dict):
+                    raw_payload = data
+        except Exception as exc:
+            logger.warning(
+                "[TaskUsage] provider task query failed | provider=%s task_id=%s error=%s",
+                provider_l or None,
+                stable_task_id,
+                exc,
+            )
+            return {}
+
+        usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+        if usage or not refresh_if_missing:
+            if usage:
+                usage["raw_task"] = {
+                    "id": raw_payload.get("id") or stable_task_id,
+                    "status": raw_payload.get("status") or raw_payload.get("state"),
+                    "model": raw_payload.get("model"),
+                }
+            return usage
+
+        try:
+            time.sleep(0.5)
+            try:
+                resp = _get(True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                resp = _get(False)
+            if getattr(resp, "status_code", None) == 200:
+                data = resp.json() if resp.content else {}
+                if isinstance(data, dict):
+                    raw_payload = data
+                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+        except Exception as exc:
+            logger.warning(
+                "[TaskUsage] provider task usage refresh failed | provider=%s task_id=%s error=%s",
+                provider_l or None,
+                stable_task_id,
+                exc,
+            )
+
+        if usage:
+            usage["raw_task"] = {
+                "id": raw_payload.get("id") or stable_task_id,
+                "status": raw_payload.get("status") or raw_payload.get("state"),
+                "model": raw_payload.get("model"),
+            }
+        return usage
 
     def _normalize_zlhub_moderation_endpoint(self, endpoint: Optional[str]) -> str:
         raw = (endpoint or "").strip()
@@ -2853,7 +3078,23 @@ class MediaGenerationService:
         seedance_resolution_override = None
         if category == "Video" and "seedance" in model_hint:
             is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
-            seedance_resolution_override = "480p" if is_draft_mode else "720p"
+            requested_res = str(
+                tool_conf.get("resolution")
+                or tool_conf.get("video_resolution")
+                or ""
+            ).strip().lower().replace(" ", "")
+            if requested_res.endswith("p") and requested_res[:-1].isdigit():
+                requested_res = requested_res[:-1]
+            elif requested_res.startswith("p") and requested_res[1:].isdigit():
+                requested_res = requested_res[1:]
+            if is_draft_mode:
+                seedance_resolution_override = "480p"
+            elif requested_res in {"480", "sd"}:
+                seedance_resolution_override = "480p"
+            elif requested_res in {"720", "hd"}:
+                seedance_resolution_override = "720p"
+            else:
+                seedance_resolution_override = "720p"
             tool_conf["resolution"] = seedance_resolution_override
 
         effective_aspect_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
@@ -3182,9 +3423,36 @@ class MediaGenerationService:
                             "details": f"task_id={task_id} status={status or '<empty>'}",
                             "raw": p_data,
                         }
+                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(p_data))
+                    if not usage:
+                        try:
+                            await asyncio.sleep(0.5)
+                            try:
+                                refresh_resp = await asyncio.to_thread(_poll, True, task_id)
+                            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                                refresh_resp = await asyncio.to_thread(_poll, False, task_id)
+                            if getattr(refresh_resp, "status_code", None) == 200:
+                                refresh_data = refresh_resp.json()
+                                if isinstance(refresh_data, dict):
+                                    p_data = refresh_data
+                                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(refresh_data))
+                        except Exception as usage_err:
+                            logger.warning(
+                                "[%s] image task usage refresh failed | task_id=%s error=%s",
+                                log_tag,
+                                task_id,
+                                usage_err,
+                            )
                     metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id, "taskId": task_id}
                     if extra_metadata:
                         metadata.update(extra_metadata)
+                        metadata["raw"] = p_data
+                    metadata = _attach_provider_usage_metadata(
+                        metadata,
+                        usage=usage,
+                        source=provider_name or "provider",
+                        task_payload=p_data,
+                    )
                     return {"url": image_url, "metadata": metadata}
                 if status_l in ["failed", "error", "canceled", "cancelled"]:
                     return {"error": f"Generation Failed: {p_data.get('error') or p_data}", "details": p_data.get("error") or p_data}
@@ -6224,7 +6492,13 @@ class MediaGenerationService:
             }
             if is_seedance_model:
                 is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
-                payload["resolution"] = str(tool_conf.get("resolution") or ("480p" if is_draft_mode else "720p")).strip()
+                requested_res = str(tool_conf.get("resolution") or tool_conf.get("video_resolution") or "").strip()
+                if is_draft_mode:
+                    payload["resolution"] = "480p"
+                elif requested_res:
+                    payload["resolution"] = requested_res if requested_res.lower().endswith("p") else f"{requested_res}p"
+                else:
+                    payload["resolution"] = "720p"
             if callback_url and callback_url != "-1":
                 payload["callback_url"] = callback_url
 
@@ -6428,8 +6702,14 @@ class MediaGenerationService:
 
         if is_draft_mode:
             payload["resolution"] = "480p"
-        elif "resolution" not in payload or str(payload.get("resolution") or "").strip().lower() == "1080p":
-            payload["resolution"] = "720p"
+        else:
+            requested_res = str(
+                tool_conf.get("resolution") or tool_conf.get("video_resolution") or payload.get("resolution") or ""
+            ).strip()
+            if requested_res:
+                payload["resolution"] = requested_res if requested_res.lower().endswith("p") else f"{requested_res}p"
+            elif "resolution" not in payload or str(payload.get("resolution") or "").strip().lower() == "1080p":
+                payload["resolution"] = "720p"
 
         # Config overrides
         if config.get("config"):
@@ -11071,18 +11351,8 @@ class MediaGenerationService:
             return None
 
         def _extract_runninghub_usage(value: Any) -> Optional[Dict[str, Any]]:
-            if not isinstance(value, dict):
-                return None
-            usage = value.get("usage")
-            if isinstance(usage, dict) and usage:
-                return dict(usage)
-            for nested_key in ["data", "output", "result"]:
-                nested = value.get(nested_key)
-                if isinstance(nested, dict):
-                    nested_usage = nested.get("usage")
-                    if isinstance(nested_usage, dict) and nested_usage:
-                        return dict(nested_usage)
-            return None
+            normalized = _normalize_provider_task_usage(_extract_provider_task_usage(value))
+            return normalized or None
 
         def _post_json(url, body, use_proxy=True, connect_timeout=15, read_timeout=120):
             kwargs = {
@@ -11286,14 +11556,16 @@ class MediaGenerationService:
                 status = str(p_data.get("status") or p_data.get("state") or "").strip().upper()
                 if status in {"SUCCESS", "SUCCEEDED"}:
                     final_url = _extract_runninghub_media_url(p_data)
-                    metadata = {"raw": p_data, "submit_raw": data, "taskId": task_id}
-                    provider_usage = _extract_runninghub_usage(p_data)
-                    if provider_usage:
-                        metadata["usage"] = provider_usage
-                        metadata["provider_usage"] = provider_usage
-                        metadata["usage_source"] = "runninghub"
+                    metadata = {"raw": p_data, "submit_raw": data, "taskId": task_id, "task_id": str(task_id)}
                     if extra_metadata:
                         metadata.update(extra_metadata)
+                        metadata["raw"] = p_data
+                    metadata = _attach_provider_usage_metadata(
+                        metadata,
+                        usage=_extract_runninghub_usage(p_data),
+                        source="runninghub",
+                        task_payload=p_data,
+                    )
                     if final_url:
                         return {"url": final_url, "metadata": metadata}
                     return {"error": "RunningHub task completed without output URL", "details": p_data}
@@ -11481,9 +11753,48 @@ class MediaGenerationService:
                                 "details": f"task_id={task_id} status={status or '<empty>'}",
                                 "raw": p_data,
                             }
-                        metadata = {"raw": p_data}
+                        # Prefer provider-reported usage (Ark Seedance: usage.total_tokens / completion_tokens).
+                        # Status may flip to succeeded before usage is populated; refresh task once if missing.
+                        usage = _normalize_provider_task_usage(_extract_provider_task_usage(p_data))
+                        if not usage:
+                            try:
+                                await asyncio.sleep(0.5)
+                                try:
+                                    refresh_resp = await asyncio.to_thread(_poll, True, task_id)
+                                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                                    refresh_resp = await asyncio.to_thread(_poll, False, task_id)
+                                if getattr(refresh_resp, "status_code", None) == 200:
+                                    refresh_data = refresh_resp.json()
+                                    if isinstance(refresh_data, dict):
+                                        p_data = refresh_data
+                                        usage = _normalize_provider_task_usage(_extract_provider_task_usage(refresh_data))
+                            except Exception as usage_err:
+                                logger.warning(
+                                    "[%s] task usage refresh failed | task_id=%s error=%s",
+                                    log_tag,
+                                    task_id,
+                                    usage_err,
+                                )
+                        metadata = {"raw": p_data, "task_id": str(task_id), "taskId": str(task_id)}
                         if extra_metadata:
                             metadata.update(extra_metadata)
+                            metadata["raw"] = p_data
+                        usage_source = provider_name or "ark"
+                        metadata = _attach_provider_usage_metadata(
+                            metadata,
+                            usage=usage,
+                            source=usage_source,
+                            task_payload=p_data,
+                        )
+                        if usage:
+                            logger.info(
+                                "[%s] provider usage captured | task_id=%s source=%s total_tokens=%s completion_tokens=%s",
+                                log_tag,
+                                task_id,
+                                usage_source,
+                                usage.get("total_tokens"),
+                                usage.get("completion_tokens") or usage.get("output_tokens"),
+                            )
                         return {"url": video_url, "metadata": metadata}
                     elif status_l in ["failed", "error", "canceled", "cancelled"]:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
@@ -11758,15 +12069,43 @@ class MediaGenerationService:
                             "details": p_data,
                             "submit_failed": True,
                         }
-                    metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id}
+                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(p_data))
+                    if not usage:
+                        try:
+                            await asyncio.sleep(0.5)
+                            try:
+                                refresh_resp = await asyncio.to_thread(_poll, task_id, True)
+                            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                                refresh_resp = await asyncio.to_thread(_poll, task_id, False)
+                            if getattr(refresh_resp, "status_code", None) == 200:
+                                refresh_data = refresh_resp.json() if refresh_resp.content else {}
+                                if isinstance(refresh_data, dict):
+                                    p_data = refresh_data
+                                    usage = _normalize_provider_task_usage(_extract_provider_task_usage(refresh_data))
+                        except Exception as usage_err:
+                            logger.warning(
+                                "[%s] zlhub task usage refresh failed | task_id=%s error=%s",
+                                log_tag,
+                                task_id,
+                                usage_err,
+                            )
+                    metadata = {"raw": p_data, "submit_raw": data, "task_id": task_id, "taskId": str(task_id)}
                     if extra_metadata:
                         metadata.update(extra_metadata)
+                        metadata["raw"] = p_data
+                    metadata = _attach_provider_usage_metadata(
+                        metadata,
+                        usage=usage,
+                        source="zlhub",
+                        task_payload=p_data,
+                    )
                     if is_seedance2:
                         logger.info(
-                            "[ZLHubSeedance2] success | trace_id=%s task_id=%s media_url=%s",
+                            "[ZLHubSeedance2] success | trace_id=%s task_id=%s media_url=%s usage_tokens=%s",
                             trace_id,
                             task_id,
                             _strip_query_from_log_url(media_url),
+                            (usage or {}).get("total_tokens"),
                         )
                     return {"url": media_url, "metadata": metadata}
 

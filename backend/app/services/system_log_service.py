@@ -3,7 +3,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from sqlalchemy.orm import Session
 from app.models.all_models import SystemLog
@@ -31,7 +31,6 @@ _UI_LOG_LINE_RE = re.compile(
     r"(?:user_id=(?P<user_id>\d+)\s+)?user=(?P<user>[^|]+?)\s*\|\s*"
     r"(?:client_time=(?P<client_time>\S+)\s+)?(?P<message>.*)$"
 )
-
 
 def log_action(db: Session, user_id: int, user_name: str, action: str, details: str = None, ip_address: str = None):
     try:
@@ -183,3 +182,8 @@ def read_ui_system_logs(
         entries.append(parsed)
 
     return entries[-safe_limit:]
+
+
+def purge_ui_billing_diag_logs() -> int:
+    """No-op: billing estimate lines are allowed in UI SysLog again."""
+    return 0

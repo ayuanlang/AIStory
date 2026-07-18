@@ -6855,6 +6855,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
                             <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图: ", "T2I: ")} />
                             <FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图: ", "I2I: ")} />
+                            <FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} label={t("分析: ", "Analysis: ")} />
                         </div>
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2 gap-2">
                             <select

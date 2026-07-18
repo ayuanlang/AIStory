@@ -5463,7 +5463,7 @@ const UserAdmin = () => {
                                     <Database className="text-primary" /> {t('研发/部署配置同步', 'Dev/Deploy Config Sync')}
                                 </h2>
                                 <p className="text-sm text-gray-300">
-                                    {t('导出将打包 system api、功能 API 映射（含功能加价）、供应商密钥池、计费规则（含供应商价/赔率/Seedance·KIE·SparkVideo 分辨率分档价）、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, function API mappings (incl. function markup), provider key pools, billing rules (supplier price/odds + Seedance/KIE/SparkVideo resolution tiers), SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
+                                    {t('导出将打包 system api、功能 API 映射（含功能加价）、供应商密钥池、计费规则（含供应商价/倍率/Seedance·KIE·SparkVideo 分辨率分档价）、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, function API mappings (incl. function markup), provider key pools, billing rules (supplier price/multiplier + Seedance/KIE/SparkVideo resolution tiers), SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
                                 </p>
                             </div>
 
@@ -6754,10 +6754,10 @@ const UserAdmin = () => {
                                                           {JSON.stringify(txn.details, null, 2)}
                                                       </div>
                                                   </td>
-                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200" title={t('基础成本积分（赔率前）', 'Base cost credits (before odds)')}>
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200" title={t('基础成本积分（倍率前）', 'Base cost credits (before multiplier)')}>
                                                       {formatCreditsCell(pricing.baseCost)}
                                                   </td>
-                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200" title={pricing.multiplier ? `${t('赔率', 'Odds')} ×${Number(pricing.multiplier).toFixed(2)}` : t('用户扣费积分', 'User charged credits')}>
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200" title={pricing.multiplier ? `${t('倍率', 'Multiplier')} ×${Number(pricing.multiplier).toFixed(2)}` : t('用户扣费积分', 'User charged credits')}>
                                                       {formatCreditsCell(pricing.userCost)}
                                                       {pricing.multiplier ? (
                                                           <div className="text-[10px] text-gray-500 mt-0.5">×{Number(pricing.multiplier).toFixed(2)}</div>

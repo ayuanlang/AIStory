@@ -134,6 +134,8 @@ import {
     PROJECT_EP_QUALITY_OPTIONS,
     PROJECT_EP_LENS_PREFERENCE_OPTIONS,
     PROJECT_EP_VIDEO_GEN_PREFERENCE_OPTIONS,
+    PROJECT_VIDEO_RESOLUTION_OPTIONS,
+    normalizeProjectVideoResolution,
     PROJECT_EP_CREATIVITY_OPTIONS,
     PROJECT_SCENE_ANALYSIS_ERA_OPTIONS,
     PROJECT_EP_SEASON_OCCURRENCE_OPTIONS,
@@ -245,7 +247,8 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 frame_rate: "24",
                 aspect_ratio: "9:16",
                 quality: "超高 / Ultra High",
-                image_size: "2K"
+                image_size: "2K",
+                video_resolution: "720",
             }
         },
         tone: "",
@@ -1490,12 +1493,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                 project_generation_defaults: {
                     ...(info.project_generation_defaults || {}),
                     sound: resolvedVideoSound,
+                    video_resolution: normalizeProjectVideoResolution(
+                        info.tech_params?.visual_standard?.video_resolution
+                        || info.project_generation_defaults?.video_resolution
+                    ) || '720',
                 },
                 tech_params: {
                     ...(info.tech_params || {}),
                     visual_standard: {
                         ...(info.tech_params?.visual_standard || {}),
                         sound: resolvedVideoSound,
+                        video_resolution: normalizeProjectVideoResolution(
+                            info.tech_params?.visual_standard?.video_resolution
+                            || info.project_generation_defaults?.video_resolution
+                        ) || '720',
                     },
                 },
                 story_generator_global_input: {
@@ -2382,7 +2393,9 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
     const updateTech = (key, value) => {
         setInfo(prev => {
             const prevVisual = prev?.tech_params?.visual_standard || {};
-            const nextValue = key === 'quality' ? normalizeProjectEpisodeQuality(value) : value;
+            const nextValue = key === 'quality'
+                ? normalizeProjectEpisodeQuality(value)
+                : (key === 'video_resolution' ? (normalizeProjectVideoResolution(value) || '720') : value);
             const nextVisual = {
                 ...prevVisual,
                 [key]: nextValue,
@@ -3096,6 +3109,12 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             value={info.tech_params?.visual_standard?.image_size}
                             onChange={v => updateTech('image_size', v)}
                             list={["0.5K", "1K", "2K", "4K"]}
+                        />
+                        <InputGroup idPrefix={prefix}
+                            label={t('视频分辨率', 'Video Resolution')}
+                            value={normalizeProjectVideoResolution(info.tech_params?.visual_standard?.video_resolution) || '720'}
+                            onChange={v => updateTech('video_resolution', v)}
+                            list={PROJECT_VIDEO_RESOLUTION_OPTIONS}
                         />
 <InputGroup idPrefix={prefix}
                             label={t('视频生成偏好', 'Video Gen Preference')}

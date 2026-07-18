@@ -3281,17 +3281,35 @@ export const deleteSetting = async (id) => {
     return response.data;
 }
 
+export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis', systemApiId = null) => {
+    const explicit = Number(systemApiId || 0);
+    if (explicit > 0) return explicit;
+    const fn = String(functionName || '').trim();
+    if (fn.startsWith('script_analysis')) {
+        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+    }
+    if (fn) {
+        return Number(localStorage.getItem(`func_api_${fn}`) || 0) || null;
+    }
+    return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+};
+
 export const analyzeEntityImage = async (entityId, functionName = null, systemApiId = null, options = {}) => {
     try {
+        const resolvedFunctionName = String(functionName || 'script_analysis').trim() || 'script_analysis';
+        const normalizedFunctionName = resolvedFunctionName.startsWith('script_analysis')
+            ? 'script_analysis'
+            : resolvedFunctionName;
         let finalApiId = systemApiId;
-        if (!finalApiId && functionName) {
-            finalApiId = Number(localStorage.getItem('func_api_' + functionName)) || null;
+        if (!finalApiId) {
+            finalApiId = resolveScriptAnalysisSystemApiId(normalizedFunctionName, null);
         }
         let url = `/entities/${entityId}/analyze`;
         const params = new URLSearchParams();
         if (finalApiId) {
             params.append('system_api_id', finalApiId);
         }
+        params.append('feature_name', normalizedFunctionName);
         if (options.background) {
             params.append('bg', 'true');
         }
@@ -3376,8 +3394,13 @@ export const markAssetAsCurrentProjectAsset = async (id) => {
 
 export const analyzeAssetImage = async (input) => {
     const payload = (input && typeof input === 'object' && !Array.isArray(input))
-        ? input
+        ? { ...input }
         : { asset_id: input };
+    const functionName = String(payload.function_name || 'script_analysis').trim() || 'script_analysis';
+    payload.function_name = functionName.startsWith('script_analysis') ? 'script_analysis' : functionName;
+    if (!Number(payload.system_api_id || 0)) {
+        payload.system_api_id = resolveScriptAnalysisSystemApiId(payload.function_name, null);
+    }
     const response = await api.post('/assets/analyze', payload);
     return response.data;
 };
@@ -3455,19 +3478,6 @@ export const tuneShotPrompt = async ({ original_prompt, instruction, prompt_lang
         function_name,
         system_api_id: resolvedApiId,
     });
-};
-
-export const resolveScriptAnalysisSystemApiId = (functionName = 'script_analysis', systemApiId = null) => {
-    const explicit = Number(systemApiId || 0);
-    if (explicit > 0) return explicit;
-    const fn = String(functionName || '').trim();
-    if (fn.startsWith('script_analysis')) {
-        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
-    }
-    if (fn) {
-        return Number(localStorage.getItem(`func_api_${fn}`) || 0) || null;
-    }
-    return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
 };
 
 export const analyzeScene = async (scriptText, systemPrompt = null, projectMetadata = null, episodeId = null, analysisAttentionNotes = null, reuseSubjectAssets = null, runtimeHooks = null, projectId = null, functionName = 'script_analysis', systemApiId = null, sceneAnalysisMode = null) => {
@@ -3783,6 +3793,10 @@ export const injectEntityFeatures = (prompt, entities = []) => {
 };
 
 // Billing API
+export const estimateVideoCredits = async (payload = {}) => (
+    await api.post('/billing/estimate/video', payload || {})
+).data;
+
 export const getBillingOptions = async () => (await api.get('/billing/options')).data;
 export const getBillingFeaturePricing = async () => (await api.get('/billing/feature-pricing')).data;
 export const updateBillingFeaturePricing = async (featurePricing) => (await api.put('/billing/feature-pricing', { feature_pricing: featurePricing || {} })).data;

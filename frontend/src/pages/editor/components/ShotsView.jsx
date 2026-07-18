@@ -32,7 +32,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -123,6 +123,7 @@ import {
     rebindShotMediaAssets,
     backfillEpisodeMediaFromLibrary,
     persistShotMedia,
+    estimateVideoCredits,
     cleanupShotVideo,
     getCachedUserPreferences,
     getDraftModePreference,
@@ -751,6 +752,232 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const prevVideoUrl = String(prevShot?.video_url || '').trim();
         return prevVideoUrl ? [prevVideoUrl] : [];
     }, [usePrevVideo, findPrevContinuationShot]);
+
+    const [videoCreditEstimate, setVideoCreditEstimate] = useState(null);
+    const [videoCreditEstimating, setVideoCreditEstimating] = useState(false);
+    const videoCreditEstimateSeqRef = useRef(0);
+
+    const refreshVideoCreditEstimate = useCallback(async () => {
+        if (!editingShot) {
+            setVideoCreditEstimate(null);
+            return null;
+        }
+        const apiList = functionApiConfigs?.generate_videos || [];
+        const fallbackApi = apiList.find((item) => !item?.is_fallback) || apiList[0] || null;
+        const systemApiId = Number(
+            selectedVideoApiId
+            || selectedGenerateVideosApi?.system_api_id
+            || fallbackApi?.system_api_id
+            || 0
+        ) || 0;
+        if (!systemApiId) {
+            // Wait until function API configs are loaded; avoid silent skip with no badge update.
+            if (!apiList.length) {
+                console.info('[videoCreditEstimate] waiting for generate_videos API configs');
+                return null;
+            }
+            console.warn('[videoCreditEstimate] skip: no system_api_id');
+            setVideoCreditEstimate({
+                ok: false,
+                estimated_credits: null,
+                error: 'no video system_api_id',
+            });
+            onLog?.(t('计费预估跳过：未选择视频 API', 'Billing estimate skipped: no video API selected'), 'warning');
+            return null;
+        }
+        const seq = ++videoCreditEstimateSeqRef.current;
+        setVideoCreditEstimating(true);
+        try {
+            const durParam = resolveShotVideoDurationParam(editingShot.duration);
+            const durationNum = Number(durParam);
+            const prevShot = usePrevVideo ? findPrevContinuationShot(editingShot.id) : null;
+            const prevDur = Number(prevShot?.duration || 0);
+            const modelHint = selectedGenerateVideosApi?.system_api_base_model
+                || selectedGenerateVideosApi?.model
+                || selectedGenerateVideosApi?.provider
+                || '';
+            const preferredAspect = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || undefined;
+            const preferredRes = getProjectPreferredResolution(project?.global_info, activeEpisode?.episode_info, modelHint) || {};
+            const videoTier = getProjectPreferredVideoResolution(project?.global_info, activeEpisode?.episode_info) || '720';
+            const width = preferredRes.width || null;
+            const height = preferredRes.height || null;
+            const videoResolutionLabel = isDraftMode ? '480p' : `${videoTier}p`;
+            const payload = {
+                system_api_id: systemApiId,
+                function_name: 'generate_videos',
+                project_id: projectId || undefined,
+                episode_id: activeEpisode?.id || undefined,
+                shot_id: editingShot.id || undefined,
+                duration: Number.isFinite(durationNum) ? durationNum : 5,
+                draft_mode: !!isDraftMode,
+                use_prev_video: !!usePrevVideo,
+                has_video_input: !!usePrevVideo,
+                input_duration_seconds: (usePrevVideo && Number.isFinite(prevDur) && prevDur > 0) ? prevDur : undefined,
+                aspect_ratio: preferredAspect,
+                width: width || undefined,
+                height: height || undefined,
+                resolution: videoResolutionLabel,
+                video_resolution: isDraftMode ? '480' : videoTier,
+            };
+            console.info('[videoCreditEstimate] POST /billing/estimate/video', {
+                system_api_id: systemApiId,
+                duration: payload.duration,
+                width: payload.width,
+                height: payload.height,
+                resolution: payload.resolution,
+                aspect_ratio: payload.aspect_ratio,
+                draft_mode: payload.draft_mode,
+                model_hint: modelHint || undefined,
+            });
+            const res = await estimateVideoCredits(payload);
+            if (seq !== videoCreditEstimateSeqRef.current) return null;
+            setVideoCreditEstimate(res || null);
+            const process = res?.billing_process || {};
+            const usage = res?.usage || {};
+            const summary = [
+                t('计费预估', 'Billing estimate'),
+                `${res?.estimated_credits ?? '—'}${t('积分', ' credits')}`,
+                (process?.charge_multiplier != null && Number(process.charge_multiplier) > 0)
+                    ? `${t('倍率', 'Multiplier')}×${Number(process.charge_multiplier).toFixed(2)}`
+                    : '',
+                (process?.base_cost != null) ? `${t('基础', 'Base')}${process.base_cost}` : '',
+                process?.logic_branch || '',
+                `${usage?.width || payload.width || '—'}x${usage?.height || payload.height || '—'}`,
+                usage?.resolution_tier || payload.resolution || '',
+                res?.provider || '',
+                res?.model || '',
+                process?.matched_rule_id ? `rule#${process.matched_rule_id}` : '',
+            ].filter(Boolean).join(' | ');
+            onLog?.(summary, 'info');
+            console.info('[videoCreditEstimate] result', {
+                credits: res?.estimated_credits,
+                rule: res?.matched_rule_id || process?.matched_rule_id,
+                logic: process?.logic_branch,
+                provider: res?.provider,
+                model: res?.model,
+                width: usage?.width || payload.width,
+                height: usage?.height || payload.height,
+            });
+            return res;
+        } catch (error) {
+            if (seq !== videoCreditEstimateSeqRef.current) return null;
+            const detail = String(error?.response?.data?.detail || error?.message || 'estimate failed');
+            console.warn('[videoCreditEstimate] failed', error?.response?.status, error?.response?.data || error?.message || error);
+            setVideoCreditEstimate({
+                ok: false,
+                estimated_credits: null,
+                error: detail,
+            });
+            onLog?.(`${t('计费预估失败', 'Billing estimate failed')}: ${detail}`, 'error');
+            return null;
+        } finally {
+            if (seq === videoCreditEstimateSeqRef.current) {
+                setVideoCreditEstimating(false);
+            }
+        }
+    }, [
+        editingShot,
+        selectedVideoApiId,
+        selectedGenerateVideosApi,
+        resolveShotVideoDurationParam,
+        usePrevVideo,
+        findPrevContinuationShot,
+        projectId,
+        activeEpisode,
+        isDraftMode,
+        project,
+        functionApiConfigs,
+        getProjectPreferredAspectRatio,
+        getProjectPreferredResolution,
+        getProjectPreferredVideoResolution,
+        onLog,
+        t,
+    ]);
+
+    const projectVideoResolution = project?.global_info?.tech_params?.visual_standard?.video_resolution
+        || project?.global_info?.project_generation_defaults?.video_resolution
+        || '';
+    const projectAspectRatio = project?.global_info?.tech_params?.visual_standard?.aspect_ratio
+        || project?.global_info?.project_generation_defaults?.aspect_ratio
+        || '';
+
+    useEffect(() => {
+        if (!editingShot) {
+            setVideoCreditEstimate(null);
+            return undefined;
+        }
+        const timer = setTimeout(() => {
+            refreshVideoCreditEstimate();
+        }, 280);
+        return () => clearTimeout(timer);
+    }, [
+        editingShot?.id,
+        editingShot?.duration,
+        selectedVideoApiId,
+        selectedGenerateVideosApi?.system_api_id,
+        functionApiConfigs?.generate_videos,
+        isDraftMode,
+        usePrevVideo,
+        sd2AutoDuration,
+        isSd2AutoDurationActive,
+        projectVideoResolution,
+        projectAspectRatio,
+        refreshVideoCreditEstimate,
+    ]);
+
+    const renderVideoCreditEstimateBadge = (compact = false) => {
+        const credits = videoCreditEstimate?.estimated_credits;
+        const creditsText = (credits === 0 || credits)
+            ? String(credits)
+            : '—';
+        const usage = videoCreditEstimate?.usage || {};
+        const process = videoCreditEstimate?.billing_process || {};
+        const tipParts = [
+            t('按当前视频 API / 时长 / 草稿 / 上镜续写预估单次生成积分', 'Estimated credits for one video generation with current API / duration / draft / continuation'),
+            process?.logic_branch ? `${t('计费逻辑', 'Billing logic')}: ${process.logic_branch}${process?.new_logic ? ' ✓' : ''}` : '',
+            process?.unit_type ? `${t('单位', 'Unit')}: ${process.unit_type}` : '',
+            process?.api_pricing_source ? `${t('来源', 'Source')}: ${process.api_pricing_source}` : '',
+            (videoCreditEstimate?.provider || videoCreditEstimate?.model)
+                ? `${videoCreditEstimate?.provider || ''} / ${videoCreditEstimate?.model || ''}`.trim()
+                : '',
+            usage?.resolution_tier || usage?.resolution ? `${t('分辨率档', 'Tier')}: ${usage.resolution_tier || usage.resolution}` : '',
+            `${t('尺寸', 'Size')}: ${usage?.width || '—'}x${usage?.height || '—'}`,
+            usage?.has_video_input ? t('含视频输入', 'Includes video input') : t('无视频输入', 'No video input'),
+            process?.matched_rule_id ? `${t('规则', 'Rule')}#${process.matched_rule_id}` : '',
+            (process?.charge_multiplier != null && Number(process.charge_multiplier) > 0)
+                ? `${t('倍率', 'Multiplier')} ×${Number(process.charge_multiplier).toFixed(2)}`
+                : '',
+            (process?.base_cost != null) ? `${t('基础积分', 'Base')}: ${process.base_cost}` : '',
+            videoCreditEstimate?.error ? String(videoCreditEstimate.error) : '',
+        ].filter(Boolean);
+        return (
+            <div
+                className={`flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 ${compact ? 'px-1.5 py-0.5' : 'px-2 py-1'}`}
+                title={tipParts.join(' | ')}
+            >
+                <span className={`${compact ? 'text-[10px]' : 'text-[11px]'} text-amber-200 whitespace-nowrap`}>
+                    {t('预计', 'Est.')}{' '}
+                    <span className="font-semibold text-amber-100">
+                        {videoCreditEstimating ? '…' : creditsText}
+                    </span>{' '}
+                    {t('积分', 'credits')}
+                </span>
+                <button
+                    type="button"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        refreshVideoCreditEstimate();
+                    }}
+                    disabled={videoCreditEstimating}
+                    className="p-0.5 rounded text-amber-200/80 hover:text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
+                    title={t('重新计算预计积分', 'Recalculate estimated credits')}
+                    aria-label={t('重新计算预计积分', 'Recalculate estimated credits')}
+                >
+                    <RefreshCw className={`w-3 h-3 ${videoCreditEstimating ? 'animate-spin' : ''}`} />
+                </button>
+            </div>
+        );
+    };
 
     const handleToggleUsePrevVideo = (checked, targetShotId = null) => {
         if (checked) {
@@ -8328,11 +8555,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
 
             let videoTaskPromise = null;
             try {
+                const videoTierForGen = getProjectPreferredVideoResolution(project?.global_info, activeEpisode?.episode_info) || '720';
+                const videoResolutionForGen = isDraftMode ? '480p' : `${videoTierForGen}p`;
                 videoTaskPromise = generateVideo(finalPrompt, null, null, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     episode_id: activeEpisode?.id ?? shotSnapshot?.episode_id ?? undefined,
                     shot_id: targetShotId,
                     draft_mode: isDraftMode,
+                    resolution: videoResolutionForGen,
+                    video_resolution: isDraftMode ? '480' : videoTierForGen,
                     use_prev_video: shouldInjectContinuationPrompt,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
@@ -10999,7 +11230,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                             <div className="flex items-center gap-2">
                                 <FunctionApiSelector functionName="generate_shot_images" configs={functionApiConfigs} label={t('图片模型: ', 'Image: ')} />
                                 <div className="flex items-center gap-1" ref={shotNotePopoverRef}>
-                                    <FunctionApiSelector functionName="generate_videos" configs={functionApiConfigs} label={t('视频模型: ', 'Video: ')} />
+                                    <FunctionApiSelector
+                                        functionName="generate_videos"
+                                        configs={functionApiConfigs}
+                                        label={t('视频模型: ', 'Video: ')}
+                                        hidePricingDescription
+                                        onChange={(id) => setSelectedVideoApiId(id || null)}
+                                    />
+                                    {renderVideoCreditEstimateBadge(true)}
                                     <div className="relative">
                                         <button
                                             type="button"
@@ -11562,6 +11800,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜续写', 'Shot Continuation')}</span>
                                                 </label>
 
+                                                {renderVideoCreditEstimateBadge(true)}
                                                 <button 
                                                     onClick={() => generateAssetWithLang('video')} 
                                                     disabled={currentShotGenerating}

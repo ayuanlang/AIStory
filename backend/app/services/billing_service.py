@@ -523,6 +523,44 @@ class BillingService:
         return False
 
     @staticmethod
+    def _rule_has_extra_match_constraints(rule: SystemAPIBillingRule) -> bool:
+        """True when extra_conditions encode usage match filters (not pricing matrices)."""
+        extra = BillingService._rule_extra_conditions(rule)
+        if not extra:
+            return False
+        if extra.get("has_video_input") is not None:
+            return True
+        if extra.get("require_success_output") is True:
+            return True
+        required_keys = extra.get("required_keys")
+        if isinstance(required_keys, list) and any(str(k or "").strip() for k in required_keys):
+            return True
+        for key in (
+            "cache_hit_tokens_min",
+            "cache_hit_tokens_max",
+            "cache_miss_tokens_min",
+            "cache_miss_tokens_max",
+        ):
+            if extra.get(key) is not None and str(extra.get(key)).strip() != "":
+                return True
+        if isinstance(extra.get("standard_values"), dict) and extra.get("standard_values"):
+            return True
+        for key in extra.keys():
+            if str(key or "").strip().lower().startswith("standard."):
+                return True
+        return False
+
+    @staticmethod
+    def _rule_is_dimensional_matcher(rule: SystemAPIBillingRule) -> bool:
+        """Dimensional / constrained override rules (not undimensioned base-tier pricing)."""
+        if BillingService._is_base_billing_rule(rule):
+            return False
+        return bool(
+            BillingService._rule_has_matching_dimensions(rule)
+            or BillingService._rule_has_extra_match_constraints(rule)
+        )
+
+    @staticmethod
     def _is_base_billing_rule(rule: SystemAPIBillingRule) -> bool:
         extra = BillingService._rule_extra_conditions(rule)
         if str(extra.get("rule_kind", "")).strip().lower() == BillingService.BASE_BILLING_RULE_KIND:
@@ -530,6 +568,52 @@ class BillingService:
         if int(getattr(rule, "priority", 0) or 0) <= BillingService.BASE_BILLING_RULE_PRIORITY and not BillingService._rule_has_matching_dimensions(rule):
             return True
         return False
+
+    @staticmethod
+    def _pick_undimensioned_base_fallback(
+        rows: List[SystemAPIBillingRule],
+        *,
+        prefer_token_unit: bool = False,
+    ) -> Optional[SystemAPIBillingRule]:
+        """Prefer explicit base_pricing; else undimensioned active rule (legacy orphans)."""
+        if not rows:
+            return None
+        base_rows = [row for row in rows if BillingService._is_base_billing_rule(row)]
+        if base_rows:
+            if prefer_token_unit:
+                token_bases = [
+                    row for row in base_rows
+                    if str(getattr(row, "billing_unit_type", "") or "").strip().lower()
+                    in BillingService.TOKEN_UNIT_TYPES
+                ]
+                if token_bases:
+                    token_bases.sort(
+                        key=lambda row: (
+                            int(getattr(row, "priority", 0) or 0),
+                            -int(getattr(row, "id", 0) or 0),
+                        )
+                    )
+                    return token_bases[0]
+            base_rows.sort(
+                key=lambda row: (
+                    int(getattr(row, "priority", 0) or 0),
+                    -int(getattr(row, "id", 0) or 0),
+                )
+            )
+            return base_rows[0]
+        undim = [
+            row for row in rows
+            if not BillingService._rule_is_dimensional_matcher(row)
+        ]
+        if not undim:
+            return None
+        undim.sort(
+            key=lambda row: (
+                int(getattr(row, "priority", 0) or 0),
+                -int(getattr(row, "id", 0) or 0),
+            )
+        )
+        return undim[0]
 
     @staticmethod
     def _billing_from_rule(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
@@ -546,15 +630,20 @@ class BillingService:
         })
 
     @staticmethod
-    def _get_base_billing_rule(db: Session, system_api_id: int) -> Optional[SystemAPIBillingRule]:
+    def _get_base_billing_rule(
+        db: Session,
+        system_api_id: int,
+        *,
+        prefer_token_unit: bool = False,
+    ) -> Optional[SystemAPIBillingRule]:
         rows = db.query(SystemAPIBillingRule).filter(
             SystemAPIBillingRule.system_api_id == system_api_id,
             SystemAPIBillingRule.is_active == True,
         ).order_by(SystemAPIBillingRule.id.desc()).all()
-        for row in rows:
-            if BillingService._is_base_billing_rule(row):
-                return row
-        return None
+        return BillingService._pick_undimensioned_base_fallback(
+            rows,
+            prefer_token_unit=prefer_token_unit,
+        )
 
     @staticmethod
     def _categories_for_mode(mode: Optional[str]) -> List[str]:
@@ -618,12 +707,14 @@ class BillingService:
         provider: str,
         model: str,
         mode: Optional[str],
+        *,
+        prefer_token_unit: bool = False,
     ) -> Optional[SystemAPIBillingRule]:
         rows = BillingService._query_active_rules_by_identity(db, provider, model, mode)
-        for row in rows:
-            if BillingService._is_base_billing_rule(row):
-                return row
-        return None
+        return BillingService._pick_undimensioned_base_fallback(
+            rows,
+            prefer_token_unit=prefer_token_unit,
+        )
 
     @staticmethod
     def _task_type_to_category(task_type: str) -> str:
@@ -1542,7 +1633,21 @@ class BillingService:
             or BillingService._normalize_bool_value(payload.get("continuation_mode"))
         )
 
-        return {
+        # KIE callback actual consumption (data.creditsConsumed).
+        kie_credits_consumed = 0.0
+        try:
+            from app.services.billing_pricing import resolve_provider_kie_credits
+
+            kie_credits_consumed = float(resolve_provider_kie_credits(payload) or 0.0)
+        except Exception:
+            kie_credits_consumed = BillingService._safe_non_negative_float(
+                payload.get("kie_credits_consumed")
+                or payload.get("credits_consumed")
+                or payload.get("creditsConsumed")
+                , 0.0,
+            )
+
+        usage_out = {
             "input_tokens": max(0, input_tokens),
             "output_tokens": max(0, output_tokens),
             "total_tokens": max(0, total_tokens),
@@ -1563,6 +1668,20 @@ class BillingService:
             "draft_mode": draft_mode,
             "use_prev_video": use_prev_video,
         }
+        if kie_credits_consumed > 0:
+            usage_out["kie_credits_consumed"] = float(kie_credits_consumed)
+            usage_out["credits_consumed"] = float(kie_credits_consumed)
+            usage_out["creditsConsumed"] = float(kie_credits_consumed)
+            usage_out["billing_basis"] = str(payload.get("billing_basis") or "provider_kie_credits")
+        if payload.get("provider_usage") and isinstance(payload.get("provider_usage"), dict):
+            usage_out["provider_usage"] = dict(payload.get("provider_usage") or {})
+        if payload.get("usage_source"):
+            usage_out["usage_source"] = str(payload.get("usage_source") or "").strip()
+        if payload.get("resolution"):
+            usage_out["resolution"] = payload.get("resolution")
+        if payload.get("has_video_input") is not None:
+            usage_out["has_video_input"] = bool(payload.get("has_video_input"))
+        return usage_out
 
     @staticmethod
     def _in_range_int(value: int, min_v: Any, max_v: Any) -> bool:
@@ -1921,7 +2040,20 @@ class BillingService:
                 usage_for_cost["video_second_cny_resolution_rates"] = cny_rates
                 usage_for_cost.pop("video_token_estimate", None)
                 usage_for_cost.pop("video_token_branch", None)
-                usage_for_cost["estimation_method"] = "sparkvideo_second_cny"
+                min_table_probe = extra.get("video_second_min_billable_by_output")
+                has_upscale_probe = any(
+                    isinstance(row, dict)
+                    and (
+                        row.get("with_video_base") is not None
+                        or row.get("with_video_addon") is not None
+                        or str(row.get("pricing_kind") or "").lower() == "upscale"
+                    )
+                    for row in cny_rates.values()
+                )
+                if (isinstance(min_table_probe, dict) and min_table_probe) or has_upscale_probe:
+                    usage_for_cost["estimation_method"] = "video_second_cny_sparkvideo"
+                else:
+                    usage_for_cost["estimation_method"] = "video_second_cny_kie"
             min_table = extra.get("video_second_min_billable_by_output")
             if isinstance(min_table, dict) and min_table:
                 usage_for_cost["video_second_min_billable_by_output"] = min_table
@@ -2137,6 +2269,10 @@ class BillingService:
 
         matched = []
         for row in rows:
+            # Undimensioned / base-tier rules are priced via base-rule fallback, not here.
+            # Otherwise orphan per_second rows (priority 0) steal from real base_pricing.
+            if not BillingService._rule_is_dimensional_matcher(row):
+                continue
             if not BillingService._rule_matches_usage(row, usage, mode):
                 continue
             pricing = BillingService._estimate_rule_cost(row, usage)
@@ -2224,6 +2360,213 @@ class BillingService:
         }
         compacted = BillingService._compact_audit_payload(payload)
         return compacted if isinstance(compacted, dict) else None
+
+    @staticmethod
+    @staticmethod
+    def _derive_billing_logic_branch(
+        *,
+        unit_type: Any = None,
+        usage: Optional[Dict[str, Any]] = None,
+        selected_rule_detail: Optional[Dict[str, Any]] = None,
+        runtime_adjustments: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Human-readable billing logic branch for logs / UI diagnostics."""
+        usage_payload = dict(usage or {})
+        adj = dict(runtime_adjustments or {})
+        if not adj and isinstance(selected_rule_detail, dict):
+            adj = dict(selected_rule_detail.get("runtime_price_adjustments") or {})
+        unit = str(unit_type or "").strip().lower()
+        if not unit and isinstance(selected_rule_detail, dict):
+            pricing = selected_rule_detail.get("pricing") if isinstance(selected_rule_detail.get("pricing"), dict) else {}
+            unit = str(pricing.get("unit_type") or "").strip().lower()
+
+        extra = {}
+        if isinstance(selected_rule_detail, dict):
+            match_dims = selected_rule_detail.get("match_dimensions") if isinstance(selected_rule_detail.get("match_dimensions"), dict) else {}
+            extra = match_dims.get("extra_conditions") if isinstance(match_dims.get("extra_conditions"), dict) else {}
+
+        has_cny_matrix = bool(
+            (isinstance(extra.get("video_second_cny_resolution_rates"), dict) and extra.get("video_second_cny_resolution_rates"))
+            or (isinstance(usage_payload.get("video_second_cny_resolution_rates"), dict) and usage_payload.get("video_second_cny_resolution_rates"))
+            or adj.get("sparkvideo_unit_rate_cny") is not None
+            or adj.get("sparkvideo_cny_amount") is not None
+            or str(usage_payload.get("estimation_method") or "").startswith("sparkvideo_second_cny")
+            or str(usage_payload.get("estimation_method") or "").startswith("video_second_cny")
+        )
+        has_kie_matrix = bool(
+            (isinstance(extra.get("video_second_resolution_rates"), dict) and extra.get("video_second_resolution_rates"))
+            or (isinstance(usage_payload.get("video_second_resolution_rates"), dict) and usage_payload.get("video_second_resolution_rates"))
+        )
+        has_token_matrix = bool(
+            (isinstance(extra.get("video_token_resolution_rates"), dict) and extra.get("video_token_resolution_rates"))
+            or (isinstance(usage_payload.get("video_token_resolution_rates"), dict) and usage_payload.get("video_token_resolution_rates"))
+        )
+        has_min_table = bool(
+            (
+                isinstance(extra.get("video_second_min_billable_by_output"), dict)
+                and extra.get("video_second_min_billable_by_output")
+            )
+            or (
+                isinstance(usage_payload.get("video_second_min_billable_by_output"), dict)
+                and usage_payload.get("video_second_min_billable_by_output")
+            )
+        )
+        has_upscale = bool(
+            adj.get("sparkvideo_with_video_base_cny") is not None
+            or adj.get("sparkvideo_with_video_addon_cny") is not None
+            or str(adj.get("sparkvideo_rate_branch") or "").endswith("upscale")
+        )
+        uses_token_formula = bool(
+            usage_payload.get("video_token_estimate")
+            or str(usage_payload.get("estimation_method") or "").startswith("video_token")
+            or str(usage_payload.get("estimation_method") or "").startswith("seedance2_video_token")
+            or adj.get("video_token_rate_branch")
+        )
+
+        if unit == "per_second" and has_cny_matrix:
+            if has_upscale or has_min_table:
+                return "video_second_cny_sparkvideo"
+            return "video_second_cny_kie_or_flat"
+        if unit == "per_second" and has_kie_matrix:
+            return "video_second_kie_credits"
+        if unit in BillingService.TOKEN_UNIT_TYPES and (has_token_matrix or uses_token_formula):
+            return "video_token_resolution" if has_token_matrix else "video_token_formula"
+        if unit == "per_second":
+            return "video_per_second_flat"
+        if unit in BillingService.TOKEN_UNIT_TYPES:
+            return "token_unit"
+        if unit:
+            return f"unit:{unit}"
+        return "unknown"
+
+    @staticmethod
+    def _build_billing_process_snapshot(breakdown: Dict[str, Any], *, phase: str = "reserve") -> Dict[str, Any]:
+        usage = breakdown.get("usage_metadata") if isinstance(breakdown.get("usage_metadata"), dict) else {}
+        selected = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
+        adj = selected.get("runtime_price_adjustments") if isinstance(selected.get("runtime_price_adjustments"), dict) else {}
+        pricing = selected.get("pricing") if isinstance(selected.get("pricing"), dict) else {}
+        function_billing = breakdown.get("function_billing") if isinstance(breakdown.get("function_billing"), dict) else {}
+        api_pricing = breakdown.get("api_pricing") if isinstance(breakdown.get("api_pricing"), dict) else {}
+        source_detail = breakdown.get("api_pricing_source_detail") if isinstance(breakdown.get("api_pricing_source_detail"), dict) else {}
+        if not adj and isinstance(source_detail.get("runtime_price_adjustments"), dict):
+            adj = dict(source_detail.get("runtime_price_adjustments") or {})
+        unit_type = (
+            pricing.get("unit_type")
+            or api_pricing.get("unit_type")
+            or usage.get("billing_unit_type")
+        )
+        # Prefer matrix markers from usage/source_detail when rule detail was compacted away.
+        usage_for_logic = dict(usage or {})
+        for key in (
+            "video_second_cny_resolution_rates",
+            "video_second_resolution_rates",
+            "video_token_resolution_rates",
+            "video_second_min_billable_by_output",
+        ):
+            if not usage_for_logic.get(key) and isinstance(api_pricing.get(key), dict):
+                usage_for_logic[key] = api_pricing.get(key)
+        logic = BillingService._derive_billing_logic_branch(
+            unit_type=unit_type,
+            usage=usage_for_logic,
+            selected_rule_detail=selected,
+            runtime_adjustments=adj,
+        )
+        matched_rule_id = breakdown.get("matched_rule_id")
+        if matched_rule_id is None:
+            matched_rule_id = source_detail.get("base_rule_id") or source_detail.get("rule_id")
+        matched_rule_name = breakdown.get("matched_rule_name")
+        if not matched_rule_name:
+            matched_rule_name = source_detail.get("base_rule_name") or source_detail.get("rule_name")
+        return {
+            "phase": str(phase or "").strip() or None,
+            "logic_branch": logic,
+            "total_cost": int(breakdown.get("total_cost") or 0),
+            "feature_cost": int(breakdown.get("feature_cost") or 0),
+            "api_cost": int(breakdown.get("api_cost") or 0),
+            "api_cost_before_function": int(breakdown.get("api_cost_before_function") or breakdown.get("api_cost") or 0),
+            "provider": breakdown.get("resolved_provider") or breakdown.get("provider"),
+            "model": breakdown.get("resolved_model") or breakdown.get("model"),
+            "system_api_id": breakdown.get("system_api_id"),
+            "api_pricing_source": breakdown.get("api_pricing_source"),
+            "api_pricing_source_detail": source_detail,
+            "matched_rule_id": matched_rule_id,
+            "matched_rule_name": matched_rule_name,
+            "unit_type": unit_type,
+            "charge_multiplier": selected.get("rule_charge_multiplier"),
+            "base_cost": selected.get("computed_base_cost"),
+            "runtime_price_multiplier": selected.get("runtime_price_multiplier"),
+            "runtime_price_adjustments": adj,
+            "function_billing": {
+                "applied": bool(function_billing.get("applied")),
+                "multiplier": function_billing.get("function_multiplier"),
+                "add_credits": function_billing.get("function_add_credits"),
+            },
+            "usage": {
+                "duration_seconds": usage.get("duration_seconds", usage.get("duration")),
+                "input_duration_seconds": usage.get("input_duration_seconds"),
+                "width": usage.get("width"),
+                "height": usage.get("height"),
+                "resolution": usage.get("resolution"),
+                "resolution_tier": usage.get("resolution_tier") or adj.get("resolution_tier"),
+                "has_video_input": usage.get("has_video_input"),
+                "draft_mode": usage.get("draft_mode"),
+                "estimation_method": usage.get("estimation_method"),
+                "output_tokens": usage.get("output_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+            },
+            "new_logic": logic in {
+                "video_second_cny_sparkvideo",
+                "video_second_cny_kie_or_flat",
+                "video_second_kie_credits",
+                "video_token_resolution",
+                "video_token_formula",
+            },
+        }
+
+    @staticmethod
+    def _log_billing_process(snapshot: Dict[str, Any], *, context: str = "billing") -> None:
+        try:
+            import json as _json
+            api_logger = logging.getLogger("api_logger")
+            activity_logger = logging.getLogger("functional_activity")
+            logic = snapshot.get("logic_branch") or "unknown"
+            msg = (
+                "[BillingProcess] ctx=%s phase=%s logic=%s new_logic=%s total=%s api=%s feature=%s "
+                "provider=%s model=%s system_api_id=%s rule_id=%s unit=%s multiplier=%s "
+                "tier=%s has_video_input=%s duration=%s draft=%s source=%s | detail=%s"
+            )
+            args = (
+                context,
+                snapshot.get("phase"),
+                logic,
+                snapshot.get("new_logic"),
+                snapshot.get("total_cost"),
+                snapshot.get("api_cost"),
+                snapshot.get("feature_cost"),
+                snapshot.get("provider"),
+                snapshot.get("model"),
+                snapshot.get("system_api_id"),
+                snapshot.get("matched_rule_id"),
+                snapshot.get("unit_type"),
+                snapshot.get("charge_multiplier"),
+                (snapshot.get("usage") or {}).get("resolution_tier"),
+                (snapshot.get("usage") or {}).get("has_video_input"),
+                (snapshot.get("usage") or {}).get("duration_seconds"),
+                (snapshot.get("usage") or {}).get("draft_mode"),
+                snapshot.get("api_pricing_source"),
+                _json.dumps(snapshot, ensure_ascii=False, default=str)[:4000],
+            )
+            try:
+                text = msg % args
+            except Exception:
+                text = f"{msg} | args={args!r}"
+            # All backend diagnostics go to app_info.log (root RotatingFileHandler).
+            api_logger.info("%s", text)
+            activity_logger.info("%s", text)
+            if logger is not api_logger:
+                logger.info("%s", text)
+        except Exception as exc:
+            logging.getLogger("api_logger").warning("[BillingProcess] log failed ctx=%s err=%s", context, exc)
 
     @staticmethod
     def estimate_cost_breakdown(
@@ -2377,26 +2720,66 @@ class BillingService:
             if isinstance(std_usage.get("standard_trace"), dict) and std_usage.get("standard_trace"):
                 usage["standard_trace"] = dict(std_usage.get("standard_trace") or {})
 
-        # Billing order: provider/model/mode identity rules -> identity base rule -> generic default pricing.
-        if provider_text and model_text:
-            base_rule = BillingService._get_base_billing_rule_by_identity(db, provider_text, model_text, mode)
-            if base_rule:
-                api_cfg = BillingService._billing_from_rule(base_rule)
-                api_pricing_source = "system_api_base_rule"
-                api_pricing_source_detail = {
-                    "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
-                    "base_rule_name": str(getattr(base_rule, "name", "") or ""),
-                }
-            else:
-                api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
-                api_pricing_source = "default_api_pricing"
-                api_pricing_source_detail = {"reason": "system_api_has_no_base_rule"}
+        # Billing order:
+        # 1) system_api_id base rule (with resolution matrices via _estimate_rule_cost)
+        # 2) provider/model identity base rule
+        # 3) dimensional matching rules
+        # 4) generic default pricing
+        prefer_token_unit = bool(
+            usage.get("video_token_estimate")
+            or str(usage.get("estimation_method") or "").startswith("video_token")
+            or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
+        )
+        base_rule: Optional[SystemAPIBillingRule] = None
+        base_rule_pricing: Optional[Dict[str, Any]] = None
+        if system_row is not None:
+            base_rule = BillingService._get_base_billing_rule(
+                db,
+                int(system_row.id),
+                prefer_token_unit=prefer_token_unit,
+            )
+        if base_rule is None and provider_text and model_text:
+            base_rule = BillingService._get_base_billing_rule_by_identity(
+                db,
+                provider_text,
+                model_text,
+                mode,
+                prefer_token_unit=prefer_token_unit,
+            )
+
+        if base_rule is not None:
+            # Critical: use _estimate_rule_cost so video_second_cny / token resolution matrices apply.
+            base_rule_pricing = BillingService._estimate_rule_cost(base_rule, usage)
+            api_cfg = dict((base_rule_pricing or {}).get("config") or BillingService._billing_from_rule(base_rule) or {})
+            # Keep matrix extras on cfg so flat fallback helpers can also see them.
+            extra_for_cfg = BillingService._rule_extra_conditions(base_rule)
+            for key in (
+                "video_second_cny_resolution_rates",
+                "video_second_resolution_rates",
+                "video_token_resolution_rates",
+                "video_second_min_billable_by_output",
+            ):
+                if isinstance(extra_for_cfg.get(key), dict) and extra_for_cfg.get(key):
+                    api_cfg[key] = extra_for_cfg.get(key)
+                    usage[key] = extra_for_cfg.get(key)
+            api_pricing_source = "system_api_base_rule"
+            api_pricing_source_detail = {
+                "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
+                "base_rule_name": str(getattr(base_rule, "name", "") or ""),
+                "base_cost": int((base_rule_pricing or {}).get("base_cost") or 0),
+                "runtime_price_adjustments": (base_rule_pricing or {}).get("runtime_price_adjustments") or {},
+            }
+            api_cost_fallback = int((base_rule_pricing or {}).get("cost") or 0)
+        elif provider_text and model_text:
+            api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
+            api_pricing_source = "default_api_pricing"
+            api_pricing_source_detail = {"reason": "system_api_has_no_base_rule"}
+            api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
         else:
             api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
             api_pricing_source = "default_api_pricing"
             api_pricing_source_detail = {"reason": "system_api_not_resolved"}
-
-        api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
+            api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
 
         matched_rule_ids: List[int] = []
         selected_rule_id = None
@@ -2404,7 +2787,7 @@ class BillingService:
         selected_rule_detail = None
         matched_rule_details: List[Dict[str, Any]] = []
         selected_api_cfg = api_cfg
-        selected_api_cost = api_cost_fallback
+        selected_api_cost = int(api_cost_fallback or 0)
         rule_match_count = 0
 
         if provider_text and model_text:
@@ -2439,10 +2822,37 @@ class BillingService:
                     pricing=best.get("pricing"),
                     specificity=best.get("specificity"),
                 )
+            elif base_rule is not None and base_rule_pricing is not None:
+                # No dimensional match: still charge/display via base rule + resolution matrices.
+                selected_rule_id = int(getattr(base_rule, "id", 0) or 0) or None
+                selected_rule_name = str(getattr(base_rule, "name", "") or "") or None
+                selected_api_cfg = dict(api_cfg or {})
+                selected_api_cost = int((base_rule_pricing or {}).get("cost") or 0)
+                api_pricing_source = "system_api_base_rule"
+                api_pricing_source_detail = {
+                    "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
+                    "base_rule_name": str(getattr(base_rule, "name", "") or ""),
+                    "reason": "no_dimensional_rule_matched_use_base_rule",
+                }
+                selected_rule_detail = BillingService._serialize_rule_for_audit(
+                    base_rule,
+                    pricing=base_rule_pricing,
+                    specificity=0,
+                )
             elif phase == "settle" and reserved_cost_fallback is not None:
                 selected_api_cost = int(max(0, reserved_cost_fallback))
                 api_pricing_source = "settlement_reserved_cost_fallback"
                 api_pricing_source_detail = {"reason": "no_rule_matched_use_reserved_cost"}
+        elif base_rule is not None and base_rule_pricing is not None:
+            selected_rule_id = int(getattr(base_rule, "id", 0) or 0) or None
+            selected_rule_name = str(getattr(base_rule, "name", "") or "") or None
+            selected_api_cfg = dict(api_cfg or {})
+            selected_api_cost = int((base_rule_pricing or {}).get("cost") or 0)
+            selected_rule_detail = BillingService._serialize_rule_for_audit(
+                base_rule,
+                pricing=base_rule_pricing,
+                specificity=0,
+            )
 
         used_reserved_fallback = bool(
             phase == "settle"
@@ -2566,8 +2976,30 @@ class BillingService:
                 "model": str(getattr(system_row, "model", "") or "") if system_row else "",
             },
         }
+        billing_process = BillingService._build_billing_process_snapshot(payload, phase=phase)
+        payload["billing_process"] = billing_process
         compacted = BillingService._compact_audit_payload(payload)
-        return compacted if isinstance(compacted, dict) else {}
+        if isinstance(compacted, dict):
+            # Always keep process snapshot for logs / estimate UI even if compaction drops zeros.
+            compacted["billing_process"] = billing_process
+            billing_mode = str(payload_details.get("billing_mode") or "").strip().upper()
+            # Skip cache warm-up / average-price probes; log real estimates & reserves only.
+            should_log = billing_mode in {
+                "ESTIMATE_PREVIEW",
+                "ESTIMATE",
+                "RESERVE",
+                "SETTLE",
+            } or any(
+                payload_details.get(key) not in (None, "", 0, "0")
+                for key in ("shot_id", "episode_id", "project_id", "task_id")
+            )
+            if should_log and (str(task_type or "").strip().lower() in {"video_gen", "image_gen"} or mode == "video"):
+                BillingService._log_billing_process(
+                    billing_process,
+                    context=billing_mode or str(phase or "estimate"),
+                )
+            return compacted
+        return {}
 
     @staticmethod
     def _build_billing_breakdown_for_audit(breakdown: Dict[str, Any], *, phase: str) -> Dict[str, Any]:
@@ -2611,11 +3043,14 @@ class BillingService:
             "system_api_ref": breakdown.get("system_api_ref") or {},
             "phase": str(phase or "").strip() or None,
             "audit_summary": breakdown.get("audit_summary") or {},
+            "billing_process": breakdown.get("billing_process") or {},
         }
         compacted = BillingService._compact_audit_payload(
             payload,
             drop_zero_keys=BillingService._AUDIT_BREAKDOWN_DROP_ZERO_KEYS,
         )
+        if isinstance(compacted, dict) and breakdown.get("billing_process"):
+            compacted["billing_process"] = breakdown.get("billing_process")
         return compacted if isinstance(compacted, dict) else {}
 
     @staticmethod
@@ -3119,8 +3554,26 @@ class BillingService:
         )
         db.commit()
         db.refresh(tx)
+        process_snapshot = reserve_breakdown.get("billing_process") if isinstance(reserve_breakdown.get("billing_process"), dict) else {}
+        if not process_snapshot:
+            process_snapshot = BillingService._build_billing_process_snapshot(reserve_breakdown, phase="reserve")
+        BillingService._log_billing_process(
+            {
+                **process_snapshot,
+                "user_id": user_id,
+                "reservation_tx_id": int(getattr(tx, "id", 0) or 0) or None,
+                "balance_after": user.credits,
+            },
+            context="reserve",
+        )
         logger.info(
-            f"Reserved {reserved_cost} credits from user {user_id} for {task_type}. New Balance: {user.credits}"
+            "Reserved %s credits from user %s for %s (logic=%s new_logic=%s). New Balance: %s",
+            reserved_cost,
+            user_id,
+            task_type,
+            process_snapshot.get("logic_branch"),
+            process_snapshot.get("new_logic"),
+            user.credits,
         )
         return tx
 
@@ -3388,6 +3841,11 @@ class BillingService:
         # Update reservation details for audit
         res_details = dict(reservation_tx.details or {})
         res_details["status"] = "SETTLED"
+        # Always flip billing_mode off RESERVE so UI/history don't look "unsettled".
+        settle_billing_mode = str(details.get("billing_mode") or "").strip().upper()
+        if settle_billing_mode in {"", "RESERVE", "RESERVED"}:
+            settle_billing_mode = "ACTUAL"
+        res_details["billing_mode"] = settle_billing_mode
         res_details["reserved_cost"] = reserved_cost
         res_details["actual_cost"] = actual_cost
         res_details["delta"] = delta
@@ -3431,6 +3889,25 @@ class BillingService:
                 "billing_unit_type": ((selected_rule_detail.get("pricing") or {}) if isinstance(selected_rule_detail.get("pricing"), dict) else {}).get("unit_type"),
             },
         })
+        # Persist settle-time quantity markers used by UI / audits.
+        for copy_key in (
+            "item",
+            "image_count",
+            "token_source",
+            "billing_basis",
+            "kie_credits_consumed",
+            "credits_consumed",
+            "creditsConsumed",
+            "completion_tokens",
+            "width",
+            "height",
+            "resolution",
+            "duration",
+            "duration_seconds",
+            "has_video_input",
+        ):
+            if details.get(copy_key) not in (None, ""):
+                res_details[copy_key] = details.get(copy_key)
         provider_usage = details.get("provider_usage")
         if isinstance(provider_usage, dict) and provider_usage:
             res_details["provider_usage"] = BillingService._compact_audit_payload(provider_usage)

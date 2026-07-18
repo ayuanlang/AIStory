@@ -11,23 +11,51 @@ const MAX_LOGS = 100;
 
 const hasAuthToken = () => Boolean(localStorage.getItem('token'));
 
+/** Stable 24h clock for live lines (matches backend Beijing display). */
+const formatHms = (date = new Date()) => {
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) return '--:--:--';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+const buildDisplayLine = (level, message, timeLabel) => (
+    `[${timeLabel || '--:--:--'}] [${String(level || 'INFO').toUpperCase()}] ${String(message ?? '')}`
+);
+
 const toDisplayLines = (entries = []) => {
     const list = Array.isArray(entries) ? entries : [];
     // API returns oldest → newest; panel shows newest first.
     return list
         .map((entry) => {
+            const message = String(entry?.message || '').trim();
             const display = String(entry?.display || '').trim();
             if (display) return display;
-            const message = String(entry?.message || '').trim();
             if (!message) return '';
             const level = String(entry?.level || 'INFO').trim().toUpperCase() || 'INFO';
-            const stamp = String(entry?.stamp || '').trim();
-            const time = stamp.length >= 19 ? stamp.slice(11, 19) : (stamp || '--:--:--');
-            return `[${time}] [${level}] ${message}`;
+            let timeLabel = '';
+            const clientTime = String(entry?.client_time || '').trim();
+            if (clientTime) {
+                const parsed = new Date(clientTime);
+                if (!Number.isNaN(parsed.getTime())) timeLabel = formatHms(parsed);
+            }
+            if (!timeLabel) {
+                const stamp = String(entry?.stamp || '').trim();
+                timeLabel = stamp.length >= 19 ? stamp.slice(11, 19) : (stamp || '--:--:--');
+            }
+            return buildDisplayLine(level, message, timeLabel);
         })
         .filter(Boolean)
         .reverse()
         .slice(0, MAX_LOGS);
+};
+
+/** Dedupe key: level + message (ignore clock so UTC/local variants collapse). */
+const lineDedupeKey = (line) => {
+    const text = String(line || '');
+    const match = text.match(/^\[[^\]]*\]\s*\[([^\]]+)\]\s*(.*)$/);
+    if (!match) return text;
+    return `${String(match[1] || '').toUpperCase()}|${String(match[2] || '').trim()}`;
 };
 
 export const LogProvider = ({ children }) => {
@@ -38,6 +66,7 @@ export const LogProvider = ({ children }) => {
     const flushTimerRef = useRef(null);
     const historyLoadedRef = useRef(false);
     const historyLoadingRef = useRef(false);
+    const liveSeqRef = useRef(0);
 
     const flushPersistQueue = useCallback(() => {
         const batch = persistQueueRef.current.splice(0, persistQueueRef.current.length);
@@ -62,6 +91,7 @@ export const LogProvider = ({ children }) => {
 
         historyLoadingRef.current = true;
         setIsLoadingHistory(true);
+        const seqAtStart = liveSeqRef.current;
         try {
             // Flush pending local entries first so the read includes the latest writes.
             if (flushTimerRef.current) {
@@ -75,10 +105,14 @@ export const LogProvider = ({ children }) => {
             historyLoadedRef.current = true;
 
             setLogs((prev) => {
-                // Keep any brand-new local lines that are not yet in persisted history.
-                const persistedSet = new Set(displayLines);
-                const pendingLocal = (Array.isArray(prev) ? prev : []).filter((line) => !persistedSet.has(line));
-                return [...pendingLocal, ...displayLines].slice(0, MAX_LOGS);
+                const persistedKeys = new Set(displayLines.map(lineDedupeKey));
+                // Only keep lines added while this fetch was in flight (prepended by addLog).
+                const liveCount = Math.max(0, liveSeqRef.current - seqAtStart);
+                const liveWhileLoading = (Array.isArray(prev) ? prev : [])
+                    .slice(0, liveCount)
+                    .filter((line) => !persistedKeys.has(lineDedupeKey(line)));
+                // Newest first: live (newest) → persisted history (already newest-first).
+                return [...liveWhileLoading, ...displayLines].slice(0, MAX_LOGS);
             });
         } catch (_) {
             // Soft-fail: keep whatever is already in memory.
@@ -89,15 +123,19 @@ export const LogProvider = ({ children }) => {
     }, [flushPersistQueue]);
 
     const addLog = useCallback((msg, type = 'info') => {
-        const timestamp = new Date().toLocaleTimeString();
-        const level = String(type || 'info').toLowerCase() || 'info';
         const message = String(msg ?? '');
-        setLogs(prev => [`[${timestamp}] [${level.toUpperCase()}] ${message}`, ...prev].slice(0, MAX_LOGS));
+        if (!message.trim()) return;
+
+        liveSeqRef.current += 1;
+        const now = new Date();
+        const level = String(type || 'info').toLowerCase() || 'info';
+        const line = buildDisplayLine(level, message, formatHms(now));
+        setLogs((prev) => [line, ...prev].slice(0, MAX_LOGS));
 
         persistQueueRef.current.push({
             message,
             type: level,
-            client_time: new Date().toISOString(),
+            client_time: now.toISOString(),
         });
 
         if (persistQueueRef.current.length >= FLUSH_BATCH_SIZE) {

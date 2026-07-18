@@ -148,6 +148,8 @@ import {
     normalizeProjectEpisodeTone,
     normalizeProjectEpisodeLighting,
     normalizeProjectEpisodeQuality,
+    PROJECT_VIDEO_RESOLUTION_OPTIONS,
+    normalizeProjectVideoResolution,
 } from '../projectOptionConfig';
 
 // RefineControl moved to components/RefineControl.jsx
@@ -175,7 +177,8 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                     frame_rate: "24",
                     aspect_ratio: "9:16",
                     quality: "超高 / Ultra High",
-                    image_size: "4K"
+                    image_size: "4K",
+                    video_resolution: "720",
                 }
             },
             tone: "肤色优化，梦幻感 / Skin Tone Optimized, Dreamy",
@@ -364,7 +367,9 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                     ...prev.e_global_info.tech_params,
                     visual_standard: {
                         ...prev.e_global_info.tech_params.visual_standard,
-                        [key]: key === 'quality' ? normalizeProjectEpisodeQuality(value) : value
+                        [key]: key === 'quality'
+                            ? normalizeProjectEpisodeQuality(value)
+                            : (key === 'video_resolution' ? (normalizeProjectVideoResolution(value) || '720') : value)
                     }
                 }
             }
@@ -517,6 +522,13 @@ export const EpisodeInfo = ({ episode, onUpdate, project, projectId, uiLang = 'e
                          <InputGroup idPrefix={prefix} label={t('画幅比例', 'Aspect Ratio')} value={data.tech_params?.visual_standard?.aspect_ratio} onChange={v => updateTech('aspect_ratio', v)} list={PROJECT_ASPECT_RATIO_OPTIONS} />
                          <InputGroup idPrefix={prefix} label={t('质量等级', 'Quality')} value={data.tech_params?.visual_standard?.quality} onChange={v => updateTech('quality', v)} list={PROJECT_EP_QUALITY_OPTIONS} />
                         <InputGroup idPrefix={prefix} label={t('图像尺寸', 'Image Size')} value={data.tech_params?.visual_standard?.image_size} onChange={v => updateTech('image_size', v)} list={["0.5K", "1K", "2K", "4K"]} />
+                        <InputGroup
+                            idPrefix={prefix}
+                            label={t('视频分辨率', 'Video Resolution')}
+                            value={normalizeProjectVideoResolution(data.tech_params?.visual_standard?.video_resolution) || '720'}
+                            onChange={v => updateTech('video_resolution', v)}
+                            list={PROJECT_VIDEO_RESOLUTION_OPTIONS}
+                        />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -2046,6 +2046,186 @@ export function getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike)
         || getEpisodePreferredAspectRatio(episodeInfoLike);
 }
 
+/** Normalize project video short-edge tier to "480" | "720" (empty if unset/invalid). */
+export function normalizeProjectVideoResolutionTier(value) {
+    const raw = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!raw) return '';
+    const digits = raw.endsWith('p') ? raw.slice(0, -1) : (raw.startsWith('p') ? raw.slice(1) : raw);
+    if (digits === '480' || digits === 'sd') return '480';
+    if (digits === '720' || digits === 'hd') return '720';
+    return '';
+}
+
+/** Official Ark Seedance output pixel tables (resolution × aspect → [W, H]). */
+export const SEEDANCE_PIXEL_TABLES = {
+    '2.0': {
+        '480p': { '16:9': [864, 496], '4:3': [752, 560], '1:1': [640, 640], '3:4': [560, 752], '9:16': [496, 864], '21:9': [992, 432] },
+        '720p': { '16:9': [1280, 720], '4:3': [1112, 834], '1:1': [960, 960], '3:4': [834, 1112], '9:16': [720, 1280], '21:9': [1470, 630] },
+        '1080p': { '16:9': [1920, 1080], '4:3': [1664, 1248], '1:1': [1440, 1440], '3:4': [1248, 1664], '9:16': [1080, 1920], '21:9': [2206, 946] },
+        '4k': { '16:9': [3840, 2160], '4:3': [3326, 2494], '1:1': [2880, 2880], '3:4': [2494, 3326], '9:16': [2160, 3840], '21:9': [4398, 1886] },
+    },
+    '1.5': {
+        '480p': { '16:9': [864, 496], '4:3': [752, 560], '1:1': [640, 640], '3:4': [560, 752], '9:16': [496, 864], '21:9': [992, 432] },
+        '720p': { '16:9': [1280, 720], '4:3': [1112, 834], '1:1': [960, 960], '3:4': [834, 1112], '9:16': [720, 1280], '21:9': [1470, 630] },
+        '1080p': { '16:9': [1920, 1080], '4:3': [1664, 1248], '1:1': [1440, 1440], '3:4': [1248, 1664], '9:16': [1080, 1920], '21:9': [2206, 946] },
+    },
+    '1.0': {
+        '480p': { '16:9': [864, 480], '4:3': [736, 544], '1:1': [640, 640], '3:4': [544, 736], '9:16': [480, 864], '21:9': [960, 416] },
+        '720p': { '16:9': [1248, 704], '4:3': [1120, 832], '1:1': [960, 960], '3:4': [832, 1120], '9:16': [704, 1248], '21:9': [1504, 640] },
+        '1080p': { '16:9': [1920, 1088], '4:3': [1664, 1248], '1:1': [1440, 1440], '3:4': [1248, 1664], '9:16': [1088, 1920], '21:9': [2176, 928] },
+    },
+};
+
+export function resolveSeedanceModelFamily(...identityParts) {
+    const text = identityParts.map((part) => String(part || '')).join(' ').trim().toLowerCase();
+    if (!text) return '2.0';
+    if (/(1\.5|1-5|1_5|seedance15|seedance-1\.5|seedance_1\.5)/.test(text)) return '1.5';
+    if (/(seedance-1-0|seedance_1_0|seedance1\.0|seedance-1\.0|seedance_1\.0)/.test(text)) return '1.0';
+    if (/seedance[\s_\-]*1([^.\d]|$)/.test(text) && !/(1\.5|1-5)/.test(text)) return '1.0';
+    return '2.0';
+}
+
+export function normalizeSeedanceAspectRatio(aspectRatio) {
+    const raw = String(aspectRatio || '').trim().toLowerCase().replace(/\s+/g, '');
+    const aliases = {
+        landscape: '16:9',
+        portrait: '9:16',
+        square: '1:1',
+        '16/9': '16:9',
+        '9/16': '9:16',
+        '4/3': '4:3',
+        '3/4': '3:4',
+        '21/9': '21:9',
+        '2.35:1': '21:9',
+        '2.35/1': '21:9',
+    };
+    if (aliases[raw]) return aliases[raw];
+    const supported = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'];
+    if (supported.includes(raw)) return raw;
+    const parts = parseAspectRatioParts(aspectRatio || '16:9');
+    if (!parts) return '16:9';
+    const target = Number(parts.widthPart) / Number(parts.heightPart);
+    if (!Number.isFinite(target) || target <= 0) return '16:9';
+    let best = '16:9';
+    let bestDelta = Number.POSITIVE_INFINITY;
+    for (const candidate of supported) {
+        const [cw, ch] = candidate.split(':').map(Number);
+        const delta = Math.abs((cw / ch) - target);
+        if (delta < bestDelta) {
+            bestDelta = delta;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+/** Project video resolution setting: "480" | "720" (default 720). */
+export function getProjectPreferredVideoResolution(projectInfoLike, episodeInfoLike) {
+    const pick = (infoLike) => {
+        const root = (infoLike && typeof infoLike === 'object' && infoLike.e_global_info)
+            ? infoLike.e_global_info
+            : (infoLike || {});
+        const defaults = root?.project_generation_defaults && typeof root.project_generation_defaults === 'object'
+            ? root.project_generation_defaults
+            : {};
+        const visual = root?.tech_params?.visual_standard || {};
+        return normalizeProjectVideoResolutionTier(
+            visual?.video_resolution
+            || defaults?.video_resolution
+            || root?.video_resolution
+        );
+    };
+    return pick(projectInfoLike) || pick(episodeInfoLike) || '720';
+}
+
+/** Derive WxH from official Seedance tables (fallback: short-edge math). */
+export function resolveVideoDimsFromAspectAndTier(aspectRatio, videoResolutionTier, modelHint) {
+    const tier = normalizeProjectVideoResolutionTier(videoResolutionTier) || '720';
+    const family = resolveSeedanceModelFamily(modelHint);
+    const aspect = normalizeSeedanceAspectRatio(aspectRatio || '16:9');
+    const tierKey = `${tier}p`;
+    const table = SEEDANCE_PIXEL_TABLES[family] || SEEDANCE_PIXEL_TABLES['2.0'];
+    const pair = table?.[tierKey]?.[aspect] || SEEDANCE_PIXEL_TABLES['2.0']?.[tierKey]?.[aspect];
+    if (Array.isArray(pair) && pair.length >= 2) {
+        const width = Number(pair[0]);
+        const height = Number(pair[1]);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+            return {
+                width: Math.round(width),
+                height: Math.round(height),
+                resolution: tierKey,
+                video_resolution: tier,
+                seedance_family: family,
+                aspect_ratio: aspect,
+            };
+        }
+    }
+
+    const shortEdge = Number(tier);
+    if (!Number.isFinite(shortEdge) || shortEdge <= 0) return null;
+    const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
+    const rw = Number(parts.widthPart);
+    const rh = Number(parts.heightPart);
+    if (!Number.isFinite(rw) || !Number.isFinite(rh) || rw <= 0 || rh <= 0) return null;
+    if (rw >= rh) {
+        const height = shortEdge;
+        const width = Math.max(1, Math.round(shortEdge * rw / rh));
+        return { width, height, resolution: tierKey, video_resolution: tier, seedance_family: family, aspect_ratio: aspect };
+    }
+    const width = shortEdge;
+    const height = Math.max(1, Math.round(shortEdge * rh / rw));
+    return { width, height, resolution: tierKey, video_resolution: tier, seedance_family: family, aspect_ratio: aspect };
+}
+
+/** Pixel size for video credit estimate / generation (prefers video_resolution tier). */
+export function getProjectPreferredResolution(projectInfoLike, episodeInfoLike, modelHint) {
+    const aspect = getProjectPreferredAspectRatio(projectInfoLike, episodeInfoLike) || '16:9';
+    const videoTier = getProjectPreferredVideoResolution(projectInfoLike, episodeInfoLike);
+    const fromVideo = resolveVideoDimsFromAspectAndTier(aspect, videoTier, modelHint);
+    if (fromVideo?.width && fromVideo?.height) {
+        return {
+            width: fromVideo.width,
+            height: fromVideo.height,
+            resolution: fromVideo.resolution,
+            video_resolution: fromVideo.video_resolution,
+        };
+    }
+
+    const pick = (infoLike) => {
+        const root = (infoLike && typeof infoLike === 'object' && infoLike.e_global_info)
+            ? infoLike.e_global_info
+            : (infoLike || {});
+        const defaults = root?.project_generation_defaults && typeof root.project_generation_defaults === 'object'
+            ? root.project_generation_defaults
+            : {};
+        const visual = root?.tech_params?.visual_standard || {};
+        const width = Number(
+            visual?.horizontal_resolution || visual?.h_resolution || visual?.width
+            || defaults?.horizontal_resolution || root?.width
+        );
+        const height = Number(
+            visual?.vertical_resolution || visual?.v_resolution || visual?.height
+            || defaults?.vertical_resolution || root?.height
+        );
+        const resolution = String(
+            visual?.resolution || defaults?.resolution || root?.resolution || ''
+        ).trim();
+        return {
+            width: (Number.isFinite(width) && width > 0) ? Math.round(width) : null,
+            height: (Number.isFinite(height) && height > 0) ? Math.round(height) : null,
+            resolution: resolution || null,
+        };
+    };
+    const primary = pick(projectInfoLike);
+    const secondary = pick(episodeInfoLike);
+    return {
+        width: primary.width || secondary.width || null,
+        height: primary.height || secondary.height || null,
+        resolution: primary.resolution || secondary.resolution || null,
+        video_resolution: videoTier || null,
+    };
+}
+
 export function buildShotDiptychPlan(aspectRatio) {
     const parts = parseAspectRatioParts(aspectRatio || '16:9') || { widthPart: 16, heightPart: 9 };
     const ratioValue = parts.widthPart / parts.heightPart;

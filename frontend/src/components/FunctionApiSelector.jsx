@@ -3,7 +3,7 @@ import { getUiLang, tUI, UI_LANG_EVENT } from '../lib/uiLang';
 
 const FUNCTION_API_CHANGE_EVENT = 'aistory:function-api-changed';
 
-const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '', onChange, value: controlledValue }) => {
+const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", className = '', onChange, value: controlledValue, hidePricingDescription = false }) => {
 
     const apiList = configs?.[functionName] || [];
     const storageKey = 'func_api_' + functionName;
@@ -98,7 +98,7 @@ const FunctionApiSelector = ({ functionName, configs, label = "AI 模型", class
                 {apiList.map((api, index) => (
                     <option key={`${api.system_api_id}-${index}`} value={api.system_api_id}>
 
-                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{api.pricing_description ? " | " + api.pricing_description : ""}
+                        {api.provider_alias ? `[${api.provider_alias}] ` : ""}{api.alias || (api.system_api_model || api.system_api_name || "API " + api.system_api_id)}{api.applicable_languages && api.applicable_languages.length > 0 ? " (" + api.applicable_languages.join(", ") + ")" : ""}{(!hidePricingDescription && api.pricing_description) ? " | " + api.pricing_description : ""}
 
                     </option>
                 ))}

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 TOKEN_UNIT_TYPES = {"per_token", "per_1k_tokens", "per_million_tokens"}
@@ -196,16 +196,238 @@ def resolve_rule_base_credits(rule: Any) -> Dict[str, Any]:
 
 VIDEO_RESOLUTION_TIERS = ("480p", "720p", "1080p", "4k")
 
-# Business rule (settings import): 1 KIE credit = 3 system credits
-KIE_TO_SYSTEM_CREDIT_RATIO = 3.0
+# Official Ark Seedance output pixel tables (resolution × aspect → WxH).
+# Source: Volcengine / Seedance published size matrix (2.0 / 1.5 Pro / 1.0).
+SEEDANCE_ASPECT_RATIOS = ("16:9", "4:3", "1:1", "3:4", "9:16", "21:9")
 
-# KIE Seedance 2 published rates (KIE credits / second)
-DEFAULT_KIE_SEEDANCE_SECOND_RATES = {
+SEEDANCE_PIXEL_TABLES: Dict[str, Dict[str, Dict[str, Tuple[int, int]]]] = {
+    # Seedance 2.0 series (standard / fast / mini share the same size matrix;
+    # 1080p unavailable on Fast/Mini is a capability constraint, not a size remap).
+    "2.0": {
+        "480p": {
+            "16:9": (864, 496),
+            "4:3": (752, 560),
+            "1:1": (640, 640),
+            "3:4": (560, 752),
+            "9:16": (496, 864),
+            "21:9": (992, 432),
+        },
+        "720p": {
+            "16:9": (1280, 720),
+            "4:3": (1112, 834),
+            "1:1": (960, 960),
+            "3:4": (834, 1112),
+            "9:16": (720, 1280),
+            "21:9": (1470, 630),
+        },
+        "1080p": {
+            "16:9": (1920, 1080),
+            "4:3": (1664, 1248),
+            "1:1": (1440, 1440),
+            "3:4": (1248, 1664),
+            "9:16": (1080, 1920),
+            "21:9": (2206, 946),
+        },
+        "4k": {
+            "16:9": (3840, 2160),
+            "4:3": (3326, 2494),
+            "1:1": (2880, 2880),
+            "3:4": (2494, 3326),
+            "9:16": (2160, 3840),
+            "21:9": (4398, 1886),
+        },
+    },
+    # Seedance 1.5 Pro shares the 2.0 matrix for 480p/720p/1080p (no 4k).
+    "1.5": {
+        "480p": {
+            "16:9": (864, 496),
+            "4:3": (752, 560),
+            "1:1": (640, 640),
+            "3:4": (560, 752),
+            "9:16": (496, 864),
+            "21:9": (992, 432),
+        },
+        "720p": {
+            "16:9": (1280, 720),
+            "4:3": (1112, 834),
+            "1:1": (960, 960),
+            "3:4": (834, 1112),
+            "9:16": (720, 1280),
+            "21:9": (1470, 630),
+        },
+        "1080p": {
+            "16:9": (1920, 1080),
+            "4:3": (1664, 1248),
+            "1:1": (1440, 1440),
+            "3:4": (1248, 1664),
+            "9:16": (1080, 1920),
+            "21:9": (2206, 946),
+        },
+    },
+    # Seedance 1.0 series
+    "1.0": {
+        "480p": {
+            "16:9": (864, 480),
+            "4:3": (736, 544),
+            "1:1": (640, 640),
+            "3:4": (544, 736),
+            "9:16": (480, 864),
+            "21:9": (960, 416),
+        },
+        "720p": {
+            "16:9": (1248, 704),
+            "4:3": (1120, 832),
+            "1:1": (960, 960),
+            "3:4": (832, 1120),
+            "9:16": (704, 1248),
+            "21:9": (1504, 640),
+        },
+        "1080p": {
+            "16:9": (1920, 1088),
+            "4:3": (1664, 1248),
+            "1:1": (1440, 1440),
+            "3:4": (1248, 1664),
+            "9:16": (1088, 1920),
+            "21:9": (2176, 928),
+        },
+    },
+}
+
+
+def normalize_seedance_aspect_ratio(aspect_ratio: Any) -> str:
+    raw = str(aspect_ratio or "").strip().lower().replace(" ", "")
+    if not raw:
+        return "16:9"
+    aliases = {
+        "landscape": "16:9",
+        "portrait": "9:16",
+        "square": "1:1",
+        "16/9": "16:9",
+        "9/16": "9:16",
+        "4/3": "4:3",
+        "3/4": "3:4",
+        "21/9": "21:9",
+        "2.35:1": "21:9",
+        "2.35/1": "21:9",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    if raw in SEEDANCE_ASPECT_RATIOS:
+        return raw
+    m = re.match(r"^(\d+(?:\.\d+)?)[:/](\d+(?:\.\d+)?)$", raw)
+    if not m:
+        return "16:9"
+    try:
+        left = float(m.group(1))
+        right = float(m.group(2))
+    except Exception:
+        return "16:9"
+    if left <= 0 or right <= 0:
+        return "16:9"
+    target = left / right
+    best = "16:9"
+    best_delta = float("inf")
+    for candidate in SEEDANCE_ASPECT_RATIOS:
+        cw, ch = candidate.split(":")
+        try:
+            ratio = float(cw) / float(ch)
+        except Exception:
+            continue
+        delta = abs(ratio - target)
+        if delta < best_delta:
+            best_delta = delta
+            best = candidate
+    return best
+
+
+def resolve_seedance_model_family(*identity_parts: Any) -> str:
+    """
+    Return Seedance size-matrix family: '2.0' | '1.5' | '1.0'.
+    Defaults to 2.0 when Seedance is implied without a clear older version.
+    """
+    text = " ".join(str(part or "") for part in identity_parts).strip().lower()
+    if not text:
+        return "2.0"
+    if any(marker in text for marker in ("1.5", "1-5", "1_5", "seedance15", "seedance-1.5", "seedance_1.5")):
+        return "1.5"
+    if any(marker in text for marker in ("seedance-1-0", "seedance_1_0", "seedance1.0", "seedance-1.0", "seedance_1.0")):
+        return "1.0"
+    # "seedance-1" / "seedance 1" without 1.5 → 1.0
+    if re.search(r"seedance[\s_\-]*1([^.\d]|$)", text) and "1.5" not in text and "1-5" not in text:
+        return "1.0"
+    if "seedance" in text or "ark" in text:
+        return "2.0"
+    return "2.0"
+
+
+def resolve_seedance_pixel_dims(
+    aspect_ratio: Any = None,
+    resolution: Any = None,
+    *,
+    model_family: Any = None,
+    model: Any = None,
+    provider: Any = None,
+) -> Optional[Tuple[int, int]]:
+    """Look up official Seedance WxH for family + resolution tier + aspect ratio."""
+    family = str(model_family or "").strip()
+    if family not in SEEDANCE_PIXEL_TABLES:
+        family = resolve_seedance_model_family(provider, model, model_family)
+    tier = resolve_video_resolution_tier(resolution=resolution)
+    if not tier:
+        raw_tier = str(resolution or "").strip().lower().replace(" ", "")
+        if raw_tier in {"480", "720", "1080", "4k"}:
+            tier = "4k" if raw_tier == "4k" else f"{raw_tier}p"
+    if not tier:
+        return None
+    aspect = normalize_seedance_aspect_ratio(aspect_ratio)
+    table = SEEDANCE_PIXEL_TABLES.get(family) or SEEDANCE_PIXEL_TABLES["2.0"]
+    tier_row = table.get(tier)
+    if not tier_row:
+        # Unsupported combo for this family (e.g. 4k on 1.5/1.0) → fall back to 2.0 size if present.
+        tier_row = (SEEDANCE_PIXEL_TABLES.get("2.0") or {}).get(tier)
+    if not tier_row:
+        return None
+    dims = tier_row.get(aspect)
+    if not dims:
+        dims = tier_row.get("16:9")
+    if not dims:
+        return None
+    try:
+        width = int(dims[0])
+        height = int(dims[1])
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (width, height)
+
+
+# KIE FX: ~200 KIE credits / 1 USD, USD:CNY = 1:7
+# => 1 KIE credit = 7/200 CNY = 0.035 CNY = 3.5 system credits (1 credit = 0.01 CNY)
+KIE_CREDITS_PER_USD = 200.0
+USD_TO_CNY_RATE = 7.0
+KIE_CREDIT_TO_CNY = USD_TO_CNY_RATE / KIE_CREDITS_PER_USD  # 0.035
+KIE_TO_SYSTEM_CREDIT_RATIO = KIE_CREDIT_TO_CNY * 100.0  # 3.5
+
+# Official KIE Seedance 2 published rates (KIE credits / second)
+DEFAULT_KIE_SEEDANCE_SECOND_RATES_KIE = {
     "480p": {"with_video_input": 11.5, "without_video_input": 19.0},
     "720p": {"with_video_input": 25.0, "without_video_input": 41.0},
     "1080p": {"with_video_input": 62.0, "without_video_input": 102.0},
     "4k": {"with_video_input": 128.0, "without_video_input": 208.0},
 }
+
+# Same table folded to supplier CNY / second for Pricing Rules (money basis)
+DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES = {
+    tier: {
+        "with_video_input": round(float(row["with_video_input"]) * KIE_CREDIT_TO_CNY, 6),
+        "without_video_input": round(float(row["without_video_input"]) * KIE_CREDIT_TO_CNY, 6),
+    }
+    for tier, row in DEFAULT_KIE_SEEDANCE_SECOND_RATES_KIE.items()
+}
+
+# Backward-compatible alias (now CNY/s). Prefer DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES.
+DEFAULT_KIE_SEEDANCE_SECOND_RATES = DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES
 
 
 # RunningHub SparkVideo 2.0 resolution tiers (API + native variants)
@@ -292,13 +514,36 @@ def resolve_video_resolution_tier(
         h = 0
     if w <= 0 and h <= 0:
         return None
+
+    # Prefer nearest official Seedance size (handles non-canonical short edges like 496/834).
+    try:
+        best_tier = None
+        best_delta = None
+        for family_table in SEEDANCE_PIXEL_TABLES.values():
+            for tier_key, aspect_map in (family_table or {}).items():
+                for dims in (aspect_map or {}).values():
+                    try:
+                        tw, th = int(dims[0]), int(dims[1])
+                    except Exception:
+                        continue
+                    if tw <= 0 or th <= 0:
+                        continue
+                    delta = abs(tw - w) + abs(th - h)
+                    if best_delta is None or delta < best_delta:
+                        best_delta = delta
+                        best_tier = tier_key
+        if best_tier and best_delta is not None and best_delta <= 48:
+            return best_tier
+    except Exception:
+        pass
+
     short_edge = min(v for v in (w, h) if v > 0)
-    # Seedance tiers by short edge (16:9): 480 / 720 / 1080 / 2160
-    if short_edge <= 480:
+    # Seedance official short-edge bands (approx): 480p<=640, 720p<=960, 1080p<=1440, else 4k
+    if short_edge <= 640:
         return "480p"
-    if short_edge <= 720:
+    if short_edge <= 960:
         return "720p"
-    if short_edge <= 1080:
+    if short_edge <= 1440:
         return "1080p"
     return "4k"
 
@@ -348,9 +593,14 @@ def normalize_video_second_resolution_rates(raw: Any) -> Dict[str, Dict[str, Opt
     return normalize_resolution_rate_map(raw)
 
 
+def kie_credits_to_cny(value: Any) -> float:
+    """Convert KIE credits to CNY (1 USD ~= 200 KIE, USD:CNY = 1:7)."""
+    return max(0.0, safe_non_negative_float(value) * float(KIE_CREDIT_TO_CNY))
+
+
 def kie_credits_to_system_credits(value: Any) -> float:
     """Convert KIE credits to system credits (may be fractional before ceil)."""
-    return max(0.0, safe_non_negative_float(value) * float(KIE_TO_SYSTEM_CREDIT_RATIO))
+    return max(0.0, kie_credits_to_cny(value) * 100.0)
 
 
 
@@ -445,10 +695,11 @@ def normalize_sparkvideo_second_cny_rates(raw: Any) -> Dict[str, Dict[str, Any]]
 
 
 def normalize_sparkvideo_min_billable_by_output(raw: Any) -> Dict[int, int]:
+    """Normalize min-billable table. Empty/missing => no floor (KIE CNY/s path)."""
     out: Dict[int, int] = {}
     src = raw if isinstance(raw, dict) else {}
     if not src:
-        return dict(SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT)
+        return {}
     for k, v in src.items():
         try:
             out_key = int(float(k))
@@ -457,7 +708,7 @@ def normalize_sparkvideo_min_billable_by_output(raw: Any) -> Dict[int, int]:
             continue
         if out_key > 0 and out_val > 0:
             out[out_key] = out_val
-    return out or dict(SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT)
+    return out
 
 
 def resolve_sparkvideo_min_billable_seconds(output_duration: Any, table: Any = None) -> float:
@@ -499,15 +750,29 @@ def resolve_sparkvideo_billable_seconds(
             "billable_mode": "output_only",
         }
     combined = input_s + output_s
-    min_bill = resolve_sparkvideo_min_billable_seconds(output_s, min_billable_table)
-    billable = max(combined, min_bill) if (combined > 0 or min_bill > 0) else 0.0
+    mapping = normalize_sparkvideo_min_billable_by_output(min_billable_table)
+    if mapping:
+        # SparkVideo: max(input+output, min_table[output])
+        min_bill = resolve_sparkvideo_min_billable_seconds(output_s, mapping)
+        billable = max(combined, min_bill) if (combined > 0 or min_bill > 0) else 0.0
+        mode = "max_combined_or_min_table"
+    elif has_video_input:
+        # KIE Seedance: With video = Price x (Input + Output)
+        min_bill = 0.0
+        billable = combined if combined > 0 else output_s
+        mode = "combined_input_output"
+    else:
+        # KIE Seedance: No video = Price x Output
+        min_bill = 0.0
+        billable = output_s
+        mode = "output_only"
     return {
         "output_seconds": output_s,
         "input_seconds": input_s,
         "combined_seconds": combined,
         "min_billable_seconds": float(min_bill),
         "billable_seconds": float(billable),
-        "billable_mode": "max_combined_or_min_table",
+        "billable_mode": mode,
     }
 
 
@@ -523,8 +788,9 @@ def estimate_sparkvideo_second_cny_amount(
     """
     RunningHub SparkVideo 2.0 supplier CNY amount (before credit conversion).
 
-    without ref: CNY = rate * output_seconds
-    with ref (flat): CNY = rate * max(input+output, min_table[output])
+    without ref / KIE no-video: CNY = rate * output_seconds
+    KIE with-video (flat, no min table): CNY = rate * (input + output)
+    with ref + min table (SparkVideo): CNY = rate * max(input+output, min_table[output])
     with ref (upscale): CNY = base_rate * billable_seconds + addon_rate * output_seconds
     """
     tier = resolve_sparkvideo_resolution_tier(resolution=resolution_tier) or str(resolution_tier or "").strip().lower()
@@ -711,6 +977,33 @@ def resolve_video_token_unit_rate(
     }
 
 
+def resolve_provider_kie_credits(usage: Optional[Dict[str, Any]] = None) -> float:
+    """Resolve actual KIE credits from settle/callback usage (creditsConsumed)."""
+    payload = dict(usage or {})
+    direct = safe_non_negative_float(
+        payload.get("kie_credits_consumed")
+        or payload.get("credits_consumed")
+        or payload.get("creditsConsumed")
+        , 0.0,
+    )
+    if direct > 0:
+        return float(direct)
+    for nested_key in ("provider_usage", "usage"):
+        nested = payload.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        nested_val = safe_non_negative_float(
+            nested.get("kie_credits_consumed")
+            or nested.get("credits_consumed")
+            or nested.get("creditsConsumed")
+            or nested.get("credits")
+            , 0.0,
+        )
+        if nested_val > 0:
+            return float(nested_val)
+    return 0.0
+
+
 def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[str, Any]] = None) -> float:
     if not config:
         return 0.0
@@ -719,6 +1012,12 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
     cost_input = float(safe_non_negative_int(config.get("cost_input", 0), 0))
     cost_output = float(safe_non_negative_int(config.get("cost_output", 0), 0))
     payload = dict(usage or {})
+
+    # Prefer actual provider-reported KIE credits (callback data.creditsConsumed).
+    # Reserve payloads never carry this field, so estimate matrices remain unchanged.
+    kie_credits = resolve_provider_kie_credits(payload)
+    if kie_credits > 0:
+        return float(kie_credits_to_system_credits(kie_credits))
 
     if unit_type in TOKEN_UNIT_TYPES:
         input_tokens = safe_non_negative_int(payload.get("input_tokens", payload.get("prompt_tokens", 0)), 0)
@@ -818,16 +1117,29 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
                 payload.get("height"),
                 payload.get("resolution_tier") or payload.get("resolution"),
             )
+            min_table = (
+                payload.get("video_second_min_billable_by_output")
+                or config.get("video_second_min_billable_by_output")
+            )
+            # Auto-apply SparkVideo min-duration table only when rates include upscale base/addon.
+            if not min_table:
+                _rate_map = normalize_sparkvideo_second_cny_rates(cny_rates)
+                if any(
+                    (isinstance(row, dict) and (
+                        row.get("with_video_base") is not None
+                        or row.get("with_video_addon") is not None
+                        or str(row.get("pricing_kind") or "").lower() == "upscale"
+                    ))
+                    for row in _rate_map.values()
+                ):
+                    min_table = dict(SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT)
             estimate = estimate_sparkvideo_second_cny_amount(
                 rates=cny_rates,
                 resolution_tier=tier,
                 has_video_input=has_video_input,
                 output_duration=out_duration,
                 input_duration=in_duration,
-                min_billable_table=(
-                    payload.get("video_second_min_billable_by_output")
-                    or config.get("video_second_min_billable_by_output")
-                ),
+                min_billable_table=min_table,
             )
             # Convert supplier CNY total -> system credits (1 credit = 0.01 CNY).
             return max(0.0, float(estimate.get("cny_amount") or 0.0) * 100.0)
@@ -850,7 +1162,19 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
                 resolution_tier=tier,
                 resolution_rates_kie=second_rates,
             )
-            return max(0.0, float(selected["rate"]) * float(quantity))
+            # KIE: no video = output; with video = input + output
+            out_s = safe_non_negative_float(
+                payload.get("duration_seconds", payload.get("duration", quantity)),
+                0.0,
+            )
+            in_s = safe_non_negative_float(
+                payload.get("input_duration_seconds", payload.get("input_duration", 0)),
+                0.0,
+            )
+            billable_s = (in_s + out_s) if has_video_input else out_s
+            if billable_s <= 0:
+                billable_s = float(quantity)
+            return max(0.0, float(selected["rate"]) * float(billable_s))
 
         # Dual rate without resolution matrix: with/without video input.
         if cost_input > 0 or cost_output > 0:

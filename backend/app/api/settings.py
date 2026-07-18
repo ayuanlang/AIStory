@@ -211,8 +211,11 @@ _BASE_BILLING_RULE_KIND = "base_pricing"
 _BASE_BILLING_RULE_PRIORITY = -100000
 _KIE_GRANULAR_RULE_KIND = "kie_granular_pricing"
 _KIE_HINT_TEMPLATE_LIMIT_PER_MODEL = 6
-_KIE_TO_SYSTEM_CREDIT_RATIO = 3.0
+# ~200 KIE credits / 1 USD, USD:CNY = 1:7 => 1 KIE = 0.035 CNY = 3.5 system credits
+_KIE_CREDITS_PER_USD = 200.0
 _USD_TO_CNY_RATE = 7.0
+_KIE_CREDIT_TO_CNY = _USD_TO_CNY_RATE / _KIE_CREDITS_PER_USD  # 0.035
+_KIE_TO_SYSTEM_CREDIT_RATIO = _KIE_CREDIT_TO_CNY * 100.0  # 3.5
 _SYSTEM_CREDIT_PER_CNY = 100.0
 _USER_API_STRATEGIES = {"fixed", "smart_default", "low_price_replace"}
 _MODEL_MODE_DEFAULTS_KEY = "model_mode_defaults"
@@ -878,9 +881,8 @@ def _convert_supplier_value_to_system_credit(value: Any, source_unit: str) -> in
         return 0
 
     # Business rule:
-    # 1 KIE credit = 3 system credits
-    # 1 USD = 7 CNY
-    # 1 system credit = 0.01 CNY  => 100 credits per CNY
+    # ~200 KIE credits / 1 USD, USD:CNY = 1:7 => 1 KIE = 0.035 CNY = 3.5 system credits
+    # 1 system credit = 0.01 CNY => 100 credits per CNY
     if unit in {"kie", "kie_credit", "kie_credits", "credit", "credits", "point", "points", "积分"}:
         return int(math.ceil(base * _KIE_TO_SYSTEM_CREDIT_RATIO))
     if unit in {"usd", "$", "us_dollar", "dollar", "dollars"}:
@@ -10510,6 +10512,145 @@ def _format_billing_unit_short_label(unit_type: str) -> str:
     return mapping.get(unit, "次")
 
 
+
+def _cny_rate_to_user_credits(cny_value: Any, charge_multiplier: Any, *, round_cost_to_int: bool = False) -> float:
+    """Supplier CNY unit rate -> user credits (ceil(CNY*100) then * odds)."""
+    try:
+        cny = float(cny_value)
+    except Exception:
+        return 0.0
+    if not math.isfinite(cny) or cny <= 0:
+        return 0.0
+    base = float(math.ceil(cny * 100.0))
+    odds = _normalize_rule_charge_multiplier(charge_multiplier, default=2.0)
+    user = float(math.ceil(base * float(odds))) if base > 0 and odds > 0 else 0.0
+    if round_cost_to_int:
+        return float(int(Decimal(str(user)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+    return user
+
+
+def _format_cost_number_for_pricing_desc(value: float, *, round_cost_to_int: bool = False) -> str:
+    if round_cost_to_int:
+        return str(int(Decimal(str(float(value))).quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+    rounded = round(float(value), 6)
+    if abs(rounded - int(rounded)) < 1e-9:
+        return str(int(rounded))
+    return ("{:.6f}".format(rounded)).rstrip("0").rstrip(".")
+
+
+def _format_resolution_matrix_pricing_description(
+    *,
+    unit_type: str,
+    charge_multiplier: Any = 2.0,
+    video_token_rates: Any = None,
+    video_second_cny_rates: Any = None,
+    video_second_kie_rates: Any = None,
+    min_billable_by_output: Any = None,
+    force_token_k_unit: bool = False,
+    round_cost_to_int: bool = False,
+) -> str:
+    """Build human pricing_description from resolution-tier rate matrices."""
+    from app.services.billing_pricing import (
+        normalize_video_token_resolution_rates,
+        normalize_video_second_resolution_rates,
+        normalize_sparkvideo_second_cny_rates,
+        normalize_sparkvideo_min_billable_by_output,
+        kie_credits_to_cny,
+        VIDEO_RESOLUTION_TIERS,
+        SPARKVIDEO_RESOLUTION_TIERS,
+    )
+
+    odds = _normalize_rule_charge_multiplier(charge_multiplier, default=2.0)
+    unit = _normalize_billing_unit_type(unit_type)
+
+    # --- Seedance / Ark style: CNY per million tokens by resolution ---
+    token_rates = normalize_video_token_resolution_rates(video_token_rates)
+    if token_rates and unit in {"per_token", "per_1k_tokens", "per_million_tokens", "per_call"}:
+        parts = []
+        for tier in VIDEO_RESOLUTION_TIERS:
+            row = token_rates.get(tier) or {}
+            with_cny = row.get("with_video_input")
+            without_cny = row.get("without_video_input")
+            with_u = _cny_rate_to_user_credits(with_cny, odds, round_cost_to_int=round_cost_to_int) if with_cny is not None else 0.0
+            without_u = _cny_rate_to_user_credits(without_cny, odds, round_cost_to_int=round_cost_to_int) if without_cny is not None else 0.0
+            if force_token_k_unit:
+                with_u = with_u / 1000.0
+                without_u = without_u / 1000.0
+            if with_u <= 0 and without_u <= 0:
+                continue
+            parts.append(
+                f"{tier} {_format_cost_number_for_pricing_desc(with_u, round_cost_to_int=round_cost_to_int)}"
+                f"/{_format_cost_number_for_pricing_desc(without_u, round_cost_to_int=round_cost_to_int)}"
+            )
+        if parts:
+            unit_label = "千 token" if force_token_k_unit else "百万 token"
+            return (
+                "分档有视频/无视频 "
+                + " · ".join(parts)
+                + f" 积分/{unit_label}"
+            )
+
+    # --- Per-second CNY matrix (KIE Seedance / SparkVideo) ---
+    cny_rates = normalize_sparkvideo_second_cny_rates(video_second_cny_rates)
+    if not cny_rates and video_second_kie_rates:
+        kie_map = normalize_video_second_resolution_rates(video_second_kie_rates)
+        converted = {}
+        for tier, row in kie_map.items():
+            converted[tier] = {
+                "with_video_input": kie_credits_to_cny(row.get("with_video_input")),
+                "without_video_input": kie_credits_to_cny(row.get("without_video_input")),
+            }
+        cny_rates = normalize_sparkvideo_second_cny_rates(converted)
+
+    if cny_rates and unit in {"per_second", "per_minute", "per_call"}:
+        has_upscale = any(
+            isinstance(row, dict)
+            and (
+                row.get("with_video_base") is not None
+                or row.get("with_video_addon") is not None
+                or str(row.get("pricing_kind") or "").lower() == "upscale"
+            )
+            for row in cny_rates.values()
+        )
+        min_table = normalize_sparkvideo_min_billable_by_output(min_billable_by_output)
+        has_native = any(t.endswith("_native") for t in cny_rates.keys())
+        is_spark = bool(has_upscale or min_table or has_native)
+        tier_order = list(SPARKVIDEO_RESOLUTION_TIERS) if is_spark else list(VIDEO_RESOLUTION_TIERS)
+        parts = []
+        for tier in tier_order:
+            row = cny_rates.get(tier) or {}
+            if not isinstance(row, dict):
+                continue
+            if row.get("with_video_base") is not None or row.get("with_video_addon") is not None:
+                without_u = _cny_rate_to_user_credits(row.get("without_video_input"), odds, round_cost_to_int=round_cost_to_int)
+                base_u = _cny_rate_to_user_credits(row.get("with_video_base"), odds, round_cost_to_int=round_cost_to_int)
+                addon_u = _cny_rate_to_user_credits(row.get("with_video_addon"), odds, round_cost_to_int=round_cost_to_int)
+                if without_u <= 0 and base_u <= 0 and addon_u <= 0:
+                    continue
+                parts.append(
+                    f"{tier} 无{_format_cost_number_for_pricing_desc(without_u, round_cost_to_int=round_cost_to_int)}"
+                    f"/有基{_format_cost_number_for_pricing_desc(base_u, round_cost_to_int=round_cost_to_int)}"
+                    f"+附{_format_cost_number_for_pricing_desc(addon_u, round_cost_to_int=round_cost_to_int)}"
+                )
+            else:
+                with_u = _cny_rate_to_user_credits(row.get("with_video_input"), odds, round_cost_to_int=round_cost_to_int)
+                without_u = _cny_rate_to_user_credits(row.get("without_video_input"), odds, round_cost_to_int=round_cost_to_int)
+                if with_u <= 0 and without_u <= 0:
+                    continue
+                parts.append(
+                    f"{tier} {_format_cost_number_for_pricing_desc(with_u, round_cost_to_int=round_cost_to_int)}"
+                    f"/{_format_cost_number_for_pricing_desc(without_u, round_cost_to_int=round_cost_to_int)}"
+                )
+        if parts:
+            if is_spark:
+                formula = "无视频×输出；有视频原生×max(入+出,最低秒)；放大有视频=基础×计费秒+附加×输出"
+            else:
+                formula = "无视频×输出；有视频×(输入+输出)"
+            return "分档有视频/无视频 " + " · ".join(parts) + f" 积分/秒（{formula}）"
+
+    return ""
+
+
 def _format_pricing_description_from_summary(
     summary: Optional[Dict[str, Any]],
     unit_type: str,
@@ -10655,6 +10796,50 @@ def _build_function_api_pricing_description_map(
             if ci > 0 or co > 0:
                 token_io_by_sid[sid] = {"cost_input": ci, "cost_output": co}
 
+    # Load base-rule extras (resolution matrices) + charge_multiplier for richer descriptions.
+    base_meta_by_sid: Dict[int, Dict[str, Any]] = {}
+    if _db_has_table(db, "system_api_billing_rules"):
+        base_rows = db.query(SystemAPIBillingRule).filter(
+            SystemAPIBillingRule.system_api_id.in_(normalized_ids),
+            or_(SystemAPIBillingRule.is_active == True, SystemAPIBillingRule.is_active.is_(None)),
+        ).order_by(
+            SystemAPIBillingRule.system_api_id.asc(),
+            SystemAPIBillingRule.priority.desc(),
+            SystemAPIBillingRule.id.asc(),
+        ).all()
+        for row in base_rows or []:
+            sid = _safe_int(getattr(row, "system_api_id", 0), 0)
+            if sid <= 0:
+                continue
+            extra = _rule_extra_conditions(row)
+            is_base = _is_base_billing_rule(row)
+            has_matrix = any(
+                isinstance(extra.get(k), dict) and extra.get(k)
+                for k in (
+                    "video_token_resolution_rates",
+                    "video_second_cny_resolution_rates",
+                    "video_second_resolution_rates",
+                )
+            )
+            if not is_base and not has_matrix:
+                continue
+            prev = base_meta_by_sid.get(sid)
+            # Prefer true base rule; otherwise keep first matrix-bearing rule.
+            if prev and prev.get("is_base") and not is_base:
+                continue
+            if prev and not prev.get("is_base") and not is_base and prev.get("extra"):
+                continue
+            base_meta_by_sid[sid] = {
+                "unit_type": _normalize_billing_unit_type(
+                    getattr(row, "billing_unit_type", None) or unit_map.get(sid) or "per_call"
+                ),
+                "charge_multiplier": _normalize_rule_charge_multiplier(
+                    getattr(row, "charge_multiplier", None), default=2.0
+                ),
+                "extra": extra,
+                "is_base": bool(is_base),
+            }
+
     result: Dict[int, str] = {}
     for sid in normalized_ids:
         summary = pricing_map.get(sid) or {}
@@ -10666,6 +10851,21 @@ def _build_function_api_pricing_description_map(
             summary = cached_price_by_id.get(sid) or summary
         unit_type = unit_map.get(sid, "per_call")
         io = token_io_by_sid.get(sid) or {}
+        meta = base_meta_by_sid.get(sid) or {}
+        extra = meta.get("extra") if isinstance(meta.get("extra"), dict) else {}
+        matrix_desc = _format_resolution_matrix_pricing_description(
+            unit_type=meta.get("unit_type") or unit_type,
+            charge_multiplier=meta.get("charge_multiplier", 2.0),
+            video_token_rates=extra.get("video_token_resolution_rates"),
+            video_second_cny_rates=extra.get("video_second_cny_resolution_rates"),
+            video_second_kie_rates=extra.get("video_second_resolution_rates"),
+            min_billable_by_output=extra.get("video_second_min_billable_by_output"),
+            force_token_k_unit=force_token_k_unit,
+            round_cost_to_int=round_cost_to_int,
+        )
+        if matrix_desc:
+            result[sid] = matrix_desc
+            continue
         result[sid] = _format_pricing_description_from_summary(
             summary,
             unit_type,

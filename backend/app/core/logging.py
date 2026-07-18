@@ -471,10 +471,19 @@ class LoggingMiddleware:
             action = func_name or f"API Call: {method} {path}"
             content_length = request.headers.get("content-length")
             size_part = f" | ReqBytes: {content_length}" if content_length else ""
+            is_billing_estimate = (
+                method == "POST"
+                and path.rstrip("/").endswith("/billing/estimate/video")
+            )
 
             if 200 <= status_code < 400:
-                # 屏蔽所有正常访问的日志（前后端简单访问日志都去掉）
-                pass
+                # Keep billing estimate hits visible; suppress other successful API noise.
+                if is_billing_estimate:
+                    logger.info(
+                        f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                        f"Action: {action} | Method: {method} | Path: {path} | "
+                        f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
+                    )
             elif 400 <= status_code < 500:
                 logger.warning(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "

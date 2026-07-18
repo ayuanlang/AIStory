@@ -1274,6 +1274,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 _endpoints_module, _endpoints_router = _resolve_endpoints_router()
 app.include_router(_endpoints_router, prefix=settings.API_V1_STR)
+from app.api.video_credit_estimate import router as video_credit_estimate_router
+app.include_router(video_credit_estimate_router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 app.include_router(groups_api.router, prefix=settings.API_V1_STR)
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])

@@ -4939,7 +4939,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, uiLang = 'z
                             </button>
                         )})}
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2">
-                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} />
+                            <FunctionApiSelector functionName="generate_subjects_t2i" configs={functionApiConfigs} label={t("文生图模型: ", "T2I Model: ")} /><FunctionApiSelector functionName="generate_subjects_i2i" configs={functionApiConfigs} label={t("图生图模型: ", "I2I Model: ")} /><FunctionApiSelector functionName="script_analysis" configs={functionApiConfigs} label={t("分析模型: ", "Analysis Model: ")} />
                         </div>
                         <div className="flex items-center ml-2 border-l border-white/20 pl-2">
                             <select
