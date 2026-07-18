@@ -5463,7 +5463,7 @@ const UserAdmin = () => {
                                     <Database className="text-primary" /> {t('研发/部署配置同步', 'Dev/Deploy Config Sync')}
                                 </h2>
                                 <p className="text-sm text-gray-300">
-                                    {t('导出将打包 system api、功能 API 映射、供应商密钥池、计费规则、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, function API mappings, provider key pools, billing rules, SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
+                                    {t('导出将打包 system api、功能 API 映射（含功能加价）、供应商密钥池、计费规则（含供应商价/赔率/Seedance·KIE·SparkVideo 分辨率分档价）、SMTP、微信支付配置；导入会全量覆盖，保证与研发环境一致。', 'Export packages system API, function API mappings (incl. function markup), provider key pools, billing rules (supplier price/odds + Seedance/KIE/SparkVideo resolution tiers), SMTP, and WeChat Pay configs. Import performs full replace to keep deployment identical to dev.')}
                                 </p>
                             </div>
 

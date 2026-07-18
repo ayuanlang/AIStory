@@ -1902,7 +1902,41 @@ class BillingService:
             ) / divisor
             amount = max(0.0, float(computed))
         else:
-            amount = float(estimate_base_amount_by_unit(raw_cfg, usage))
+            usage_for_cost = dict(usage or {})
+            rates = extra.get("video_token_resolution_rates")
+            if isinstance(rates, dict) and rates:
+                usage_for_cost["video_token_resolution_rates"] = rates
+            second_rates = extra.get("video_second_resolution_rates")
+            if isinstance(second_rates, dict) and second_rates:
+                usage_for_cost["video_second_resolution_rates"] = second_rates
+                # Per-second resolution matrix wins over Ark video-token flags.
+                usage_for_cost.pop("video_token_estimate", None)
+                if str(usage_for_cost.get("estimation_method") or "").startswith(
+                    ("video_token", "seedance2_video_token")
+                ):
+                    usage_for_cost["estimation_method"] = "video_second_resolution"
+                usage_for_cost.pop("video_token_branch", None)
+            cny_rates = extra.get("video_second_cny_resolution_rates")
+            if isinstance(cny_rates, dict) and cny_rates:
+                usage_for_cost["video_second_cny_resolution_rates"] = cny_rates
+                usage_for_cost.pop("video_token_estimate", None)
+                usage_for_cost.pop("video_token_branch", None)
+                usage_for_cost["estimation_method"] = "sparkvideo_second_cny"
+            min_table = extra.get("video_second_min_billable_by_output")
+            if isinstance(min_table, dict) and min_table:
+                usage_for_cost["video_second_min_billable_by_output"] = min_table
+            if usage_for_cost.get("video_second_cny_resolution_rates"):
+                from app.services.billing_pricing import resolve_sparkvideo_resolution_tier as _resolve_tier_cost
+            else:
+                from app.services.billing_pricing import resolve_video_resolution_tier as _resolve_tier_cost
+            tier = _resolve_tier_cost(
+                usage_for_cost.get("width"),
+                usage_for_cost.get("height"),
+                usage_for_cost.get("resolution_tier") or usage_for_cost.get("resolution"),
+            )
+            if tier:
+                usage_for_cost["resolution_tier"] = tier
+            amount = float(estimate_base_amount_by_unit(raw_cfg, usage_for_cost))
 
         runtime_multiplier = 1.0
         runtime_adjustments: Dict[str, Any] = {}
@@ -1915,6 +1949,40 @@ class BillingService:
         )
         runtime_enabled = extra.get("seedance_runtime_price_adjustment_enabled")
         runtime_enabled = True if runtime_enabled is None else bool(BillingService._normalize_bool_value(runtime_enabled))
+        cny_rates_audit = extra.get("video_second_cny_resolution_rates")
+        if isinstance(cny_rates_audit, dict) and cny_rates_audit and raw_cfg["unit_type"] == "per_second":
+            from app.services.billing_pricing import (
+                estimate_sparkvideo_second_cny_amount,
+                resolve_sparkvideo_resolution_tier as _resolve_sv_tier,
+            )
+            has_video_input_sv = bool(usage.get("has_video_input"))
+            est = estimate_sparkvideo_second_cny_amount(
+                rates=cny_rates_audit,
+                resolution_tier=_resolve_sv_tier(
+                    usage.get("width"),
+                    usage.get("height"),
+                    usage.get("resolution_tier") or usage.get("resolution"),
+                ),
+                has_video_input=has_video_input_sv,
+                output_duration=usage.get("duration_seconds", usage.get("duration", 0)),
+                input_duration=usage.get("input_duration_seconds", usage.get("input_duration", 0)),
+                min_billable_table=extra.get("video_second_min_billable_by_output"),
+            )
+            runtime_adjustments["sparkvideo_rate_branch"] = est.get("rate_branch")
+            runtime_adjustments["sparkvideo_cny_amount"] = est.get("cny_amount")
+            runtime_adjustments["has_video_input"] = bool(has_video_input_sv)
+            if est.get("resolution_tier"):
+                runtime_adjustments["resolution_tier"] = est.get("resolution_tier")
+            if est.get("billable_seconds") is not None:
+                runtime_adjustments["sparkvideo_billable_seconds"] = est.get("billable_seconds")
+            if est.get("min_billable_seconds") is not None:
+                runtime_adjustments["sparkvideo_min_billable_seconds"] = est.get("min_billable_seconds")
+            if est.get("unit_rate_cny") is not None:
+                runtime_adjustments["sparkvideo_unit_rate_cny"] = est.get("unit_rate_cny")
+            if est.get("with_video_base_cny") is not None:
+                runtime_adjustments["sparkvideo_with_video_base_cny"] = est.get("with_video_base_cny")
+            if est.get("with_video_addon_cny") is not None:
+                runtime_adjustments["sparkvideo_with_video_addon_cny"] = est.get("with_video_addon_cny")
         if is_seedance_video and runtime_enabled:
             # Seedance 2.0 / video-token formula already folds draft & video-input duration
             # into token usage; skip legacy continuation markup for that branch.
@@ -1942,6 +2010,36 @@ class BillingService:
                 )
                 runtime_multiplier *= continuation_multiplier
                 runtime_adjustments["seedance_continuation_price_multiplier"] = continuation_multiplier
+            second_rates = extra.get("video_second_resolution_rates")
+            if isinstance(second_rates, dict) and second_rates and raw_cfg["unit_type"] == "per_second":
+                from app.services.billing_pricing import (
+                    resolve_video_resolution_tier as _resolve_tier_s,
+                    resolve_video_second_unit_rate,
+                )
+                has_video_input_s = bool(usage.get("has_video_input"))
+                rate_meta_s = resolve_video_second_unit_rate(
+                    cost=float(raw_cfg["cost"]),
+                    cost_input=float(raw_cfg["cost_input"]),
+                    cost_output=float(raw_cfg["cost_output"]),
+                    has_video_input=has_video_input_s,
+                    resolution_tier=_resolve_tier_s(
+                        usage.get("width"),
+                        usage.get("height"),
+                        usage.get("resolution_tier") or usage.get("resolution"),
+                    ),
+                    resolution_rates_kie=second_rates,
+                )
+                runtime_adjustments["video_second_rate_branch"] = rate_meta_s.get("rate_branch")
+                runtime_adjustments["video_second_unit_rate"] = rate_meta_s.get("rate")
+                runtime_adjustments["has_video_input"] = bool(has_video_input_s)
+                if rate_meta_s.get("resolution_tier"):
+                    runtime_adjustments["resolution_tier"] = rate_meta_s.get("resolution_tier")
+                if rate_meta_s.get("rate_source"):
+                    runtime_adjustments["video_second_rate_source"] = rate_meta_s.get("rate_source")
+                if rate_meta_s.get("rate_kie_credits_per_second") is not None:
+                    runtime_adjustments["video_second_rate_kie_credits_per_second"] = rate_meta_s.get(
+                        "rate_kie_credits_per_second"
+                    )
             if uses_video_token_formula:
                 runtime_adjustments["video_token_branch"] = "seedance2" if is_seedance_2 else "fallback"
                 runtime_adjustments["video_token_formula"] = (
@@ -1953,15 +2051,28 @@ class BillingService:
                 has_video_input = bool(usage.get("has_video_input"))
                 if not has_video_input and isinstance(usage.get("video_token_estimate"), dict):
                     has_video_input = bool(usage["video_token_estimate"].get("has_video_input"))
+                from app.services.billing_pricing import resolve_video_resolution_tier as _resolve_tier
                 rate_meta = resolve_video_token_unit_rate(
                     cost=float(raw_cfg["cost"]),
                     cost_input=float(raw_cfg["cost_input"]),
                     cost_output=float(raw_cfg["cost_output"]),
                     has_video_input=has_video_input,
+                    resolution_tier=_resolve_tier(
+                        usage.get("width"),
+                        usage.get("height"),
+                        usage.get("resolution_tier") or usage.get("resolution"),
+                    ),
+                    resolution_rates_cny=extra.get("video_token_resolution_rates"),
                 )
                 runtime_adjustments["video_token_rate_branch"] = rate_meta.get("rate_branch")
                 runtime_adjustments["video_token_unit_rate"] = rate_meta.get("rate")
                 runtime_adjustments["has_video_input"] = bool(has_video_input)
+                if rate_meta.get("resolution_tier"):
+                    runtime_adjustments["resolution_tier"] = rate_meta.get("resolution_tier")
+                if rate_meta.get("rate_source"):
+                    runtime_adjustments["video_token_rate_source"] = rate_meta.get("rate_source")
+                if rate_meta.get("rate_cny_per_mtok") is not None:
+                    runtime_adjustments["video_token_rate_cny_per_mtok"] = rate_meta.get("rate_cny_per_mtok")
 
         charged = compute_user_charge(
             unit_type=raw_cfg["unit_type"],
@@ -2183,8 +2294,30 @@ class BillingService:
             usage["has_video_input"] = BillingService.resolve_has_video_input(usage)
             if usage.get("is_seedance_video"):
                 usage["seedance_billing_adjustable"] = True
+            identity_lower = " ".join(str(p or "") for p in identity_parts).lower()
+            if "sparkvideo" in identity_lower or "runninghub" in str(provider_text or "").lower():
+                from app.services.billing_pricing import resolve_sparkvideo_resolution_tier as _tier_fn_early
+            else:
+                from app.services.billing_pricing import resolve_video_resolution_tier as _tier_fn_early
+            usage["resolution_tier"] = _tier_fn_early(
+                usage.get("width"),
+                usage.get("height"),
+                usage.get("resolution") or usage.get("resolution_tier"),
+            )
             # Video token fallback / Seedance 2.0 branch: derive tokens when missing.
-            if (
+            # KIE Seedance 2 bills per-second by resolution (not Ark token formula).
+            provider_lower = str(provider_text or "").strip().lower()
+            is_kie_provider = (
+                provider_lower == BillingService.KIE_STANDARD_PROVIDER
+                or provider_lower.startswith(f"{BillingService.KIE_STANDARD_PROVIDER}/")
+                or "kie.ai" in provider_lower
+            )
+            is_runninghub_provider = (
+                provider_lower == "runninghub"
+                or provider_lower.startswith("runninghub/")
+                or "runninghub" in provider_lower
+            )
+            if (not is_kie_provider) and (not is_runninghub_provider) and (
                 usage.get("is_seedance_2")
                 or str(usage.get("estimation_method") or "").startswith("video_token")
                 or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
@@ -2222,6 +2355,12 @@ class BillingService:
                     usage["video_token_estimate"] = token_estimate
                     usage["estimation_method"] = token_estimate.get("estimation_method")
                     usage["video_token_branch"] = "seedance2" if usage.get("is_seedance_2") else "fallback"
+                    from app.services.billing_pricing import resolve_video_resolution_tier as _tier_fn
+                    usage["resolution_tier"] = _tier_fn(
+                        usage.get("width"),
+                        usage.get("height"),
+                        usage.get("resolution") or usage.get("resolution_tier"),
+                    )
 
         if (
             system_row

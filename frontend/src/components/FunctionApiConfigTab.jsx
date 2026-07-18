@@ -312,7 +312,7 @@ export default function FunctionApiConfigTab() {
                     </div>
                 </div>
                 <p className="text-gray-400 text-sm mb-4">
-                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设 定优先级）。<br/>导入/导出会走统一配置同步包，包含功能 API 映射在内的全部同步配置。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
+                    在此列表指定各功能执行的 API。支持为一个功能映射多 API （设 定优先级）。<br/>导入/导出会走统一配置同步包，包含功能 API 映射、功能加价，以及计费规则中的分辨率分档价等全部同步配置。<br/>当选择 API 失败时，会向同功能下勾选了 "作为备用 API（Fallback）" 的系统按优先级顺序重试。
                 </p>
 
                 <div className="bg-[#111114] border border-white/10 rounded-xl p-4 md:p-6 mb-6">

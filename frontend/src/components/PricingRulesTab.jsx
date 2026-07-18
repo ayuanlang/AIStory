@@ -39,6 +39,121 @@ const UNIT_TYPE_LABELS = {
 
 const DEFAULT_CHARGE_MULTIPLIER = 2;
 
+const VIDEO_RESOLUTION_TIERS = ['480p', '720p', '1080p', '4k'];
+
+const DEFAULT_SEEDANCE_RESOLUTION_RATES = {
+    '480p': { with_video_input: '28', without_video_input: '46' },
+    '720p': { with_video_input: '28', without_video_input: '46' },
+    '1080p': { with_video_input: '31', without_video_input: '51' },
+    '4k': { with_video_input: '16', without_video_input: '26' },
+};
+
+// KIE Seedance 2: KIE credits / second (1 KIE credit = 3 system credits)
+const DEFAULT_KIE_SEEDANCE_SECOND_RATES = {
+    '480p': { with_video_input: '11.5', without_video_input: '19' },
+    '720p': { with_video_input: '25', without_video_input: '41' },
+    '1080p': { with_video_input: '62', without_video_input: '102' },
+    '4k': { with_video_input: '128', without_video_input: '208' },
+};
+
+const SPARKVIDEO_RESOLUTION_TIERS = ['480p', '720p', '1080p_native', '4k_native', '1080p', '2k', '4k'];
+
+// RunningHub SparkVideo 2.0: CNY / second
+const DEFAULT_SPARKVIDEO_SECOND_CNY_RATES = {
+    '480p': { without_video_input: '0.6', with_video_input: '0.4' },
+    '720p': { without_video_input: '1.2', with_video_input: '0.8' },
+    '1080p_native': { without_video_input: '3', with_video_input: '2' },
+    '4k_native': { without_video_input: '6', with_video_input: '4' },
+    '1080p': { without_video_input: '1.48', with_video_base: '0.8', with_video_addon: '0.28', pricing_kind: 'upscale' },
+    '2k': { without_video_input: '1.62', with_video_base: '0.8', with_video_addon: '0.42', pricing_kind: 'upscale' },
+    '4k': { without_video_input: '1.83', with_video_base: '0.8', with_video_addon: '0.63', pricing_kind: 'upscale' },
+};
+
+const DEFAULT_SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT = {
+    4: 7, 5: 9, 6: 10, 7: 12, 8: 14, 9: 15, 10: 17, 11: 19, 12: 20, 13: 22, 14: 24, 15: 25,
+};
+
+const normalizeSparkvideoCnyRates = (raw) => {
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const out = {};
+    SPARKVIDEO_RESOLUTION_TIERS.forEach((tier) => {
+        const row = (src[tier] && typeof src[tier] === 'object') ? src[tier] : {};
+        const next = {
+            without_video_input: row.without_video_input != null && row.without_video_input !== '' ? String(row.without_video_input) : '',
+            with_video_input: row.with_video_input != null && row.with_video_input !== '' ? String(row.with_video_input) : '',
+            with_video_base: row.with_video_base != null && row.with_video_base !== '' ? String(row.with_video_base) : '',
+            with_video_addon: row.with_video_addon != null && row.with_video_addon !== '' ? String(row.with_video_addon) : '',
+            pricing_kind: row.pricing_kind ? String(row.pricing_kind) : '',
+        };
+        if (!next.without_video_input && !next.with_video_input && !next.with_video_base && !next.with_video_addon) {
+            out[tier] = { without_video_input: '', with_video_input: '', with_video_base: '', with_video_addon: '', pricing_kind: '' };
+        } else {
+            out[tier] = next;
+        }
+    });
+    return out;
+};
+
+const sparkvideoCnyRatesToPayload = (rates) => {
+    const out = {};
+    SPARKVIDEO_RESOLUTION_TIERS.forEach((tier) => {
+        const row = rates?.[tier] || {};
+        const item = {};
+        const withoutN = toNullableSupplierPrice(row.without_video_input);
+        const withN = toNullableSupplierPrice(row.with_video_input);
+        const baseN = toNullableSupplierPrice(row.with_video_base);
+        const addonN = toNullableSupplierPrice(row.with_video_addon);
+        if (withoutN != null) item.without_video_input = withoutN;
+        if (withN != null) item.with_video_input = withN;
+        if (baseN != null) item.with_video_base = baseN;
+        if (addonN != null) item.with_video_addon = addonN;
+        if (row.pricing_kind) item.pricing_kind = row.pricing_kind;
+        else if (baseN != null || addonN != null) item.pricing_kind = 'upscale';
+        if (Object.keys(item).length) out[tier] = item;
+    });
+    return out;
+};
+
+const normalizeResolutionRates = (raw) => {
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const out = {};
+    VIDEO_RESOLUTION_TIERS.forEach((tier) => {
+        const row = (src[tier] && typeof src[tier] === 'object') ? src[tier] : {};
+        const fallback = DEFAULT_SEEDANCE_RESOLUTION_RATES[tier] || {};
+        const withVal = row.with_video_input ?? row.with ?? '';
+        const withoutVal = row.without_video_input ?? row.without ?? '';
+        out[tier] = {
+            with_video_input: withVal === null || withVal === undefined || withVal === ''
+                ? ''
+                : String(withVal),
+            without_video_input: withoutVal === null || withoutVal === undefined || withoutVal === ''
+                ? ''
+                : String(withoutVal),
+        };
+        // Keep empty by default; UI can "fill defaults" separately if needed.
+        if (!out[tier].with_video_input && !out[tier].without_video_input) {
+            out[tier] = { with_video_input: '', without_video_input: '' };
+        }
+        void fallback;
+    });
+    return out;
+};
+
+const resolutionRatesToPayload = (rates) => {
+    const out = {};
+    VIDEO_RESOLUTION_TIERS.forEach((tier) => {
+        const row = rates?.[tier] || {};
+        const withN = toNullableSupplierPrice(row.with_video_input);
+        const withoutN = toNullableSupplierPrice(row.without_video_input);
+        if (withN === null && withoutN === null) return;
+        out[tier] = {};
+        if (withN !== null) out[tier].with_video_input = withN;
+        if (withoutN !== null) out[tier].without_video_input = withoutN;
+    });
+    return out;
+};
+
+
 const normalizeUnitType = (value) => {
     const unit = String(value || 'per_call').trim() || 'per_call';
     return BILLING_UNIT_OPTIONS.includes(unit) ? unit : 'per_call';
@@ -102,6 +217,10 @@ const buildDraftFromApi = (api) => ({
         '0',
     ),
     charge_multiplier: String(toChargeMultiplier(api?.charge_multiplier, DEFAULT_CHARGE_MULTIPLIER)),
+    video_token_resolution_rates: normalizeResolutionRates(api?.video_token_resolution_rates),
+    video_second_resolution_rates: normalizeResolutionRates(api?.video_second_resolution_rates),
+    video_second_cny_resolution_rates: normalizeSparkvideoCnyRates(api?.video_second_cny_resolution_rates),
+    video_second_min_billable_by_output: api?.video_second_min_billable_by_output || { ...DEFAULT_SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT },
 });
 
 const computePreview = (draft) => {
@@ -139,6 +258,12 @@ const isDraftDirty = (draft, api) => {
         || String(toNullableSupplierPrice(draft.supplier_price_input) ?? '') !== String(toNullableSupplierPrice(baseline.supplier_price_input) ?? '')
         || String(toNullableSupplierPrice(draft.supplier_price_output) ?? '') !== String(toNullableSupplierPrice(baseline.supplier_price_output) ?? '')
         || String(toChargeMultiplier(draft.charge_multiplier)) !== String(toChargeMultiplier(baseline.charge_multiplier))
+        || JSON.stringify(resolutionRatesToPayload(draft.video_token_resolution_rates))
+            !== JSON.stringify(resolutionRatesToPayload(baseline.video_token_resolution_rates))
+        || JSON.stringify(resolutionRatesToPayload(draft.video_second_resolution_rates))
+            !== JSON.stringify(resolutionRatesToPayload(baseline.video_second_resolution_rates))
+        || JSON.stringify(sparkvideoCnyRatesToPayload(draft.video_second_cny_resolution_rates))
+            !== JSON.stringify(sparkvideoCnyRatesToPayload(baseline.video_second_cny_resolution_rates))
     );
 };
 
@@ -315,6 +440,18 @@ export default function PricingRulesTab() {
             payload.supplier_price_input = null;
             payload.supplier_price_output = null;
         }
+        if (String(api?.category || '').trim() === 'Video' && tokenUnit) {
+            payload.video_token_resolution_rates = resolutionRatesToPayload(draft.video_token_resolution_rates);
+        }
+        if (String(api?.category || '').trim() === 'Video' && draft.billing_unit_type === 'per_second') {
+            const provider = String(api?.provider || '').trim().toLowerCase();
+            if (provider.includes('runninghub') || String(api?.model || '').toLowerCase().includes('sparkvideo')) {
+                payload.video_second_cny_resolution_rates = sparkvideoCnyRatesToPayload(draft.video_second_cny_resolution_rates);
+                payload.video_second_min_billable_by_output = draft.video_second_min_billable_by_output || DEFAULT_SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT;
+            } else {
+                payload.video_second_resolution_rates = resolutionRatesToPayload(draft.video_second_resolution_rates);
+            }
+        }
 
         setSavingIds((prev) => ({ ...prev, [id]: true }));
         try {
@@ -329,6 +466,10 @@ export default function PricingRulesTab() {
                         supplier_price: updated?.supplier_price ?? payload.supplier_price,
                         supplier_price_input: updated?.supplier_price_input ?? payload.supplier_price_input,
                         supplier_price_output: updated?.supplier_price_output ?? payload.supplier_price_output,
+                        video_token_resolution_rates: updated?.video_token_resolution_rates ?? payload.video_token_resolution_rates,
+                        video_second_resolution_rates: updated?.video_second_resolution_rates ?? payload.video_second_resolution_rates,
+                        video_second_cny_resolution_rates: updated?.video_second_cny_resolution_rates ?? payload.video_second_cny_resolution_rates,
+                        video_second_min_billable_by_output: updated?.video_second_min_billable_by_output ?? payload.video_second_min_billable_by_output,
                         charge_multiplier: updated?.charge_multiplier ?? payload.charge_multiplier,
                         billing_cost: updated?.billing_cost ?? row.billing_cost,
                         billing_cost_input: updated?.billing_cost_input ?? row.billing_cost_input,
@@ -343,6 +484,10 @@ export default function PricingRulesTab() {
                     supplier_price: updated?.supplier_price ?? payload.supplier_price,
                     supplier_price_input: updated?.supplier_price_input ?? payload.supplier_price_input,
                     supplier_price_output: updated?.supplier_price_output ?? payload.supplier_price_output,
+                        video_token_resolution_rates: updated?.video_token_resolution_rates ?? payload.video_token_resolution_rates,
+                        video_second_resolution_rates: updated?.video_second_resolution_rates ?? payload.video_second_resolution_rates,
+                        video_second_cny_resolution_rates: updated?.video_second_cny_resolution_rates ?? payload.video_second_cny_resolution_rates,
+                        video_second_min_billable_by_output: updated?.video_second_min_billable_by_output ?? payload.video_second_min_billable_by_output,
                     charge_multiplier: updated?.charge_multiplier ?? payload.charge_multiplier,
                     billing_cost: updated?.billing_cost,
                     billing_cost_input: updated?.billing_cost_input,
@@ -476,9 +621,9 @@ export default function PricingRulesTab() {
                                 {isVideoCategory ? (
                                     <div className="text-[11px] text-gray-500 mt-0.5">
                                         {t(
-                                            '按百万 Token：含视频输入价 / 不含视频输入价（元/百万 tokens）',
-                                            'Per million tokens: with-video / without-video rates (CNY per MTok)',
-                                        )}
+                                                'Token 计费：Seedance 分档（CNY/MTok）；按秒计费：KIE Seedance 分档（KIE积分/秒）',
+                                                'Token: Seedance tiers (CNY/MTok); Per-second: KIE Seedance tiers (KIE credits/s)',
+                                            )}
                                     </div>
                                 ) : null}
                             </div>
@@ -607,6 +752,283 @@ export default function PricingRulesTab() {
                                                 </td>
                                                 <td className="p-2.5 min-w-[160px]">
                                                     {renderPreview(draft, { videoTokenTier: isVideoCategory && tokenUnit })}
+                                                    {isVideoCategory && tokenUnit ? (
+                                                        <div className="mt-2 space-y-1">
+                                                            <div className="text-[10px] text-gray-500">{t('分辨率单价 (元/百万Token)', 'Resolution rates (CNY/MTok)')}</div>
+                                                            <div className="grid grid-cols-1 gap-1">
+                                                                {VIDEO_RESOLUTION_TIERS.map((tier) => {
+                                                                    const row = (draft.video_token_resolution_rates || {})[tier] || {};
+                                                                    return (
+                                                                        <div key={`${id}-${tier}`} className="flex items-center gap-1">
+                                                                            <span className="w-12 text-[10px] text-sky-200">{tier}</span>
+                                                                            <input
+                                                                                type="number"
+                                                                                min="0"
+                                                                                step="0.000001"
+                                                                                placeholder={t('含输入', 'With')}
+                                                                                value={row.with_video_input ?? ''}
+                                                                                onChange={(e) => {
+                                                                                    const value = e.target.value;
+                                                                                    setDrafts((prev) => {
+                                                                                        const key = String(id);
+                                                                                        const cur = prev[key] || buildDraftFromApi(api);
+                                                                                        const rates = { ...(cur.video_token_resolution_rates || normalizeResolutionRates({})) };
+                                                                                        rates[tier] = { ...(rates[tier] || {}), with_video_input: value };
+                                                                                        return { ...prev, [key]: { ...cur, video_token_resolution_rates: rates } };
+                                                                                    });
+                                                                                }}
+                                                                                className="w-16 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                title={t('含视频输入', 'With video input')}
+                                                                            />
+                                                                            <input
+                                                                                type="number"
+                                                                                min="0"
+                                                                                step="0.000001"
+                                                                                placeholder={t('不含', 'W/O')}
+                                                                                value={row.without_video_input ?? ''}
+                                                                                onChange={(e) => {
+                                                                                    const value = e.target.value;
+                                                                                    setDrafts((prev) => {
+                                                                                        const key = String(id);
+                                                                                        const cur = prev[key] || buildDraftFromApi(api);
+                                                                                        const rates = { ...(cur.video_token_resolution_rates || normalizeResolutionRates({})) };
+                                                                                        rates[tier] = { ...(rates[tier] || {}), without_video_input: value };
+                                                                                        return { ...prev, [key]: { ...cur, video_token_resolution_rates: rates } };
+                                                                                    });
+                                                                                }}
+                                                                                className="w-16 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                title={t('不含视频输入', 'Without video input')}
+                                                                            />
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                className="text-[10px] text-sky-300 hover:text-sky-200"
+                                                                onClick={() => {
+                                                                    setDrafts((prev) => {
+                                                                        const key = String(id);
+                                                                        const cur = prev[key] || buildDraftFromApi(api);
+                                                                        const filled = {};
+                                                                        VIDEO_RESOLUTION_TIERS.forEach((tier) => {
+                                                                            filled[tier] = { ...DEFAULT_SEEDANCE_RESOLUTION_RATES[tier] };
+                                                                        });
+                                                                        return { ...prev, [key]: { ...cur, video_token_resolution_rates: filled } };
+                                                                    });
+                                                                }}
+                                                            >
+                                                                {t('填入 Seedance 参考价', 'Fill Seedance reference rates')}
+                                                            </button>
+                                                        </div>
+                                                    ) : null}
+                                                                
+                                                                {isVideoCategory && draft.billing_unit_type === 'per_second' ? (
+                                                                    (() => {
+                                                                        const provider = String(api?.provider || '').trim().toLowerCase();
+                                                                        const model = String(api?.model || '').trim().toLowerCase();
+                                                                        const isSpark = provider.includes('runninghub') || model.includes('sparkvideo');
+                                                                        if (isSpark) {
+                                                                            return (
+                                                                    <div className="mt-2 space-y-1">
+                                                                        <div className="text-[10px] text-gray-500">
+                                                                            {t('SparkVideo 单价（CNY/秒；放大档有参考=基础+附加）', 'SparkVideo rates (CNY/s; upscale+ref = base+addon)')}
+                                                                        </div>
+                                                                        <div className="grid grid-cols-1 gap-1">
+                                                                            {SPARKVIDEO_RESOLUTION_TIERS.map((tier) => {
+                                                                                const row = (draft.video_second_cny_resolution_rates || {})[tier] || {};
+                                                                                const isUpscale = Boolean(row.with_video_base || row.with_video_addon || row.pricing_kind === 'upscale' || ['1080p', '2k', '4k'].includes(tier));
+                                                                                return (
+                                                                                    <div key={`${id}-${tier}-sv`} className="flex flex-wrap items-center gap-1">
+                                                                                        <span className="w-20 text-[10px] text-amber-200">{tier}</span>
+                                                                                        <input
+                                                                                            type="number"
+                                                                                            min="0"
+                                                                                            step="0.01"
+                                                                                            placeholder={t('无参考', 'No ref')}
+                                                                                            value={row.without_video_input ?? ''}
+                                                                                            onChange={(e) => {
+                                                                                                const value = e.target.value;
+                                                                                                setDrafts((prev) => {
+                                                                                                    const key = String(id);
+                                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                    const rates = { ...(cur.video_second_cny_resolution_rates || normalizeSparkvideoCnyRates({})) };
+                                                                                                    rates[tier] = { ...(rates[tier] || {}), without_video_input: value };
+                                                                                                    return { ...prev, [key]: { ...cur, video_second_cny_resolution_rates: rates } };
+                                                                                                });
+                                                                                            }}
+                                                                                            className="w-14 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                            title={t('无参考视频 CNY/秒', 'No reference video CNY/s')}
+                                                                                        />
+                                                                                        {isUpscale ? (
+                                                                                            <>
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    min="0"
+                                                                                                    step="0.01"
+                                                                                                    placeholder={t('基础', 'Base')}
+                                                                                                    value={row.with_video_base ?? ''}
+                                                                                                    onChange={(e) => {
+                                                                                                        const value = e.target.value;
+                                                                                                        setDrafts((prev) => {
+                                                                                                            const key = String(id);
+                                                                                                            const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                            const rates = { ...(cur.video_second_cny_resolution_rates || normalizeSparkvideoCnyRates({})) };
+                                                                                                            rates[tier] = { ...(rates[tier] || {}), with_video_base: value, pricing_kind: 'upscale' };
+                                                                                                            return { ...prev, [key]: { ...cur, video_second_cny_resolution_rates: rates } };
+                                                                                                        });
+                                                                                                    }}
+                                                                                                    className="w-14 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                                    title={t('有参考基础 CNY/秒', 'With-ref base CNY/s')}
+                                                                                                />
+                                                                                                <input
+                                                                                                    type="number"
+                                                                                                    min="0"
+                                                                                                    step="0.01"
+                                                                                                    placeholder={t('附加', 'Addon')}
+                                                                                                    value={row.with_video_addon ?? ''}
+                                                                                                    onChange={(e) => {
+                                                                                                        const value = e.target.value;
+                                                                                                        setDrafts((prev) => {
+                                                                                                            const key = String(id);
+                                                                                                            const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                            const rates = { ...(cur.video_second_cny_resolution_rates || normalizeSparkvideoCnyRates({})) };
+                                                                                                            rates[tier] = { ...(rates[tier] || {}), with_video_addon: value, pricing_kind: 'upscale' };
+                                                                                                            return { ...prev, [key]: { ...cur, video_second_cny_resolution_rates: rates } };
+                                                                                                        });
+                                                                                                    }}
+                                                                                                    className="w-14 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                                    title={t('有参考附加 CNY/秒（×生成时长）', 'With-ref addon CNY/s (x output)')}
+                                                                                                />
+                                                                                            </>
+                                                                                        ) : (
+                                                                                            <input
+                                                                                                type="number"
+                                                                                                min="0"
+                                                                                                step="0.01"
+                                                                                                placeholder={t('有参考', 'With ref')}
+                                                                                                value={row.with_video_input ?? ''}
+                                                                                                onChange={(e) => {
+                                                                                                    const value = e.target.value;
+                                                                                                    setDrafts((prev) => {
+                                                                                                        const key = String(id);
+                                                                                                        const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                        const rates = { ...(cur.video_second_cny_resolution_rates || normalizeSparkvideoCnyRates({})) };
+                                                                                                        rates[tier] = { ...(rates[tier] || {}), with_video_input: value };
+                                                                                                        return { ...prev, [key]: { ...cur, video_second_cny_resolution_rates: rates } };
+                                                                                                    });
+                                                                                                }}
+                                                                                                className="w-14 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                                title={t('有参考视频 CNY/秒', 'With reference video CNY/s')}
+                                                                                            />
+                                                                                        )}
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            className="text-[10px] text-amber-300 hover:text-amber-200"
+                                                                            onClick={() => {
+                                                                                setDrafts((prev) => {
+                                                                                    const key = String(id);
+                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                    const filled = {};
+                                                                                    SPARKVIDEO_RESOLUTION_TIERS.forEach((tier) => {
+                                                                                        filled[tier] = { ...DEFAULT_SPARKVIDEO_SECOND_CNY_RATES[tier] };
+                                                                                    });
+                                                                                    return {
+                                                                                        ...prev,
+                                                                                        [key]: {
+                                                                                            ...cur,
+                                                                                            video_second_cny_resolution_rates: filled,
+                                                                                            video_second_min_billable_by_output: { ...DEFAULT_SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT },
+                                                                                        },
+                                                                                    };
+                                                                                });
+                                                                            }}
+                                                                        >
+                                                                            {t('填入 SparkVideo 参考价', 'Fill SparkVideo reference rates')}
+                                                                        </button>
+                                                                    </div>
+                                                                            );
+                                                                        }
+                                                                        return (
+                                                                    <div className="mt-2 space-y-1">
+                                                                        <div className="text-[10px] text-gray-500">
+                                                                            {t('分辨率单价（KIE 积分/秒）', 'Resolution rates (KIE credits/s)')}
+                                                                        </div>
+                                                                        <div className="grid grid-cols-1 gap-1">
+                                                                            {VIDEO_RESOLUTION_TIERS.map((tier) => {
+                                                                                const row = (draft.video_second_resolution_rates || {})[tier] || {};
+                                                                                return (
+                                                                                    <div key={`${id}-${tier}-s`} className="flex items-center gap-1">
+                                                                                        <span className="w-12 text-[10px] text-sky-200">{tier}</span>
+                                                                                        <input
+                                                                                            type="number"
+                                                                                            min="0"
+                                                                                            step="0.1"
+                                                                                            placeholder={t('含视频', 'With')}
+                                                                                            value={row.with_video_input ?? ''}
+                                                                                            onChange={(e) => {
+                                                                                                const value = e.target.value;
+                                                                                                setDrafts((prev) => {
+                                                                                                    const key = String(id);
+                                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                    const rates = { ...(cur.video_second_resolution_rates || normalizeResolutionRates({})) };
+                                                                                                    rates[tier] = { ...(rates[tier] || {}), with_video_input: value };
+                                                                                                    return { ...prev, [key]: { ...cur, video_second_resolution_rates: rates } };
+                                                                                                });
+                                                                                            }}
+                                                                                            className="w-16 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                            title={t('含视频输入', 'With video input')}
+                                                                                        />
+                                                                                        <input
+                                                                                            type="number"
+                                                                                            min="0"
+                                                                                            step="0.1"
+                                                                                            placeholder={t('无视频', 'W/O')}
+                                                                                            value={row.without_video_input ?? ''}
+                                                                                            onChange={(e) => {
+                                                                                                const value = e.target.value;
+                                                                                                setDrafts((prev) => {
+                                                                                                    const key = String(id);
+                                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                    const rates = { ...(cur.video_second_resolution_rates || normalizeResolutionRates({})) };
+                                                                                                    rates[tier] = { ...(rates[tier] || {}), without_video_input: value };
+                                                                                                    return { ...prev, [key]: { ...cur, video_second_resolution_rates: rates } };
+                                                                                                });
+                                                                                            }}
+                                                                                            className="w-16 bg-black/40 border border-gray-700 rounded px-1 py-0.5 text-[10px]"
+                                                                                            title={t('不含视频输入', 'Without video input')}
+                                                                                        />
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            className="text-[10px] text-sky-300 hover:text-sky-200"
+                                                                            onClick={() => {
+                                                                                setDrafts((prev) => {
+                                                                                    const key = String(id);
+                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                    const filled = {};
+                                                                                    VIDEO_RESOLUTION_TIERS.forEach((tier) => {
+                                                                                        filled[tier] = { ...DEFAULT_KIE_SEEDANCE_SECOND_RATES[tier] };
+                                                                                    });
+                                                                                    return { ...prev, [key]: { ...cur, video_second_resolution_rates: filled } };
+                                                                                });
+                                                                            }}
+                                                                        >
+                                                                            {t('填入 KIE Seedance 参考价', 'Fill KIE Seedance reference rates')}
+                                                                        </button>
+                                                                    </div>
+                                                                        );
+                                                                    })()
+                                                                ) : null}
+
+
                                                 </td>
                                                 <td className="p-2.5">
                                                     <button

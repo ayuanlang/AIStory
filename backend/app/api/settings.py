@@ -2491,6 +2491,26 @@ def _rule_to_billing(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
         "unit_user_cost": apply_odds_to_credits(cost, multiplier),
         "unit_user_cost_input": apply_odds_to_credits(cost_input, multiplier),
         "unit_user_cost_output": apply_odds_to_credits(cost_output, multiplier),
+        "video_token_resolution_rates": (
+            _rule_extra_conditions(rule).get("video_token_resolution_rates")
+            if isinstance(_rule_extra_conditions(rule).get("video_token_resolution_rates"), dict)
+            else None
+        ),
+        "video_second_resolution_rates": (
+            _rule_extra_conditions(rule).get("video_second_resolution_rates")
+            if isinstance(_rule_extra_conditions(rule).get("video_second_resolution_rates"), dict)
+            else None
+        ),
+        "video_second_cny_resolution_rates": (
+            _rule_extra_conditions(rule).get("video_second_cny_resolution_rates")
+            if isinstance(_rule_extra_conditions(rule).get("video_second_cny_resolution_rates"), dict)
+            else None
+        ),
+        "video_second_min_billable_by_output": (
+            _rule_extra_conditions(rule).get("video_second_min_billable_by_output")
+            if isinstance(_rule_extra_conditions(rule).get("video_second_min_billable_by_output"), dict)
+            else None
+        ),
     }
 
 
@@ -3202,6 +3222,10 @@ def _setting_row_to_out_prefetched(
         unit_user_cost=billing.get("unit_user_cost", 0),
         unit_user_cost_input=billing.get("unit_user_cost_input", 0),
         unit_user_cost_output=billing.get("unit_user_cost_output", 0),
+        video_token_resolution_rates=billing.get("video_token_resolution_rates"),
+        video_second_resolution_rates=billing.get("video_second_resolution_rates"),
+        video_second_cny_resolution_rates=billing.get("video_second_cny_resolution_rates"),
+        video_second_min_billable_by_output=billing.get("video_second_min_billable_by_output"),
         has_granular_billing_rules=row_id in granular_rule_ids,
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=(task_default_id == row_id and row_id > 0),
@@ -3242,6 +3266,10 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         unit_user_cost=billing.get("unit_user_cost", 0),
         unit_user_cost_input=billing.get("unit_user_cost_input", 0),
         unit_user_cost_output=billing.get("unit_user_cost_output", 0),
+        video_token_resolution_rates=billing.get("video_token_resolution_rates"),
+        video_second_resolution_rates=billing.get("video_second_resolution_rates"),
+        video_second_cny_resolution_rates=billing.get("video_second_cny_resolution_rates"),
+        video_second_min_billable_by_output=billing.get("video_second_min_billable_by_output"),
         has_granular_billing_rules=_has_granular_billing_rules(db, int(row.id)),
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=is_task_default_system_setting(db, int(row.id), row.category),
@@ -4164,13 +4192,43 @@ def _billing_from_payload_or_config(payload, raw_config: dict) -> Dict[str, Any]
     c = getattr(payload, "billing_cost", None)
     ci = getattr(payload, "billing_cost_input", None)
     co = getattr(payload, "billing_cost_output", None)
-    if ut is not None or c is not None or ci is not None or co is not None:
-        return {
+    sp = getattr(payload, "supplier_price", None)
+    spi = getattr(payload, "supplier_price_input", None)
+    spo = getattr(payload, "supplier_price_output", None)
+    cm = getattr(payload, "charge_multiplier", None)
+    token_rates = getattr(payload, "video_token_resolution_rates", None)
+    second_rates = getattr(payload, "video_second_resolution_rates", None)
+    cny_rates = getattr(payload, "video_second_cny_resolution_rates", None)
+    min_billable = getattr(payload, "video_second_min_billable_by_output", None)
+    has_explicit = any(
+        value is not None
+        for value in (ut, c, ci, co, sp, spi, spo, cm, token_rates, second_rates, cny_rates, min_billable)
+    )
+    if has_explicit:
+        out = {
             "unit_type": _normalize_billing_unit_type(ut or "per_call"),
             "cost": _non_negative_int(c if c is not None else 0),
             "cost_input": _non_negative_int(ci if ci is not None else 0),
             "cost_output": _non_negative_int(co if co is not None else 0),
+            "supplier_price": sp,
+            "supplier_price_input": spi,
+            "supplier_price_output": spo,
+            "supplier_currency": getattr(payload, "supplier_currency", None) or "CNY",
+            "supplier_price_basis": getattr(payload, "supplier_price_basis", None) or "money",
+            "charge_multiplier": cm if cm is not None else 2.0,
         }
+        extra = {}
+        if isinstance(token_rates, dict) and token_rates:
+            extra["video_token_resolution_rates"] = token_rates
+        if isinstance(second_rates, dict) and second_rates:
+            extra["video_second_resolution_rates"] = second_rates
+        if isinstance(cny_rates, dict) and cny_rates:
+            extra["video_second_cny_resolution_rates"] = cny_rates
+        if isinstance(min_billable, dict) and min_billable:
+            extra["video_second_min_billable_by_output"] = min_billable
+        if extra:
+            out["extra_conditions"] = _normalize_sync_billing_extra_conditions(extra)
+        return out
     return _extract_billing_from_config(raw_config)
 
 
@@ -7373,6 +7431,8 @@ def update_system_setting_for_manage(
         "supplier_price_output",
         "supplier_currency",
         "supplier_price_basis",
+        "video_token_resolution_rates",
+        "extra_conditions",
     )
     payload_billing = {k: update_data.pop(k) for k in billing_keys if k in update_data}
     has_model_mode_defaults = "model_mode_defaults" in update_data
@@ -7401,6 +7461,48 @@ def update_system_setting_for_manage(
         for key in billing_keys:
             if key in payload_billing:
                 update_billing[key] = payload_billing[key]
+        # Persist Seedance resolution-tier CNY / MTok rates on base rule.extra_conditions.
+        existing_extra = existing_billing.get("extra_conditions") if isinstance(existing_billing.get("extra_conditions"), dict) else {}
+        next_extra = dict(existing_extra or {})
+        if "extra_conditions" in payload_billing and isinstance(payload_billing.get("extra_conditions"), dict):
+            next_extra.update(payload_billing.get("extra_conditions") or {})
+        if "video_token_resolution_rates" in payload_billing:
+            from app.services.billing_pricing import normalize_video_token_resolution_rates
+            rates = normalize_video_token_resolution_rates(payload_billing.get("video_token_resolution_rates"))
+            if rates:
+                next_extra["video_token_resolution_rates"] = rates
+            else:
+                next_extra.pop("video_token_resolution_rates", None)
+        if "video_second_resolution_rates" in payload_billing:
+            from app.services.billing_pricing import normalize_video_second_resolution_rates
+            second_rates = normalize_video_second_resolution_rates(
+                payload_billing.get("video_second_resolution_rates")
+            )
+            if second_rates:
+                next_extra["video_second_resolution_rates"] = second_rates
+            else:
+                next_extra.pop("video_second_resolution_rates", None)
+        if "video_second_cny_resolution_rates" in payload_billing:
+            from app.services.billing_pricing import normalize_sparkvideo_second_cny_rates
+            cny_rates = normalize_sparkvideo_second_cny_rates(
+                payload_billing.get("video_second_cny_resolution_rates")
+            )
+            if cny_rates:
+                next_extra["video_second_cny_resolution_rates"] = cny_rates
+            else:
+                next_extra.pop("video_second_cny_resolution_rates", None)
+        if "video_second_min_billable_by_output" in payload_billing:
+            from app.services.billing_pricing import normalize_sparkvideo_min_billable_by_output
+            min_table = normalize_sparkvideo_min_billable_by_output(
+                payload_billing.get("video_second_min_billable_by_output")
+            )
+            if min_table:
+                # store keys as strings for JSON stability
+                next_extra["video_second_min_billable_by_output"] = {str(k): int(v) for k, v in min_table.items()}
+            else:
+                next_extra.pop("video_second_min_billable_by_output", None)
+        if next_extra:
+            update_billing["extra_conditions"] = next_extra
     else:
         update_billing = existing_billing
     target.config = _sync_model_mode_defaults_config(
@@ -8044,6 +8146,11 @@ _SYNC_BILLING_RULE_FIELDS = [
     "fps_min",
     "fps_max",
     "billing_unit_type",
+    "supplier_price",
+    "supplier_price_input",
+    "supplier_price_output",
+    "supplier_currency",
+    "supplier_price_basis",
     "billing_cost",
     "billing_cost_input",
     "billing_cost_output",
@@ -8082,6 +8189,9 @@ _SYNC_BILLING_RULE_FLOAT_FIELDS = {
     "duration_seconds_max",
     "fps_min",
     "fps_max",
+    "supplier_price",
+    "supplier_price_input",
+    "supplier_price_output",
     "charge_multiplier",
 }
 
@@ -8150,9 +8260,19 @@ def _build_provider_bundle_export_payload(db: Session, rows: List[SystemAPISetti
                 "supplier_info": getattr(row, "supplier_info", None),
                 "config": _strip_billing_from_config(row.config),
                 "billing_unit_type": billing.get("unit_type", "per_call"),
+                "supplier_price": billing.get("supplier_price"),
+                "supplier_price_input": billing.get("supplier_price_input"),
+                "supplier_price_output": billing.get("supplier_price_output"),
+                "supplier_currency": billing.get("supplier_currency") or "CNY",
+                "supplier_price_basis": billing.get("supplier_price_basis") or "money",
                 "billing_cost": billing.get("cost", 0),
                 "billing_cost_input": billing.get("cost_input", 0),
                 "billing_cost_output": billing.get("cost_output", 0),
+                "charge_multiplier": billing.get("charge_multiplier", 2.0),
+                "video_token_resolution_rates": billing.get("video_token_resolution_rates"),
+                "video_second_resolution_rates": billing.get("video_second_resolution_rates"),
+                "video_second_cny_resolution_rates": billing.get("video_second_cny_resolution_rates"),
+                "video_second_min_billable_by_output": billing.get("video_second_min_billable_by_output"),
                 "deprecated": bool(row.deprecated),
                 "is_active": is_task_default_system_setting(db, int(row.id), row.category),
             })
@@ -8341,6 +8461,54 @@ def _safe_clear_transaction_action_rule_links(db: Session, *, clear_system_api_i
         logger.warning("Skip transaction_action cleanup due to schema mismatch: %s", exc)
 
 
+
+def _normalize_sync_billing_extra_conditions(raw_value: Any) -> Dict[str, Any]:
+    """Normalize billing-rule extra_conditions for config sync import/export."""
+    extra = _safe_json_dict(raw_value)
+    if not extra:
+        return {}
+
+    try:
+        from app.services.billing_pricing import (
+            normalize_video_token_resolution_rates,
+            normalize_video_second_resolution_rates,
+            normalize_sparkvideo_second_cny_rates,
+            normalize_sparkvideo_min_billable_by_output,
+        )
+    except Exception:
+        return extra
+
+    if "video_token_resolution_rates" in extra:
+        rates = normalize_video_token_resolution_rates(extra.get("video_token_resolution_rates"))
+        if rates:
+            extra["video_token_resolution_rates"] = rates
+        else:
+            extra.pop("video_token_resolution_rates", None)
+
+    if "video_second_resolution_rates" in extra:
+        rates = normalize_video_second_resolution_rates(extra.get("video_second_resolution_rates"))
+        if rates:
+            extra["video_second_resolution_rates"] = rates
+        else:
+            extra.pop("video_second_resolution_rates", None)
+
+    if "video_second_cny_resolution_rates" in extra:
+        rates = normalize_sparkvideo_second_cny_rates(extra.get("video_second_cny_resolution_rates"))
+        if rates:
+            extra["video_second_cny_resolution_rates"] = rates
+        else:
+            extra.pop("video_second_cny_resolution_rates", None)
+
+    if "video_second_min_billable_by_output" in extra:
+        min_table = normalize_sparkvideo_min_billable_by_output(extra.get("video_second_min_billable_by_output"))
+        if min_table:
+            extra["video_second_min_billable_by_output"] = {str(k): int(v) for k, v in min_table.items()}
+        else:
+            extra.pop("video_second_min_billable_by_output", None)
+
+    return extra
+
+
 def _normalize_sync_billing_rule_field(field_name: str, raw_value: Any) -> Any:
     if field_name == "name":
         text = str(raw_value or "").strip()
@@ -8358,7 +8526,7 @@ def _normalize_sync_billing_rule_field(field_name: str, raw_value: Any) -> Any:
             return None
         return _to_bool(raw_value)
     if field_name == "extra_conditions":
-        return _safe_json_dict(raw_value)
+        return _normalize_sync_billing_extra_conditions(raw_value)
     if field_name in _SYNC_BILLING_RULE_BOOL_FIELDS:
         return _to_bool(raw_value)
     if field_name in _SYNC_BILLING_RULE_INT_FIELDS:
@@ -8375,6 +8543,13 @@ def _normalize_sync_billing_rule_field(field_name: str, raw_value: Any) -> Any:
             return float(raw_value)
         except Exception:
             return 2.0 if field_name == "charge_multiplier" else None
+
+    if field_name == "supplier_currency":
+        text = str(raw_value or "").strip().upper()
+        return text or "CNY"
+    if field_name == "supplier_price_basis":
+        text = str(raw_value or "").strip().lower()
+        return text or "money"
 
     text = str(raw_value or "").strip()
     return text or None
@@ -8873,7 +9048,10 @@ def export_system_config_sync_bundle_for_manage(
                 "updated_at": rule.updated_at,
             }
             for field_name in _SYNC_BILLING_RULE_FIELDS:
-                entry[field_name] = getattr(rule, field_name)
+                value = getattr(rule, field_name)
+                if field_name == "extra_conditions":
+                    value = _normalize_sync_billing_extra_conditions(value)
+                entry[field_name] = value
             billing_rules_payload.append(entry)
         _append_sync_process_record(
             process_records,

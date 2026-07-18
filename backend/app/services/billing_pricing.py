@@ -9,6 +9,7 @@ Layers:
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, Optional
 
 
@@ -192,6 +193,452 @@ def resolve_rule_base_credits(rule: Any) -> Dict[str, Any]:
     }
 
 
+
+VIDEO_RESOLUTION_TIERS = ("480p", "720p", "1080p", "4k")
+
+# Business rule (settings import): 1 KIE credit = 3 system credits
+KIE_TO_SYSTEM_CREDIT_RATIO = 3.0
+
+# KIE Seedance 2 published rates (KIE credits / second)
+DEFAULT_KIE_SEEDANCE_SECOND_RATES = {
+    "480p": {"with_video_input": 11.5, "without_video_input": 19.0},
+    "720p": {"with_video_input": 25.0, "without_video_input": 41.0},
+    "1080p": {"with_video_input": 62.0, "without_video_input": 102.0},
+    "4k": {"with_video_input": 128.0, "without_video_input": 208.0},
+}
+
+
+# RunningHub SparkVideo 2.0 resolution tiers (API + native variants)
+SPARKVIDEO_RESOLUTION_TIERS = (
+    "480p",
+    "720p",
+    "1080p_native",
+    "4k_native",
+    "1080p",
+    "2k",
+    "4k",
+)
+
+# Published CNY / second rates (supplier money)
+DEFAULT_SPARKVIDEO_SECOND_CNY_RATES = {
+    "480p": {"without_video_input": 0.6, "with_video_input": 0.4},
+    "720p": {"without_video_input": 1.2, "with_video_input": 0.8},
+    "1080p_native": {"without_video_input": 3.0, "with_video_input": 2.0},
+    "4k_native": {"without_video_input": 6.0, "with_video_input": 4.0},
+    # Upscale from 720p native
+    "1080p": {
+        "without_video_input": 1.48,
+        "with_video_base": 0.8,
+        "with_video_addon": 0.28,
+        "pricing_kind": "upscale",
+    },
+    "2k": {
+        "without_video_input": 1.62,
+        "with_video_base": 0.8,
+        "with_video_addon": 0.42,
+        "pricing_kind": "upscale",
+    },
+    "4k": {
+        "without_video_input": 1.83,
+        "with_video_base": 0.8,
+        "with_video_addon": 0.63,
+        "pricing_kind": "upscale",
+    },
+}
+
+# With reference video: billable_seconds = max(input+output, min_by_output[output])
+SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT = {
+    4: 7,
+    5: 9,
+    6: 10,
+    7: 12,
+    8: 14,
+    9: 15,
+    10: 17,
+    11: 19,
+    12: 20,
+    13: 22,
+    14: 24,
+    15: 25,
+}
+
+
+def resolve_video_resolution_tier(
+    width: Any = None,
+    height: Any = None,
+    resolution: Any = None,
+) -> Optional[str]:
+    """Map explicit label or pixel size to Seedance-style resolution tier."""
+    text = str(resolution or "").strip().lower().replace(" ", "")
+    aliases = {
+        "480": "480p", "480p": "480p", "p480": "480p", "sd": "480p",
+        "720": "720p", "720p": "720p", "p720": "720p", "hd": "720p",
+        "1080": "1080p", "1080p": "1080p", "p1080": "1080p", "fhd": "1080p",
+        "2160": "4k", "2160p": "4k", "4k": "4k", "uhd": "4k", "3840": "4k",
+    }
+    if text in aliases:
+        return aliases[text]
+    m = re.search(r"(480|720|1080|2160|3840)\s*p?", text)
+    if m:
+        return aliases.get(m.group(1))
+
+    try:
+        w = int(float(width)) if width not in (None, "") else 0
+    except Exception:
+        w = 0
+    try:
+        h = int(float(height)) if height not in (None, "") else 0
+    except Exception:
+        h = 0
+    if w <= 0 and h <= 0:
+        return None
+    short_edge = min(v for v in (w, h) if v > 0)
+    # Seedance tiers by short edge (16:9): 480 / 720 / 1080 / 2160
+    if short_edge <= 480:
+        return "480p"
+    if short_edge <= 720:
+        return "720p"
+    if short_edge <= 1080:
+        return "1080p"
+    return "4k"
+
+
+
+def _pick_tier_rate(tier_val: Dict[str, Any], keys: list) -> Optional[float]:
+    for k in keys:
+        if k in tier_val and tier_val.get(k) is not None and tier_val.get(k) != "":
+            try:
+                v = float(tier_val.get(k))
+                if math.isfinite(v) and v >= 0:
+                    return v
+            except Exception:
+                continue
+    return None
+
+
+def normalize_resolution_rate_map(raw: Any) -> Dict[str, Dict[str, Optional[float]]]:
+    """Normalize {tier: {with_video_input, without_video_input}} numeric rate map."""
+    out: Dict[str, Dict[str, Optional[float]]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for tier_key, tier_val in raw.items():
+        tier = resolve_video_resolution_tier(resolution=tier_key) or str(tier_key or "").strip().lower()
+        if tier not in VIDEO_RESOLUTION_TIERS:
+            continue
+        if not isinstance(tier_val, dict):
+            continue
+        with_rate = _pick_tier_rate(tier_val, ["with_video_input", "with", "input"])
+        without_rate = _pick_tier_rate(tier_val, ["without_video_input", "without", "output"])
+        if with_rate is None and without_rate is None:
+            continue
+        out[tier] = {
+            "with_video_input": with_rate,
+            "without_video_input": without_rate,
+        }
+    return out
+
+
+def normalize_video_token_resolution_rates(raw: Any) -> Dict[str, Dict[str, Optional[float]]]:
+    """Normalize {tier: {with_video_input, without_video_input}} CNY / MTok map."""
+    return normalize_resolution_rate_map(raw)
+
+
+def normalize_video_second_resolution_rates(raw: Any) -> Dict[str, Dict[str, Optional[float]]]:
+    """Normalize {tier: {with_video_input, without_video_input}} KIE credits / second map."""
+    return normalize_resolution_rate_map(raw)
+
+
+def kie_credits_to_system_credits(value: Any) -> float:
+    """Convert KIE credits to system credits (may be fractional before ceil)."""
+    return max(0.0, safe_non_negative_float(value) * float(KIE_TO_SYSTEM_CREDIT_RATIO))
+
+
+
+def resolve_sparkvideo_resolution_tier(
+    width: Any = None,
+    height: Any = None,
+    resolution: Any = None,
+) -> Optional[str]:
+    """Map SparkVideo labels including native vs upscale and 2k."""
+    text = str(resolution or "").strip().lower().replace(" ", "").replace("-", "_")
+    aliases = {
+        "480": "480p", "480p": "480p", "p480": "480p",
+        "720": "720p", "720p": "720p", "p720": "720p",
+        "1080p_native": "1080p_native",
+        "1080pnative": "1080p_native",
+        "native1080p": "1080p_native",
+        "4k_native": "4k_native",
+        "4knative": "4k_native",
+        "native4k": "4k_native",
+        "2160p_native": "4k_native",
+        "1080": "1080p", "1080p": "1080p", "p1080": "1080p",
+        "2k": "2k", "1440": "2k", "1440p": "2k", "p1440": "2k",
+        "2160": "4k", "2160p": "4k", "4k": "4k", "uhd": "4k", "3840": "4k",
+    }
+    # Chinese "原生" markers often arrive url-encoded or as unicode in labels
+    if "原生" in str(resolution or "") or "native" in text:
+        if "1080" in text:
+            return "1080p_native"
+        if "4k" in text or "2160" in text:
+            return "4k_native"
+    if text in aliases:
+        return aliases[text]
+    m = re.search(r"(480|720|1080|1440|2160|3840|2k|4k)\s*p?", text)
+    if m:
+        token = m.group(1)
+        return aliases.get(token) or aliases.get(f"{token}p")
+    try:
+        w = int(float(width)) if width not in (None, "") else 0
+    except Exception:
+        w = 0
+    try:
+        h = int(float(height)) if height not in (None, "") else 0
+    except Exception:
+        h = 0
+    if w <= 0 and h <= 0:
+        return None
+    short_edge = min(v for v in (w, h) if v > 0)
+    if short_edge <= 480:
+        return "480p"
+    if short_edge <= 720:
+        return "720p"
+    if short_edge <= 1080:
+        return "1080p"
+    if short_edge <= 1440:
+        return "2k"
+    return "4k"
+
+
+def normalize_sparkvideo_second_cny_rates(raw: Any) -> Dict[str, Dict[str, Any]]:
+    """Normalize SparkVideo CNY/s rate map (supports upscale base+addon)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for tier_key, tier_val in raw.items():
+        tier = resolve_sparkvideo_resolution_tier(resolution=tier_key) or str(tier_key or "").strip().lower()
+        if tier not in SPARKVIDEO_RESOLUTION_TIERS:
+            continue
+        if not isinstance(tier_val, dict):
+            continue
+        row: Dict[str, Any] = {}
+        without = _pick_tier_rate(tier_val, ["without_video_input", "without", "output", "no_ref"])
+        with_flat = _pick_tier_rate(tier_val, ["with_video_input", "with", "input", "with_ref"])
+        with_base = _pick_tier_rate(tier_val, ["with_video_base", "base", "base_rate"])
+        with_addon = _pick_tier_rate(tier_val, ["with_video_addon", "addon", "addon_rate", "upscale_addon"])
+        kind = str(tier_val.get("pricing_kind") or "").strip().lower()
+        if without is not None:
+            row["without_video_input"] = without
+        if with_flat is not None:
+            row["with_video_input"] = with_flat
+        if with_base is not None:
+            row["with_video_base"] = with_base
+        if with_addon is not None:
+            row["with_video_addon"] = with_addon
+        if kind:
+            row["pricing_kind"] = kind
+        elif with_base is not None or with_addon is not None:
+            row["pricing_kind"] = "upscale"
+        if not row:
+            continue
+        out[tier] = row
+    return out
+
+
+def normalize_sparkvideo_min_billable_by_output(raw: Any) -> Dict[int, int]:
+    out: Dict[int, int] = {}
+    src = raw if isinstance(raw, dict) else {}
+    if not src:
+        return dict(SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT)
+    for k, v in src.items():
+        try:
+            out_key = int(float(k))
+            out_val = int(float(v))
+        except Exception:
+            continue
+        if out_key > 0 and out_val > 0:
+            out[out_key] = out_val
+    return out or dict(SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT)
+
+
+def resolve_sparkvideo_min_billable_seconds(output_duration: Any, table: Any = None) -> float:
+    out_s = safe_non_negative_float(output_duration, 0.0)
+    mapping = normalize_sparkvideo_min_billable_by_output(table)
+    if out_s <= 0:
+        return 0.0
+    key = int(round(out_s))
+    if key in mapping:
+        return float(mapping[key])
+    keys = sorted(mapping.keys())
+    if not keys:
+        return out_s
+    if key < keys[0]:
+        return float(mapping[keys[0]])
+    if key > keys[-1]:
+        return float(mapping[keys[-1]])
+    # nearest neighbor
+    nearest = min(keys, key=lambda x: abs(x - key))
+    return float(mapping[nearest])
+
+
+def resolve_sparkvideo_billable_seconds(
+    *,
+    output_duration: Any,
+    input_duration: Any = 0,
+    has_video_input: bool = False,
+    min_billable_table: Any = None,
+) -> Dict[str, float]:
+    output_s = safe_non_negative_float(output_duration, 0.0)
+    input_s = safe_non_negative_float(input_duration, 0.0)
+    if not has_video_input:
+        return {
+            "output_seconds": output_s,
+            "input_seconds": input_s,
+            "combined_seconds": output_s,
+            "min_billable_seconds": 0.0,
+            "billable_seconds": output_s,
+            "billable_mode": "output_only",
+        }
+    combined = input_s + output_s
+    min_bill = resolve_sparkvideo_min_billable_seconds(output_s, min_billable_table)
+    billable = max(combined, min_bill) if (combined > 0 or min_bill > 0) else 0.0
+    return {
+        "output_seconds": output_s,
+        "input_seconds": input_s,
+        "combined_seconds": combined,
+        "min_billable_seconds": float(min_bill),
+        "billable_seconds": float(billable),
+        "billable_mode": "max_combined_or_min_table",
+    }
+
+
+def estimate_sparkvideo_second_cny_amount(
+    *,
+    rates: Any,
+    resolution_tier: Any,
+    has_video_input: bool,
+    output_duration: Any,
+    input_duration: Any = 0,
+    min_billable_table: Any = None,
+) -> Dict[str, Any]:
+    """
+    RunningHub SparkVideo 2.0 supplier CNY amount (before credit conversion).
+
+    without ref: CNY = rate * output_seconds
+    with ref (flat): CNY = rate * max(input+output, min_table[output])
+    with ref (upscale): CNY = base_rate * billable_seconds + addon_rate * output_seconds
+    """
+    tier = resolve_sparkvideo_resolution_tier(resolution=resolution_tier) or str(resolution_tier or "").strip().lower()
+    rate_map = normalize_sparkvideo_second_cny_rates(rates)
+    row = rate_map.get(tier) if tier else None
+    billable_meta = resolve_sparkvideo_billable_seconds(
+        output_duration=output_duration,
+        input_duration=input_duration,
+        has_video_input=has_video_input,
+        min_billable_table=min_billable_table,
+    )
+    output_s = float(billable_meta["output_seconds"])
+    billable_s = float(billable_meta["billable_seconds"])
+    if not row or output_s <= 0 and billable_s <= 0:
+        return {
+            "cny_amount": 0.0,
+            "resolution_tier": tier,
+            "rate_branch": "with_video_input" if has_video_input else "without_video_input",
+            **billable_meta,
+        }
+
+    if has_video_input:
+        base = row.get("with_video_base")
+        addon = row.get("with_video_addon")
+        if base is not None or addon is not None:
+            base_v = float(base or 0.0)
+            addon_v = float(addon or 0.0)
+            cny = (billable_s * base_v) + (output_s * addon_v)
+            return {
+                "cny_amount": max(0.0, float(cny)),
+                "resolution_tier": tier,
+                "rate_branch": "with_video_input_upscale",
+                "with_video_base_cny": base_v,
+                "with_video_addon_cny": addon_v,
+                "pricing_kind": row.get("pricing_kind") or "upscale",
+                **billable_meta,
+            }
+        rate = row.get("with_video_input")
+        if rate is None:
+            rate = row.get("without_video_input")
+        cny = billable_s * float(rate or 0.0)
+        return {
+            "cny_amount": max(0.0, float(cny)),
+            "resolution_tier": tier,
+            "rate_branch": "with_video_input",
+            "unit_rate_cny": float(rate or 0.0),
+            "pricing_kind": row.get("pricing_kind") or "native",
+            **billable_meta,
+        }
+
+    rate = row.get("without_video_input")
+    if rate is None:
+        rate = row.get("with_video_input")
+    cny = output_s * float(rate or 0.0)
+    return {
+        "cny_amount": max(0.0, float(cny)),
+        "resolution_tier": tier,
+        "rate_branch": "without_video_input",
+        "unit_rate_cny": float(rate or 0.0),
+        "pricing_kind": row.get("pricing_kind") or "native",
+        **billable_meta,
+    }
+
+
+def resolve_video_second_unit_rate(
+    *,
+    cost: float,
+    cost_input: float,
+    cost_output: float,
+    has_video_input: bool,
+    resolution_tier: Any = None,
+    resolution_rates_kie: Any = None,
+) -> Dict[str, Any]:
+    """
+    KIE Seedance 2 style: one rate per second, by resolution + has_video_input.
+
+    Priority:
+      1) resolution_rates_kie[tier][with/without] as KIE credits / second
+      2) cost_input / cost_output base credits (legacy dual rate)
+      3) cost fallback
+    """
+    tier = resolve_video_resolution_tier(resolution=resolution_tier) if resolution_tier else None
+    rates = normalize_video_second_resolution_rates(resolution_rates_kie)
+    if tier and tier in rates:
+        tier_rates = rates[tier]
+        key = "with_video_input" if has_video_input else "without_video_input"
+        kie_rate = tier_rates.get(key)
+        if kie_rate is None:
+            kie_rate = tier_rates.get("without_video_input" if has_video_input else "with_video_input")
+        if kie_rate is not None:
+            rate_credits = float(kie_credits_to_system_credits(kie_rate))
+            return {
+                "rate": max(0.0, rate_credits),
+                "rate_branch": "with_video_input" if has_video_input else "without_video_input",
+                "rate_with_video_input": float(kie_credits_to_system_credits(tier_rates.get("with_video_input") or 0)),
+                "rate_without_video_input": float(kie_credits_to_system_credits(tier_rates.get("without_video_input") or 0)),
+                "resolution_tier": tier,
+                "rate_source": "resolution_rates_kie_per_second",
+                "rate_kie_credits_per_second": float(kie_rate),
+            }
+
+    with_rate = float(cost_input) if cost_input > 0 else (float(cost) if cost > 0 else float(cost_output))
+    without_rate = float(cost_output) if cost_output > 0 else (float(cost) if cost > 0 else float(cost_input))
+    rate = with_rate if has_video_input else without_rate
+    return {
+        "rate": max(0.0, float(rate or 0.0)),
+        "rate_branch": "with_video_input" if has_video_input else "without_video_input",
+        "rate_with_video_input": max(0.0, float(with_rate or 0.0)),
+        "rate_without_video_input": max(0.0, float(without_rate or 0.0)),
+        "resolution_tier": tier,
+        "rate_source": "rule_base_credits",
+    }
+
+
 def is_video_token_usage(usage: Optional[Dict[str, Any]] = None) -> bool:
     """True when usage is billed as a single video-token pool (Seedance / Ark formula)."""
     payload = dict(usage or {})
@@ -219,15 +666,38 @@ def resolve_video_token_unit_rate(
     cost_input: float,
     cost_output: float,
     has_video_input: bool,
+    resolution_tier: Any = None,
+    resolution_rates_cny: Any = None,
 ) -> Dict[str, Any]:
     """
     Video token pricing uses one rate on total tokens, not LLM input/output split.
 
-    Convention (supplier CNY already converted to base credits):
-      - cost_input  = with video input (e.g. 28 CNY / million tokens)
-      - cost_output = without video input (e.g. 46 CNY / million tokens)
-      - cost        = fallback when the preferred tier rate is unset
+    Priority:
+      1) resolution_rates_cny[tier][with/without] as CNY / million tokens
+      2) cost_input / cost_output base credits (legacy dual rate)
+      3) cost fallback
     """
+    tier = resolve_video_resolution_tier(resolution=resolution_tier) if resolution_tier else None
+    rates = normalize_video_token_resolution_rates(resolution_rates_cny)
+    if tier and tier in rates:
+        tier_rates = rates[tier]
+        key = "with_video_input" if has_video_input else "without_video_input"
+        cny = tier_rates.get(key)
+        # If preferred side missing, fall back to the other side of same tier.
+        if cny is None:
+            cny = tier_rates.get("without_video_input" if has_video_input else "with_video_input")
+        if cny is not None:
+            rate_credits = float(supplier_cny_to_base_credits(cny))
+            return {
+                "rate": max(0.0, rate_credits),
+                "rate_branch": "with_video_input" if has_video_input else "without_video_input",
+                "rate_with_video_input": float(supplier_cny_to_base_credits(tier_rates.get("with_video_input") or 0)),
+                "rate_without_video_input": float(supplier_cny_to_base_credits(tier_rates.get("without_video_input") or 0)),
+                "resolution_tier": tier,
+                "rate_source": "resolution_rates_cny",
+                "rate_cny_per_mtok": float(cny),
+            }
+
     with_rate = float(cost_input) if cost_input > 0 else (float(cost) if cost > 0 else float(cost_output))
     without_rate = float(cost_output) if cost_output > 0 else (float(cost) if cost > 0 else float(cost_input))
     rate = with_rate if has_video_input else without_rate
@@ -236,6 +706,8 @@ def resolve_video_token_unit_rate(
         "rate_branch": "with_video_input" if has_video_input else "without_video_input",
         "rate_with_video_input": max(0.0, float(with_rate or 0.0)),
         "rate_without_video_input": max(0.0, float(without_rate or 0.0)),
+        "resolution_tier": tier,
+        "rate_source": "rule_base_credits",
     }
 
 
@@ -273,11 +745,21 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
             has_video_input = bool(payload.get("has_video_input"))
             if not has_video_input and isinstance(payload.get("video_token_estimate"), dict):
                 has_video_input = bool(payload["video_token_estimate"].get("has_video_input"))
+            tier = resolve_video_resolution_tier(
+                payload.get("width"),
+                payload.get("height"),
+                payload.get("resolution_tier") or payload.get("resolution"),
+            )
             selected = resolve_video_token_unit_rate(
                 cost=base_cost,
                 cost_input=cost_input,
                 cost_output=cost_output,
                 has_video_input=has_video_input,
+                resolution_tier=tier,
+                resolution_rates_cny=(
+                    payload.get("video_token_resolution_rates")
+                    or config.get("video_token_resolution_rates")
+                ),
             )
             token_cost = (float(tokens) * float(selected["rate"])) / divisor
             return max(0.0, float(token_cost))
@@ -311,6 +793,75 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
 
     if quantity <= 0:
         return 0.0
+
+    # Per-second resolution matrices (SparkVideo CNY/s, then KIE credits/s).
+    if unit_type == "per_second":
+        has_video_input = bool(payload.get("has_video_input"))
+        if not has_video_input and isinstance(payload.get("video_token_estimate"), dict):
+            has_video_input = bool(payload["video_token_estimate"].get("has_video_input"))
+
+        cny_rates = (
+            payload.get("video_second_cny_resolution_rates")
+            or config.get("video_second_cny_resolution_rates")
+        )
+        if cny_rates:
+            out_duration = safe_non_negative_float(
+                payload.get("duration_seconds", payload.get("duration", quantity)),
+                0.0,
+            )
+            in_duration = safe_non_negative_float(
+                payload.get("input_duration_seconds", payload.get("input_duration", 0)),
+                0.0,
+            )
+            tier = resolve_sparkvideo_resolution_tier(
+                payload.get("width"),
+                payload.get("height"),
+                payload.get("resolution_tier") or payload.get("resolution"),
+            )
+            estimate = estimate_sparkvideo_second_cny_amount(
+                rates=cny_rates,
+                resolution_tier=tier,
+                has_video_input=has_video_input,
+                output_duration=out_duration,
+                input_duration=in_duration,
+                min_billable_table=(
+                    payload.get("video_second_min_billable_by_output")
+                    or config.get("video_second_min_billable_by_output")
+                ),
+            )
+            # Convert supplier CNY total -> system credits (1 credit = 0.01 CNY).
+            return max(0.0, float(estimate.get("cny_amount") or 0.0) * 100.0)
+
+        second_rates = (
+            payload.get("video_second_resolution_rates")
+            or config.get("video_second_resolution_rates")
+        )
+        if second_rates:
+            tier = resolve_video_resolution_tier(
+                payload.get("width"),
+                payload.get("height"),
+                payload.get("resolution_tier") or payload.get("resolution"),
+            )
+            selected = resolve_video_second_unit_rate(
+                cost=base_cost,
+                cost_input=cost_input,
+                cost_output=cost_output,
+                has_video_input=has_video_input,
+                resolution_tier=tier,
+                resolution_rates_kie=second_rates,
+            )
+            return max(0.0, float(selected["rate"]) * float(quantity))
+
+        # Dual rate without resolution matrix: with/without video input.
+        if cost_input > 0 or cost_output > 0:
+            has_video_input = bool(payload.get("has_video_input"))
+            rate = float(cost_input) if has_video_input else float(cost_output)
+            if rate <= 0:
+                rate = float(cost_output if has_video_input else cost_input)
+            if rate <= 0:
+                rate = float(base_cost)
+            return max(0.0, float(rate) * float(quantity))
+
     return float(base_cost) * float(quantity)
 
 
