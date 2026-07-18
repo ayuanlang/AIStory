@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FunctionApiConfigTab from '../components/FunctionApiConfigTab';
+import PricingRulesTab from '../components/PricingRulesTab';
 import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingFeaturePricing, updateBillingFeaturePricing, getBillingDefaultApiPricing, updateBillingDefaultApiPricing, getAgentToolPolicy, updateAgentToolPolicy, getBillingRuleResetConfigManage, updateBillingRuleResetConfigManage, getAssetImageRatioConfigManage, updateAssetImageRatioConfigManage, getSceneAnalysisConfigManage, updateSceneAnalysisConfigManage, getProjectCostEstimationConfigManage, updateProjectCostEstimationConfigManage, getSystemSettingsManage, getSystemApisMissingBillingRulesManage, createSystemSettingManage, updateSystemSettingManage, deleteSystemSettingManage, listTaskDefaultApisManage, createTaskDefaultApiManage, updateTaskDefaultApiManage, deleteTaskDefaultApiManage, listSystemApiBillingRulesManage, listSystemApiBillingRulesBatchManage, createSystemApiBillingRuleManage, updateSystemApiBillingRuleManage, deleteSystemApiBillingRuleManage, deleteSystemApiBillingRulesBatchManage, resetSystemApiBillingRuleChargeMultipliersManage, recomputeSystemApiPriceCacheManage, exportSystemSettingsManage, exportSystemSettingsToSeed, importSystemSettingsManage, exportSystemProviderBundleManage, importSystemProviderBundleManage, validateSystemProviderBundleManage, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage, batchToggleSystemProviderDeprecatedManage, toggleSystemSettingDeprecatedManage, toggleSystemSettingDeprecatedByKeyManage, getSystemProviderKeysManage, setSystemProviderKeysManage, listProviderKeyPools, createProviderKeyPool, updateProviderKeyPool, deleteProviderKeyPool, listOssProviderPools, createOssProviderPool, updateOssProviderPool, deleteOssProviderPool, listKieStandardValuesManage, listKieStandardMappingsManage, createKieStandardMappingManage, updateKieStandardMappingManage, deleteKieStandardMappingManage, inferKieStandardMappingBillingRelatedManage, exportKieDataDictionaryMappings, importKieDataDictionaryMappings, exportKieDataDictionaryValues, importKieDataDictionaryValues, exportKieDataDictionaryBundle, importKieDataDictionaryBundle, getAdminRuntimeLogFiles, getAdminRuntimeLogView, getLlmCallLogs, getAdminStorageUsage, getAdminExpiredFiles, remindAdminExpiredFiles, deleteAdminExpiredFiles, getAdminOrphanFiles, deleteAdminOrphanFiles, getAdminMaintenanceConfig, updateAdminMaintenanceConfig, fetchPromptSkills, fetchPrompt, savePrompt, getAdminUsersPage, getFunctionApiConfigs } from '../services/api';
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
@@ -1163,7 +1164,7 @@ const UserAdmin = () => {
             const normalized = Array.isArray(rows) ? rows : [];
             setSystemApiRows(normalized);
             const nextSelectedId = resolveSystemApiSelection(normalized, selectedSystemApiId, {
-                allowEmpty: activeTab === 'pricing_rules',
+                allowEmpty: false,
             });
             setSelectedSystemApiId(nextSelectedId);
             return {
@@ -1224,7 +1225,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'system_api' || activeTab === 'pricing_rules' || activeTab === 'oss_pools') {
+        if (activeTab === 'system_api' || activeTab === 'oss_pools') {
             if (activeTab === 'system_api') {
                 refreshSystemApiAdminViews({
                     includeSystemApi: true,
@@ -1240,10 +1241,7 @@ const UserAdmin = () => {
                     includeProviderPools: true,
                     includeOssPools: true,
                 });
-                return;
             }
-
-            fetchSystemApiManageRows();
         }
     }, [activeTab]);
 
@@ -1538,12 +1536,6 @@ const UserAdmin = () => {
             setIsProjectCostConfigSaving(false);
         }
     };
-
-    useEffect(() => {
-        if (activeTab === 'pricing_rules') {
-            fetchBillingRuleResetConfig();
-        }
-    }, [activeTab]);
 
     useEffect(() => {
         if (activeTab === 'system_api') {
@@ -1964,7 +1956,7 @@ const UserAdmin = () => {
     );
 
     useEffect(() => {
-        if (activeTab !== 'system_api' && activeTab !== 'pricing_rules') return;
+        if (activeTab !== 'system_api') return;
         fetchBillingRulesForSystemApi(selectedSystemApiId);
     }, [activeTab, selectedSystemApiId, systemApiIdDigest]);
 
@@ -3029,7 +3021,7 @@ const UserAdmin = () => {
     };
 
     useEffect(() => {
-        if (activeTab === 'pricing_rules') return;
+        if (activeTab !== 'system_api') return;
         if (!visibleSystemApiRows.length) {
             setSelectedSystemApiId('');
             return;
@@ -4650,6 +4642,68 @@ const UserAdmin = () => {
         }
         return parsed.toLocaleString();
     };
+
+    const toNullableNonNegInt = (value) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) return null;
+        return Math.floor(parsed);
+    };
+
+    const getTransactionPricingSummary = (txn) => {
+        const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
+        const program = details?.pricing_program && typeof details.pricing_program === 'object'
+            ? details.pricing_program
+            : {};
+        const breakdown = details?.billing_breakdown && typeof details.billing_breakdown === 'object'
+            ? details.billing_breakdown
+            : {};
+        const ruleDetail = (
+            (breakdown?.selected_rule_detail && typeof breakdown.selected_rule_detail === 'object')
+                ? breakdown.selected_rule_detail
+                : ((details?.selected_rule_detail && typeof details.selected_rule_detail === 'object')
+                    ? details.selected_rule_detail
+                    : {})
+        );
+        const multiplierRaw = Number(
+            program?.charge_multiplier
+            ?? ruleDetail?.rule_charge_multiplier
+            ?? details?.charge_multiplier
+        );
+        const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : null;
+
+        let baseCost = toNullableNonNegInt(
+            program?.base_cost
+            ?? ruleDetail?.computed_base_cost
+            ?? details?.base_cost
+            ?? txn?.base_cost
+        );
+        let userCost = toNullableNonNegInt(
+            program?.user_cost
+            ?? ruleDetail?.computed_cost
+            ?? breakdown?.total_cost
+            ?? details?.actual_cost
+            ?? details?.reserved_cost
+            ?? txn?.user_cost
+        );
+
+        if (userCost === null && typeof txn?.amount === 'number' && txn.amount !== 0) {
+            userCost = Math.abs(Math.floor(txn.amount));
+        }
+        if (baseCost === null && userCost !== null && multiplier) {
+            baseCost = Math.max(0, Math.round(userCost / multiplier));
+        }
+
+        return {
+            baseCost,
+            userCost,
+            multiplier,
+            hasPricing: baseCost !== null || userCost !== null,
+        };
+    };
+
+    const formatCreditsCell = (value) => (
+        value === null || value === undefined ? '-' : String(value)
+    );
 
     const getTransactionProviderUsage = (txn) => {
         const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
@@ -6613,7 +6667,9 @@ const UserAdmin = () => {
                                 </div>
                              </div>
                              <div className="md:hidden space-y-3">
-                                    {transactions.map(txn => (
+                                    {transactions.map(txn => {
+                                      const pricing = getTransactionPricingSummary(txn);
+                                      return (
                                       <div key={`txn-card-${txn.id}`} className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                                           <div className="flex items-start justify-between gap-3">
                                               <div className="min-w-0">
@@ -6627,7 +6683,18 @@ const UserAdmin = () => {
                                           </div>
                                           <div className="grid grid-cols-2 gap-3 text-sm">
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
-                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('金额', 'Amount')}</div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('成本', 'Cost')}</div>
+                                                <div className="font-mono text-sky-200">{formatCreditsCell(pricing.baseCost)}</div>
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('用户价', 'User Price')}</div>
+                                                <div className="font-mono text-amber-200">{formatCreditsCell(pricing.userCost)}</div>
+                                                {pricing.multiplier ? (
+                                                    <div className="text-[10px] text-gray-500 mt-0.5">×{Number(pricing.multiplier).toFixed(2)}</div>
+                                                ) : null}
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('流水', 'Ledger')}</div>
                                                     <div className={`font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{txn.amount > 0 ? '+' : ''}{txn.amount}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
@@ -6637,7 +6704,7 @@ const UserAdmin = () => {
                                         </div>
                                         <div>
                                             <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('详情', 'Details')}</div>
-                                            <div className="mb-2">
+                                            <div className="mb-2 space-y-2">
                                                 {renderTransactionProviderUsage(txn)}
                                             </div>
                                             <div className="max-h-[180px] overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-900/50 p-2 border border-gray-800 font-mono text-[11px] text-gray-400">
@@ -6645,7 +6712,8 @@ const UserAdmin = () => {
                                             </div>
                                         </div>
                                     </div>
-                                ))}
+                                      );
+                                    })}
                             </div>
                              <div className="hidden md:block overflow-x-auto">
                                 <table className="w-full text-left border-collapse text-sm">
@@ -6657,12 +6725,16 @@ const UserAdmin = () => {
                                               <th className="p-3">{t('渠道', 'Provider')}</th>
                                               <th className="p-3">{t('模型', 'Model')}</th>
                                               <th className="p-3 max-w-[300px]">{t('详情', 'Details')}</th>
-                                              <th className="p-3 text-right">{t('金额', 'Amount')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap">{t('成本', 'Cost')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap">{t('用户价', 'User Price')}</th>
+                                              <th className="p-3 text-right">{t('流水', 'Ledger')}</th>
                                               <th className="p-3 text-right">{t('余额', 'Balance')}</th>
                                           </tr>
                                       </thead>
                                       <tbody>
-                                          {transactions.map(txn => (
+                                          {transactions.map(txn => {
+                                              const pricing = getTransactionPricingSummary(txn);
+                                              return (
                                               <tr key={txn.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                                                   <td className="p-3 text-gray-400 whitespace-nowrap">
                                                       {formatAdminDateTime(txn.created_at)}
@@ -6675,19 +6747,29 @@ const UserAdmin = () => {
                                                       {txn.description && (
                                                         <div className="mb-2 text-[11px] text-gray-300 font-medium">{txn.description} {txn.project_id ? `[Proj: ${txn.project_id}]` : ''} {txn.episode_id ? `[Ep: ${txn.episode_id}]` : ''}</div>
                                                       )}
-                                                      <div className="mb-2 w-full">
+                                                      <div className="mb-2 w-full space-y-2">
                                                           {renderTransactionProviderUsage(txn)}
                                                       </div>
                                                       <div className="max-h-[150px] overflow-y-auto whitespace-pre-wrap break-all bg-gray-900/50 p-1 w-full rounded border border-gray-800 font-mono">
                                                           {JSON.stringify(txn.details, null, 2)}
                                                       </div>
                                                   </td>
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200" title={t('基础成本积分（赔率前）', 'Base cost credits (before odds)')}>
+                                                      {formatCreditsCell(pricing.baseCost)}
+                                                  </td>
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200" title={pricing.multiplier ? `${t('赔率', 'Odds')} ×${Number(pricing.multiplier).toFixed(2)}` : t('用户扣费积分', 'User charged credits')}>
+                                                      {formatCreditsCell(pricing.userCost)}
+                                                      {pricing.multiplier ? (
+                                                          <div className="text-[10px] text-gray-500 mt-0.5">×{Number(pricing.multiplier).toFixed(2)}</div>
+                                                      ) : null}
+                                                  </td>
                                                   <td className={`p-3 text-right font-mono whitespace-nowrap ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                       {txn.amount > 0 ? '+' : ''}{txn.amount}
                                                   </td>
                                                   <td className="p-3 text-right font-mono text-gray-400 whitespace-nowrap">{txn.balance_after}</td>
                                               </tr>
-                                          ))}
+                                              );
+                                          })}
                                       </tbody>
                                   </table>
                             </div>
@@ -8712,561 +8794,7 @@ const UserAdmin = () => {
 
                     {/* PRICING RULES TAB */}
                     {activeTab === 'pricing_rules' && (
-                        <div className="space-y-4">
-                            <div className="flex items-center justify-between gap-2">
-                                <h3 className="text-lg font-bold">{t('计费规则 CRUD（独立页）', 'Pricing Rule CRUD (Dedicated Tab)')}</h3>
-                                <div className="flex items-center gap-2">
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('最小倍率', 'Min Mul')}</span>
-                                        <input
-                                            type="number"
-                                            min="1.1"
-                                            max="2"
-                                            step="0.01"
-                                            value={batchResetMinMultiplier}
-                                            onChange={(e) => setBatchResetMinMultiplier(e.target.value)}
-                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('最大倍率', 'Max Mul')}</span>
-                                        <input
-                                            type="number"
-                                            min="1.1"
-                                            max="2"
-                                            step="0.01"
-                                            value={batchResetMaxMultiplier}
-                                            onChange={(e) => setBatchResetMaxMultiplier(e.target.value)}
-                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('默认倍率', 'Default')}</span>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            value={batchResetDefaultMultiplier}
-                                            onChange={(e) => setBatchResetDefaultMultiplier(e.target.value)}
-                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('分箱(积分)', 'Bin Size')}</span>
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            step="1"
-                                            value={batchResetBinSizeCredits}
-                                            onChange={(e) => setBatchResetBinSizeCredits(e.target.value)}
-                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('每箱降幅', 'Drop/Bin')}</span>
-                                        <input
-                                            type="number"
-                                            min="0.0001"
-                                            step="0.01"
-                                            value={batchResetBinDropMultiplier}
-                                            onChange={(e) => setBatchResetBinDropMultiplier(e.target.value)}
-                                            onBlur={() => saveBillingRuleResetConfig(batchResetMaxIncreaseCredits)}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-14 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-1 rounded border border-white/10 bg-black/30 px-2 py-1">
-                                        <span className="text-[11px] text-gray-300 whitespace-nowrap">{t('单条增幅上限', 'Per-Rule Cap')}</span>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            value={batchResetMaxIncreaseCredits}
-                                            onChange={(e) => setBatchResetMaxIncreaseCredits(e.target.value)}
-                                            onBlur={(e) => saveBillingRuleResetConfig(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    e.preventDefault();
-                                                    saveBillingRuleResetConfig(batchResetMaxIncreaseCredits);
-                                                }
-                                            }}
-                                            disabled={isBatchResetConfigSaving}
-                                            className="w-16 bg-black/50 border border-gray-700 rounded px-1 py-0.5 text-xs text-white"
-                                            title={t('批量重置后，单条规则相对原积分的增幅不得超过该值', 'Per-rule increase over original credits cannot exceed this value')}
-                                        />
-                                        {isBatchResetConfigSaving && <span className="text-[10px] text-gray-400">{t('保存中', 'Saving')}</span>}
-                                    </div>
-                                    <button
-                                        onClick={fetchSystemApiManageRows}
-                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2"
-                                    >
-                                        <RefreshCw size={16} /> {t('刷新 API 列表', 'Refresh API List')}
-                                    </button>
-                                    <button
-                                        onClick={() => fetchBillingRulesForSystemApi(selectedSystemApiId)}
-                                        disabled={isBillingRuleLoading}
-                                        className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
-                                    >
-                                        <RefreshCw size={16} /> {t('刷新规则', 'Refresh Rules')}
-                                    </button>
-                                    <button
-                                        onClick={handleRecomputePriceCache}
-                                        disabled={isPriceCacheRecomputeLoading}
-                                        className="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
-                                        title={t('重算并持久化价格区间与样本均价（写入 system_api_settings）', 'Recompute and persist price range/sample-average into system_api_settings')}
-                                    >
-                                        <Database size={16} /> {isPriceCacheRecomputeLoading ? t('预计算中...', 'Precomputing...') : t('预计算价格缓存', 'Precompute Price Cache')}
-                                    </button>
-                                    <button
-                                        onClick={handleBatchResetBillingRuleChargeMultiplier}
-                                        disabled={isBatchResetMultiplierLoading}
-                                        className="bg-amber-700 hover:bg-amber-600 text-white px-3 py-1 rounded flex items-center gap-2 disabled:opacity-50"
-                                    >
-                                        <RefreshCw size={16} /> {isBatchResetMultiplierLoading ? t('重置中...', 'Resetting...') : t('批量重置倍率', 'Batch Reset Multiplier')}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="text-xs text-gray-400">
-                                {t('共', 'Total')} {billingRuleRows.length} {t('条，当前显示', ', showing')} {filteredBillingRuleRows.length} {t('条', 'items')}
-                            </div>
-
-                            {billingRuleEditToast && (
-                                <div className="rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-                                    {billingRuleEditToast}
-                                </div>
-                            )}
-
-                            <div className="border border-white/10 rounded-lg p-4 bg-black/20 space-y-3">
-                                <label className="text-xs uppercase text-gray-400">{t('筛选 System API 模型', 'Filter by System API Model')}</label>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                    <select
-                                        value={billingRuleApiPickerProvider}
-                                        onChange={(e) => setBillingRuleApiPickerProvider(e.target.value)}
-                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
-                                    >
-                                        <option value="all">{t('全部服务商', 'All Providers')}</option>
-                                        {billingRuleApiPickerProviderOptions.map((value) => (
-                                            <option key={`billing-rule-api-picker-provider-${value}`} value={value}>{value}</option>
-                                        ))}
-                                    </select>
-                                    <select
-                                        value={billingRuleApiPickerCategory}
-                                        onChange={(e) => setBillingRuleApiPickerCategory(e.target.value)}
-                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
-                                    >
-                                        <option value="all">{t('全部类型', 'All Categories')}</option>
-                                        {billingRuleApiPickerCategoryOptions.map((value) => (
-                                            <option key={`billing-rule-api-picker-category-${value}`} value={value}>{value}</option>
-                                        ))}
-                                    </select>
-                                    <select
-                                        value={billingRuleApiPickerBaseModel}
-                                        onChange={(e) => setBillingRuleApiPickerBaseModel(e.target.value)}
-                                        className="bg-black/40 border border-gray-700 rounded p-2 text-xs"
-                                    >
-                                        <option value="all">{t('全部基础模型', 'All Base Models')}</option>
-                                        {billingRuleApiPickerBaseModelOptions.map((value) => (
-                                            <option key={`billing-rule-api-picker-base-model-${value}`} value={value}>{value}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="text-[11px] text-gray-400">
-                                    {t('API 候选：', 'API candidates:')} {filteredBillingRuleApiPickerRows.length}
-                                </div>
-                                <select
-                                    value={selectedSystemApiId}
-                                    onChange={(e) => {
-                                        setSelectedSystemApiId(e.target.value);
-                                        setIsBillingRuleEditing(false);
-                                    }}
-                                    className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm"
-                                >
-                                    <option value="">{t('全部 API（默认）', 'All APIs (Default)')}</option>
-                                    {filteredBillingRuleApiPickerRows.map((row) => (
-                                        <option key={row.id} value={row.id}>
-                                            [{row.category}] {row.provider} / {row.model || '-'} (ID:{row.id})
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="border border-sky-500/30 rounded-lg p-4 bg-sky-500/5 space-y-3">
-                                <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                                    <input
-                                        value={billingRuleFilterKeyword}
-                                        onChange={(e) => setBillingRuleFilterKeyword(e.target.value)}
-                                        placeholder={t('关键词（名称/描述/模式）', 'Keyword (name/description/mode)')}
-                                        className="md:col-span-2 bg-black/40 border border-gray-700 rounded p-2 text-xs"
-                                    />
-                                    <select value={billingRuleFilterStatus} onChange={(e) => setBillingRuleFilterStatus(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                        <option value="all">{t('全部状态', 'All Status')}</option>
-                                        <option value="active">{t('启用', 'Active')}</option>
-                                        <option value="inactive">{t('停用', 'Inactive')}</option>
-                                    </select>
-                                    <select value={billingRuleFilterTarget} onChange={(e) => setBillingRuleFilterTarget(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                        <option value="all">{t('全部目标', 'All Targets')}</option>
-                                        <option value="text">Text</option>
-                                        <option value="image">Image</option>
-                                        <option value="video">Video</option>
-                                    </select>
-                                    <select value={billingRuleFilterUnitType} onChange={(e) => setBillingRuleFilterUnitType(e.target.value)} className="bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                        <option value="all">{t('全部计费单位', 'All Units')}</option>
-                                        <option value="per_call">per_call</option>
-                                        <option value="per_second">per_second</option>
-                                        <option value="per_minute">per_minute</option>
-                                        <option value="per_token">per_token</option>
-                                        <option value="per_1k_tokens">per_1k_tokens</option>
-                                        <option value="per_million_tokens">per_million_tokens</option>
-                                    </select>
-                                </div>
-
-                                {isBillingRuleLoading ? (
-                                    <div className="text-xs text-gray-400">{t('定价规则加载中...', 'Loading pricing rules...')}</div>
-                                ) : (
-                                    <>
-                                    <div className="md:hidden space-y-2">
-                                        {filteredBillingRuleRows.map((row) => {
-                                            const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(row?.system_api_id));
-                                            const apiLabel = apiRow ? `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'}` : `ID:${row?.system_api_id || '-'}`;
-                                            const isSelected = String(selectedBillingRuleId) === String(row.id);
-                                            return (
-                                                <button
-                                                    key={`billing-rule-card-${row.id}`}
-                                                    type="button"
-                                                    onClick={() => setSelectedBillingRuleId(String(row.id))}
-                                                    onDoubleClick={() => {
-                                                        setSelectedBillingRuleId(String(row.id));
-                                                        setIsBillingRuleEditing(true);
-                                                        showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
-                                                    }}
-                                                    className={`w-full rounded-lg border p-3 text-left space-y-2 transition-colors ${isSelected ? 'border-sky-400/40 bg-sky-500/10' : 'border-white/10 bg-black/20 hover:bg-white/5'}`}
-                                                >
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="min-w-0">
-                                                            <div className="font-semibold text-sm text-white">#{row.id} {row.name || '-'}</div>
-                                                            <div className="text-[11px] text-gray-400 mt-1 break-words">{apiLabel}</div>
-                                                        </div>
-                                                        <span className={`shrink-0 rounded px-2 py-1 text-[11px] ${row.is_active ? 'bg-emerald-500/20 text-emerald-300' : 'bg-gray-700 text-gray-300'}`}>
-                                                            {row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}
-                                                        </span>
-                                                    </div>
-                                                    <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-300">
-                                                        <div className="rounded bg-black/20 px-2 py-1.5">
-                                                            <div className="text-gray-500 mb-1">{t('优先级', 'Priority')}</div>
-                                                            <div>{row.priority ?? 0}</div>
-                                                        </div>
-                                                        <div className="rounded bg-black/20 px-2 py-1.5">
-                                                            <div className="text-gray-500 mb-1">{t('计费单位', 'Billing Unit')}</div>
-                                                            <div>{row?.billing_unit_type || 'per_call'}</div>
-                                                        </div>
-                                                        <div className="rounded bg-black/20 px-2 py-1.5">
-                                                            <div className="text-gray-500 mb-1">billing_cost</div>
-                                                            <div>{toNonNegativeInt(row?.billing_cost ?? 0)}</div>
-                                                        </div>
-                                                        <div className="rounded bg-black/20 px-2 py-1.5">
-                                                            <div className="text-gray-500 mb-1">charge_multiplier</div>
-                                                            <div>{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex flex-wrap gap-2 text-[11px] text-gray-400">
-                                                        <span className="rounded bg-white/5 px-2 py-1">T: {row?.applies_to_text ? t('是', 'Yes') : t('否', 'No')}</span>
-                                                        <span className="rounded bg-white/5 px-2 py-1">I: {row?.applies_to_image ? t('是', 'Yes') : t('否', 'No')}</span>
-                                                        <span className="rounded bg-white/5 px-2 py-1">V: {row?.applies_to_video ? t('是', 'Yes') : t('否', 'No')}</span>
-                                                        <span className="rounded bg-white/5 px-2 py-1">mode: {row?.generation_mode || '-'}</span>
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
-                                        {filteredBillingRuleRows.length === 0 && (
-                                            <div className="rounded border border-white/10 px-3 py-4 text-gray-400 text-xs">{t('无匹配规则', 'No matching rules')}</div>
-                                        )}
-                                    </div>
-                                    <div className="hidden md:block overflow-x-auto max-h-[320px] border border-white/10 rounded">
-                                        <table className="w-full text-xs min-w-[1480px]">
-                                            <thead className="bg-white/5 text-gray-400 sticky top-0">
-                                                <tr>
-                                                    <th className="text-left p-2">ID</th>
-                                                    <th className="text-left p-2">API</th>
-                                                    <th className="text-left p-2">{t('名称', 'Name')}</th>
-                                                    <th className="text-left p-2">{t('状态', 'Status')}</th>
-                                                    <th className="text-left p-2">{t('优先级', 'Priority')}</th>
-                                                    <th className="text-left p-2">T</th>
-                                                    <th className="text-left p-2">I</th>
-                                                    <th className="text-left p-2">V</th>
-                                                    <th className="text-left p-2">generation_mode</th>
-                                                    <th className="text-left p-2">input_format</th>
-                                                    <th className="text-left p-2">output_format</th>
-                                                    <th className="text-left p-2">has_audio</th>
-                                                    <th className="text-left p-2">billing_unit_type</th>
-                                                    <th className="text-left p-2">billing_cost</th>
-                                                    <th className="text-left p-2">billing_cost_input</th>
-                                                    <th className="text-left p-2">billing_cost_output</th>
-                                                    <th className="text-left p-2">charge_multiplier</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {filteredBillingRuleRows.map((row) => {
-                                                    const apiRow = systemApiRows.find((api) => Number(api?.id) === Number(row?.system_api_id));
-                                                    const apiLabel = apiRow ? `[${apiRow.category}] ${apiRow.provider}/${apiRow.model || '-'}` : `ID:${row?.system_api_id || '-'}`;
-                                                    return (
-                                                        <tr
-                                                            key={row.id}
-                                                            onClick={() => setSelectedBillingRuleId(String(row.id))}
-                                                            onDoubleClick={() => {
-                                                                setSelectedBillingRuleId(String(row.id));
-                                                                setIsBillingRuleEditing(true);
-                                                                showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
-                                                            }}
-                                                            className={`border-t border-white/10 cursor-pointer ${String(selectedBillingRuleId) === String(row.id) ? 'bg-sky-500/10' : 'hover:bg-white/5'}`}
-                                                        >
-                                                            <td className="p-2">{row.id}</td>
-                                                            <td className="p-2 max-w-[260px] truncate" title={apiLabel}>{apiLabel}</td>
-                                                            <td className="p-2">{row.name || '-'}</td>
-                                                            <td className="p-2">{row.is_active ? t('启用', 'Active') : t('停用', 'Inactive')}</td>
-                                                            <td className="p-2">{row.priority ?? 0}</td>
-                                                            <td className="p-2">{row?.applies_to_text ? t('是', 'Yes') : t('否', 'No')}</td>
-                                                            <td className="p-2">{row?.applies_to_image ? t('是', 'Yes') : t('否', 'No')}</td>
-                                                            <td className="p-2">{row?.applies_to_video ? t('是', 'Yes') : t('否', 'No')}</td>
-                                                            <td className="p-2">{row?.generation_mode || '-'}</td>
-                                                            <td className="p-2">{row?.input_format || '-'}</td>
-                                                            <td className="p-2">{row?.output_format || '-'}</td>
-                                                            <td className="p-2">{row?.has_audio === null || row?.has_audio === undefined ? '-' : (row?.has_audio ? t('是', 'Yes') : t('否', 'No'))}</td>
-                                                            <td className="p-2">{row?.billing_unit_type || 'per_call'}</td>
-                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost ?? 0)}</td>
-                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_input ?? 0)}</td>
-                                                            <td className="p-2">{toNonNegativeInt(row?.billing_cost_output ?? 0)}</td>
-                                                            <td className="p-2">{toRuleChargeMultiplier(row?.charge_multiplier, 2).toFixed(2)}</td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                                {filteredBillingRuleRows.length === 0 && (
-                                                    <tr className="border-t border-white/10">
-                                                        <td className="p-3 text-gray-400" colSpan={17}>{t('无匹配规则', 'No matching rules')}</td>
-                                                    </tr>
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                    </>
-                                )}
-
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        onClick={() => {
-                                            if (!selectedSystemApiId) {
-                                                alert(t('请先选择一个 System API', 'Select a System API first'));
-                                                return;
-                                            }
-                                            setSelectedBillingRuleId('');
-                                            setBillingRuleForm(createEmptyBillingRuleForm());
-                                            setIsBillingRuleEditing(true);
-                                            showBillingRuleEditToast(t('已进入新建规则编辑', 'Entered new rule editor'));
-                                        }}
-                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs"
-                                    >
-                                        {t('新建规则', 'New Rule')}
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            if (!selectedBillingRuleId) {
-                                                alert(t('请先双击一条规则', 'Double-click a rule first'));
-                                                return;
-                                            }
-                                            setIsBillingRuleEditing(true);
-                                            showBillingRuleEditToast(t('已进入规则编辑模式', 'Entered rule edit mode'));
-                                        }}
-                                        className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded text-xs"
-                                    >
-                                        {t('编辑选中', 'Edit Selected')}
-                                    </button>
-                                </div>
-                            </div>
-
-                            {!isBillingRuleEditing && (
-                                <div className="border border-white/10 rounded-lg p-4 bg-black/20 text-sm text-gray-300">
-                                    {t('先在列表中双击一条规则进行编辑，或点击“新建规则”。', 'Double-click a rule in the list to edit, or click "New Rule".')}
-                                </div>
-                            )}
-
-                            {isBillingRuleEditing && (
-                            <div
-                                className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[1px] flex items-center justify-center p-4"
-                                onClick={() => setIsBillingRuleEditing(false)}
-                            >
-                            <div
-                                className="w-full max-w-4xl max-h-[88vh] overflow-y-auto border border-white/15 rounded-xl p-4 bg-[#0d0f14] space-y-3 shadow-2xl"
-                                onClick={(e) => e.stopPropagation()}
-                            >
-                                <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
-                                    <h4 className="text-sm font-bold text-sky-200">
-                                        {selectedBillingRuleId ? t('编辑计费规则', 'Edit Pricing Rule') : t('新建计费规则', 'Create Pricing Rule')}
-                                    </h4>
-                                    <button
-                                        onClick={() => setIsBillingRuleEditing(false)}
-                                        className="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white text-xs"
-                                    >
-                                        {t('关闭', 'Close')}
-                                    </button>
-                                </div>
-
-                                <div className="text-xs text-gray-400">
-                                    {t('绑定 API', 'Bound API')}: {selectedBillingRuleApiLabel}
-                                </div>
-
-                                {selectedBillingRuleRow && (
-                                    <div className="border border-white/10 rounded-lg p-3 bg-black/20 space-y-2">
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
-                                            <div><span className="text-gray-400">Rule ID:</span> <span className="text-white">{selectedBillingRuleRow.id}</span></div>
-                                            <div><span className="text-gray-400">System API ID:</span> <span className="text-white">{selectedBillingRuleRow.system_api_id || '-'}</span></div>
-                                            <div><span className="text-gray-400">Created:</span> <span className="text-white">{selectedBillingRuleRow.created_at || '-'}</span></div>
-                                            <div><span className="text-gray-400">Updated:</span> <span className="text-white">{selectedBillingRuleRow.updated_at || '-'}</span></div>
-                                        </div>
-                                        <div>
-                                            <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">{t('当前规则完整信息', 'Current Rule Full Payload')}</div>
-                                            <pre className="max-h-44 overflow-auto bg-black/40 border border-gray-700 rounded p-2 text-[11px] text-gray-200 whitespace-pre-wrap break-all font-mono">
-{JSON.stringify(selectedBillingRuleRow, null, 2)}
-                                            </pre>
-                                        </div>
-                                    </div>
-                                )}
-
-                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('基础信息', 'Basic')}</summary>
-                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
-                                        <RuleField label="name">
-                                            <input value={billingRuleForm.name} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, name: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="description">
-                                            <input value={billingRuleForm.description} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, description: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="priority">
-                                            <input type="number" value={billingRuleForm.priority} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, priority: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="is_active">
-                                            <select value={billingRuleForm.is_active ? 'active' : 'inactive'} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, is_active: e.target.value === 'active' }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                                <option value="active">{t('启用', 'Active')}</option>
-                                                <option value="inactive">{t('停用', 'Inactive')}</option>
-                                            </select>
-                                        </RuleField>
-                                    </div>
-                                </details>
-
-                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('匹配条件', 'Matching')}</summary>
-                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
-                                        <RuleField label="generation_mode">
-                                            <input value={billingRuleForm.generation_mode} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, generation_mode: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="input_format">
-                                            <input value={billingRuleForm.input_format} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_format: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="output_format">
-                                            <input value={billingRuleForm.output_format} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_format: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" />
-                                        </RuleField>
-                                        <RuleField label="has_audio">
-                                            <select value={billingRuleForm.has_audio} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, has_audio: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                                <option value="any">any</option>
-                                                <option value="true">true</option>
-                                                <option value="false">false</option>
-                                            </select>
-                                        </RuleField>
-                                    </div>
-                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_text} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_text: e.target.checked }))} /> Text</label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_image} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_image: e.target.checked }))} /> Image</label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" checked={!!billingRuleForm.applies_to_video} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, applies_to_video: e.target.checked }))} /> Video</label>
-                                    </div>
-                                </details>
-
-                                <details open className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('计费参数', 'Pricing')}</summary>
-                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
-                                        <RuleField label="billing_unit_type">
-                                            <select value={billingRuleForm.billing_unit_type} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_unit_type: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs">
-                                                <option value="per_call">per_call</option>
-                                                <option value="per_second">per_second</option>
-                                                <option value="per_minute">per_minute</option>
-                                                <option value="per_token">per_token</option>
-                                                <option value="per_1k_tokens">per_1k_tokens</option>
-                                                <option value="per_million_tokens">per_million_tokens</option>
-                                            </select>
-                                        </RuleField>
-                                        <RuleField label="billing_cost"><input type="number" value={billingRuleForm.billing_cost} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="billing_cost_input"><input type="number" value={billingRuleForm.billing_cost_input} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_input: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="billing_cost_output"><input type="number" value={billingRuleForm.billing_cost_output} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, billing_cost_output: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="charge_multiplier"><input type="number" step="0.01" value={billingRuleForm.charge_multiplier} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, charge_multiplier: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                    </div>
-                                </details>
-
-                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('文本维度', 'Text Dimensions')}</summary>
-                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
-                                        <RuleField label="input_tokens_min"><input type="number" value={billingRuleForm.input_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="input_tokens_max"><input type="number" value={billingRuleForm.input_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, input_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="output_tokens_min"><input type="number" value={billingRuleForm.output_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="output_tokens_max"><input type="number" value={billingRuleForm.output_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, output_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="total_tokens_min"><input type="number" value={billingRuleForm.total_tokens_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="total_tokens_max"><input type="number" value={billingRuleForm.total_tokens_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, total_tokens_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                    </div>
-                                </details>
-
-                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('图像维度', 'Image Dimensions')}</summary>
-                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
-                                        <RuleField label="image_count_min"><input type="number" value={billingRuleForm.image_count_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, image_count_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="image_count_max"><input type="number" value={billingRuleForm.image_count_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, image_count_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="width_min"><input type="number" value={billingRuleForm.width_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, width_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="width_max"><input type="number" value={billingRuleForm.width_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, width_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="height_min"><input type="number" value={billingRuleForm.height_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, height_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="height_max"><input type="number" value={billingRuleForm.height_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, height_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="pixels_min"><input type="number" value={billingRuleForm.pixels_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, pixels_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="pixels_max"><input type="number" value={billingRuleForm.pixels_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, pixels_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                    </div>
-                                </details>
-
-                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('视频维度', 'Video Dimensions')}</summary>
-                                    <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-                                        <RuleField label="duration_seconds_min"><input type="number" step="0.1" value={billingRuleForm.duration_seconds_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, duration_seconds_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="duration_seconds_max"><input type="number" step="0.1" value={billingRuleForm.duration_seconds_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, duration_seconds_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="fps_min"><input type="number" step="0.1" value={billingRuleForm.fps_min} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, fps_min: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                        <RuleField label="fps_max"><input type="number" step="0.1" value={billingRuleForm.fps_max} onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, fps_max: e.target.value }))} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs" /></RuleField>
-                                    </div>
-                                </details>
-
-                                <details className="border border-white/10 rounded-lg p-3 bg-black/20">
-                                    <summary className="cursor-pointer text-xs text-sky-200 font-semibold">{t('扩展条件', 'Extra Conditions')}</summary>
-                                    <div className="mt-3">
-                                        <label className="block text-xs text-gray-400 mb-1">extra_conditions (JSON)</label>
-                                        <textarea
-                                            rows={3}
-                                            value={billingRuleForm.extra_conditions_text}
-                                            onChange={(e) => setBillingRuleForm((prev) => ({ ...prev, extra_conditions_text: e.target.value }))}
-                                            className="w-full bg-black/40 border border-gray-700 rounded p-2 text-xs font-mono"
-                                        />
-                                    </div>
-                                </details>
-
-                                <div className="flex flex-wrap gap-2 pt-2 border-t border-white/10">
-                                    <button onClick={handleCreateBillingRule} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs">{t('创建', 'Create')}</button>
-                                    <button onClick={handleUpdateBillingRule} disabled={!selectedBillingRuleId} className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded text-xs">{t('更新', 'Update')}</button>
-                                    <button onClick={handleDeleteBillingRule} disabled={!selectedBillingRuleId && selectedBillingRuleIds.length === 0} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold rounded text-xs">{selectedBillingRuleIds.length > 1 ? t('批量删除', 'Delete Selected') : t('删除', 'Delete')}</button>
-                                    <button onClick={() => setBillingRuleForm(createEmptyBillingRuleForm())} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded text-xs">{t('清空表单', 'Clear Form')}</button>
-                                    <button onClick={() => setIsBillingRuleEditing(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded text-xs">{t('完成编辑', 'Done Editing')}</button>
-                                </div>
-                            </div>
-                            </div>
-                            )}
-                        </div>
+                        <PricingRulesTab />
                     )}
 
                     {activeTab === 'oss_pools' && (

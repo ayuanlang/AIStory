@@ -7,7 +7,7 @@ import { getUiLang, tUI } from '../lib/uiLang';
 const LogPanel = () => {
     const uiLang = getUiLang();
     const t = (zh, en) => tUI(uiLang, zh, en);
-    const { logs, isLogOpen, setIsLogOpen, clearLogs } = useLog();
+    const { logs, isLogOpen, setIsLogOpen, clearLogs, isLoadingHistory } = useLog();
 
     return (
         <>
@@ -32,6 +32,11 @@ const LogPanel = () => {
                 <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-white/5 shrink-0 h-10">
                     <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-2">
                         <ScrollText className="w-3 h-3" /> {t('系统日志', 'System Logs')} <span className="text-[10px] opacity-50">({logs.length})</span>
+                        {isLoadingHistory ? (
+                            <span className="text-[10px] font-normal normal-case opacity-60">
+                                {t('正在读取…', 'Loading…')}
+                            </span>
+                        ) : null}
                     </span>
                     <div className="flex gap-2 items-center">
                             <button onClick={clearLogs} className="p-1 hover:bg-white/10 rounded text-muted-foreground hover:text-red-400 transition-colors" title={t('清空日志', 'Clear Logs')}>
@@ -46,7 +51,9 @@ const LogPanel = () => {
                 <div className="flex-1 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-muted-foreground custom-scrollbar space-y-1.5">
                     {logs.length === 0 && (
                         <div className="h-full flex items-center justify-center text-muted-foreground/30 italic">
-                            {t('暂无日志。', 'No active logs.')}
+                            {isLoadingHistory
+                                ? t('正在读取已有日志…', 'Loading existing logs…')
+                                : t('暂无日志。', 'No active logs.')}
                         </div>
                     )}
                     {logs.map((log, i) => (

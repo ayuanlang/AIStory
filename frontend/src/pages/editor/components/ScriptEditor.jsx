@@ -10,7 +10,7 @@ import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -1588,14 +1588,14 @@ const runAnalysisPipelineIntegrityGate = async ({
     const resolvedSubjectIndex = String(subjectIndexText || '').trim();
 
     if (!resolvedSubjectIndex) {
-        failures.push(t('Subject Index 未生成或未持久化', 'Subject Index was not generated or persisted'));
+        failures.push(t('资产清单尚未生成或尚未保存', 'Asset inventory was not generated or saved'));
     }
 
     const expected = Math.max(1, Number(expectedSceneCount) || 0);
     onLog?.(
         t(
-            `[Integrity Gate] 开始检查：期望 ${expected} 场入库，Subject Index ${resolvedSubjectIndex.length} 字符`,
-            `[Integrity Gate] Starting checks: expecting ${expected} scene(s) in workspace, Subject Index ${resolvedSubjectIndex.length} chars`
+            `开始本集齐套检查：期望入库 ${expected} 场，资产清单已准备就绪`,
+            `Starting episode readiness check: expecting ${expected} scene(s) imported; asset inventory is ready`
         ),
         'info'
     );
@@ -1652,12 +1652,16 @@ const runAnalysisPipelineIntegrityGate = async ({
                 'Visual asset subtasks completed but no assets were imported in this run'
             ));
         } else if (subtaskReports.length > 0 && okSubtaskCount <= 0 && handledAssets <= 0) {
-            const entities = await fetchEntitiesFn(projectId).catch(() => []);
-            const entityCount = Array.isArray(entities) ? entities.length : 0;
-            if (entityCount <= 0) {
+            const entities = await fetchEntitiesFn(projectId, {
+                episode_id: Number(episodeId) || undefined,
+            }).catch(() => []);
+            const episodeScoped = (Array.isArray(entities) ? entities : []).filter(
+                (entity) => String(entity?.episode_id || '').trim() === String(episodeId || '').trim()
+            );
+            if (episodeScoped.length <= 0) {
                 failures.push(t(
-                    '资产设计已完成但未检测到项目实体记录',
-                    'Visual asset generation finished but no project entities were found'
+                    '资产设计已完成但未检测到本集实体记录',
+                    'Visual asset generation finished but no entities were found for this episode'
                 ));
             }
         }
@@ -1665,17 +1669,17 @@ const runAnalysisPipelineIntegrityGate = async ({
 
     if (failures.length > 0) {
         const message = failures.filter(Boolean).join('；');
-        onLog?.(`[Integrity Gate] ${message}`, 'error');
+        onLog?.(t(`本集齐套检查未通过：${message}`, `Episode readiness check failed: ${message}`), 'error');
         throw new Error(t(
-            `分析管线完整性检查未通过：${message}`,
-            `Analysis pipeline integrity check failed: ${message}`
+            `本集齐套检查未通过：${message}`,
+            `Episode readiness check failed: ${message}`
         ));
     }
 
     onLog?.(
         t(
-            `[Integrity Gate] 完整性检查通过：${dbSceneCount} 场已入库，资产清单与资产设计任务均已完成。`,
-            `[Integrity Gate] Integrity check passed: ${dbSceneCount} scene(s) in workspace; Subject Index and visual asset tasks completed.`
+            `本集齐套检查通过：已入库 ${dbSceneCount} 场，资产清单与资产设计均已完成。`,
+            `Episode readiness check passed: ${dbSceneCount} scene(s) imported; asset inventory and asset design are complete.`
         ),
         'success'
     );
@@ -1794,6 +1798,95 @@ const getAnalysisStageLabel = (stepKey, tFn) => {
     return typeof tFn === 'function' ? tFn(meta.zh, meta.en) : meta.zh;
 };
 
+/** Soften technical pipeline logs for the system log / progress history. */
+const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
+    let text = String(rawMessage || '').trim();
+    if (!text) return '';
+    const t = typeof tFn === 'function' ? tFn : (zh) => zh;
+
+    // Drop ultra-noisy internal writeback / debug lines from the user-facing stream.
+    if (/^\[(?:Analysis Writeback|Stage2\.2 Debug|Stage 3 Debug|Asset Gen Tracking)\]/i.test(text)) {
+        return '';
+    }
+
+    const replacements = [
+        [/\[Integrity Gate\]/gi, t('[齐套检查]', '[Readiness check]')],
+        [/\[Analysis Resume\]/gi, t('[继续分析]', '[Resume analysis]')],
+        [/\[Auto Zero Report Rerun\]/gi, t('[自动补齐]', '[Auto refill]')],
+        [/\[Scene Units Sync\]/gi, t('[场景同步]', '[Scene sync]')],
+        [/\[Stage 2 Asset Index\]/gi, t('[资产清单]', '[Asset inventory]')],
+        [/\[Stage 1 Adapted Script\]/gi, t('[剧本统筹]', '[Script coordination]')],
+        [/\[Stage 3 Asset Design\]/gi, t('[资产设计]', '[Asset design]')],
+        [/\[Stage\s*2\.1\]/gi, t('[资产清单]', '[Asset inventory]')],
+        [/\[Stage\s*2\.2\]/gi, t('[场景编排]', '[Scene orchestration]')],
+        [/\[Stage\s*3\]/gi, t('[资产设计]', '[Asset design]')],
+        [/\[Stage\s*1\]/gi, t('[剧本统筹]', '[Script coordination]')],
+        [/\bStage\s*2\.1\b/gi, t('资产清单', 'asset inventory')],
+        [/\bStage\s*2\.2\b/gi, t('场景编排', 'scene orchestration')],
+        [/\bStage\s*3\b/gi, t('资产设计', 'asset design')],
+        [/\bStage\s*1\b/gi, t('剧本统筹', 'script coordination')],
+        [/\bSubject Index\b/gi, t('资产清单', 'asset inventory')],
+        [/\bscene_markdown_by_scene\b/gi, t('分场场景编排', 'per-scene orchestration')],
+        [/\bscene_markdown\b/gi, t('场景编排内容', 'scene orchestration content')],
+        [/\bscript_optimization\b/gi, t('剧本统筹', 'script coordination')],
+        [/\bassets_extraction\b/gi, t('资产清单', 'asset inventory')],
+        [/\basset_design_environment\b/gi, t('环境资产设计', 'environment asset design')],
+        [/\basset_design_character\b/gi, t('角色资产设计', 'character asset design')],
+        [/\basset_design_prop\b/gi, t('道具资产设计', 'prop asset design')],
+        [/\basset_design(?:_json)?\b/gi, t('资产设计结果', 'asset design result')],
+        [/\bstoryboard_generation\b/gi, t('分镜生成', 'storyboard generation')],
+        [/\bscene_beats\b/gi, t('场景编排', 'scene orchestration')],
+        [/\bcover_poster\b/gi, t('封面海报', 'cover poster')],
+        [/\bsubjects[_\s-]?json\b/gi, t('资产结构化结果', 'asset structured result')],
+        [/\bScenes Table\b/gi, t('场景表', 'scenes table')],
+        [/\bScene ID\b/gi, t('场景编号', 'scene ID')],
+        [/\bBeats\b/g, t('节拍', 'beats')],
+        [/\bLLM\b/gi, t('AI', 'AI')],
+        [/\bJSON\b/g, t('结构化结果', 'structured result')],
+        [/\bAPI\b/g, t('服务接口', 'service')],
+        [/Persisting clean .+ immediately after return\.\.\./i, t('正在保存资产清单…', 'Saving asset inventory...')],
+        [/Persisting per-scene .+ immediately after parallel beats return\.\.\./i, t('正在保存各场场景编排结果…', 'Saving per-scene orchestration...')],
+        [/Submitting .+ \(Asset Extraction\)\.\.\./i, t('正在生成资产清单…', 'Generating asset inventory...')],
+        [/Cleared existing episode scenes before .+\./i, t('已清空本集旧场景，准备重新导入。', 'Cleared previous scenes in this episode before re-import.')],
+        [/Pre-import .+ purge warning:/i, t('导入前清理提示：', 'Pre-import cleanup notice:')],
+        [/Failed to persist clean .+:/i, t('保存资产清单失败：', 'Failed to save asset inventory:')],
+        [/Failed to save asset index edit:/i, t('保存资产清单修改失败：', 'Failed to save asset inventory edits:')],
+        [/Failed to save adapted script edit:/i, t('保存剧本统筹修改失败：', 'Failed to save script coordination edits:')],
+        [/Failed to save per-scene scene markdown:/i, t('保存分场场景编排失败：', 'Failed to save per-scene orchestration:')],
+        [/Failed to clear per-scene scene markdown:/i, t('清理分场场景编排失败：', 'Failed to clear per-scene orchestration:')],
+        [/Saved manual edit \(len=\d+\)/i, t('已保存手动修改。', 'Manual edits saved.')],
+        [/Saved manual beats edit \(len=\d+\)/i, t('已保存剧本统筹修改。', 'Script coordination edits saved.')],
+        [/Scene markdown precheck skipped:/i, t('场景编排预检已跳过：', 'Scene orchestration precheck skipped:')],
+        [/Scene markdown precheck passed:/i, t('场景编排预检通过：', 'Scene orchestration precheck passed:')],
+        [/Scene markdown repair:/i, t('场景编排修复：', 'Scene orchestration repair:')],
+        [/backend scene orchestration enabled:/i, t('已启用按场场景编排：', 'Per-scene orchestration enabled:')],
+        [/Skipped duplicate Stage 3 asset-design trigger/i, t('已跳过重复的资产设计触发', 'Skipped duplicate asset-design trigger')],
+        [/Cleared stale phase-2 marker/i, t('已清理过期的资产设计标记', 'Cleared stale asset-design marker')],
+        [/Cleared stale scene_beats marker/i, t('已清理过期的场景编排标记', 'Cleared stale scene-orchestration marker')],
+        [/未生成或未持久化/g, t('尚未生成或尚未保存', 'was not generated or saved')],
+        [/完整性检查通过/g, t('齐套检查通过', 'readiness check passed')],
+        [/分析管线完整性检查未通过/g, t('本集齐套检查未通过', 'episode readiness check failed')],
+    ];
+
+    replacements.forEach(([pattern, value]) => {
+        text = text.replace(pattern, value);
+    });
+
+    // Soften leftover "field=xxx len=yyy" style fragments.
+    text = text
+        .replace(/\bfield=\S+/gi, '')
+        .replace(/\braw_len=\d+/gi, '')
+        .replace(/\badaptation_len=\d+/gi, '')
+        .replace(/\bsubject_index_len=\d+/gi, '')
+        .replace(/\bbundle_len=\d+/gi, '')
+        .replace(/\bmerged_chars=\d+/gi, '')
+        .replace(/\bsource=\S+/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+    return text;
+};
+
 const normalizeAnalysisLivePhase = (phase) => {
     const key = String(phase || '').trim().toLowerCase();
     if (key === 'supplement') return 'assets_gen';
@@ -1860,6 +1953,7 @@ import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
 import MarkdownHelpModal from './MarkdownHelpModal';
+import AiDiagnosisModal from './AiDiagnosisModal';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -1898,7 +1992,7 @@ import {
 // RefineControl moved to components/RefineControl.jsx
 import { processPrompt } from '../../../lib/promptUtils';
 import SettingsPage from '../../Settings';
-import { confirmUiMessage, promptUiMessage } from '../../../lib/uiMessage';
+import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../../../lib/uiMessage';
 
 // Character Canon (Authoritative) generator (shared)
 
@@ -2035,6 +2129,7 @@ const createSkippedSubjectConsistencyReport = () => ({
 
 export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript, onUpdateEpisodeInfo, onRefreshEpisodes, onLog: parentOnLog, onImportText, onSwitchToScenes, assetRerunRequest = null, onAssetRerunRequestConsumed = null, uiLang = 'zh', tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const { logs: systemPanelLogs } = useLog();
     const parentOnLogRef = useRef(parentOnLog);
     parentOnLogRef.current = parentOnLog;
     const analysisDetailLogsRef = useRef([]);
@@ -2072,11 +2167,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const onLog = useCallback((message, type = 'info') => {
+        const businessMessage = toBusinessAnalysisLogMessage(message, t);
+        if (!businessMessage) return;
         if (captureAnalysisLogRef.current()) {
-            appendAnalysisDetailLog(message, type);
+            appendAnalysisDetailLog(businessMessage, type);
         }
-        parentOnLogRef.current?.(message, type);
-    }, [appendAnalysisDetailLog]);
+        parentOnLogRef.current?.(businessMessage, type);
+    }, [appendAnalysisDetailLog, t]);
     const functionApiConfigs = useFunctionApis('script_analysis');
     const [selectedScriptAnalysisApiId, setSelectedScriptAnalysisApiId] = useState(() => {
         return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
@@ -2202,6 +2299,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isRecomputingEpisodeCost, setIsRecomputingEpisodeCost] = useState(false);
     const [showAnalysisModal, setShowAnalysisModal] = useState(false);
     const [manualModalOpen, setManualModalOpen] = useState(false);
+    const [aiDiagnosisOpen, setAiDiagnosisOpen] = useState(false);
+    const [aiDiagnosisWorkspaceSummary, setAiDiagnosisWorkspaceSummary] = useState('');
     const [analysisModalMode, setAnalysisModalMode] = useState('stage1');
     const [subjectIndexText, setSubjectIndexText] = useState('');
     const [adaptationText, setAdaptationText] = useState('');
@@ -2851,7 +2950,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [diagnosticImportingKind, setDiagnosticImportingKind] = useState('');
     const [stageArtifactEditModal, setStageArtifactEditModal] = useState({
         open: false,
-        kind: '', // script_opt | subject_index
+        kind: '', // script_opt | subject_index | scene_beats
         titleZh: '',
         titleEn: '',
         hintZh: '',
@@ -2859,6 +2958,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         content: '',
         editing: false,
         saving: false,
+        sceneId: '',
+        scenes: [], // [{ sceneId, sceneOrder, displayLabel, markdown }]
+        headers: [], // scene_beats: Scenes Table headers
+        fields: {}, // scene_beats: { [header]: value }
     });
     const [postAnalysisCheckModal, setPostAnalysisCheckModal] = useState({
         open: false,
@@ -3110,25 +3213,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return map[key] || key || t('步骤', 'Step');
     }, [t]);
 
-    const toBusinessHistoryMessage = useCallback((rawMessage) => {
-        let text = String(rawMessage || '').trim();
-        if (!text) return '';
-        const replacements = [
-            [/\bLLM\b/gi, t('AI引擎', 'AI engine')],
-            [/\bSubject Index\b/gi, t('角色/道具/场景清单', 'Character/prop/environment list')],
-            [/\bscene_markdown\b/gi, t('场景编排内容', 'scene orchestration content')],
-            [/\bscript_optimization\b/gi, t('剧本统筹阶段', 'script coordination stage')],
-            [/\bassets_extraction\b/gi, t('资产清单阶段', 'asset inventory stage')],
-            [/\bcover_poster\b/gi, t('封面海报', 'cover poster')],
-            [/\bproject_visual_backfill\b/gi, t('项目视觉基调信息', 'project visual baseline info')],
-            [/\bJSON\b/g, t('结构化结果', 'structured result')],
-            [/\bAPI\b/g, t('服务接口', 'service API')],
-        ];
-        replacements.forEach(([pattern, value]) => {
-            text = text.replace(pattern, value);
-        });
-        return text;
-    }, [t]);
+    const toBusinessHistoryMessage = useCallback((rawMessage) => (
+        toBusinessAnalysisLogMessage(rawMessage, t)
+    ), [t]);
 
     const formatHistoryClock = useCallback((value) => {
         const num = Number(value);
@@ -3176,7 +3263,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 if (prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed') return prev;
                 return {
                     phase: 'completed',
-                    message: prevMessage || t('🎉 剧本分析与场景构建已完成，快来看看吧！', 'Analysis and import completed.'),
+                    message: prevMessage || t('🎉 剧本分析与场景构建已完成。', 'Analysis and import completed.'),
                 };
             }
 
@@ -3213,7 +3300,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             return t('AI Script Analysis 检测到结构片段损坏。', 'AI Script Analysis detected invalid structured fragments.');
         }
         if (normalized === 'ANALYSIS_SUBJECT_INDEX_POSTER_ROW_MISSING') {
-            return t('Subject Index 缺少封面海报行。第二阶段资产清单必须包含唯一且置尾的 cover_poster/poster 条目。', 'Subject Index is missing the cover poster row. Stage 2 asset extraction must include one final cover_poster/poster row.');
+            return t('资产清单缺少封面海报。本集资产清单必须包含唯一且置尾的封面项。', 'Asset inventory is missing the cover poster. This episode’s inventory must include one final cover entry.');
         }
         if (normalized === 'ANALYSIS_SUBJECTS_UNVERIFIED') {
             return '';
@@ -3288,8 +3375,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     .filter(Boolean)
                     .join(', ');
                 return t(
-                    `场景编排失败：${failedCount}/${totalCount} 场未通过校验。${sceneDetails ? `失败场景：${sceneDetails}。` : ''}常见原因：LLM 未返回含 Scene ID 的 Scenes Table、Scene ID 不匹配，或返回了 Subject Index。系统将尝试逐场重试。`,
-                    `Scene beats orchestration failed: ${failedCount}/${totalCount} scene(s) did not pass validation.${sceneDetails ? ` Failed scenes: ${sceneDetails}.` : ''} Common causes: missing Scenes Table with Scene ID, Scene ID mismatch, or Subject Index returned instead. Sequential per-scene retry will be attempted.`
+                    `场景编排失败：${failedCount}/${totalCount} 场未通过校验。${sceneDetails ? `失败场景：${sceneDetails}。` : ''}常见原因：未返回有效场景表、场景编号不匹配，或误返回了资产清单。系统将尝试逐场重试。`,
+                    `Scene orchestration failed: ${failedCount}/${totalCount} scene(s) did not pass validation.${sceneDetails ? ` Failed scenes: ${sceneDetails}.` : ''} Common causes: missing valid scenes table, scene ID mismatch, or asset inventory returned instead. Sequential per-scene retry will be attempted.`
                 );
             } catch (_) {
                 // fall through to generic handling
@@ -3300,8 +3387,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || normalized.includes('scene_markdown_orchestration_failed')
         ) {
             return t(
-                '场景编排失败：后端并行编排未返回有效的 Scenes Table。请检查 Stage 2.1 资产清单是否完整，或稍后重试单场重排。',
-                'Scene beats orchestration failed: backend parallel orchestration did not return valid Scenes Table output. Verify Stage 2.1 Subject Index is complete, or retry a single scene.'
+                '场景编排失败：未返回有效的场景表。请检查资产清单是否完整，或稍后重试单场重排。',
+                'Scene orchestration failed: no valid scenes table was returned. Check that the asset inventory is complete, or retry a single scene later.'
             );
         }
         if (
@@ -4787,35 +4874,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     };
 
     const runPostAnalysisChecksAndPrompt = async (analyzedText = '') => {
-        setPostAnalysisCheckModal({
-            open: true,
-            status: 'running',
-            message: t('🧹 正在检查角色和场景名称是否前后一致...', 'Running check: Subject Consistency...'),
-            guidance: [],
-        });
+        notifyUiMessage(
+            t('正在检查角色和场景名称一致性...', 'Checking subject consistency...'),
+            'info',
+            2200
+        );
 
         const subjectReport = runSubjectConsistencyCheck(analyzedText || '', { silent: true });
-
         const passedSubject = Boolean(subjectReport?.ok);
         const summary = passedSubject
-            ? t('登场角色和道具核对完全一致！您可以放心关掉此窗口继续啦。', 'Subject consistency check completed and passed. Review the result, then close this dialog to continue.')
-            : t('登场角色和道具核对完毕。有几个地方需要您瞧瞧，确认后关掉窗口就行。', 'Subject consistency check completed. Review the result (including warnings), then close this dialog to continue.');
-
-        const guidance = [];
-        if (!passedSubject) {
-            guidance.push(
-                t(
-                    'Subject 一致性未通过：说明角色/道具/环境索引可能不完整或不一致，建议重新执行 AI Script Analysis。',
-                    'Subject consistency failed: subject index/entities may be incomplete or inconsistent; rerun AI Script Analysis is recommended.'
-                )
+            ? t('登场角色和道具核对一致，可继续。', 'Subject consistency check passed. You can continue.')
+            : t(
+                '登场角色/道具核对有告警，请在进度区核对后再继续。',
+                'Subject consistency has warnings; review the progress panel before continuing.'
             );
-        }
+
+        // Keep non-blocking state for optional detail UI; do not force a modal.
         setPostAnalysisCheckModal({
-            open: true,
+            open: false,
             status: 'done',
             message: summary,
-            guidance,
+            guidance: passedSubject ? [] : [
+                t(
+                    'Subject 一致性未通过：角色/道具/环境索引可能不完整，建议必要时重跑分析。',
+                    'Subject consistency failed: index may be incomplete; rerun analysis if needed.'
+                ),
+            ],
         });
+        notifyUiMessage(summary, passedSubject ? 'success' : 'warning', 4500);
 
         if (onLog) {
             onLog(
@@ -6884,8 +6970,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ok: false,
                 subjectIndexText,
                 reason: t(
-                    `${contextLabel} 缺少 cover_poster/poster 类型资产，按规则判定本次提取失败并需要重试。`,
-                    `${contextLabel} is missing cover_poster/poster entries. This extraction is considered failed and must retry.`
+                    `${contextLabel} 缺少封面海报，本次提取视为未完成，需要重试。`,
+                    `${contextLabel} is missing the cover poster; this extraction is incomplete and must retry.`
                 ),
             };
         }
@@ -6893,32 +6979,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { ok: true, subjectIndexText };
     }, [extractPureSubjectIndexText, t]);
 
-    const runStage2_1WithValidationRetry = useCallback(async (runAttempt, contextLabel = 'Stage 2.1') => {
+    const runStage2_1WithValidationRetry = useCallback(async (runAttempt, contextLabel = null) => {
+        const label = contextLabel || t('资产清单', 'Asset inventory');
         let result = await runAttempt();
         let text = extractAnalysisTextFromResult(result) || '';
-        let validation = validateStage2_1SubjectIndexOutput(text, contextLabel);
+        let validation = validateStage2_1SubjectIndexOutput(text, label);
         for (let fallbackAttempt = 1; !validation.ok && fallbackAttempt <= MAX_ANALYSIS_FALLBACK_ATTEMPTS; fallbackAttempt += 1) {
-            onLog?.(`[Stage 2.1] ${validation.reason}`, 'warning');
+            onLog?.(validation.reason, 'warning');
             setAnalysisFlowStatus({
                 phase: 'extract_assets',
                 message: t(
-                    `Stage 2.1 校验失败，正在自动重试 (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`,
-                    `Stage 2.1 validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
+                    `资产清单校验未通过，正在自动重试（${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS}）…`,
+                    `Asset inventory validation failed. Auto-retrying (${fallbackAttempt}/${MAX_ANALYSIS_FALLBACK_ATTEMPTS})...`
                 ),
             });
             result = await runAttempt();
             text = extractAnalysisTextFromResult(result) || '';
-            validation = validateStage2_1SubjectIndexOutput(text, `${contextLabel} retry ${fallbackAttempt}`);
+            validation = validateStage2_1SubjectIndexOutput(
+                text,
+                t(`${label}（第 ${fallbackAttempt} 次重试）`, `${label} (retry ${fallbackAttempt})`)
+            );
         }
         if (!validation.ok) {
-            throw new Error(validation.reason || `Stage 2.1 failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
+            throw new Error(validation.reason || t(
+                `资产清单在自动重试 ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} 次后仍未通过。`,
+                `Asset inventory still failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`
+            ));
         }
-        const subjectIndexLen = String(validation.subjectIndexText || text || '').trim().length;
         onLog?.(
-            t(
-                `[Stage 2.1] LLM 已返回并通过校验（Subject Index ${subjectIndexLen} 字符）`,
-                `[Stage 2.1] LLM returned and passed validation (Subject Index ${subjectIndexLen} chars)`
-            ),
+            t('资产清单已生成并通过校验。', 'Asset inventory generated and validated.'),
             'success'
         );
         return { result, text, validation };
@@ -8440,78 +8529,299 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         subjectIndexText,
     ]);
 
+    const decodeSceneTableCellForEdit = useCallback((value) => (
+        String(value || '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/\\\|/g, '|')
+    ), []);
+
+    const parseSceneBeatsFieldsFromMarkdown = useCallback((markdown) => {
+        const sceneTableText = extractScenesTableBlock(markdown) || String(markdown || '');
+        const parsed = parseMarkdownTable(sceneTableText);
+        if (!parsed?.headers?.length || !Array.isArray(parsed.rows) || parsed.rows.length <= 0) {
+            return { headers: [], fields: {} };
+        }
+        const headers = parsed.headers.map((header) => String(header || '').trim()).filter(Boolean);
+        const row = parsed.rows[0] || [];
+        const fields = {};
+        headers.forEach((header, index) => {
+            fields[header] = decodeSceneTableCellForEdit(row[index] || '');
+        });
+        return { headers, fields };
+    }, [decodeSceneTableCellForEdit, extractScenesTableBlock, parseMarkdownTable]);
+
+    const buildSceneBeatsMarkdownFromFields = useCallback((headers, fields, { displayLabel = '' } = {}) => {
+        const safeHeaders = (Array.isArray(headers) ? headers : [])
+            .map((header) => String(header || '').trim())
+            .filter(Boolean);
+        if (!safeHeaders.length) return '';
+        const row = safeHeaders.map((header) => String(fields?.[header] ?? ''));
+        const table = buildMarkdownTable(safeHeaders, [row]);
+        const title = String(displayLabel || '').trim();
+        return title
+            ? `### Part 1: Scenes Table\n\n#### ${title}\n\n${table}`.trim()
+            : `### Part 1: Scenes Table\n\n${table}`.trim();
+    }, [buildMarkdownTable]);
+
+    const isLongSceneBeatsField = useCallback((header) => {
+        const key = String(header || '').toLowerCase().replace(/[\s_.\-]/g, '');
+        return key.includes('coresceneinfo')
+            || key.includes('adaptedscript')
+            || key.includes('beats')
+            || key.includes('environmentname')
+            || key.includes('environmentdelta')
+            || key.includes('linkedcharacters')
+            || key.includes('keyprops')
+            || key.includes('entrystate')
+            || key.includes('exitstate')
+            || key.includes('核心场景')
+            || key.includes('改编剧本')
+            || key.includes('节拍');
+    }, []);
+
+    const getSceneBeatsFieldRows = useCallback((header) => {
+        const key = String(header || '').toLowerCase().replace(/[\s_.\-]/g, '');
+        if (key.includes('coresceneinfo') || key.includes('核心场景') || key.includes('beats') || key.includes('节拍')) return 16;
+        if (key.includes('adaptedscript') || key.includes('改编剧本')) return 8;
+        return 4;
+    }, []);
+
+    const isHiddenSceneBeatsField = useCallback((header) => {
+        const key = String(header || '').toLowerCase().replace(/[\s_.\-]/g, '');
+        return key === 'environmentrelation'
+            || key === 'baseenvironmentreference'
+            || key === 'environmentdelta'
+            || key === 'entrystate'
+            || key === 'exitstate';
+    }, []);
+
+    const getSceneBeatsFieldLabel = useCallback((header) => {
+        const raw = String(header || '').trim();
+        const key = raw.toLowerCase().replace(/[\s_.\-]/g, '');
+        const map = {
+            episodeid: ['Episode ID', 'Episode ID'],
+            sceneid: ['Scene ID', 'Scene ID'],
+            sceneno: ['Scene No.', 'Scene No.'],
+            scenename: ['Scene Name', 'Scene Name'],
+            equivalentduration: ['Equivalent Duration', 'Equivalent Duration'],
+            coresceneinfo: ['Core Scene Info（Beats）', 'Core Scene Info (Beats)'],
+            adaptedscriptexcerpt: ['Adapted Script Excerpt', 'Adapted Script Excerpt'],
+            environmentname: ['Environment Name', 'Environment Name'],
+            environmentrelation: ['Environment Relation', 'Environment Relation'],
+            baseenvironmentreference: ['Base Environment Reference', 'Base Environment Reference'],
+            environmentdelta: ['Environment Delta', 'Environment Delta'],
+            entrystate: ['Entry State', 'Entry State'],
+            exitstate: ['Exit State', 'Exit State'],
+            linkedcharacters: ['Linked Characters', 'Linked Characters'],
+            keyprops: ['Key Props', 'Key Props'],
+        };
+        const hit = map[key];
+        return hit ? t(hit[0], hit[1]) : raw;
+    }, [t]);
+
+    const buildSceneBeatsEditScenes = useCallback(() => {
+        const rawJson = String(
+            currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
+        ).trim();
+        let byScene = parseSceneMarkdownBySceneMap(rawJson);
+        if (!byScene || Object.keys(byScene).length <= 0) {
+            const merged = String(
+                currentStageOutputs?.stages?.stage2?.outputs?.scene_markdown?.content
+                || activeEpisode?.ai_scene_analysis_scene_markdown
+                || ''
+            ).trim();
+            byScene = merged ? splitSceneMarkdownTableBySceneId(merged) : {};
+        }
+        return Object.entries(byScene || {})
+            .map(([rawId, entry]) => {
+                const sceneId = String(rawId || entry?.scene_id || '').trim();
+                const markdown = String(entry?.markdown || (typeof entry === 'string' ? entry : '') || '').trim();
+                const sceneOrder = Number(entry?.scene_order) || 0;
+                const displayLabel = String(
+                    entry?.display_label
+                    || entry?.displayLabel
+                    || entry?.scene_name
+                    || entry?.name
+                    || sceneId
+                ).trim() || sceneId;
+                return { sceneId, sceneOrder, displayLabel, markdown };
+            })
+            .filter((item) => item.sceneId && item.markdown)
+            .sort((left, right) => (
+                (left.sceneOrder || 0) - (right.sceneOrder || 0)
+                || String(left.sceneId).localeCompare(String(right.sceneId))
+            ));
+    }, [
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        currentStageOutputs,
+        parseSceneMarkdownBySceneMap,
+        splitSceneMarkdownTableBySceneId,
+    ]);
+
     const openStageArtifactEditModal = useCallback((kind) => {
         const stableKind = String(kind || '').trim();
         if (stableKind === 'script_opt') {
             const content = resolveScriptOptBeatsContent();
             if (!content) {
-                alert(t('暂无剧本统筹（Beats 分割）内容可查看。', 'No script-coordination beats content available yet.'));
+                notifyUiMessage(t('暂无剧本统筹的节拍内容可查看。', 'No script-coordination beat content available yet.'), 'warning');
                 return;
             }
             setStageArtifactEditModal({
                 open: true,
                 kind: 'script_opt',
-                titleZh: '剧本统筹 · Beats 分割内容',
-                titleEn: 'Script Coordination · Beats Portion',
-                hintZh: '仅展示/编辑优化后剧本中用于下游的环境块与 Beat 分割部分（不含修改说明与全局风格 JSON）。',
-                hintEn: 'View/edit only the ENV + Beat portion of the optimized script used downstream (excludes revision notes and global-style JSON).',
+                titleZh: '剧本统筹 · 节拍内容',
+                titleEn: 'Script Coordination · Beat Content',
+                hintZh: '仅展示/编辑优化后剧本中用于下游的环境与节拍部分（不含修改说明与全局风格信息）。',
+                hintEn: 'View/edit only the environment and beat portion used downstream (excludes revision notes and global-style info).',
                 content,
                 editing: false,
                 saving: false,
+                sceneId: '',
+                scenes: [],
+                headers: [],
+                fields: {},
             });
             return;
         }
         if (stableKind === 'subject_index') {
             const content = resolveSubjectIndexEditContent();
             if (!content) {
-                alert(t('暂无资产清单内容可查看。', 'No asset inventory content available yet.'));
+                notifyUiMessage(t('暂无资产清单内容可查看。', 'No asset inventory content available yet.'), 'warning');
                 return;
             }
             setStageArtifactEditModal({
                 open: true,
                 kind: 'subject_index',
-                titleZh: '资产清单 · Subject Index',
-                titleEn: 'Asset Inventory · Subject Index',
-                hintZh: '支持 Markdown 预览与编辑；保存后作为资产清单权威输入。',
-                hintEn: 'Markdown preview and edit; saved content becomes the authoritative Asset Inventory input.',
+                titleZh: '资产清单',
+                titleEn: 'Asset Inventory',
+                hintZh: '可预览与编辑本集角色、道具、环境、封面清单；保存后作为后续资产设计的依据。',
+                hintEn: 'Preview and edit this episode’s characters, props, environments, and covers; saved content drives later asset design.',
                 content,
                 editing: false,
                 saving: false,
+                sceneId: '',
+                scenes: [],
+                headers: [],
+                fields: {},
+            });
+            return;
+        }
+        if (stableKind === 'scene_beats') {
+            const scenes = buildSceneBeatsEditScenes();
+            if (!scenes.length) {
+                notifyUiMessage(t('暂无场景编排内容可编辑。', 'No scene orchestration content available to edit.'), 'warning');
+                return;
+            }
+            const first = scenes[0];
+            const parsedFields = parseSceneBeatsFieldsFromMarkdown(first.markdown);
+            setStageArtifactEditModal({
+                open: true,
+                kind: 'scene_beats',
+                titleZh: '场景编排 · 分场分字段编辑',
+                titleEn: 'Scene Orchestration · Per-scene Field Edit',
+                hintZh: '按场景切换，按 Scenes Table 列字段查看/修改；保存仅更新当前场，并回写合并后的场景编排产物。',
+                hintEn: 'Switch scenes and edit Scenes Table columns as fields; save updates the selected scene and writes back the merged orchestration artifact.',
+                content: first.markdown,
+                editing: false,
+                saving: false,
+                sceneId: first.sceneId,
+                scenes,
+                headers: parsedFields.headers,
+                fields: parsedFields.fields,
             });
         }
-    }, [resolveScriptOptBeatsContent, resolveSubjectIndexEditContent, t]);
+    }, [
+        buildSceneBeatsEditScenes,
+        parseSceneBeatsFieldsFromMarkdown,
+        resolveScriptOptBeatsContent,
+        resolveSubjectIndexEditContent,
+        t,
+    ]);
 
     const saveStageArtifactEditModal = useCallback(async () => {
         const kind = String(stageArtifactEditModal.kind || '').trim();
-        const content = String(stageArtifactEditModal.content || '');
+        let content = String(stageArtifactEditModal.content || '');
+        if (kind === 'scene_beats') {
+            if (Array.isArray(stageArtifactEditModal.headers) && stageArtifactEditModal.headers.length > 0) {
+                const currentScene = (stageArtifactEditModal.scenes || []).find(
+                    (item) => String(item?.sceneId || '').trim() === String(stageArtifactEditModal.sceneId || '').trim()
+                );
+                content = buildSceneBeatsMarkdownFromFields(
+                    stageArtifactEditModal.headers,
+                    stageArtifactEditModal.fields,
+                    { displayLabel: currentScene?.displayLabel || stageArtifactEditModal.sceneId }
+                );
+            }
+            if (!content.trim()) {
+                notifyUiMessage(t('当前场内容为空，无法保存。', 'Current scene content is empty; cannot save.'), 'warning');
+                return;
+            }
+        }
         setStageArtifactEditModal((prev) => ({ ...prev, saving: true }));
         try {
             if (kind === 'script_opt') {
                 await persistAdaptedScriptEdit(content);
             } else if (kind === 'subject_index') {
                 await persistSubjectIndexEdit(content);
+            } else if (kind === 'scene_beats') {
+                const sceneId = String(stageArtifactEditModal.sceneId || '').trim();
+                if (!sceneId) {
+                    throw new Error(t('请先选择要保存的场景。', 'Select a scene to save first.'));
+                }
+                const currentScene = (stageArtifactEditModal.scenes || []).find(
+                    (item) => String(item?.sceneId || '').trim() === sceneId
+                );
+                await persistSceneMarkdownPatch({
+                    [sceneId]: {
+                        scene_id: sceneId,
+                        scene_order: Number(currentScene?.sceneOrder) || 0,
+                        display_label: String(currentScene?.displayLabel || sceneId).trim(),
+                        markdown: content.trim(),
+                    },
+                }, { source: 'stage-artifact-edit-scene-beats' });
             }
+            const nextContent = kind === 'subject_index'
+                ? (extractPureSubjectIndexText(content.trim()) || content.trim())
+                : content.trim();
+            const nextParsed = kind === 'scene_beats'
+                ? parseSceneBeatsFieldsFromMarkdown(nextContent)
+                : { headers: [], fields: {} };
             setStageArtifactEditModal((prev) => ({
                 ...prev,
                 saving: false,
                 editing: false,
-                content: kind === 'subject_index'
-                    ? (extractPureSubjectIndexText(content.trim()) || content.trim())
-                    : content.trim(),
+                content: nextContent,
+                headers: kind === 'scene_beats' ? nextParsed.headers : (prev.headers || []),
+                fields: kind === 'scene_beats' ? nextParsed.fields : (prev.fields || {}),
+                scenes: kind === 'scene_beats'
+                    ? (prev.scenes || []).map((item) => (
+                        String(item?.sceneId || '').trim() === String(prev.sceneId || '').trim()
+                            ? { ...item, markdown: nextContent }
+                            : item
+                    ))
+                    : (prev.scenes || []),
             }));
+            notifyUiMessage(t('已保存更改。', 'Changes saved.'), 'success', 2500);
         } catch (error) {
             setStageArtifactEditModal((prev) => ({ ...prev, saving: false }));
-            alert(t(
+            notifyUiMessage(t(
                 `保存失败：${error?.message || error}`,
                 `Save failed: ${error?.message || error}`
-            ));
+            ), 'error', 4200);
         }
     }, [
+        buildSceneBeatsMarkdownFromFields,
         extractPureSubjectIndexText,
+        parseSceneBeatsFieldsFromMarkdown,
         persistAdaptedScriptEdit,
+        persistSceneMarkdownPatch,
         persistSubjectIndexEdit,
         stageArtifactEditModal.content,
+        stageArtifactEditModal.fields,
+        stageArtifactEditModal.headers,
         stageArtifactEditModal.kind,
+        stageArtifactEditModal.sceneId,
+        stageArtifactEditModal.scenes,
         t,
     ]);
 
@@ -8538,8 +8848,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             await persistSubjectIndexEdit(resolvedStage);
             onLog?.(
                 t(
-                    '已将第二阶段面板中的资产清单同步到分集字段，便于场景重排继续。',
-                    'Synced Stage 2 asset index from the panel into the episode field for scene rerun.'
+                    '已将资产清单同步到本集，便于继续场景重排。',
+                    'Synced the asset inventory into this episode so scene re-orchestration can continue.'
                 ),
                 'info'
             );
@@ -8908,6 +9218,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             persistAnalysisSessionSnapshot(activeEpisode.id);
         }
     }, [activeEpisode?.id, persistAnalysisSessionSnapshot]);
+
+    const terminalAnalysisToastKeyRef = useRef('');
+    // After imports finish: use a self-dismissing toast instead of a blocking modal.
+    useEffect(() => {
+        if (isAnalyzing) return;
+        const phase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
+        if (!['completed', 'warning', 'failed'].includes(phase)) return;
+        const message = String(analysisFlowStatus?.message || '').trim()
+            || (phase === 'completed'
+                ? t('剧本分析与导入已完成。', 'Analysis and import completed.')
+                : phase === 'warning'
+                    ? t('分析完成，但有告警。', 'Analysis finished with warnings.')
+                    : t('分析失败。', 'Analysis failed.'));
+        const toastKey = `${phase}:${message}:${analysisUiReport?.startedAt || 0}:${analysisUiReport?.durationMs || 0}`;
+        if (terminalAnalysisToastKeyRef.current === toastKey) return;
+        terminalAnalysisToastKeyRef.current = toastKey;
+        notifyUiMessage(
+            message,
+            phase === 'failed' ? 'error' : (phase === 'warning' ? 'warning' : 'success'),
+            phase === 'completed' ? 4500 : 5200
+        );
+    }, [
+        analysisFlowStatus?.message,
+        analysisFlowStatus?.phase,
+        analysisUiReport?.durationMs,
+        analysisUiReport?.startedAt,
+        isAnalyzing,
+        t,
+    ]);
 
     useEffect(() => {
         if (!activeEpisode?.id || analysisProgressDismissedRef.current) return;
@@ -9381,8 +9720,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const subjectIndexForStage2_2 = String(stage2_1SubjectIndexText || '').trim();
         if (!subjectIndexForStage2_2 || !hasSubjectIndexStructure(subjectIndexForStage2_2)) {
             throw new Error(t(
-                '缺少资产清单（Subject Index），无法执行场景编排。请先完成第二阶段资产提取后再重试。',
-                'Missing Subject Index asset inventory. Complete Stage 2.1 asset extraction before scene orchestration.'
+                '缺少资产清单，无法执行场景编排。请先完成资产清单后再重试。',
+                'Asset inventory is missing. Finish the asset inventory step before scene orchestration.'
             ));
         }
         let sceneUnits = [];
@@ -14208,17 +14547,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     throw new Error(errMsg);
                 }
 
-                if (onLog) onLog('Stage 1 split prompt detected. Running Stage 2 scene analysis before asset-index validation.', 'info');
+                if (onLog) onLog(t('剧本统筹已完成，开始生成资产清单…', 'Script coordination finished; generating asset inventory...'), 'info');
 
                 const stage2_1PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_1_assets_extraction.md');
                 let finalStage2_1Prompt = stage2_1PromptRes?.content || '';
                 let finalStage2_1UserInput = stage2UserInput;
 
-                if (onLog) onLog('Submitting Stage 2.1 (Asset Extraction)...', 'info');
+                if (onLog) onLog(t('正在生成资产清单…', 'Generating asset inventory...'), 'info');
 
                 setAnalysisFlowStatus({
                     phase: 'extract_assets',
-                    message: t('📝 正在执行美术提取，拆解核心资产...', 'Running Asset Extraction...'),
+                    message: t('📝 正在整理本集资产清单（角色/道具/环境/封面）…', 'Building this episode’s asset inventory (characters/props/environments/covers)...'),
                 });
 
                 const runStage2_1Attempt = async () => (
@@ -14256,21 +14595,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 
                 // --- 第一时间保存 Stage 2.1 (提取的美术资产/Subject Index) 对应卡片！---
                 try {
-                    if (onLog) onLog('Persisting clean Stage 2.1 Subject Index immediately after return...', 'process');
+                    if (onLog) onLog(t('正在保存资产清单…', 'Saving asset inventory...'), 'process');
                     await persistLlmResultContent(stage2_1SubjectIndexText, 'ai_scene_analysis_subject_index', {
                         source: 'advanced-analysis-stage2_1-subject-index-immediate'
                     });
                 } catch (persistErr) {
-                    if (onLog) onLog(`Failed to persist clean Subject Index immediately: ${persistErr?.message || persistErr}`, 'warning');
+                    if (onLog) onLog(t(`保存资产清单失败：${persistErr?.message || persistErr}`, `Failed to save asset inventory: ${persistErr?.message || persistErr}`), 'warning');
                 }
 
-                if (onLog) onLog('资产清单已就绪，开始并发执行：场景编排 + 资产设计（角色/道具/环境）...', 'info');
+                if (onLog) onLog(t('资产清单已就绪，正在同时进行场景编排与资产设计…', 'Asset inventory ready; scene orchestration and asset design are running together...'), 'info');
 
                 setAnalysisFlowStatus({
                     phase: 'scene_beats',
                     message: t(
-                        '📝 资产清单已生成，正在并发执行场景编排与资产设计...',
-                        'Asset inventory ready; running scene orchestration and asset design in parallel...'
+                        '📝 资产清单已生成，正在同时进行场景编排与资产设计…',
+                        'Asset inventory ready; scene orchestration and asset design are running together...'
                     ),
                 });
 
@@ -14372,7 +14711,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     let stage2_2UserInputBody = buildStage2_2UserInputFromStage1(stage1PhaseRawText);
                     const finalStage2_2UserInput = stage2_2UserInputBody;
                     onLog?.(
-                        t('[Stage 2.2] 开始场景编排（镜头节拍生成）...', '[Stage 2.2] Starting scene beats orchestration...'),
+                        t('开始场景编排…', 'Starting scene orchestration...'),
                         'info'
                     );
                     const beatsResult = await runStage2_2WithValidationRetry({
@@ -14409,7 +14748,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         branchStage2PhaseRawText = [String(stage2_1Text || '').trim()].filter(Boolean).join('\n\n');
                         phaseMarks.persistStartedAt = Date.now();
                         try {
-                            if (onLog) onLog('Persisting per-scene Stage 2.2 outputs immediately after parallel beats return...', 'process');
+                            if (onLog) onLog(t('正在保存各场场景编排结果…', 'Saving per-scene orchestration results...'), 'process');
                             await persistSceneMarkdownPatch(sceneMarkdownPatchMap, {
                                 source: 'advanced-analysis-split-per-scene-immediate',
                                 stage1RawText: stage1PhaseRawText,
@@ -14507,8 +14846,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
                 if (assetOutcome.status !== 'fulfilled') {
                     const assetErr = assetOutcome.reason;
-                    onLog?.(`Stage 3 asset design branch failed: ${assetErr?.message || assetErr}`, 'error');
-                    throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || 'Stage 3 asset design failed'));
+                    onLog?.(t(
+                        `资产设计失败：${assetErr?.message || assetErr}`,
+                        `Asset design failed: ${assetErr?.message || assetErr}`
+                    ), 'error');
+                    throw assetErr instanceof Error ? assetErr : new Error(String(assetErr || t('资产设计失败', 'Asset design failed')));
                 }
 
                 const sceneBranch = sceneOutcome.value || {};
@@ -14728,7 +15070,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             setAnalysisFlowStatus({
                 phase: 'supplement',
-                message: t('🔍 全部节点已完成，正在执行完整性检查...', 'All nodes finished; running integrity checks...'),
+                message: t('🔍 各步骤已完成，正在检查本集是否齐套…', 'All steps finished; checking whether this episode is ready...'),
             });
             await runAnalysisPipelineIntegrityGate({
                 t,
@@ -16126,7 +16468,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!adapted) {
-                    alert(t('暂无可导入的剧本统筹内容。', 'No script-coordination content available to import.'));
+                    notifyUiMessage(t('暂无可导入的剧本统筹内容。', 'No script-coordination content available to import.'), 'warning');
                     return;
                 }
                 if (!activeEpisode?.id) return;
@@ -16137,6 +16479,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     await onUpdateScript(activeEpisode.id, adapted);
                 }
                 setRawContent(adapted);
+                notifyUiMessage(
+                    t('剧本统筹内容已导入。', 'Script-coordination content imported.'),
+                    'success',
+                    3200
+                );
                 onLog?.(
                     t(
                         '已将剧本统筹（Beats）内容写入数据表（script_content / adaptation）。',
@@ -16149,14 +16496,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'subject_index') {
                 const content = resolveSubjectIndexEditContent();
                 if (!content) {
-                    alert(t('暂无可导入的资产清单内容。', 'No asset inventory content available to import.'));
+                    notifyUiMessage(t('暂无可导入的资产清单内容。', 'No asset inventory content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
                     content,
                     importType: 'auto',
                     label: 'diagnostic subject index',
+                    importOptions: { suppressAlerts: true },
                 });
+                notifyUiMessage(t('资产清单已导入。', 'Asset inventory imported.'), 'success', 3200);
                 return;
             }
             if (stableKind === 'scene_beats') {
@@ -16166,20 +16515,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!content) {
-                    alert(t('暂无可导入的场景编排内容。', 'No scene orchestration content available to import.'));
+                    notifyUiMessage(t('暂无可导入的场景编排内容。', 'No scene orchestration content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
                     content,
                     importType: 'scene',
                     label: 'diagnostic scene markdown',
+                    importOptions: { suppressAlerts: true },
                 });
+                notifyUiMessage(t('场景编排已导入。', 'Scene orchestration imported.'), 'success', 3200);
                 return;
             }
             if (stableKind === 'storyboard') {
                 const candidates = await buildStoryboardRerunCandidates();
                 if (!candidates.length) {
-                    alert(t('工作区尚无已入库场景，无法导入镜头。', 'No imported scenes in workspace; cannot import shots.'));
+                    notifyUiMessage(t('工作区尚无已入库场景，无法导入镜头。', 'No imported scenes in workspace; cannot import shots.'), 'warning');
                     return;
                 }
                 let applied = 0;
@@ -16217,12 +16568,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
                 }));
                 if (applied <= 0) {
-                    alert(t(
+                    notifyUiMessage(t(
                         `未找到可导入的镜头结果（${candidates.length} 场均无最新分镜缓存）。可先点「重跑」生成。`,
                         `No importable shot results found (${candidates.length} scene(s) have no latest storyboard cache). Use Rerun to generate first.`
-                    ));
+                    ), 'warning', 4500);
                     return;
                 }
+                notifyUiMessage(
+                    t(
+                        `镜头已导入 ${applied} 场（跳过 ${skipped} 场）`,
+                        `Imported shots for ${applied} scene(s) (skipped ${skipped})`
+                    ),
+                    'success',
+                    3600
+                );
                 onLog?.(
                     t(
                         `[镜头导入] 已导入 ${applied} 场（跳过 ${skipped} 场）`,
@@ -16235,7 +16594,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'assets') {
                 const { assetDesignJson, assetDesignPayload } = resolveDiagnosticAssetDesignImport();
                 if (!assetDesignJson) {
-                    alert(t('暂无可导入的资产设计内容。', 'No asset design content available to import.'));
+                    notifyUiMessage(t('暂无可导入的资产设计内容。', 'No asset design content available to import.'), 'warning');
                     return;
                 }
                 await handleImportStageArtifact({
@@ -16244,15 +16603,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     label: 'diagnostic asset design json',
                     importOptions: {
                         subjectsJson: assetDesignPayload || null,
-                        suppressAlerts: false,
+                        suppressAlerts: true,
                     },
                 });
+                notifyUiMessage(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
             }
         } catch (error) {
-            alert(t(
+            notifyUiMessage(t(
                 `导入失败：${error?.message || error}`,
                 `Import failed: ${error?.message || error}`
-            ));
+            ), 'error', 4500);
         } finally {
             setDiagnosticImportingKind('');
         }
@@ -17842,7 +18202,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const workflowCompletenessStats = useMemo(() => {
         const importReport = resolveWorkflowImportReport(analysisUiReport, activeEpisode?.id);
         const scenePostReport = importReport?.sceneSubjectPostImportReport || {};
-        const dbEntities = Array.isArray(availableSubjectAssets) ? availableSubjectAssets : [];
+        // Completeness is episode-scoped: only count entities belonging to the active episode.
+        const activeEpisodeId = String(activeEpisode?.id || '').trim();
+        const dbEntities = (Array.isArray(availableSubjectAssets) ? availableSubjectAssets : []).filter(
+            (entity) => {
+                if (!activeEpisodeId) return false;
+                return String(entity?.episode_id || '').trim() === activeEpisodeId;
+            }
+        );
 
         const sceneMarkdownMerged = String(
             getStageOutputContent('stage2', 'scene_markdown')
@@ -17866,11 +18233,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             analysisSceneCount = Array.isArray(parsed?.rows) ? parsed.rows.length : 0;
         }
 
+        // Scenes: prefer live episode workspace count over cumulative import-report tallies.
         const importedSceneCount = firstPositiveFiniteNumber(
-            analysisUiReport?.resolvedSceneImportCount,
-            importReport?.dbPersistedCounts?.scenes?.currentEpisode,
-            resolveImportReportSceneCount(importReport, scenePostReport, diagnosticsEpisodeSceneCount),
             diagnosticsEpisodeSceneCount,
+            importReport?.dbPersistedCounts?.scenes?.currentEpisode,
+            analysisUiReport?.resolvedSceneImportCount,
+            resolveImportReportSceneCount(importReport, scenePostReport, diagnosticsEpisodeSceneCount),
         );
 
         const subjectIndexText = String(resolveSubjectIndexTextForAssetRerun() || '').trim();
@@ -17912,21 +18280,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         };
         const hasAssetDesignPayload = Object.values(assetDesignCounts).some((count) => count > 0);
 
-        const dbEntityCountsByType = {
-            character: countDbEntitiesByType('character', dbEntities),
-            prop: countDbEntitiesByType('prop', dbEntities),
-            environment: countDbEntitiesByType('environment', dbEntities),
-            poster: countDbEntitiesByType('poster', dbEntities),
-        };
-
-        const resolveImportedAssetCount = (type, categoryKey, categoryEntries, designItems) => {
-            const fromReport = resolveImportReportAssetHandledCount(importReport, type, categoryKey);
-            const fromResolved = toPositiveCount(analysisUiReport?.resolvedAssetHandledCounts?.[type]);
-            const fromDbMatch = hasAssetDesignPayload
-                ? countEntityPayloadItemsCoveredInDb(designItems, type, dbEntities)
-                : countSubjectIndexEntriesCoveredInDb(categoryEntries, type, dbEntities);
-            const fromDbTotal = toPositiveCount(dbEntityCountsByType[type]);
-            return Math.max(fromReport, fromResolved, fromDbMatch, fromDbTotal);
+        // Episode unit: expected = this episode's Subject Index; covered = name-match in this episode's DB.
+        // Do NOT Math.max cumulative import-report created+skipped (re-runs inflate 9→18 style).
+        const resolveImportedAssetCount = (type, categoryEntries, designItems) => {
+            if (Array.isArray(categoryEntries) && categoryEntries.length > 0) {
+                return countSubjectIndexEntriesCoveredInDb(categoryEntries, type, dbEntities);
+            }
+            if (Array.isArray(designItems) && designItems.length > 0) {
+                return countEntityPayloadItemsCoveredInDb(designItems, type, dbEntities);
+            }
+            return countDbEntitiesByType(type, dbEntities);
         };
 
         // Sub-asset subtask health: characters/props/environments are generated by three
@@ -17960,12 +18323,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const buildAssetRow = (key, labelZh, labelEn, categoryKey) => {
             const subjectIndexCount = subjectIndexCounts[key] || 0;
             const designCount = assetDesignCounts[key] || 0;
-            const analysisCount = hasAssetDesignPayload
-                ? Math.max(designCount, key === 'poster' ? subjectIndexCount : designCount)
-                : subjectIndexCount;
+            // Left side = this episode's inventory contract (Subject Index first).
+            const analysisCount = subjectIndexCount > 0 ? subjectIndexCount : designCount;
             const importedCount = resolveImportedAssetCount(
                 key,
-                categoryKey,
                 subjectEntriesByCategory[categoryKey] || [],
                 assetDesignItems[key] || [],
             );
@@ -18047,6 +18408,67 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         resolveSubjectIndexTextForAssetRerun,
         splitSceneMarkdownTableBySceneId,
         stage2SceneMarkdownByScene,
+    ]);
+
+    const openAiDiagnosisModal = useCallback(() => {
+        const episodeLabel = buildEpisodeDisplayLabel({
+            episodeNumber: activeEpisode?.episode_number,
+            title: activeEpisode?.title,
+        });
+        const completenessLines = (workflowCompletenessStats?.summaryItems || []).map((item) => (
+            `${item.labelZh || item.key}: 应有${item.analysisCount}/已齐${item.importedCount} (${item.status || '-'}${item.mark || ''})`
+        ));
+        const subjectPreview = String(resolveSubjectIndexTextForAssetRerun?.() || '').trim().slice(0, 2500);
+        const scenePreview = String(
+            getStageOutputContent('stage2', 'scene_markdown')
+            || activeEpisode?.ai_scene_analysis_scene_markdown
+            || ''
+        ).trim().slice(0, 2500);
+        const assetDesignPresent = Boolean(String(
+            getStageOutputContent('stage3', 'asset_design_json')
+            || activeEpisode?.ai_entity_design_result
+            || ''
+        ).trim());
+        const scriptOptPresent = Boolean(String(getStageOutputContent('stage1', 'adapted_script') || '').trim());
+        const summary = [
+            `项目：${project?.title || projectId || '-'}`,
+            `分集：${episodeLabel || '-'} (id=${activeEpisode?.id || '-'})`,
+            `当前分析状态：${analysisFlowStatus?.phase || 'idle'} | ${String(analysisFlowStatus?.message || '').trim() || '-'}`,
+            `是否正在分析：${isAnalyzing ? '是' : '否'}`,
+            `产物有无：剧本统筹=${scriptOptPresent ? '有' : '无'}；资产清单=${subjectPreview ? '有' : '无'}；场景编排=${scenePreview ? '有' : '无'}；资产设计=${assetDesignPresent ? '有' : '无'}`,
+            `工作区场景数：${diagnosticsEpisodeSceneCount || 0}`,
+            `工作区镜头：总数=${diagnosticsEpisodeShotStats?.shotCount || 0}，有分镜的场数=${diagnosticsEpisodeShotStats?.sceneCountWithShots || 0}`,
+            `本集实体数（工作区）：角色=${(availableSubjectAssets || []).filter((e) => String(e?.type || '').toLowerCase().includes('char')).length}，道具=${(availableSubjectAssets || []).filter((e) => String(e?.type || '').toLowerCase().includes('prop')).length}，环境/其他=${(availableSubjectAssets || []).length}`,
+            '',
+            '本集齐套：',
+            ...(completenessLines.length ? completenessLines : ['（暂无）']),
+            '',
+            '资产清单预览（截断）：',
+            subjectPreview || '（空）',
+            '',
+            '场景编排预览（截断）：',
+            scenePreview || '（空）',
+        ].join('\n');
+        setAiDiagnosisWorkspaceSummary(summary);
+        setAiDiagnosisOpen(true);
+    }, [
+        activeEpisode?.ai_entity_design_result,
+        activeEpisode?.ai_scene_analysis_scene_markdown,
+        activeEpisode?.episode_number,
+        activeEpisode?.id,
+        activeEpisode?.title,
+        analysisFlowStatus?.message,
+        analysisFlowStatus?.phase,
+        availableSubjectAssets,
+        diagnosticsEpisodeSceneCount,
+        diagnosticsEpisodeShotStats?.sceneCountWithShots,
+        diagnosticsEpisodeShotStats?.shotCount,
+        getStageOutputContent,
+        isAnalyzing,
+        project?.title,
+        projectId,
+        resolveSubjectIndexTextForAssetRerun,
+        workflowCompletenessStats?.summaryItems,
     ]);
 
     const stage2StageCards = useMemo(() => {
@@ -18219,15 +18641,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     key: 'reimport-stage3-asset-design',
                     label: t('全部导入', 'Import All'),
                     icon: 'refresh',
-                    onClick: () => handleImportStageArtifact({
-                        content: assetDesignJson,
-                        importType: 'json',
-                        label: 'stage3 asset design json',
-                        importOptions: {
-                            subjectsJson: assetDesignPayload || null,
-                            suppressAlerts: false,
-                        },
-                    }),
+                    onClick: async () => {
+                        await handleImportStageArtifact({
+                            content: assetDesignJson,
+                            importType: 'json',
+                            label: 'stage3 asset design json',
+                            importOptions: {
+                                subjectsJson: assetDesignPayload || null,
+                                suppressAlerts: true,
+                            },
+                        });
+                        notifyUiMessage(t('资产设计已导入。', 'Asset design imported.'), 'success', 3200);
+                    },
                     disabled: isAnalyzing || !assetDesignJson,
                     loading: false,
                 },
@@ -18276,15 +18701,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         key: `reimport-stage3-${cat.key}`,
                         label: t('局部导入', 'Import Partial'),
                         icon: 'refresh',
-                        onClick: () => handleImportStageArtifact({
-                            content: catJson,
-                            importType: 'json',
-                            label: `stage3 ${cat.key} json`,
-                            importOptions: {
-                                subjectsJson: catObj || null,
-                                suppressAlerts: false,
-                            },
-                        }),
+                        onClick: async () => {
+                            await handleImportStageArtifact({
+                                content: catJson,
+                                importType: 'json',
+                                label: `stage3 ${cat.key} json`,
+                                importOptions: {
+                                    subjectsJson: catObj || null,
+                                    suppressAlerts: true,
+                                },
+                            });
+                            notifyUiMessage(
+                                t(`${cat.labelZh}已导入。`, `${cat.labelEn} imported.`),
+                                'success',
+                                3200
+                            );
+                        },
                         disabled: isAnalyzing || !catJson,
                         loading: false,
                     },
@@ -18318,6 +18750,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 onClose={() => setManualModalOpen(false)}
                 uiLang={uiLang}
             />
+            <AiDiagnosisModal
+                open={aiDiagnosisOpen}
+                onClose={() => setAiDiagnosisOpen(false)}
+                uiLang={uiLang}
+                systemLogs={systemPanelLogs}
+                workspaceSummary={aiDiagnosisWorkspaceSummary}
+                projectId={projectId}
+                episodeId={activeEpisode?.id}
+                episodeLabel={buildEpisodeDisplayLabel({
+                    episodeNumber: activeEpisode?.episode_number,
+                    title: activeEpisode?.title,
+                })}
+                systemApiId={selectedScriptAnalysisApiId}
+                onLog={onLog}
+            />
             <div className="relative shrink-0 mb-5 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent px-4 py-4 sm:px-6 sm:py-5">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(168,85,247,0.10),transparent_55%)]" />
                 <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -18344,6 +18791,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         aria-label={t('剧本分析操作手册', 'Script Analysis Manual')}
                     >
                         <Info className="w-4 h-4" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={openAiDiagnosisModal}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 hover:text-emerald-100"
+                        title={t('AI 诊断：结合手册、日志与工作区给出下一步建议', 'AI Diagnosis: next-step advice from manual, logs, and workspace')}
+                        aria-label={t('AI 诊断', 'AI Diagnosis')}
+                    >
+                        <Stethoscope className="w-4 h-4" />
                     </button>
                     {isRawMode && (
                         <>
@@ -18585,6 +19041,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
                                         {renderImportButton('scene_beats', canImportSceneBeats)}
+                                        <button
+                                            onClick={() => openStageArtifactEditModal('scene_beats')}
+                                            disabled={isAnalyzing || !canImportSceneBeats}
+                                            className={diagnosticBtnClass}
+                                        >
+                                            {t('编辑', 'Edit')}
+                                        </button>
                                         <button onClick={handleRerunSceneBeatsOnly} disabled={isAnalyzing} className={diagnosticBtnClass}>
                                             {t('重排', 'Rerun')}
                                         </button>
@@ -18599,7 +19062,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         ) : (
                                             <span className="text-[10px] text-white/30">{t('待上一步完成', 'Wait previous step')}</span>
                                         ))}
-                                        {renderImportButton('scene_beats', canImportSceneBeats)}
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('scene_beats', canImportSceneBeats)}
+                                            {canImportSceneBeats ? (
+                                                <button
+                                                    onClick={() => openStageArtifactEditModal('scene_beats')}
+                                                    disabled={isAnalyzing}
+                                                    className={diagnosticBtnClass}
+                                                >
+                                                    {t('编辑', 'Edit')}
+                                                </button>
+                                            ) : null}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -18754,20 +19228,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     && (
                     <div className="mt-3 pt-3 border-t border-white/10 text-[11px] text-white/70 leading-relaxed">
                         <span className="text-white/55 font-semibold mr-2">
-                            {t('完整性', 'Completeness')}:
+                            {t('本集齐套', 'Episode readiness')}:
                         </span>
-                        {workflowCompletenessStats.summaryItems.map((item, index) => (
-                            <span
-                                key={item.key}
-                                className={`${item.className}${index > 0 ? ' ml-3' : ''}`}
-                                title={item.errorMessage || (item.status === 'missing' ? t('该类子资产入库数量为 0，请检查并重跑。', 'This asset category has 0 imported items. Please check and rerun.') : '')}
-                            >
-                                {t(item.labelZh, item.labelEn)} {item.analysisCount}→{item.importedCount}{item.mark}
-                            </span>
-                        ))}
-                        <span className="ml-3 text-white/30">
-                            {t('（角色/道具/环境/封面默认不允许为 0）', '(character/prop/environment/poster must not be 0 by default)')}
-                        </span>
+                        {workflowCompletenessStats.summaryItems.map((item, index) => {
+                            const statusTip = item.errorMessage
+                                || (
+                                    item.status === 'missing'
+                                        ? t(
+                                            `本集还没有可用的${item.labelZh}，请检查后重新生成。`,
+                                            `No usable ${item.labelEn.toLowerCase()} in this episode yet. Please review and regenerate.`
+                                        )
+                                        : item.status === 'partial'
+                                            ? t(
+                                                `本集应有 ${item.analysisCount} 个${item.labelZh}，目前齐套 ${item.importedCount} 个，还差 ${Math.max(0, item.analysisCount - item.importedCount)} 个。`,
+                                                `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready, ${Math.max(0, item.analysisCount - item.importedCount)} still missing.`
+                                            )
+                                            : item.status === 'extra'
+                                                ? t(
+                                                    `本集工作区里的${item.labelZh}比清单多，请确认是否需要清理多余项。`,
+                                                    `Workspace has more ${item.labelEn.toLowerCase()} than the episode list; confirm whether extras should be cleaned up.`
+                                                )
+                                                : t(
+                                                    `本集应有 ${item.analysisCount} 个${item.labelZh}，已齐套 ${item.importedCount} 个。`,
+                                                    `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready.`
+                                                )
+                                );
+                            return (
+                                <span
+                                    key={item.key}
+                                    className={`${item.className}${index > 0 ? ' ml-3' : ''}`}
+                                    title={statusTip}
+                                >
+                                    {t(item.labelZh, item.labelEn)}
+                                    {' '}
+                                    {t(
+                                        `应有${item.analysisCount}/已齐${item.importedCount}`,
+                                        `need ${item.analysisCount}/ready ${item.importedCount}`
+                                    )}
+                                    {item.mark}
+                                </span>
+                            );
+                        })}
                     </div>
                 )}
 
@@ -18783,13 +19284,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs text-red-100 space-y-1.5">
                         <div className="flex items-center gap-2 font-semibold">
                             <X className="w-3.5 h-3.5" />
-                            {t('资产设计完整性检测未通过', 'Asset design integrity check failed')}
+                            {t('本集还有资产未齐套', 'Some assets in this episode are not ready')}
                         </div>
                         <ul className="list-disc list-inside space-y-1">
                             {workflowCompletenessStats.failedCategories.map((row) => (
                                 <li key={`failed-${row.key}`}>
                                     <span className="font-semibold">{t(row.labelZh, row.labelEn)}</span>
-                                    {t('：入库数量为 0', ': 0 items imported')}
+                                    {t('：工作区里还没有可用项', ': none ready in the workspace yet')}
                                     {row.errorMessage ? ` — ${row.errorMessage}` : ''}
                                 </li>
                             ))}
@@ -18801,7 +19302,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 className="text-[11px] px-2.5 py-1 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors disabled:opacity-50 inline-flex items-center gap-1"
                             >
                                 {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败的资产类型', 'Rerun failed asset categories')}
+                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重新生成未齐套的类型', 'Regenerate missing types')}
                             </button>
                         </div>
                     </div>
@@ -18952,7 +19453,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     }}
                 >
                     <div
-                        className="bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-w-4xl max-h-[88vh] shadow-2xl overflow-hidden flex flex-col"
+                        className={`bg-[#1a1a1a] border border-white/10 rounded-xl w-full max-h-[88vh] shadow-2xl overflow-hidden flex flex-col ${
+                            stageArtifactEditModal.kind === 'scene_beats' ? 'max-w-5xl' : 'max-w-4xl'
+                        }`}
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
@@ -18964,17 +19467,32 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 <button
                                     type="button"
                                     disabled={stageArtifactEditModal.saving}
-                                    onClick={() => setStageArtifactEditModal((prev) => ({
-                                        ...prev,
-                                        editing: !prev.editing,
-                                        content: prev.editing
-                                            ? (
-                                                prev.kind === 'script_opt'
-                                                    ? (resolveScriptOptBeatsContent() || prev.content)
-                                                    : (resolveSubjectIndexEditContent() || prev.content)
-                                            )
-                                            : prev.content,
-                                    }))}
+                                    onClick={() => setStageArtifactEditModal((prev) => {
+                                        if (prev.kind === 'scene_beats') {
+                                            const scene = (prev.scenes || []).find(
+                                                (item) => String(item?.sceneId || '').trim() === String(prev.sceneId || '').trim()
+                                            );
+                                            const restored = String(scene?.markdown || prev.content || '');
+                                            const parsed = parseSceneBeatsFieldsFromMarkdown(restored);
+                                            return {
+                                                ...prev,
+                                                editing: !prev.editing,
+                                                content: prev.editing ? restored : prev.content,
+                                                headers: prev.editing ? parsed.headers : (prev.headers || []),
+                                                fields: prev.editing ? parsed.fields : (prev.fields || {}),
+                                            };
+                                        }
+                                        const restoreContent = () => {
+                                            if (prev.kind === 'script_opt') return resolveScriptOptBeatsContent() || prev.content;
+                                            if (prev.kind === 'subject_index') return resolveSubjectIndexEditContent() || prev.content;
+                                            return prev.content;
+                                        };
+                                        return {
+                                            ...prev,
+                                            editing: !prev.editing,
+                                            content: prev.editing ? restoreContent() : prev.content,
+                                        };
+                                    })}
                                     className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border ${
                                         stageArtifactEditModal.editing
                                             ? 'bg-sky-500/20 border-sky-400/40 text-sky-100'
@@ -18994,12 +19512,150 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         </div>
 
-                        <div className="px-4 pt-3 text-xs text-white/55">
-                            {t(stageArtifactEditModal.hintZh, stageArtifactEditModal.hintEn)}
+                        <div className="px-4 pt-3 text-xs text-white/55 space-y-2">
+                            <div>{t(stageArtifactEditModal.hintZh, stageArtifactEditModal.hintEn)}</div>
+                            {stageArtifactEditModal.kind === 'scene_beats' && Array.isArray(stageArtifactEditModal.scenes) && stageArtifactEditModal.scenes.length > 0 ? (
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                    <label className="text-[11px] font-semibold text-white/70 shrink-0">
+                                        {t('选择场景', 'Select Scene')}
+                                    </label>
+                                    <select
+                                        value={String(stageArtifactEditModal.sceneId || '')}
+                                        disabled={stageArtifactEditModal.saving}
+                                        onChange={(e) => {
+                                            const nextId = String(e.target.value || '').trim();
+                                            setStageArtifactEditModal((prev) => {
+                                                const nextScene = (prev.scenes || []).find(
+                                                    (item) => String(item?.sceneId || '').trim() === nextId
+                                                );
+                                                const nextMarkdown = String(nextScene?.markdown || '');
+                                                const parsed = parseSceneBeatsFieldsFromMarkdown(nextMarkdown);
+                                                return {
+                                                    ...prev,
+                                                    sceneId: nextId,
+                                                    content: nextMarkdown,
+                                                    headers: parsed.headers,
+                                                    fields: parsed.fields,
+                                                    editing: false,
+                                                };
+                                            });
+                                        }}
+                                        className="w-full sm:min-w-[16rem] rounded-md border border-white/15 bg-black/40 px-2.5 py-1.5 text-xs text-white outline-none focus:border-amber-400/50"
+                                    >
+                                        {stageArtifactEditModal.scenes.map((scene) => (
+                                            <option key={`scene-edit-${scene.sceneId}`} value={scene.sceneId}>
+                                                {scene.displayLabel || scene.sceneId}
+                                                {scene.sceneOrder ? ` · #${scene.sceneOrder}` : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <span className="text-[11px] text-white/40">
+                                        {t(
+                                            `${stageArtifactEditModal.scenes.length} 场`,
+                                            `${stageArtifactEditModal.scenes.length} scene(s)`
+                                        )}
+                                    </span>
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="p-4 overflow-y-auto custom-scrollbar flex-1 min-h-0">
-                            {stageArtifactEditModal.editing ? (
+                            {stageArtifactEditModal.kind === 'scene_beats' ? (
+                                Array.isArray(stageArtifactEditModal.headers) && stageArtifactEditModal.headers.length > 0 ? (
+                                    <div className="space-y-3">
+                                        {stageArtifactEditModal.headers.map((header) => {
+                                            const fieldKey = String(header || '').trim();
+                                            if (!fieldKey || isHiddenSceneBeatsField(fieldKey)) return null;
+                                            const value = String(stageArtifactEditModal.fields?.[fieldKey] ?? '');
+                                            const longField = isLongSceneBeatsField(fieldKey);
+                                            const label = getSceneBeatsFieldLabel(fieldKey);
+                                            return (
+                                                <div
+                                                    key={`scene-field-${fieldKey}`}
+                                                    className="rounded-lg border border-white/10 bg-black/30 px-3 py-2.5"
+                                                >
+                                                    <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                                                        <label className="text-[11px] font-semibold text-amber-200/90">
+                                                            {label}
+                                                        </label>
+                                                        <span className="text-[10px] text-white/30 font-mono truncate">
+                                                            {fieldKey}
+                                                        </span>
+                                                    </div>
+                                                    {stageArtifactEditModal.editing ? (
+                                                        longField ? (
+                                                            <textarea
+                                                                className="w-full min-h-[6rem] bg-black/40 text-white/90 border border-white/20 rounded-md px-2.5 py-2 text-sm focus:outline-none focus:border-amber-500/50 resize-y custom-scrollbar font-mono leading-relaxed"
+                                                                rows={getSceneBeatsFieldRows(fieldKey)}
+                                                                value={value}
+                                                                disabled={stageArtifactEditModal.saving}
+                                                                onChange={(e) => setStageArtifactEditModal((prev) => ({
+                                                                    ...prev,
+                                                                    fields: {
+                                                                        ...(prev.fields || {}),
+                                                                        [fieldKey]: e.target.value,
+                                                                    },
+                                                                }))}
+                                                            />
+                                                        ) : (
+                                                            <input
+                                                                type="text"
+                                                                className="w-full bg-black/40 text-white/90 border border-white/20 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:border-amber-500/50 font-mono"
+                                                                value={value}
+                                                                disabled={stageArtifactEditModal.saving}
+                                                                onChange={(e) => setStageArtifactEditModal((prev) => ({
+                                                                    ...prev,
+                                                                    fields: {
+                                                                        ...(prev.fields || {}),
+                                                                        [fieldKey]: e.target.value,
+                                                                    },
+                                                                }))}
+                                                            />
+                                                        )
+                                                    ) : (
+                                                        <div className={`text-sm text-white/80 whitespace-pre-wrap break-words ${longField ? 'font-mono leading-relaxed max-h-[28vh] overflow-y-auto custom-scrollbar' : ''}`}>
+                                                            {value.trim()
+                                                                ? value
+                                                                : (
+                                                                    <span className="text-white/30 italic">
+                                                                        {t('（空）', '(empty)')}
+                                                                    </span>
+                                                                )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100/90">
+                                        {t(
+                                            '未能从当前场解析出 Scenes Table 字段。可切换其他场，或检查该场 Markdown 表结构。',
+                                            'Could not parse Scenes Table fields for this scene. Switch scenes or check the markdown table structure.'
+                                        )}
+                                        {stageArtifactEditModal.editing ? (
+                                            <textarea
+                                                className="mt-3 w-full min-h-[40vh] bg-black/40 text-white/90 border border-white/20 rounded-md p-3 text-sm focus:outline-none focus:border-amber-500/50 resize-y custom-scrollbar font-mono"
+                                                value={stageArtifactEditModal.content || ''}
+                                                onChange={(e) => setStageArtifactEditModal((prev) => ({ ...prev, content: e.target.value }))}
+                                                disabled={stageArtifactEditModal.saving}
+                                            />
+                                        ) : (
+                                            <div className="mt-3 rounded-md border border-white/10 bg-black/30 px-3 py-2 prose prose-invert max-w-none text-sm text-white/85">
+                                                {String(stageArtifactEditModal.content || '').trim() ? (
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                                                        {String(stageArtifactEditModal.content || '')}
+                                                    </ReactMarkdown>
+                                                ) : (
+                                                    <div className="text-xs text-white/35 italic">
+                                                        {t('暂无内容。', 'No content.')}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            ) : stageArtifactEditModal.editing ? (
                                 <textarea
                                     className="w-full min-h-[52vh] bg-black/40 text-white/90 border border-white/20 rounded-md p-3 text-sm focus:outline-none focus:border-amber-500/50 resize-y custom-scrollbar font-mono"
                                     value={stageArtifactEditModal.content || ''}
@@ -19025,10 +19681,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="p-4 border-t border-white/10 bg-white/5 flex items-center justify-between gap-3">
                             <span className="text-xs text-white/45">
-                                {t(
-                                    `字符数：${String(stageArtifactEditModal.content || '').length}`,
-                                    `Chars: ${String(stageArtifactEditModal.content || '').length}`
-                                )}
+                                {stageArtifactEditModal.kind === 'scene_beats'
+                                    ? t(
+                                        `字段 ${stageArtifactEditModal.headers?.length || 0} · 字符 ${Object.values(stageArtifactEditModal.fields || {}).reduce((sum, value) => sum + String(value || '').length, 0)}`,
+                                        `Fields ${stageArtifactEditModal.headers?.length || 0} · Chars ${Object.values(stageArtifactEditModal.fields || {}).reduce((sum, value) => sum + String(value || '').length, 0)}`
+                                    )
+                                    : t(
+                                        `字符数：${String(stageArtifactEditModal.content || '').length}`,
+                                        `Chars: ${String(stageArtifactEditModal.content || '').length}`
+                                    )}
                             </span>
                             <div className="flex items-center gap-2">
                                 {stageArtifactEditModal.editing ? (
@@ -19036,23 +19697,51 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         <button
                                             type="button"
                                             disabled={stageArtifactEditModal.saving}
-                                            onClick={() => setStageArtifactEditModal((prev) => ({
-                                                ...prev,
-                                                editing: false,
-                                                content: prev.kind === 'script_opt'
-                                                    ? (resolveScriptOptBeatsContent() || prev.content)
-                                                    : (resolveSubjectIndexEditContent() || prev.content),
-                                            }))}
+                                            onClick={() => setStageArtifactEditModal((prev) => {
+                                                let content = prev.content;
+                                                let headers = prev.headers || [];
+                                                let fields = prev.fields || {};
+                                                if (prev.kind === 'script_opt') content = resolveScriptOptBeatsContent() || prev.content;
+                                                else if (prev.kind === 'subject_index') content = resolveSubjectIndexEditContent() || prev.content;
+                                                else if (prev.kind === 'scene_beats') {
+                                                    const scene = (prev.scenes || []).find(
+                                                        (item) => String(item?.sceneId || '').trim() === String(prev.sceneId || '').trim()
+                                                    );
+                                                    content = String(scene?.markdown || prev.content || '');
+                                                    const parsed = parseSceneBeatsFieldsFromMarkdown(content);
+                                                    headers = parsed.headers;
+                                                    fields = parsed.fields;
+                                                }
+                                                return { ...prev, editing: false, content, headers, fields };
+                                            })}
                                             className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 hover:bg-white/20 text-white"
                                         >
                                             {t('取消', 'Cancel')}
                                         </button>
                                         <button
                                             type="button"
-                                            disabled={stageArtifactEditModal.saving || !String(stageArtifactEditModal.content || '').trim()}
+                                            disabled={
+                                                stageArtifactEditModal.saving
+                                                || (
+                                                    stageArtifactEditModal.kind === 'scene_beats'
+                                                        ? !(
+                                                            (stageArtifactEditModal.headers?.length > 0)
+                                                            || String(stageArtifactEditModal.content || '').trim()
+                                                        )
+                                                        : !String(stageArtifactEditModal.content || '').trim()
+                                                )
+                                            }
                                             onClick={saveStageArtifactEditModal}
                                             className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
-                                                stageArtifactEditModal.saving || !String(stageArtifactEditModal.content || '').trim()
+                                                stageArtifactEditModal.saving
+                                                || (
+                                                    stageArtifactEditModal.kind === 'scene_beats'
+                                                        ? !(
+                                                            (stageArtifactEditModal.headers?.length > 0)
+                                                            || String(stageArtifactEditModal.content || '').trim()
+                                                        )
+                                                        : !String(stageArtifactEditModal.content || '').trim()
+                                                )
                                                     ? 'bg-white/5 text-white/35 cursor-not-allowed'
                                                     : 'bg-amber-600 hover:bg-amber-500 text-white'
                                             }`}

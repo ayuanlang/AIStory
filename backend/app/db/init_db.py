@@ -1042,6 +1042,10 @@ def check_and_migrate_tables(*, critical_only: bool = False):
 
         try:
             _ensure_missing_table_columns("system_api_settings", SystemAPISetting, is_postgres=is_postgres)
+            try:
+                _ensure_missing_table_columns("function_api_configs", models.FunctionAPIConfig, is_postgres=is_postgres)
+            except Exception as e:
+                logger.warning("Failed to ensure function_api_configs columns: %s", e)
         except Exception as e:
             logger.error(f"Failed to ensure critical system_api_settings columns: {e}")
 
@@ -1194,7 +1198,7 @@ def check_and_migrate_tables(*, critical_only: bool = False):
         except Exception as e:
             logger.error(f"Failed to ensure wechat_pay_configs table: {e}")
 
-        # Ensure legacy system_api_billing_rules schema can support charge multiplier.
+        # Ensure legacy system_api_billing_rules schema can support charge multiplier + supplier prices.
         try:
             inspector = inspect(engine)
             existing_rule_cols = {c['name'] for c in inspector.get_columns('system_api_billing_rules')} if inspector.has_table('system_api_billing_rules') else set()
@@ -1205,10 +1209,47 @@ def check_and_migrate_tables(*, critical_only: bool = False):
                     else:
                         conn.execute(text("ALTER TABLE system_api_billing_rules ADD COLUMN charge_multiplier FLOAT DEFAULT 2.0"))
                     logger.info("Ensured system_api_billing_rules.charge_multiplier column")
+                supplier_cols = {
+                    "supplier_price": ("DOUBLE PRECISION", "FLOAT"),
+                    "supplier_price_input": ("DOUBLE PRECISION", "FLOAT"),
+                    "supplier_price_output": ("DOUBLE PRECISION", "FLOAT"),
+                    "supplier_currency": ("VARCHAR", "VARCHAR"),
+                    "supplier_price_basis": ("VARCHAR", "VARCHAR"),
+                }
+                for col_name, (pg_type, sqlite_type) in supplier_cols.items():
+                    if col_name in existing_rule_cols:
+                        continue
+                    col_type = pg_type if is_postgres else sqlite_type
+                    if is_postgres:
+                        conn.execute(text(f"ALTER TABLE system_api_billing_rules ADD COLUMN IF NOT EXISTS {col_name} {col_type}"))
+                    else:
+                        conn.execute(text(f"ALTER TABLE system_api_billing_rules ADD COLUMN {col_name} {col_type}"))
+                    logger.info("Ensured system_api_billing_rules.%s column", col_name)
                 try:
                     conn.execute(text("UPDATE system_api_billing_rules SET charge_multiplier = 2.0 WHERE charge_multiplier IS NULL OR charge_multiplier < 0"))
                 except Exception as e:
                     logger.warning(f"Failed to backfill system_api_billing_rules.charge_multiplier: {e}")
+                try:
+                    # Backfill supplier CNY from legacy base credits when supplier columns are empty.
+                    conn.execute(text("""
+                        UPDATE system_api_billing_rules
+                        SET supplier_currency = COALESCE(supplier_currency, 'CNY'),
+                            supplier_price_basis = COALESCE(supplier_price_basis, 'money'),
+                            supplier_price = CASE
+                                WHEN supplier_price IS NULL AND COALESCE(billing_cost, 0) > 0 THEN CAST(billing_cost AS FLOAT) / 100.0
+                                ELSE supplier_price
+                            END,
+                            supplier_price_input = CASE
+                                WHEN supplier_price_input IS NULL AND COALESCE(billing_cost_input, 0) > 0 THEN CAST(billing_cost_input AS FLOAT) / 100.0
+                                ELSE supplier_price_input
+                            END,
+                            supplier_price_output = CASE
+                                WHEN supplier_price_output IS NULL AND COALESCE(billing_cost_output, 0) > 0 THEN CAST(billing_cost_output AS FLOAT) / 100.0
+                                ELSE supplier_price_output
+                            END
+                    """))
+                except Exception as e:
+                    logger.warning(f"Failed to backfill system_api_billing_rules supplier prices: {e}")
         except Exception as e:
             logger.error(f"Failed to migrate system_api_billing_rules schema: {e}")
 

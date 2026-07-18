@@ -1093,6 +1093,29 @@ export const persistUiSystemLogs = async (payload = {}) => {
     }
 }
 
+export const fetchUiSystemLogs = async (limit = 100) => {
+    try {
+        const response = await api.get('/system_logs/ui', {
+            params: { limit: Math.max(1, Math.min(Number(limit) || 100, 100)) },
+            skipAuthRedirect: true,
+            timeout: 15000,
+        });
+        return response.data;
+    } catch (error) {
+        return {
+            ok: false,
+            entries: [],
+            error: error?.response?.data?.detail || error?.message || String(error),
+        };
+    }
+}
+
+export const runScriptAnalysisAiDiagnosis = async (payload = {}) => {
+    return await asyncLLMPost('/script_analysis/ai_diagnosis', payload || {}, {
+        timeout: 180000,
+    });
+}
+
 export const fetchProject = async (id) => {
     const response = await api.get(`/projects/${id}`);
     return response.data;

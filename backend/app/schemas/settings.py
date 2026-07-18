@@ -152,9 +152,15 @@ class SystemAPISettingManageUpdate(SystemAPISettingFeatureFields):
     model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = None
     billing_unit_type: Optional[str] = None
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    supplier_currency: Optional[str] = None
+    supplier_price_basis: Optional[str] = None
     billing_cost: Optional[int] = None
     billing_cost_input: Optional[int] = None
     billing_cost_output: Optional[int] = None
+    charge_multiplier: Optional[float] = None
     has_granular_billing_rules: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -173,9 +179,15 @@ class SystemAPISettingManageCreate(SystemAPISettingFeatureFields):
     model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    supplier_currency: Optional[str] = "CNY"
+    supplier_price_basis: Optional[str] = "money"
     billing_cost: Optional[int] = 0
     billing_cost_input: Optional[int] = 0
     billing_cost_output: Optional[int] = 0
+    charge_multiplier: Optional[float] = 2.0
     has_granular_billing_rules: Optional[bool] = False
     is_active: bool = False
 
@@ -218,9 +230,18 @@ class SystemAPISettingOut(BaseModel):
     model_mode_defaults: Optional[Dict[str, str]] = None
     config: Optional[Dict[str, Any]] = {}
     billing_unit_type: Optional[str] = "per_call"
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    supplier_currency: Optional[str] = "CNY"
+    supplier_price_basis: Optional[str] = "money"
     billing_cost: Optional[int] = 0
     billing_cost_input: Optional[int] = 0
     billing_cost_output: Optional[int] = 0
+    charge_multiplier: Optional[float] = 2.0
+    unit_user_cost: Optional[int] = 0
+    unit_user_cost_input: Optional[int] = 0
+    unit_user_cost_output: Optional[int] = 0
     has_granular_billing_rules: Optional[bool] = False
     deprecated: bool = False
     is_active: bool = False
@@ -345,6 +366,11 @@ class SystemAPIBillingRuleBase(BaseModel):
     fps_min: Optional[float] = None
     fps_max: Optional[float] = None
     billing_unit_type: Optional[str] = "per_call"
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    supplier_currency: Optional[str] = "CNY"
+    supplier_price_basis: Optional[str] = "money"
     billing_cost: Optional[float] = 0.0
     billing_cost_input: Optional[float] = 0.0
     billing_cost_output: Optional[float] = 0.0
@@ -387,6 +413,11 @@ class SystemAPIBillingRuleUpdate(BaseModel):
     fps_min: Optional[float] = None
     fps_max: Optional[float] = None
     billing_unit_type: Optional[str] = None
+    supplier_price: Optional[float] = None
+    supplier_price_input: Optional[float] = None
+    supplier_price_output: Optional[float] = None
+    supplier_currency: Optional[str] = None
+    supplier_price_basis: Optional[str] = None
     billing_cost: Optional[float] = None
     billing_cost_input: Optional[float] = None
     billing_cost_output: Optional[float] = None
@@ -1110,9 +1141,13 @@ class FunctionAPISettingItem(BaseModel):
 
 class FunctionAPIConfigUpdate(BaseModel):
     api_settings: List[FunctionAPISettingItem]
+    billing_multiplier: Optional[float] = None
+    billing_add_credits: Optional[int] = None
 
 class FunctionAPIConfigOut(BaseModel):
     function_name: str
     api_settings: List[dict]
+    billing_multiplier: float = 1.0
+    billing_add_credits: int = 0
     class Config:
         from_attributes = True

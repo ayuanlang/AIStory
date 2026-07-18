@@ -6,7 +6,8 @@ from app.models.all_models import (
     SystemAPIBillingRule,
     TransactionAction,
     UserGroup,
-    ProjectGroupCreditAllocation
+    ProjectGroupCreditAllocation,
+    FunctionAPIConfig,
 )
 from fastapi import HTTPException
 import logging
@@ -534,17 +535,14 @@ class BillingService:
     def _billing_from_rule(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
         if not rule:
             return {"unit_type": "per_call", "cost": 0, "cost_input": 0, "cost_output": 0}
-        raw_multiplier = getattr(rule, "charge_multiplier", None)
-        try:
-            parsed_multiplier = float(raw_multiplier) if raw_multiplier is not None else 2.0
-        except Exception:
-            parsed_multiplier = 2.0
-        charge_multiplier = 2.0 if parsed_multiplier < 0 else parsed_multiplier
+        from app.services.billing_pricing import apply_odds_to_credits, normalize_charge_multiplier, resolve_rule_base_credits
+        resolved = resolve_rule_base_credits(rule)
+        charge_multiplier = normalize_charge_multiplier(getattr(rule, "charge_multiplier", None), default=2.0)
         return BillingService._normalize_api_pricing_config({
-            "unit_type": getattr(rule, "billing_unit_type", "per_call"),
-            "cost": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost", 0), 0)) * float(charge_multiplier)))),
-            "cost_input": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0)) * float(charge_multiplier)))),
-            "cost_output": int(max(0, round(float(BillingService._to_int(getattr(rule, "billing_cost_output", 0), 0)) * float(charge_multiplier)))),
+            "unit_type": resolved.get("unit_type") or "per_call",
+            "cost": apply_odds_to_credits(resolved.get("cost") or 0, charge_multiplier),
+            "cost_input": apply_odds_to_credits(resolved.get("cost_input") or 0, charge_multiplier),
+            "cost_output": apply_odds_to_credits(resolved.get("cost_output") or 0, charge_multiplier),
         })
 
     @staticmethod
@@ -1014,6 +1012,93 @@ class BillingService:
                 return max(0, BillingService._to_int(pricing_map[candidate], 0))
         return 0
 
+
+    ITEM_TO_FUNCTION_NAME = {
+        "generate_subjects": "generate_subjects",
+        "generate_subjects_t2i": "generate_subjects_t2i",
+        "generate_subjects_i2i": "generate_subjects_i2i",
+        "generate_cover": "generate_cover",
+        "generate_shot_images": "generate_shot_images",
+        "generate_videos": "generate_videos",
+        "generate_entity_reference_audio": "generate_entity_reference_audio",
+        "generate_entity_reference_audio_audio": "generate_entity_reference_audio_audio",
+        "generate_entity_reference_audio_video": "generate_entity_reference_audio_video",
+        "script_analysis": "script_analysis",
+        "scene_analysis": "script_analysis",
+        "ai_assistant": "ai_assistant",
+        "ai_shot": "ai_shot",
+        "generate_shots": "ai_shot",
+    }
+
+    @staticmethod
+    def _resolve_billing_function_name(details: Optional[dict] = None, system_api_id: Optional[int] = None, db: Session = None) -> Optional[str]:
+        payload = dict(details or {})
+        for key in ("function_name", "billing_function_name", "function"):
+            text = str(payload.get(key) or "").strip()
+            if text:
+                return text
+        for key in ("billing_feature", "feature", "item"):
+            raw = str(payload.get(key) or "").strip()
+            if not raw:
+                continue
+            mapped = BillingService.ITEM_TO_FUNCTION_NAME.get(raw) or BillingService.ITEM_TO_FUNCTION_NAME.get(raw.lower())
+            if mapped:
+                return mapped
+            if raw in BillingService.ITEM_TO_FUNCTION_NAME.values():
+                return raw
+        sid = BillingService._to_int(system_api_id or payload.get("system_api_id"), 0)
+        if sid > 0 and db is not None:
+            try:
+                rows = db.query(FunctionAPIConfig).all()
+            except Exception:
+                rows = []
+            matches = []
+            for row in rows:
+                for item in (row.api_settings or []):
+                    if not isinstance(item, dict):
+                        continue
+                    if BillingService._to_int(item.get("system_api_id"), 0) == sid:
+                        name = str(getattr(row, "function_name", "") or "").strip()
+                        if name:
+                            matches.append(name)
+                        break
+            # Only auto-bind when uniquely mapped to one function.
+            uniq = sorted(set(matches))
+            if len(uniq) == 1:
+                return uniq[0]
+        return None
+
+    @staticmethod
+    def _resolve_function_billing_adjustment(db: Session, details: Optional[dict] = None, system_api_id: Optional[int] = None) -> Dict[str, Any]:
+        function_name = BillingService._resolve_billing_function_name(details, system_api_id=system_api_id, db=db)
+        multiplier = 1.0
+        add_credits = 0
+        source = "default"
+        if function_name:
+            try:
+                row = db.query(FunctionAPIConfig).filter(FunctionAPIConfig.function_name == function_name).first()
+            except Exception:
+                row = None
+            if row is not None:
+                source = "function_api_config"
+                try:
+                    raw_mult = getattr(row, "billing_multiplier", None)
+                    if raw_mult is None or raw_mult == "":
+                        multiplier = 1.0
+                    else:
+                        multiplier = float(raw_mult)
+                        if not math.isfinite(multiplier) or multiplier < 0:
+                            multiplier = 1.0
+                except Exception:
+                    multiplier = 1.0
+                add_credits = max(0, BillingService._to_int(getattr(row, "billing_add_credits", 0), 0))
+        return {
+            "function_name": function_name,
+            "function_multiplier": float(multiplier),
+            "function_add_credits": int(add_credits),
+            "source": source,
+        }
+
     @staticmethod
     def _resolve_api_pricing_config(db: Session, task_type: str, provider: str = None, model: str = None) -> Dict[str, Any]:
         provider_text = str(provider or "").strip()
@@ -1086,9 +1171,30 @@ class BillingService:
                 parsed_divisor = BillingService._safe_float(raw_divisor, 1_000_000.0)
                 divisor = parsed_divisor if parsed_divisor > 0 else 1_000_000.0
 
-            token_cost = ((float(input_tokens) * float(cost_input)) + (float(output_tokens) * float(cost_output))) / divisor
-            if cost_input == 0 and cost_output == 0 and base_cost > 0:
-                token_cost = (float(max(total_tokens, input_tokens + output_tokens)) * float(base_cost)) / divisor
+            from app.services.billing_pricing import (
+                is_video_token_usage,
+                resolve_video_token_unit_rate,
+            )
+            if is_video_token_usage(payload):
+                tokens = max(total_tokens, output_tokens, input_tokens)
+                if tokens <= 0:
+                    estimate = payload.get("video_token_estimate")
+                    if isinstance(estimate, dict):
+                        tokens = BillingService._to_int(estimate.get("tokens", 0), 0)
+                has_video_input = bool(payload.get("has_video_input"))
+                if not has_video_input and isinstance(payload.get("video_token_estimate"), dict):
+                    has_video_input = bool(payload["video_token_estimate"].get("has_video_input"))
+                selected = resolve_video_token_unit_rate(
+                    cost=float(base_cost),
+                    cost_input=float(cost_input),
+                    cost_output=float(cost_output),
+                    has_video_input=has_video_input,
+                )
+                token_cost = (float(tokens) * float(selected["rate"])) / divisor
+            else:
+                token_cost = ((float(input_tokens) * float(cost_input)) + (float(output_tokens) * float(cost_output))) / divisor
+                if cost_input == 0 and cost_output == 0 and base_cost > 0:
+                    token_cost = (float(max(total_tokens, input_tokens + output_tokens)) * float(base_cost)) / divisor
             if return_float: return float(max(0.0, token_cost))
             
             import math
@@ -1589,6 +1695,8 @@ class BillingService:
             score += 2
         if extra.get("require_success_output") is True:
             score += 2
+        if extra.get("has_video_input") is not None:
+            score += 2
 
         required_keys = extra.get("required_keys")
         if isinstance(required_keys, list):
@@ -1680,6 +1788,14 @@ class BillingService:
             return False
 
         extra = BillingService._rule_extra_conditions(rule)
+        rule_has_video_input = extra.get("has_video_input")
+        if rule_has_video_input is not None:
+            usage_has_video_input = usage.get("has_video_input")
+            if usage_has_video_input is None and isinstance(usage.get("video_token_estimate"), dict):
+                usage_has_video_input = usage["video_token_estimate"].get("has_video_input")
+            if usage_has_video_input is not None and bool(rule_has_video_input) != bool(usage_has_video_input):
+                return False
+
         if not BillingService._in_range_int(
             usage.get("cache_hit_tokens", 0),
             extra.get("cache_hit_tokens_min"),
@@ -1745,12 +1861,20 @@ class BillingService:
 
     @staticmethod
     def _estimate_rule_cost(rule: SystemAPIBillingRule, usage: Dict[str, Any]) -> Dict[str, Any]:
+        from app.services.billing_pricing import (
+            compute_user_charge,
+            estimate_base_amount_by_unit,
+            resolve_rule_base_credits,
+        )
+
+        resolved = resolve_rule_base_credits(rule)
         raw_cfg = {
-            "unit_type": str(getattr(rule, "billing_unit_type", "per_call") or "per_call"),
-            "cost": max(0, BillingService._to_int(getattr(rule, "billing_cost", 0), 0)),
-            "cost_input": max(0, BillingService._to_int(getattr(rule, "billing_cost_input", 0), 0)),
-            "cost_output": max(0, BillingService._to_int(getattr(rule, "billing_cost_output", 0), 0)),
+            "unit_type": str(resolved.get("unit_type") or "per_call"),
+            "cost": max(0, int(resolved.get("cost") or 0)),
+            "cost_input": max(0, int(resolved.get("cost_input") or 0)),
+            "cost_output": max(0, int(resolved.get("cost_output") or 0)),
         }
+        supplier = resolved.get("supplier") if isinstance(resolved.get("supplier"), dict) else {}
         extra = BillingService._rule_extra_conditions(rule)
         cache_hit_input_cost = BillingService._to_int(extra.get("cache_hit_cost_input", 0), 0)
         cache_hit_output_cost = BillingService._to_int(extra.get("cache_hit_cost_output", 0), 0)
@@ -1778,23 +1902,23 @@ class BillingService:
             ) / divisor
             amount = max(0.0, float(computed))
         else:
-            amount = BillingService._estimate_api_cost_from_config(raw_cfg, usage, return_float=True)
-
-        raw_multiplier = getattr(rule, "charge_multiplier", None)
-        try:
-            parsed_multiplier = float(raw_multiplier) if raw_multiplier is not None else 2.0
-        except Exception:
-            parsed_multiplier = 2.0
-        # Requirement: null/negative multiplier falls back to 2.0
-        charge_multiplier = 2.0 if parsed_multiplier < 0 else parsed_multiplier
+            amount = float(estimate_base_amount_by_unit(raw_cfg, usage))
 
         runtime_multiplier = 1.0
         runtime_adjustments: Dict[str, Any] = {}
         is_seedance_video = bool(usage.get("is_seedance_video"))
+        is_seedance_2 = bool(usage.get("is_seedance_2"))
+        uses_video_token_formula = bool(
+            usage.get("video_token_estimate")
+            or str(usage.get("estimation_method") or "").startswith("video_token")
+            or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
+        )
         runtime_enabled = extra.get("seedance_runtime_price_adjustment_enabled")
         runtime_enabled = True if runtime_enabled is None else bool(BillingService._normalize_bool_value(runtime_enabled))
         if is_seedance_video and runtime_enabled:
-            if bool(usage.get("draft_mode")):
+            # Seedance 2.0 / video-token formula already folds draft & video-input duration
+            # into token usage; skip legacy continuation markup for that branch.
+            if bool(usage.get("draft_mode")) and not uses_video_token_formula:
                 draft_multiplier = BillingService._first_positive_float(
                     extra,
                     [
@@ -1806,7 +1930,7 @@ class BillingService:
                 )
                 runtime_multiplier *= draft_multiplier
                 runtime_adjustments["seedance_draft_price_multiplier"] = draft_multiplier
-            if bool(usage.get("use_prev_video")):
+            if bool(usage.get("use_prev_video")) and not (is_seedance_2 or uses_video_token_formula):
                 continuation_multiplier = BillingService._first_positive_float(
                     extra,
                     [
@@ -1818,23 +1942,62 @@ class BillingService:
                 )
                 runtime_multiplier *= continuation_multiplier
                 runtime_adjustments["seedance_continuation_price_multiplier"] = continuation_multiplier
+            if uses_video_token_formula:
+                runtime_adjustments["video_token_branch"] = "seedance2" if is_seedance_2 else "fallback"
+                runtime_adjustments["video_token_formula"] = (
+                    (usage.get("video_token_estimate") or {}).get("formula")
+                    if isinstance(usage.get("video_token_estimate"), dict)
+                    else None
+                )
+                from app.services.billing_pricing import resolve_video_token_unit_rate
+                has_video_input = bool(usage.get("has_video_input"))
+                if not has_video_input and isinstance(usage.get("video_token_estimate"), dict):
+                    has_video_input = bool(usage["video_token_estimate"].get("has_video_input"))
+                rate_meta = resolve_video_token_unit_rate(
+                    cost=float(raw_cfg["cost"]),
+                    cost_input=float(raw_cfg["cost_input"]),
+                    cost_output=float(raw_cfg["cost_output"]),
+                    has_video_input=has_video_input,
+                )
+                runtime_adjustments["video_token_rate_branch"] = rate_meta.get("rate_branch")
+                runtime_adjustments["video_token_unit_rate"] = rate_meta.get("rate")
+                runtime_adjustments["has_video_input"] = bool(has_video_input)
 
-        import math
+        charged = compute_user_charge(
+            unit_type=raw_cfg["unit_type"],
+            base_cost=raw_cfg["cost"],
+            base_cost_input=raw_cfg["cost_input"],
+            base_cost_output=raw_cfg["cost_output"],
+            charge_multiplier=getattr(rule, "charge_multiplier", 2.0),
+            usage={"billing_quantity": 1},
+            runtime_multiplier=1.0,
+        )
+        # Reuse unit calc amount (incl. cache path) then apply odds via pricing program.
+        from app.services.billing_pricing import apply_odds_to_credits, normalize_charge_multiplier
+        charge_multiplier = normalize_charge_multiplier(getattr(rule, "charge_multiplier", None), default=2.0)
         base_cost = int(max(0, math.ceil(amount))) if amount > 0 else 0
-        final_charged_val = float(amount) * float(charge_multiplier) * float(runtime_multiplier)
-        charged_cost = int(max(0, math.ceil(final_charged_val))) if final_charged_val > 0 else 0
+        charged_cost = apply_odds_to_credits(amount, charge_multiplier, runtime_multiplier)
         effective_cfg = BillingService._normalize_api_pricing_config({
             "unit_type": raw_cfg["unit_type"],
-            "cost": int(max(0, round(float(raw_cfg["cost"]) * float(charge_multiplier) * float(runtime_multiplier)))),
-            "cost_input": int(max(0, round(float(raw_cfg["cost_input"]) * float(charge_multiplier) * float(runtime_multiplier)))),
-            "cost_output": int(max(0, round(float(raw_cfg["cost_output"]) * float(charge_multiplier) * float(runtime_multiplier)))),
+            "cost": int(charged.get("unit_user_cost") or 0),
+            "cost_input": int(charged.get("unit_user_cost_input") or 0),
+            "cost_output": int(charged.get("unit_user_cost_output") or 0),
         })
+        if runtime_multiplier != 1.0:
+            effective_cfg = BillingService._normalize_api_pricing_config({
+                "unit_type": raw_cfg["unit_type"],
+                "cost": apply_odds_to_credits(raw_cfg["cost"], charge_multiplier, runtime_multiplier),
+                "cost_input": apply_odds_to_credits(raw_cfg["cost_input"], charge_multiplier, runtime_multiplier),
+                "cost_output": apply_odds_to_credits(raw_cfg["cost_output"], charge_multiplier, runtime_multiplier),
+            })
         return {
             "cost": charged_cost,
             "base_cost": base_cost,
             "charge_multiplier": float(charge_multiplier),
             "runtime_price_multiplier": float(runtime_multiplier),
             "runtime_price_adjustments": runtime_adjustments,
+            "supplier_pricing": supplier,
+            "base_credit_source": resolved.get("source"),
             "config": effective_cfg,
         }
 
@@ -1942,6 +2105,8 @@ class BillingService:
             "rule_charge_multiplier": float((pricing_payload or {}).get("charge_multiplier", getattr(rule, "charge_multiplier", 2.0)) or 0.0),
             "runtime_price_multiplier": float((pricing_payload or {}).get("runtime_price_multiplier", 1.0) or 1.0),
             "runtime_price_adjustments": (pricing_payload or {}).get("runtime_price_adjustments") or {},
+            "supplier_pricing": (pricing_payload or {}).get("supplier_pricing") or {},
+            "base_credit_source": (pricing_payload or {}).get("base_credit_source"),
             "computed_base_cost": int((pricing_payload or {}).get("base_cost", 0) or 0),
             "computed_cost": int((pricing_payload or {}).get("cost", 0) or 0),
             "specificity_score": int(specificity or 0),
@@ -2007,17 +2172,56 @@ class BillingService:
             model_text = str(getattr(system_row, "model", "") or model_text).strip()
 
         if mode == "video":
-            identity_text = " ".join(
-                str(part or "")
-                for part in [
-                    provider_text,
-                    model_text,
-                    getattr(system_row, "name", "") if system_row else "",
-                ]
-            ).lower()
+            identity_parts = [
+                provider_text,
+                model_text,
+                getattr(system_row, "name", "") if system_row else "",
+            ]
+            identity_text = " ".join(str(part or "") for part in identity_parts).lower()
             usage["is_seedance_video"] = "seedance" in identity_text
+            usage["is_seedance_2"] = BillingService.is_seedance_2_model(*identity_parts)
+            usage["has_video_input"] = BillingService.resolve_has_video_input(usage)
             if usage.get("is_seedance_video"):
                 usage["seedance_billing_adjustable"] = True
+            # Video token fallback / Seedance 2.0 branch: derive tokens when missing.
+            if (
+                usage.get("is_seedance_2")
+                or str(usage.get("estimation_method") or "").startswith("video_token")
+                or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
+                or (
+                    BillingService._to_int(usage.get("output_tokens", 0), 0) <= 0
+                    and BillingService._to_int(usage.get("total_tokens", 0), 0) <= 0
+                    and (
+                        BillingService._to_int(usage.get("width", 0), 0) > 0
+                        or BillingService._to_int(usage.get("height", 0), 0) > 0
+                    )
+                )
+            ):
+                out_duration = BillingService._safe_float(
+                    usage.get("duration_seconds", usage.get("duration", usage.get("estimated_duration", 0))),
+                    0.0,
+                )
+                if out_duration > 0:
+                    token_estimate = BillingService.estimate_video_token_usage(
+                        width=BillingService._to_int(usage.get("width"), 1280) or 1280,
+                        height=BillingService._to_int(usage.get("height"), 720) or 720,
+                        fps=BillingService._to_int(usage.get("fps"), 24) or 24,
+                        output_duration_seconds=out_duration,
+                        has_video_input=bool(usage.get("has_video_input")),
+                        input_duration_seconds=usage.get("input_duration_seconds"),
+                        draft_token_coefficient=BillingService._safe_float(
+                            usage.get("draft_token_coefficient"),
+                            1.0 if not usage.get("draft_mode") else BillingService.DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER,
+                        ),
+                        method=("seedance2_video_token_formula" if usage.get("is_seedance_2") else "video_token_formula"),
+                    )
+                    tokens = int(token_estimate.get("tokens") or 0)
+                    if tokens > 0 and BillingService._to_int(usage.get("output_tokens", 0), 0) <= 0:
+                        usage["output_tokens"] = tokens
+                        usage["total_tokens"] = tokens
+                    usage["video_token_estimate"] = token_estimate
+                    usage["estimation_method"] = token_estimate.get("estimation_method")
+                    usage["video_token_branch"] = "seedance2" if usage.get("is_seedance_2") else "fallback"
 
         if (
             system_row
@@ -2109,9 +2313,36 @@ class BillingService:
             and system_row is not None
         )
 
+        function_billing = BillingService._resolve_function_billing_adjustment(
+            db,
+            details=payload_details,
+            system_api_id=(int(system_row.id) if system_row else None),
+        )
+        api_cost_before_function = int(selected_api_cost)
         if used_reserved_fallback and reserved_cost_fallback is not None:
+            # Reserved fallback already includes prior function markup from reserve phase.
             total_cost = max(0, int(reserved_cost_fallback))
+            function_billing = {
+                **function_billing,
+                "applied": False,
+                "reason": "settlement_reserved_cost_fallback",
+                "api_cost_before": api_cost_before_function,
+                "api_cost_after": int(reserved_cost_fallback),
+            }
         else:
+            from app.services.billing_pricing import apply_function_billing_adjustment
+            adjusted = apply_function_billing_adjustment(
+                selected_api_cost,
+                multiplier=function_billing.get("function_multiplier", 1.0),
+                add_credits=function_billing.get("function_add_credits", 0),
+            )
+            selected_api_cost = int(adjusted.get("api_cost_after") or 0)
+            function_billing = {
+                **function_billing,
+                "applied": True,
+                "api_cost_before": int(adjusted.get("api_cost_before") or api_cost_before_function),
+                "api_cost_after": int(selected_api_cost),
+            }
             total_cost = max(0, int(feature_cost) + int(selected_api_cost))
 
         normalized_task = str(task_type or "").strip().lower()
@@ -2159,6 +2390,8 @@ class BillingService:
             "phase": phase,
             "feature_cost": int(feature_cost),
             "api_cost": int(selected_api_cost),
+            "api_cost_before_function": int(function_billing.get("api_cost_before") or selected_api_cost),
+            "function_billing": function_billing,
             "total_cost": int(total_cost),
             "api_pricing": selected_api_cfg,
             "fallback_api_cost": int(api_cost_fallback),
@@ -2216,6 +2449,8 @@ class BillingService:
         payload = {
             "feature_cost": int(breakdown.get("feature_cost") or 0),
             "api_cost": int(breakdown.get("api_cost") or 0),
+            "api_cost_before_function": int(breakdown.get("api_cost_before_function") or breakdown.get("api_cost") or 0),
+            "function_billing": breakdown.get("function_billing") or {},
             "fallback_api_cost": int(breakdown.get("fallback_api_cost") or 0),
             "total_cost": int(breakdown.get("total_cost") or 0),
             "resolved_provider": breakdown.get("resolved_provider"),
@@ -2412,6 +2647,98 @@ class BillingService:
         return False
 
     # ── Video token estimation ──────────────────────────────────────
+    # Ark Seedance 2.0 / video-token fallback:
+    #   tokens = (W × H × fps × billable_duration) / 1024
+    #   without video input: billable_duration = output_duration
+    #   with video input:    billable_duration = input_duration + output_duration
+    #   cost = token_unit_price × tokens
+
+    @staticmethod
+    def is_seedance_2_model(*identity_parts: Any) -> bool:
+        """True when identity contains both 'seedance' and a '2' version marker."""
+        text = " ".join(str(part or "") for part in identity_parts).strip().lower()
+        if "seedance" not in text:
+            return False
+        if any(marker in text for marker in ("seedance-2", "seedance_2", "seedance2", "2.0", "2-0", "2_0")):
+            return True
+        # Loose fallback: seedance + standalone digit 2 (e.g. "seedance 2 pro")
+        return bool(re.search(r"(^|[^0-9])2([^0-9]|$)", text))
+
+    @staticmethod
+    def resolve_has_video_input(usage: Optional[Dict[str, Any]] = None) -> bool:
+        payload = dict(usage or {})
+        if payload.get("has_video_input") is True:
+            return True
+        if payload.get("has_video_input") is False:
+            return False
+        if bool(payload.get("use_prev_video") or payload.get("shot_continuation")):
+            return True
+        for key in ("reference_video_count", "resolved_reference_video_count", "ref_video_count"):
+            if BillingService._to_int(payload.get(key), 0) > 0:
+                return True
+        for key in ("reference_video_urls", "ref_video_urls"):
+            value = payload.get(key)
+            if isinstance(value, (list, tuple)) and len(value) > 0:
+                return True
+        if BillingService._safe_float(payload.get("input_duration_seconds"), 0.0) > 0:
+            return True
+        return False
+
+    @staticmethod
+    def estimate_video_token_usage(
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 24,
+        output_duration_seconds: float = 5.0,
+        *,
+        has_video_input: bool = False,
+        input_duration_seconds: Optional[float] = None,
+        draft_token_coefficient: float = 1.0,
+        method: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Estimate video tokens via Ark Seedance 2.0 / video-token fallback formula."""
+        w = max(1, int(width or 1))
+        h = max(1, int(height or 1))
+        f = max(1, int(fps or 1))
+        out_d = max(0.0, float(output_duration_seconds or 0.0))
+        in_d = 0.0
+        if has_video_input:
+            parsed_in = BillingService._safe_float(input_duration_seconds, 0.0)
+            # When input duration is unknown, use output duration as reserve proxy.
+            in_d = parsed_in if parsed_in > 0 else out_d
+        billable_duration = (out_d + in_d) if has_video_input else out_d
+        if billable_duration <= 0:
+            return {
+                "tokens": 0,
+                "width": w,
+                "height": h,
+                "fps": f,
+                "output_duration_seconds": out_d,
+                "input_duration_seconds": in_d,
+                "billable_duration_seconds": 0.0,
+                "has_video_input": bool(has_video_input),
+                "estimation_method": method or "video_token_formula",
+                "formula": "(width * height * fps * billable_duration) / 1024",
+            }
+
+        raw = (float(w) * float(h) * float(f) * float(billable_duration)) / 1024.0
+        coeff = float(draft_token_coefficient or 1.0)
+        if 0 < coeff < 1.0:
+            raw *= coeff
+        tokens = max(1, int(math.ceil(raw))) if raw > 0 else 0
+        return {
+            "tokens": tokens,
+            "width": w,
+            "height": h,
+            "fps": f,
+            "output_duration_seconds": out_d,
+            "input_duration_seconds": in_d,
+            "billable_duration_seconds": float(billable_duration),
+            "has_video_input": bool(has_video_input),
+            "draft_token_coefficient": coeff,
+            "estimation_method": method or ("seedance2_video_token_formula" if has_video_input else "video_token_formula"),
+            "formula": "(width * height * fps * (input+output duration)) / 1024" if has_video_input else "(width * height * fps * output_duration) / 1024",
+        }
 
     @staticmethod
     def estimate_video_output_tokens(
@@ -2420,23 +2747,30 @@ class BillingService:
         fps: int = 24,
         duration_seconds: float = 5.0,
         draft_token_coefficient: float = 1.0,
+        *,
+        has_video_input: bool = False,
+        input_duration_seconds: Optional[float] = None,
+        method: Optional[str] = None,
     ) -> int:
         """
-        Estimate video output tokens.
-        Normal:  ceil(width × height × fps × duration / 1024)
-        Draft:   above × draft_token_coefficient  (< 1.0 means fewer tokens)
+        Estimate video tokens (Seedance 2.0 / video-token fallback).
+
+        Without video input:
+          ceil(width × height × fps × output_duration / 1024)
+        With video input:
+          ceil(width × height × fps × (input_duration + output_duration) / 1024)
         """
-        w = max(1, int(width))
-        h = max(1, int(height))
-        f = max(1, int(fps))
-        d = max(0.0, float(duration_seconds))
-        if d <= 0:
-            return 0
-        raw = (w * h * f * d) / 1024.0
-        coeff = float(draft_token_coefficient)
-        if 0 < coeff < 1.0:
-            raw *= coeff
-        return max(1, int(math.ceil(raw)))
+        estimated = BillingService.estimate_video_token_usage(
+            width=width,
+            height=height,
+            fps=fps,
+            output_duration_seconds=duration_seconds,
+            has_video_input=has_video_input,
+            input_duration_seconds=input_duration_seconds,
+            draft_token_coefficient=draft_token_coefficient,
+            method=method,
+        )
+        return int(estimated.get("tokens") or 0)
 
     @staticmethod
     def resolve_video_token_config(
@@ -2463,7 +2797,20 @@ class BillingService:
                 SystemAPISetting.provider == provider_text,
             ).order_by(SystemAPISetting.id.desc()).first()
 
-        defaults = {"default_width": 1280, "default_height": 720, "default_fps": 24, "draft_token_coefficient": 1.0}
+        defaults = {
+            "default_width": 1280,
+            "default_height": 720,
+            "default_fps": 24,
+            "draft_token_coefficient": 1.0,
+            "is_seedance_2": BillingService.is_seedance_2_model(provider_text, model_text, getattr(row, "name", "") if row else ""),
+            "video_token_branch": "seedance2" if BillingService.is_seedance_2_model(provider_text, model_text, getattr(row, "name", "") if row else "") else "fallback",
+        }
+        if row:
+            defaults["is_seedance_2"] = BillingService.is_seedance_2_model(
+                provider_text, model_text, getattr(row, "name", "")
+            )
+            defaults["video_token_branch"] = "seedance2" if defaults["is_seedance_2"] else "fallback"
+
         if not row:
             return defaults
 
@@ -2521,6 +2868,7 @@ class BillingService:
         resolved_provider = reserve_breakdown.get("resolved_provider") or provider
         resolved_model = reserve_breakdown.get("resolved_model") or model
 
+        selected_rule_detail = reserve_breakdown.get("selected_rule_detail") if isinstance(reserve_breakdown.get("selected_rule_detail"), dict) else {}
         reserve_details.update({
             "resolved_provider": reserve_breakdown.get("resolved_provider"),
             "resolved_model": reserve_breakdown.get("resolved_model"),
@@ -2533,6 +2881,22 @@ class BillingService:
                 model=resolved_model,
                 phase="reserve",
             ),
+            # Pricing program layers: supplier → base → odds → function markup → user charge
+            "pricing_program": {
+                "supplier_pricing": selected_rule_detail.get("supplier_pricing") or {},
+                "base_credit_source": selected_rule_detail.get("base_credit_source"),
+                "base_cost": selected_rule_detail.get("computed_base_cost"),
+                "charge_multiplier": selected_rule_detail.get("rule_charge_multiplier"),
+                "runtime_price_multiplier": selected_rule_detail.get("runtime_price_multiplier"),
+                "user_cost_before_function": (reserve_breakdown.get("api_cost_before_function")
+                                              if isinstance(reserve_breakdown, dict) else None),
+                "function_billing": (reserve_breakdown.get("function_billing")
+                                    if isinstance(reserve_breakdown, dict) else {}) or {},
+                "user_cost": (reserve_breakdown.get("api_cost")
+                             if isinstance(reserve_breakdown, dict) and reserve_breakdown.get("api_cost") is not None
+                             else selected_rule_detail.get("computed_cost")),
+                "billing_unit_type": ((selected_rule_detail.get("pricing") or {}) if isinstance(selected_rule_detail.get("pricing"), dict) else {}).get("unit_type"),
+            },
         })
 
         project_id = reserve_details.get("project_id")
@@ -2641,13 +3005,48 @@ class BillingService:
         tx_model = tx_action.model if tx_action else ""
 
         reserved_cost = int(abs(tx.amount))
-        user.credits = (user.credits or 0) + reserved_cost
+        tx_details_dict = dict(tx.details or {}) if isinstance(tx.details, dict) else {}
+        billed_group_credits = max(0, BillingService._to_int(tx_details_dict.get("billed_group_credits", 0), 0))
+        billed_personal_credits = max(0, BillingService._to_int(tx_details_dict.get("billed_personal_credits", 0), 0))
+        group_id = BillingService._to_int(tx_details_dict.get("group_id", 0), 0)
+        project_id = tx_details_dict.get("project_id") or (tx_action.project_id if tx_action else None)
+
+        # Restore group/personal split using reserve-time metadata when available.
+        restored_group = 0
+        restored_personal = 0
+        if billed_group_credits > 0 or billed_personal_credits > 0:
+            if billed_group_credits > 0 and group_id > 0:
+                group = db.query(UserGroup).filter(UserGroup.id == group_id).first()
+                if group:
+                    group.credits = (group.credits or 0) + billed_group_credits
+                    restored_group = billed_group_credits
+            if billed_personal_credits > 0:
+                user.credits = (user.credits or 0) + billed_personal_credits
+                restored_personal = billed_personal_credits
+            # Fallback remainder (legacy reservations without split metadata).
+            remainder = reserved_cost - restored_group - restored_personal
+            if remainder > 0:
+                user.credits = (user.credits or 0) + remainder
+                restored_personal += remainder
+        else:
+            user.credits = (user.credits or 0) + reserved_cost
+            restored_personal = reserved_cost
+
+        if project_id and group_id > 0 and reserved_cost > 0:
+            allocation = db.query(ProjectGroupCreditAllocation).filter(
+                ProjectGroupCreditAllocation.group_id == group_id,
+                ProjectGroupCreditAllocation.project_id == project_id,
+            ).first()
+            if allocation:
+                allocation.used_credits = max(0, (allocation.used_credits or 0) - reserved_cost)
 
         refund_details = {
             "status": "REFUND",
             "reason": "RESERVATION_CANCELED",
             "reservation_tx_id": tx.id,
-            "reservation_billing_breakdown": ((tx.details or {}).get("billing_breakdown") if isinstance(tx.details, dict) else {}),
+            "refunded_group_credits": restored_group,
+            "refunded_personal_credits": restored_personal,
+            "reservation_billing_breakdown": tx_details_dict.get("billing_breakdown") or {},
         }
         if error_msg:
             refund_details["error"] = str(error_msg)[:500]
@@ -2861,6 +3260,7 @@ class BillingService:
             res_details["settlement_tx_id"] = None
 
         # Add actual usage details (token counts, etc)
+        selected_rule_detail = breakdown.get("selected_rule_detail") if isinstance(breakdown.get("selected_rule_detail"), dict) else {}
         res_details.update({
             "resolved_provider": settle_provider,
             "resolved_model": settle_model,
@@ -2876,6 +3276,21 @@ class BillingService:
                 model=settle_model,
                 phase="settle",
             ),
+            "pricing_program": {
+                "supplier_pricing": selected_rule_detail.get("supplier_pricing") or {},
+                "base_credit_source": selected_rule_detail.get("base_credit_source"),
+                "base_cost": selected_rule_detail.get("computed_base_cost"),
+                "charge_multiplier": selected_rule_detail.get("rule_charge_multiplier"),
+                "runtime_price_multiplier": selected_rule_detail.get("runtime_price_multiplier"),
+                "user_cost_before_function": (breakdown.get("api_cost_before_function")
+                                              if isinstance(breakdown, dict) else None),
+                "function_billing": (breakdown.get("function_billing")
+                                    if isinstance(breakdown, dict) else {}) or {},
+                "user_cost": (breakdown.get("api_cost")
+                             if isinstance(breakdown, dict) and breakdown.get("api_cost") is not None
+                             else selected_rule_detail.get("computed_cost")),
+                "billing_unit_type": ((selected_rule_detail.get("pricing") or {}) if isinstance(selected_rule_detail.get("pricing"), dict) else {}).get("unit_type"),
+            },
         })
         provider_usage = details.get("provider_usage")
         if isinstance(provider_usage, dict) and provider_usage:

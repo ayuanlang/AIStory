@@ -163,7 +163,7 @@ import {
 import { processPrompt } from '../lib/promptUtils';
 import { entityNameAppearsInText, entityTokenMatchesName, normalizeEntityToken } from '../lib/entityToken';
 import SettingsPage from './Settings';
-import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
+import { confirmUiMessage, promptUiMessage, notifyUiMessage } from '../lib/uiMessage';
 import ErrorBoundary from '../components/ErrorBoundary';
 
 // Character Canon (Authoritative) generator (shared)
@@ -3287,7 +3287,14 @@ const Editor = ({
             }
             if (postImportStatusNote) summaryLines.push(postImportStatusNote);
             if (!suppressAlerts) {
-                alert(summaryLines.join('\n'));
+                const toastMessage = [
+                    'Import Successful!',
+                    `Subjects=${importedSubjectsTotal}`,
+                    `Scenes=${importedScenesTotal}`,
+                    `Shots=${importStats.shotsCreated}`,
+                ].join(' · ');
+                notifyUiMessage(toastMessage, 'success', 4200);
+                addLog(summaryLines.join('\n'), 'success');
             }
             return {
                 ok: true,
@@ -3313,7 +3320,8 @@ const Editor = ({
                 `Markers: script=${importDiagnostics.markers.script}, scene=${importDiagnostics.markers.scene}, shot=${importDiagnostics.markers.shot}`,
             ];
             if (!suppressAlerts) {
-                alert(noChangeLines.join('\n'));
+                notifyUiMessage('Import finished, but no new data was applied.', 'warning', 4200);
+                addLog(noChangeLines.join('\n'), 'warning');
             }
             return {
                 ok: true,

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 class SystemLogBase(BaseModel):
     action: str
@@ -34,6 +34,45 @@ class UiSystemLogBatchOut(BaseModel):
     ok: bool = True
     written: int = 0
     log_file: str = ""
+
+
+class UiSystemLogReadEntry(BaseModel):
+    stamp: str = ""
+    level: str = "INFO"
+    message: str = ""
+    client_time: Optional[str] = None
+    display: str = ""
+
+
+class UiSystemLogListOut(BaseModel):
+    ok: bool = True
+    entries: List[UiSystemLogReadEntry] = Field(default_factory=list)
+    log_file: str = ""
+
+
+class ScriptAnalysisAiDiagnosisRequest(BaseModel):
+    manual_text: str = ""
+    system_logs: str = ""
+    workspace_summary: str = ""
+    user_note: str = ""
+    project_id: Optional[int] = None
+    episode_id: Optional[int] = None
+    episode_label: str = ""
+    system_api_id: Optional[int] = None
+    function_name: str = "script_analysis"
+    send_to_ops: bool = False
+    # When set with send_to_ops=True, skip LLM and only email this advice + materials.
+    existing_advice: str = ""
+
+
+class ScriptAnalysisAiDiagnosisOut(BaseModel):
+    ok: bool = True
+    advice: str = ""
+    emailed_to_ops: bool = False
+    ops_email: str = ""
+    email_error: Optional[str] = None
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
 
 class LLMCallLogOut(BaseModel):
     id: int

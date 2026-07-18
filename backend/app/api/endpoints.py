@@ -6890,12 +6890,26 @@ def fix_db_schema_endpoint(current_user: User = Depends(get_current_user)):
 
 
 
-from app.services.system_log_service import append_ui_system_logs, get_ui_system_log_path, log_action
+from app.services.system_log_service import (
+    append_ui_system_logs,
+    get_ui_system_log_path,
+    log_action,
+    read_ui_system_logs,
+)
 from app.schemas.system_log import (
     SystemLogOut,
     SystemLogCreate,
     UiSystemLogBatchCreate,
     UiSystemLogBatchOut,
+    UiSystemLogListOut,
+    UiSystemLogReadEntry,
+    ScriptAnalysisAiDiagnosisRequest,
+    ScriptAnalysisAiDiagnosisOut,
+)
+from app.services.script_analysis_ai_diagnosis import (
+    OPS_SUPPORT_EMAIL,
+    build_diagnosis_messages,
+    build_ops_email_body,
 )
 
 def _can_use_system_settings(user: User) -> bool:
@@ -6990,6 +7004,46 @@ def create_system_log_action(
     return row
 
 
+@router.get("/system_logs/ui", response_model=UiSystemLogListOut)
+def list_ui_system_logs(
+    limit: int = 100,
+    current_user: User = Depends(get_current_user),
+):
+    """Read persisted frontend「系统日志」entries for the current user (max 100)."""
+    safe_limit = max(1, min(int(limit or 100), 100))
+    rows = read_ui_system_logs(user_id=int(current_user.id), limit=safe_limit)
+    entries: list[UiSystemLogReadEntry] = []
+    for row in rows:
+        stamp = str(row.get("stamp") or "").strip()
+        level = str(row.get("level") or "INFO").strip().upper() or "INFO"
+        message = str(row.get("message") or "").strip()
+        client_time = str(row.get("client_time") or "").strip() or None
+        # Prefer client clock for display; fall back to server stamp time-of-day.
+        display_time = ""
+        if client_time:
+            try:
+                display_time = datetime.fromisoformat(client_time.replace("Z", "+00:00")).strftime("%H:%M:%S")
+            except Exception:
+                display_time = client_time[11:19] if len(client_time) >= 19 else client_time
+        if not display_time and stamp:
+            display_time = stamp[11:19] if len(stamp) >= 19 else stamp
+        display = f"[{display_time or '--:--:--'}] [{level}] {message}".strip()
+        entries.append(
+            UiSystemLogReadEntry(
+                stamp=stamp,
+                level=level,
+                message=message,
+                client_time=client_time,
+                display=display,
+            )
+        )
+    return UiSystemLogListOut(
+        ok=True,
+        entries=entries,
+        log_file=str(get_ui_system_log_path()),
+    )
+
+
 @router.post("/system_logs/ui", response_model=UiSystemLogBatchOut)
 def persist_ui_system_logs(
     payload: UiSystemLogBatchCreate,
@@ -7010,6 +7064,198 @@ def persist_ui_system_logs(
         ok=True,
         written=int(written or 0),
         log_file=str(get_ui_system_log_path()),
+    )
+
+
+@router.post("/script_analysis/ai_diagnosis", response_model=ScriptAnalysisAiDiagnosisOut)
+async def run_script_analysis_ai_diagnosis(
+    payload: ScriptAnalysisAiDiagnosisRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Diagnose script-analysis page state with LLM; optionally email ops."""
+    current_user_snapshot = _snapshot_user_principal(current_user)
+    current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
+    if payload.project_id:
+        _require_project_access(db, int(payload.project_id), current_user_snapshot)
+
+    manual_text = str(payload.manual_text or "")
+    system_logs = str(payload.system_logs or "")
+    workspace_summary = str(payload.workspace_summary or "")
+    user_note = str(payload.user_note or "")
+    existing_advice = str(payload.existing_advice or "").strip()
+    email_only = bool(payload.send_to_ops) and bool(existing_advice)
+
+    if not any(part.strip() for part in (manual_text, system_logs, workspace_summary, user_note, existing_advice)):
+        raise HTTPException(status_code=400, detail="请至少提供操作手册、系统日志、工作区概况或问题描述中的一项。")
+
+    meta = {
+        "ops_email": OPS_SUPPORT_EMAIL,
+        "email_only": email_only,
+    }
+    advice = existing_advice
+    selected_dropdown_id = None
+    config = None
+
+    if not email_only:
+        messages, prompt_meta = build_diagnosis_messages(
+            manual_text=manual_text,
+            system_logs=system_logs,
+            workspace_summary=workspace_summary,
+            user_note=user_note,
+            project_id=payload.project_id,
+            episode_id=payload.episode_id,
+            episode_label=str(payload.episode_label or ""),
+        )
+        meta.update(prompt_meta)
+
+        config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
+            db,
+            current_user_id,
+            payload.function_name or "script_analysis",
+            payload.system_api_id,
+            context="script_analysis_ai_diagnosis",
+        )
+        if not config or not (config.get("provider") or config.get("api_key") or (config.get("config") or {}).get("api_key")):
+            raise HTTPException(status_code=400, detail="未找到可用的剧本分析 AI 接口，请先在设置中配置。")
+
+        config = _inject_user_advanced_llm_preferences(config, current_user_snapshot)
+        provider = (config or {}).get("provider")
+        model = (config or {}).get("model")
+        task_type = "llm_chat"
+        billing_item = "script_analysis_ai_diagnosis"
+        reservation_tx = None
+        reservation_tx_id = None
+
+        reserve_extra: Dict[str, Any] = {"item": billing_item}
+        if payload.project_id:
+            reserve_extra["project_id"] = int(payload.project_id)
+        if payload.episode_id:
+            reserve_extra["episode_id"] = int(payload.episode_id)
+
+        if billing_service.is_token_pricing(db, task_type, provider, model):
+            est = billing_service.estimate_reserve_tokens_from_messages(messages)
+            reservation_tx = billing_service.reserve_credits(
+                db,
+                current_user_id,
+                task_type,
+                provider,
+                model,
+                {
+                    **reserve_extra,
+                    "estimation_method": "prompt_tokens_ratio",
+                    "estimated_output_ratio": billing_service.RESERVE_OUTPUT_RATIO,
+                    "input_tokens": est.get("input_tokens", 0),
+                    "output_tokens": est.get("output_tokens", 0),
+                    "total_tokens": est.get("total_tokens", 0),
+                },
+            )
+            reservation_tx_id = _reservation_tx_id(reservation_tx)
+        else:
+            billing_service.check_balance(db, current_user_id, task_type, provider, model)
+
+        _release_db_connection(db, "script_analysis_ai_diagnosis_llm_call")
+
+        try:
+            llm_response = await llm_service.chat_completion_with_fallback(
+                messages,
+                config,
+                user_id=current_user_id,
+                category="LLM",
+            )
+            advice = str((llm_response or {}).get("content") or "").strip()
+            if not advice:
+                raise HTTPException(status_code=422, detail="AI 未返回有效诊断内容，请稍后重试。")
+            if advice.startswith("Error:"):
+                raise HTTPException(status_code=502, detail=advice)
+
+            usage = (llm_response or {}).get("usage") if isinstance(llm_response, dict) else {}
+            if not isinstance(usage, dict) or not usage:
+                usage = billing_service.estimate_input_output_tokens_from_messages(
+                    list(messages or []) + [{"role": "assistant", "content": advice}],
+                    output_ratio=1.0,
+                )
+
+            settle_db = SessionLocal()
+            try:
+                billing_details = _finalize_model_invocation_billing(
+                    db=settle_db,
+                    current_user=current_user_snapshot,
+                    task_type=task_type,
+                    provider=provider,
+                    model=model,
+                    reservation_tx=reservation_tx,
+                    reservation_tx_id=reservation_tx_id,
+                    item=billing_item,
+                    usage_payload=usage,
+                    extra_details=reserve_extra,
+                    routing_payload=llm_response,
+                )
+                meta["billing"] = {
+                    "task_type": task_type,
+                    "item": billing_item,
+                    "input_tokens": billing_details.get("input_tokens"),
+                    "output_tokens": billing_details.get("output_tokens"),
+                    "total_tokens": billing_details.get("total_tokens"),
+                }
+            finally:
+                settle_db.close()
+        except HTTPException as exc:
+            if reservation_tx_id:
+                cancel_db = SessionLocal()
+                try:
+                    billing_service.cancel_reservation(cancel_db, reservation_tx_id, str(exc.detail))
+                    billing_service.log_failed_transaction(
+                        cancel_db, current_user_id, task_type, provider, model, str(exc.detail)
+                    )
+                finally:
+                    cancel_db.close()
+            raise
+        except Exception as exc:
+            if reservation_tx_id:
+                cancel_db = SessionLocal()
+                try:
+                    billing_service.cancel_reservation(cancel_db, reservation_tx_id, str(exc))
+                    billing_service.log_failed_transaction(
+                        cancel_db, current_user_id, task_type, provider, model, str(exc)
+                    )
+                finally:
+                    cancel_db.close()
+            raise HTTPException(status_code=500, detail=f"AI 诊断失败：{exc}") from exc
+
+    emailed = False
+    email_error = None
+    if bool(payload.send_to_ops):
+        try:
+            subject, content = build_ops_email_body(
+                username=str(getattr(current_user_snapshot, "username", "") or ""),
+                user_email=str(getattr(current_user_snapshot, "email", "") or ""),
+                project_id=payload.project_id,
+                episode_id=payload.episode_id,
+                episode_label=str(payload.episode_label or ""),
+                user_note=user_note,
+                advice=advice,
+                manual_text=manual_text,
+                system_logs=system_logs,
+                workspace_summary=workspace_summary,
+            )
+            _send_email_via_runtime_smtp(OPS_SUPPORT_EMAIL, subject, content, strict=True)
+            emailed = True
+        except Exception as exc:
+            email_error = str(exc)
+
+    return ScriptAnalysisAiDiagnosisOut(
+        ok=True,
+        advice=advice,
+        emailed_to_ops=emailed,
+        ops_email=OPS_SUPPORT_EMAIL,
+        email_error=email_error,
+        meta={
+            **meta,
+            "system_api_id": selected_dropdown_id,
+            "provider": (config or {}).get("provider") if isinstance(config, dict) else None,
+            "model": (config or {}).get("model") if isinstance(config, dict) else None,
+        },
     )
 
 
@@ -41484,22 +41730,52 @@ async def _run_generate_video(
             reserve_width = int(resolved_video_width) if resolved_video_width else int(_video_token_cfg.get("default_width", 1280))
             reserve_height = int(resolved_video_height) if resolved_video_height else int(_video_token_cfg.get("default_height", 720))
             reserve_fps = int(_video_token_cfg.get("default_fps", 24))
-            _estimated_tokens = billing_service.estimate_video_output_tokens(
+            _ref_video_urls = getattr(req, "ref_video_urls", None)
+            _has_video_input = bool(
+                getattr(req, "use_prev_video", False)
+                or (isinstance(_ref_video_urls, (list, tuple)) and len(_ref_video_urls) > 0)
+            )
+            _input_duration = None
+            try:
+                _raw_input_duration = getattr(req, "input_duration", None)
+                if _raw_input_duration is None:
+                    _raw_input_duration = getattr(req, "input_duration_seconds", None)
+                if _raw_input_duration is not None and float(_raw_input_duration) > 0:
+                    _input_duration = float(_raw_input_duration)
+            except Exception:
+                _input_duration = None
+            _draft_coeff = float(_video_token_cfg.get("draft_token_coefficient", 1.0) or 1.0)
+            if bool(req.draft_mode) and not (0 < _draft_coeff < 1.0):
+                _draft_coeff = float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+            _is_seedance_2 = bool(_video_token_cfg.get("is_seedance_2")) or billing_service.is_seedance_2_model(
+                reserve_provider, reserve_model
+            )
+            _token_estimate = billing_service.estimate_video_token_usage(
                 width=reserve_width,
                 height=reserve_height,
                 fps=reserve_fps,
-                duration_seconds=est_duration,
-                draft_token_coefficient=_video_token_cfg.get("draft_token_coefficient", 1.0),
+                output_duration_seconds=est_duration,
+                has_video_input=_has_video_input,
+                input_duration_seconds=_input_duration,
+                draft_token_coefficient=_draft_coeff,
+                method=("seedance2_video_token_formula" if _is_seedance_2 else "video_token_formula"),
             )
+            _estimated_tokens = int(_token_estimate.get("tokens") or 0)
             reserve_details = {
                 "output_tokens": _estimated_tokens,
                 "total_tokens": _estimated_tokens,
                 "billing_mode": "RESERVE",
-                "estimation_method": "video_token_formula",
+                "estimation_method": _token_estimate.get("estimation_method") or "video_token_formula",
+                "video_token_branch": "seedance2" if _is_seedance_2 else "fallback",
+                "video_token_estimate": _token_estimate,
                 "estimated_duration": est_duration,
+                "duration_seconds": est_duration,
                 "width": reserve_width,
                 "height": reserve_height,
                 "fps": reserve_fps,
+                "has_video_input": bool(_has_video_input),
+                "input_duration_seconds": _token_estimate.get("input_duration_seconds"),
+                "is_seedance_2": bool(_is_seedance_2),
             }
         else:
             reserve_details = {
@@ -42266,19 +42542,51 @@ async def _run_generate_video(
                 raw_resp = (result.get("metadata") or {}).get("raw") or {}
                 usage = raw_resp.get("usage") or {}
                 actual_tokens = int(usage.get("total_tokens") or usage.get("output_tokens") or 0)
-                if actual_tokens <= 0:
-                    actual_tokens = _estimated_tokens  # fallback to estimate
+                token_source = "api_usage" if actual_tokens > 0 else "estimate"
+                settle_has_video_input = bool(
+                    getattr(req, "use_prev_video", False)
+                    or (isinstance(getattr(req, "ref_video_urls", None), (list, tuple)) and len(getattr(req, "ref_video_urls") or []) > 0)
+                )
                 settle_details = {
-                    "output_tokens": actual_tokens,
-                    "total_tokens": actual_tokens,
                     "status": "SETTLED",
                     "billing_mode": "ACTUAL",
-                    "token_source": "api_usage" if int(usage.get("total_tokens", 0) or 0) > 0 else "estimate",
                     "draft_mode": bool(req.draft_mode),
                     "draft": bool(req.draft_mode),
                     "use_prev_video": bool(getattr(req, "use_prev_video", False)),
                     "shot_continuation": bool(getattr(req, "use_prev_video", False)),
+                    "has_video_input": settle_has_video_input,
+                    "width": int(resolved_video_width) if resolved_video_width else None,
+                    "height": int(resolved_video_height) if resolved_video_height else None,
+                    "fps": int((_video_token_cfg or {}).get("default_fps", 24) or 24),
                 }
+                if actual_tokens <= 0:
+                    # Recompute via Seedance 2.0 / video-token fallback formula when provider omits usage.
+                    settle_duration = max(5, int(req.duration or 5)) if (req.duration and req.duration > 0) else 5
+                    settle_estimate = billing_service.estimate_video_token_usage(
+                        width=int(settle_details.get("width") or (_video_token_cfg or {}).get("default_width", 1280) or 1280),
+                        height=int(settle_details.get("height") or (_video_token_cfg or {}).get("default_height", 720) or 720),
+                        fps=int(settle_details.get("fps") or 24),
+                        output_duration_seconds=settle_duration,
+                        has_video_input=settle_has_video_input,
+                        input_duration_seconds=None,
+                        draft_token_coefficient=(
+                            float((_video_token_cfg or {}).get("draft_token_coefficient", 1.0) or 1.0)
+                            if not req.draft_mode
+                            else float(getattr(billing_service, "DEFAULT_SEEDANCE_DRAFT_PRICE_MULTIPLIER", 0.7) or 0.7)
+                        ),
+                        method=(
+                            "seedance2_video_token_formula"
+                            if ((_video_token_cfg or {}).get("is_seedance_2") or billing_service.is_seedance_2_model(final_provider, final_model))
+                            else "video_token_formula"
+                        ),
+                    )
+                    actual_tokens = int(settle_estimate.get("tokens") or _estimated_tokens or 0)
+                    settle_details["video_token_estimate"] = settle_estimate
+                    settle_details["estimation_method"] = settle_estimate.get("estimation_method")
+                    settle_details["input_duration_seconds"] = settle_estimate.get("input_duration_seconds")
+                settle_details["output_tokens"] = actual_tokens
+                settle_details["total_tokens"] = actual_tokens
+                settle_details["token_source"] = token_source
             else:
                 settle_details = {
                     "duration": req.duration,

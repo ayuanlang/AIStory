@@ -1,4 +1,3 @@
-
 from sqlalchemy import event, func, DateTime, Column, Integer, String, Text, ForeignKey, JSON, Boolean, Float, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.session import Base
@@ -656,6 +655,9 @@ generate_subjects_t2i  (文生图：角色、道具、环境、不含封面)`nge
     id = Column(Integer, primary_key=True, index=True)
     function_name = Column(String, unique=True, index=True, nullable=False)   
     api_settings = Column(JSON, default=list) # 存储的是配置项列表： [{system_api_id, priority, is_fallback}]
+    # 功能级用户计费：在规则赔率结果之上再乘倍率（默认1）并加固定积分（默认0）
+    billing_multiplier = Column(Float, nullable=False, default=1.0)
+    billing_add_credits = Column(Integer, nullable=False, default=0)
     
     created_at = Column(String, default=now_bj_iso)
     updated_at = Column(String, default=now_bj_iso)
@@ -711,12 +713,17 @@ class SystemAPIBillingRule(Base):
     fps_min = Column(Float, nullable=True)
     fps_max = Column(Float, nullable=True)
 
-    # 定价
+    # 定价：供应商价（CNY）持久化 → 派生基础积分成本 → 赔率加成后为用户价
     billing_unit_type = Column(String, default="per_call")
-    billing_cost = Column(Integer, default=0)
+    supplier_price = Column(Float, nullable=True)
+    supplier_price_input = Column(Float, nullable=True)
+    supplier_price_output = Column(Float, nullable=True)
+    supplier_currency = Column(String, nullable=True, default="CNY")
+    supplier_price_basis = Column(String, nullable=True, default="money")
+    billing_cost = Column(Integer, default=0)  # 派生：ceil(supplier_price_cny * 100)
     billing_cost_input = Column(Integer, default=0)
     billing_cost_output = Column(Integer, default=0)
-    charge_multiplier = Column(Float, default=2.0)
+    charge_multiplier = Column(Float, default=2.0)  # 赔率：用户价 = 基础成本 * 赔率
 
     extra_conditions = Column(JSON, default={})
     created_at = Column(String, default=now_bj_iso)

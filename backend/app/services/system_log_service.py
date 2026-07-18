@@ -1,8 +1,9 @@
 import logging
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 
 from sqlalchemy.orm import Session
 from app.models.all_models import SystemLog
@@ -24,6 +25,12 @@ _UI_LEVEL_MAP = {
     "warning": "WARNING",
     "error": "ERROR",
 }
+
+_UI_LOG_LINE_RE = re.compile(
+    r"^(?P<stamp>.+?)\s*\|\s*(?P<level>[A-Za-z]+)\s*\|\s*"
+    r"(?:user_id=(?P<user_id>\d+)\s+)?user=(?P<user>[^|]+?)\s*\|\s*"
+    r"(?:client_time=(?P<client_time>\S+)\s+)?(?P<message>.*)$"
+)
 
 
 def log_action(db: Session, user_id: int, user_name: str, action: str, details: str = None, ip_address: str = None):
@@ -120,3 +127,59 @@ def append_ui_system_logs(
         except Exception:
             # Persistence must never break request handling.
             return 0
+
+
+def _parse_ui_system_log_line(line: str) -> Optional[Dict[str, Optional[str]]]:
+    text = str(line or "").strip()
+    if not text:
+        return None
+    match = _UI_LOG_LINE_RE.match(text)
+    if not match:
+        return {
+            "stamp": "",
+            "level": "INFO",
+            "user_id": None,
+            "user": "",
+            "client_time": None,
+            "message": text,
+        }
+    user_id_raw = match.group("user_id")
+    return {
+        "stamp": str(match.group("stamp") or "").strip(),
+        "level": str(match.group("level") or "INFO").strip().upper() or "INFO",
+        "user_id": str(user_id_raw).strip() if user_id_raw else None,
+        "user": str(match.group("user") or "").strip(),
+        "client_time": str(match.group("client_time") or "").strip() or None,
+        "message": str(match.group("message") or "").strip(),
+    }
+
+
+def read_ui_system_logs(
+    *,
+    user_id: Optional[int] = None,
+    limit: int = _UI_SYSTEM_LOG_MAX_LINES,
+) -> List[Dict[str, Optional[str]]]:
+    """Read persisted frontend「系统日志」entries for a user (oldest → newest)."""
+    safe_limit = max(1, min(int(limit or _UI_SYSTEM_LOG_MAX_LINES), _UI_SYSTEM_LOG_MAX_LINES))
+    log_path = get_ui_system_log_path()
+    with _ui_system_file_lock:
+        lines = _read_log_lines(log_path)
+
+    wanted_user_id = str(int(user_id)) if user_id is not None else None
+    entries: List[Dict[str, Optional[str]]] = []
+    for line in lines:
+        parsed = _parse_ui_system_log_line(line)
+        if not parsed:
+            continue
+        if wanted_user_id is not None:
+            line_user_id = str(parsed.get("user_id") or "").strip()
+            if line_user_id and line_user_id != wanted_user_id:
+                continue
+            # Legacy lines without user_id: skip when filtering by user.
+            if not line_user_id:
+                continue
+        if not parsed.get("message"):
+            continue
+        entries.append(parsed)
+
+    return entries[-safe_limit:]

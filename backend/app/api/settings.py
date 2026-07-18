@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, load_only
 from sqlalchemy import cast, String, func, inspect, or_, and_, text, Table, MetaData, bindparam, literal
@@ -2431,12 +2431,66 @@ def _is_base_billing_rule(rule: SystemAPIBillingRule) -> bool:
 
 def _rule_to_billing(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
     if not rule:
-        return {"unit_type": "per_call", "cost": 0, "cost_input": 0, "cost_output": 0}
+        return {
+            "unit_type": "per_call",
+            "cost": 0,
+            "cost_input": 0,
+            "cost_output": 0,
+            "charge_multiplier": 2.0,
+            "supplier_price": None,
+            "supplier_price_input": None,
+            "supplier_price_output": None,
+            "supplier_currency": "CNY",
+            "supplier_price_basis": "money",
+            "unit_user_cost": 0,
+            "unit_user_cost_input": 0,
+            "unit_user_cost_output": 0,
+        }
+    from app.services.billing_pricing import (
+        apply_odds_to_credits,
+        merge_billing_payload_for_upsert,
+        normalize_charge_multiplier,
+        resolve_rule_base_credits,
+    )
+    resolved = resolve_rule_base_credits(rule)
+    multiplier = normalize_charge_multiplier(getattr(rule, "charge_multiplier", None), default=2.0)
+    supplier = resolved.get("supplier") if isinstance(resolved.get("supplier"), dict) else {}
+    # Keep billing_cost* cache aligned with supplier-derived credits when available.
+    if resolved.get("source") == "supplier_price":
+        merged = merge_billing_payload_for_upsert(
+            {
+                "billing_unit_type": resolved.get("unit_type"),
+                "supplier_price": supplier.get("supplier_price"),
+                "supplier_price_input": supplier.get("supplier_price_input"),
+                "supplier_price_output": supplier.get("supplier_price_output"),
+                "supplier_currency": supplier.get("supplier_currency"),
+                "supplier_price_basis": supplier.get("supplier_price_basis"),
+                "charge_multiplier": multiplier,
+            },
+            existing_rule=rule,
+            default_multiplier=multiplier,
+        )
+        cost = int(merged["cost"])
+        cost_input = int(merged["cost_input"])
+        cost_output = int(merged["cost_output"])
+    else:
+        cost = int(resolved.get("cost") or 0)
+        cost_input = int(resolved.get("cost_input") or 0)
+        cost_output = int(resolved.get("cost_output") or 0)
     return {
-        "unit_type": _normalize_billing_unit_type(getattr(rule, "billing_unit_type", None) or "per_call"),
-        "cost": _non_negative_int(getattr(rule, "billing_cost", 0), 0),
-        "cost_input": _non_negative_int(getattr(rule, "billing_cost_input", 0), 0),
-        "cost_output": _non_negative_int(getattr(rule, "billing_cost_output", 0), 0),
+        "unit_type": _normalize_billing_unit_type(resolved.get("unit_type") or "per_call"),
+        "cost": cost,
+        "cost_input": cost_input,
+        "cost_output": cost_output,
+        "charge_multiplier": float(multiplier),
+        "supplier_price": supplier.get("supplier_price"),
+        "supplier_price_input": supplier.get("supplier_price_input"),
+        "supplier_price_output": supplier.get("supplier_price_output"),
+        "supplier_currency": supplier.get("supplier_currency") or "CNY",
+        "supplier_price_basis": supplier.get("supplier_price_basis") or "money",
+        "unit_user_cost": apply_odds_to_credits(cost, multiplier),
+        "unit_user_cost_input": apply_odds_to_credits(cost_input, multiplier),
+        "unit_user_cost_output": apply_odds_to_credits(cost_output, multiplier),
     }
 
 
@@ -2837,27 +2891,17 @@ def _upsert_base_billing_rule(
     *,
     activate: bool = True,
 ) -> SystemAPIBillingRule:
-    def _pick_cost_value(payload: Dict[str, Any], plain_key: str, billing_key: str) -> Any:
-        if plain_key in payload and payload.get(plain_key) is not None:
-            return payload.get(plain_key)
-        return payload.get(billing_key)
+    from app.services.billing_pricing import merge_billing_payload_for_upsert
 
     raw_billing = billing or {}
-    normalized = {
-        # Accept both internal keys (unit_type/cost) and suggestion keys (billing_unit_type/billing_cost).
-        "unit_type": _normalize_billing_unit_type(
-            raw_billing.get("unit_type")
-            or raw_billing.get("billing_unit_type")
-            or "per_call"
-        ),
-        "cost": _non_negative_int(_pick_cost_value(raw_billing, "cost", "billing_cost"), 0),
-        "cost_input": _non_negative_int(_pick_cost_value(raw_billing, "cost_input", "billing_cost_input"), 0),
-        "cost_output": _non_negative_int(_pick_cost_value(raw_billing, "cost_output", "billing_cost_output"), 0),
-    }
-    charge_multiplier = _normalize_rule_charge_multiplier(raw_billing.get("charge_multiplier"), default=2.0)
     raw_extra = raw_billing.get("extra_conditions") if isinstance(raw_billing.get("extra_conditions"), dict) else {}
     flags = _category_to_mode_flags(category)
     rule = _get_base_billing_rule(db, system_api_id, include_inactive=True)
+    normalized = merge_billing_payload_for_upsert(
+        raw_billing,
+        existing_rule=rule,
+        default_multiplier=2.0,
+    )
     now_iso = now_bj_iso()
 
     if rule:
@@ -2893,10 +2937,15 @@ def _upsert_base_billing_rule(
         rule.fps_min = None
         rule.fps_max = None
         rule.billing_unit_type = normalized["unit_type"]
+        rule.supplier_price = normalized.get("supplier_price")
+        rule.supplier_price_input = normalized.get("supplier_price_input")
+        rule.supplier_price_output = normalized.get("supplier_price_output")
+        rule.supplier_currency = normalized.get("supplier_currency") or "CNY"
+        rule.supplier_price_basis = normalized.get("supplier_price_basis") or "money"
         rule.billing_cost = normalized["cost"]
         rule.billing_cost_input = normalized["cost_input"]
         rule.billing_cost_output = normalized["cost_output"]
-        rule.charge_multiplier = charge_multiplier
+        rule.charge_multiplier = normalized["charge_multiplier"]
         rule.extra_conditions = extra
         if activate:
             rule.is_active = True
@@ -2917,10 +2966,15 @@ def _upsert_base_billing_rule(
         output_format=None,
         has_audio=None,
         billing_unit_type=normalized["unit_type"],
+        supplier_price=normalized.get("supplier_price"),
+        supplier_price_input=normalized.get("supplier_price_input"),
+        supplier_price_output=normalized.get("supplier_price_output"),
+        supplier_currency=normalized.get("supplier_currency") or "CNY",
+        supplier_price_basis=normalized.get("supplier_price_basis") or "money",
         billing_cost=normalized["cost"],
         billing_cost_input=normalized["cost_input"],
         billing_cost_output=normalized["cost_output"],
-        charge_multiplier=charge_multiplier,
+        charge_multiplier=normalized["charge_multiplier"],
         extra_conditions={**raw_extra, "rule_kind": _BASE_BILLING_RULE_KIND},
         created_at=now_iso,
         updated_at=now_iso,
@@ -3136,9 +3190,18 @@ def _setting_row_to_out_prefetched(
         model_mode_defaults=(model_mode_defaults or None),
         config=out_cfg,
         billing_unit_type=billing["unit_type"],
+        supplier_price=billing.get("supplier_price"),
+        supplier_price_input=billing.get("supplier_price_input"),
+        supplier_price_output=billing.get("supplier_price_output"),
+        supplier_currency=billing.get("supplier_currency") or "CNY",
+        supplier_price_basis=billing.get("supplier_price_basis") or "money",
         billing_cost=billing["cost"],
         billing_cost_input=billing["cost_input"],
         billing_cost_output=billing["cost_output"],
+        charge_multiplier=billing.get("charge_multiplier", 2.0),
+        unit_user_cost=billing.get("unit_user_cost", 0),
+        unit_user_cost_input=billing.get("unit_user_cost_input", 0),
+        unit_user_cost_output=billing.get("unit_user_cost_output", 0),
         has_granular_billing_rules=row_id in granular_rule_ids,
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=(task_default_id == row_id and row_id > 0),
@@ -3167,9 +3230,18 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         model_mode_defaults=(model_mode_defaults or None),
         config=out_cfg,
         billing_unit_type=billing["unit_type"],
+        supplier_price=billing.get("supplier_price"),
+        supplier_price_input=billing.get("supplier_price_input"),
+        supplier_price_output=billing.get("supplier_price_output"),
+        supplier_currency=billing.get("supplier_currency") or "CNY",
+        supplier_price_basis=billing.get("supplier_price_basis") or "money",
         billing_cost=billing["cost"],
         billing_cost_input=billing["cost_input"],
         billing_cost_output=billing["cost_output"],
+        charge_multiplier=billing.get("charge_multiplier", 2.0),
+        unit_user_cost=billing.get("unit_user_cost", 0),
+        unit_user_cost_input=billing.get("unit_user_cost_input", 0),
+        unit_user_cost_output=billing.get("unit_user_cost_output", 0),
         has_granular_billing_rules=_has_granular_billing_rules(db, int(row.id)),
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=is_task_default_system_setting(db, int(row.id), row.category),
@@ -6637,8 +6709,22 @@ def create_system_api_billing_rule(
     if not target:
         raise HTTPException(status_code=404, detail="System API setting not found")
 
+    from app.services.billing_pricing import merge_billing_payload_for_upsert
+
     payload_data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
-    payload_data["charge_multiplier"] = _normalize_rule_charge_multiplier(payload_data.get("charge_multiplier"), default=2.0)
+    pricing = merge_billing_payload_for_upsert(payload_data, existing_rule=None, default_multiplier=2.0)
+    payload_data.update({
+        "billing_unit_type": pricing["billing_unit_type"],
+        "supplier_price": pricing.get("supplier_price"),
+        "supplier_price_input": pricing.get("supplier_price_input"),
+        "supplier_price_output": pricing.get("supplier_price_output"),
+        "supplier_currency": pricing.get("supplier_currency") or "CNY",
+        "supplier_price_basis": pricing.get("supplier_price_basis") or "money",
+        "billing_cost": pricing["billing_cost"],
+        "billing_cost_input": pricing["billing_cost_input"],
+        "billing_cost_output": pricing["billing_cost_output"],
+        "charge_multiplier": pricing["charge_multiplier"],
+    })
     payload_data["updated_at"] = now_bj_iso()
     rule = SystemAPIBillingRule(**payload_data)
     db.add(rule)
@@ -6666,12 +6752,31 @@ def update_system_api_billing_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="Billing rule not found")
 
+    from app.services.billing_pricing import merge_billing_payload_for_upsert
+
     update_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     if "is_active" in update_data:
         # Preserve explicit disable requests (false) and avoid accidental truthy coercion.
         update_data["is_active"] = bool(update_data.get("is_active"))
-    if "charge_multiplier" in update_data:
-        update_data["charge_multiplier"] = _normalize_rule_charge_multiplier(update_data.get("charge_multiplier"), default=2.0)
+    pricing_keys = {
+        "billing_unit_type", "billing_cost", "billing_cost_input", "billing_cost_output",
+        "charge_multiplier", "supplier_price", "supplier_price_input", "supplier_price_output",
+        "supplier_currency", "supplier_price_basis",
+    }
+    if any(key in update_data for key in pricing_keys):
+        pricing = merge_billing_payload_for_upsert(update_data, existing_rule=rule, default_multiplier=2.0)
+        update_data.update({
+            "billing_unit_type": pricing["billing_unit_type"],
+            "supplier_price": pricing.get("supplier_price"),
+            "supplier_price_input": pricing.get("supplier_price_input"),
+            "supplier_price_output": pricing.get("supplier_price_output"),
+            "supplier_currency": pricing.get("supplier_currency") or "CNY",
+            "supplier_price_basis": pricing.get("supplier_price_basis") or "money",
+            "billing_cost": pricing["billing_cost"],
+            "billing_cost_input": pricing["billing_cost_input"],
+            "billing_cost_output": pricing["billing_cost_output"],
+            "charge_multiplier": pricing["charge_multiplier"],
+        })
     for key, value in update_data.items():
         setattr(rule, key, value)
     rule.updated_at = now_bj_iso()
@@ -7016,6 +7121,11 @@ def apply_system_ai_assistant(
 
         billing = {
             "unit_type": suggestion.unit_type,
+            "supplier_price": suggestion.supplier_price,
+            "supplier_price_input": suggestion.supplier_price_input,
+            "supplier_price_output": suggestion.supplier_price_output,
+            "supplier_currency": suggestion.supplier_currency or "CNY",
+            "supplier_price_basis": suggestion.supplier_price_basis or "money",
             "cost": _base_cost_to_credit(suggestion.supplier_price),
             "cost_input": _base_cost_to_credit(suggestion.supplier_price_input),
             "cost_output": _base_cost_to_credit(suggestion.supplier_price_output),
@@ -7251,8 +7361,19 @@ def update_system_setting_for_manage(
     if _is_system_reserved_category(next_category):
         raise HTTPException(status_code=400, detail="System_* categories are reserved for infrastructure settings and cannot be managed as AIGC System API")
 
-    update_data = payload.dict(exclude_unset=True)
-    billing_keys = ("billing_unit_type", "billing_cost", "billing_cost_input", "billing_cost_output")
+    update_data = payload.dict(exclude_unset=True) if hasattr(payload, "dict") else payload.model_dump(exclude_unset=True)
+    billing_keys = (
+        "billing_unit_type",
+        "billing_cost",
+        "billing_cost_input",
+        "billing_cost_output",
+        "charge_multiplier",
+        "supplier_price",
+        "supplier_price_input",
+        "supplier_price_output",
+        "supplier_currency",
+        "supplier_price_basis",
+    )
     payload_billing = {k: update_data.pop(k) for k in billing_keys if k in update_data}
     has_model_mode_defaults = "model_mode_defaults" in update_data
     payload_model_mode_defaults = update_data.pop("model_mode_defaults", None)
@@ -7263,11 +7384,23 @@ def update_system_setting_for_manage(
     existing_billing = _resolve_system_setting_billing(db, target)
     if payload_billing:
         update_billing = {
-            "unit_type": _normalize_billing_unit_type(payload_billing.get("billing_unit_type") or existing_billing.get("unit_type") or "per_call"),
+            "unit_type": _normalize_billing_unit_type(
+                payload_billing.get("billing_unit_type") or existing_billing.get("unit_type") or "per_call"
+            ),
             "cost": _non_negative_int(payload_billing["billing_cost"]) if "billing_cost" in payload_billing else _non_negative_int(existing_billing.get("cost", 0)),
             "cost_input": _non_negative_int(payload_billing["billing_cost_input"]) if "billing_cost_input" in payload_billing else _non_negative_int(existing_billing.get("cost_input", 0)),
             "cost_output": _non_negative_int(payload_billing["billing_cost_output"]) if "billing_cost_output" in payload_billing else _non_negative_int(existing_billing.get("cost_output", 0)),
+            "charge_multiplier": payload_billing.get("charge_multiplier", existing_billing.get("charge_multiplier", 2.0)),
+            "supplier_price": payload_billing.get("supplier_price", existing_billing.get("supplier_price")),
+            "supplier_price_input": payload_billing.get("supplier_price_input", existing_billing.get("supplier_price_input")),
+            "supplier_price_output": payload_billing.get("supplier_price_output", existing_billing.get("supplier_price_output")),
+            "supplier_currency": payload_billing.get("supplier_currency", existing_billing.get("supplier_currency") or "CNY"),
+            "supplier_price_basis": payload_billing.get("supplier_price_basis", existing_billing.get("supplier_price_basis") or "money"),
         }
+        # Preserve explicit "touched" keys so merge can distinguish omit vs clear.
+        for key in billing_keys:
+            if key in payload_billing:
+                update_billing[key] = payload_billing[key]
     else:
         update_billing = existing_billing
     target.config = _sync_model_mode_defaults_config(
@@ -7291,9 +7424,14 @@ def update_system_setting_for_manage(
     )
     target.api_key = effective_key
 
-    if _is_system_api_auto_billing_sync_enabled():
+    # Explicit billing fields in the update payload always upsert the base rule.
+    # Legacy auto-sync remains gated for updates that omit billing_* fields.
+    if payload_billing or _is_system_api_auto_billing_sync_enabled():
         _upsert_base_billing_rule(db, target.id, target.category, update_billing, activate=True)
+        db.flush()
         _refresh_has_granular_billing_rules_flag(db, target.id)
+        _refresh_settings_price_cache_for_system_apis(db, [int(target.id)])
+        _refresh_settings_provider_price_cache_for_system_apis(db, [int(target.id)])
 
     db.commit()
     db.refresh(target)
@@ -8926,6 +9064,8 @@ def export_system_config_sync_bundle_for_manage(
             {
                 "function_name": row.function_name,
                 "api_settings": row.api_settings if isinstance(row.api_settings, list) else [],
+                "billing_multiplier": _normalize_function_billing_fields(row)["billing_multiplier"],
+                "billing_add_credits": _normalize_function_billing_fields(row)["billing_add_credits"],
                 "created_at": getattr(row, "created_at", None),
                 "updated_at": getattr(row, "updated_at", None),
             }
@@ -9573,9 +9713,15 @@ def import_system_config_sync_bundle_for_manage(
                         function_name = str(raw_conf.get("function_name") or "").strip()
                         if not function_name:
                             continue
+                        billing_fields = _normalize_function_billing_fields(
+                            multiplier=raw_conf.get("billing_multiplier"),
+                            add_credits=raw_conf.get("billing_add_credits"),
+                        )
                         new_conf = FunctionAPIConfig(
                             function_name=function_name,
                             api_settings=raw_conf.get("api_settings") if isinstance(raw_conf.get("api_settings"), list) else [],
+                            billing_multiplier=billing_fields["billing_multiplier"],
+                            billing_add_credits=billing_fields["billing_add_credits"],
                         )
                         if raw_conf.get("created_at") is not None:
                             new_conf.created_at = str(raw_conf.get("created_at"))
@@ -10383,6 +10529,28 @@ def update_api_routing_mode(payload: dict, db: Session = Depends(get_db), curren
     db.refresh(conf)
     return {"use_function_based_routing": conf.use_function_based_routing}
 
+
+def _normalize_function_billing_fields(row: Any = None, *, multiplier: Any = None, add_credits: Any = None) -> Dict[str, Any]:
+    raw_mult = multiplier if multiplier is not None else (getattr(row, "billing_multiplier", None) if row is not None else None)
+    raw_add = add_credits if add_credits is not None else (getattr(row, "billing_add_credits", None) if row is not None else None)
+    try:
+        if raw_mult is None or raw_mult == "":
+            mult = 1.0
+        else:
+            mult = float(raw_mult)
+            if not math.isfinite(mult) or mult < 0:
+                mult = 1.0
+    except Exception:
+        mult = 1.0
+    try:
+        add = int(raw_add) if raw_add is not None and raw_add != "" else 0
+        if add < 0:
+            add = 0
+    except Exception:
+        add = 0
+    return {"billing_multiplier": float(mult), "billing_add_credits": int(add)}
+
+
 @router.get("/settings/system/function_api_configs", response_model=List[FunctionAPIConfigOut])
 def get_all_function_api_configs(
     db: Session = Depends(get_db),
@@ -10436,7 +10604,13 @@ def get_all_function_api_configs(
                     "strict_provider": item.get("strict_provider", False)
                 })
         valid_settings.sort(key=lambda x: x.get("priority", 0), reverse=True)
-        result.append({"function_name": func_name, "api_settings": valid_settings})
+        billing_fields = _normalize_function_billing_fields(config)
+        result.append({
+            "function_name": func_name,
+            "api_settings": valid_settings,
+            "billing_multiplier": billing_fields["billing_multiplier"],
+            "billing_add_credits": billing_fields["billing_add_credits"],
+        })
         
     return result
 
@@ -10520,12 +10694,24 @@ def update_function_api_config(
     
     config = db.query(FunctionAPIConfig).filter(FunctionAPIConfig.function_name == function_name).first()
     new_settings = [item.model_dump() if hasattr(item, "model_dump") else item.dict() for item in update_in.api_settings]
-    
+    billing_fields = _normalize_function_billing_fields(
+        config,
+        multiplier=getattr(update_in, "billing_multiplier", None),
+        add_credits=getattr(update_in, "billing_add_credits", None),
+    )
+
     if config:
         config.api_settings = new_settings
+        config.billing_multiplier = billing_fields["billing_multiplier"]
+        config.billing_add_credits = billing_fields["billing_add_credits"]
         config.updated_at = now_bj_iso()
     else:
-        config = FunctionAPIConfig(function_name=function_name, api_settings=new_settings)
+        config = FunctionAPIConfig(
+            function_name=function_name,
+            api_settings=new_settings,
+            billing_multiplier=billing_fields["billing_multiplier"],
+            billing_add_credits=billing_fields["billing_add_credits"],
+        )
         db.add(config)
         
     db.commit()

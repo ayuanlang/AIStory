@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Save, GripVertical, Download, Upload, RefreshCw } from 'lucide-react';
 import { getFunctionApiConfigs, updateFunctionApiConfig, syncFunctionApiPricingDescriptions, getSystemSettingsManage, getApiRoutingConfig, updateApiRoutingConfig, exportSystemConfigSyncBundleManage, importSystemConfigSyncBundleManage } from '../services/api';
@@ -20,6 +19,7 @@ generate_subjects_i2i: '图生图 (角色/道具/环境)',
 export default function FunctionApiConfigTab() {
     const fileInputRef = useRef(null);
     const [configs, setConfigs] = useState({});
+    const [billingByFunction, setBillingByFunction] = useState({});
     const [systemApis, setSystemApis] = useState([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState({});
@@ -75,10 +75,18 @@ export default function FunctionApiConfigTab() {
             });
 
             const configsMap = {};
+            const billingMap = {};
             configsData.forEach(c => {
                 configsMap[c.function_name] = c.api_settings || [];
+                const mult = Number(c.billing_multiplier);
+                const add = Number(c.billing_add_credits);
+                billingMap[c.function_name] = {
+                    billing_multiplier: Number.isFinite(mult) && mult >= 0 ? String(mult) : '1',
+                    billing_add_credits: Number.isFinite(add) && add >= 0 ? String(Math.floor(add)) : '0',
+                };
             });
             setConfigs(configsMap);
+            setBillingByFunction(billingMap);
             
             // Only keep non-deprecated APIs for the dropdowns
             const activeApis = sysApis.filter(api => !api.deprecated);
@@ -137,10 +145,29 @@ export default function FunctionApiConfigTab() {
 
             })).filter(item => !isNaN(item.system_api_id));
 
-            const res = await updateFunctionApiConfig(funcName, { api_settings: items });
+            const billing = billingByFunction[funcName] || {};
+            const payload = {
+                api_settings: items,
+                billing_multiplier: (() => {
+                    const n = Number(billing.billing_multiplier);
+                    return Number.isFinite(n) && n >= 0 ? n : 1;
+                })(),
+                billing_add_credits: (() => {
+                    const n = Number(billing.billing_add_credits);
+                    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+                })(),
+            };
+            const res = await updateFunctionApiConfig(funcName, payload);
             setConfigs(prev => ({
                 ...prev,
                 [funcName]: res.api_settings || []
+            }));
+            setBillingByFunction(prev => ({
+                ...prev,
+                [funcName]: {
+                    billing_multiplier: String(res.billing_multiplier ?? payload.billing_multiplier ?? 1),
+                    billing_add_credits: String(res.billing_add_credits ?? payload.billing_add_credits ?? 0),
+                },
             }));
             alert('保存成功: ' + (FUNCTION_LABELS[funcName] || funcName));
         } catch (error) {
@@ -363,6 +390,45 @@ export default function FunctionApiConfigTab() {
                                 <div>
                                     <h4 className="text-lg font-medium text-blue-300">{FUNCTION_LABELS[funcName]}</h4>
                                     <p className="text-xs text-gray-400 mt-1">标识: <code className="bg-black/30 px-1.5 py-0.5 rounded text-gray-300">{funcName}</code></p>
+                                    <div className="mt-3 flex flex-wrap items-end gap-3">
+                                        <label className="text-xs text-gray-400">
+                                            <span className="block mb-1">功能计费倍率（兜底 1）</span>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                value={(billingByFunction[funcName] || {}).billing_multiplier ?? '1'}
+                                                onChange={(e) => setBillingByFunction(prev => ({
+                                                    ...prev,
+                                                    [funcName]: {
+                                                        ...(prev[funcName] || { billing_multiplier: '1', billing_add_credits: '0' }),
+                                                        billing_multiplier: e.target.value,
+                                                    },
+                                                }))}
+                                                className="w-28 bg-black/40 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                                                title="在规则赔率结果上再乘以该倍率"
+                                            />
+                                        </label>
+                                        <label className="text-xs text-gray-400">
+                                            <span className="block mb-1">功能加价积分（兜底 0）</span>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step="1"
+                                                value={(billingByFunction[funcName] || {}).billing_add_credits ?? '0'}
+                                                onChange={(e) => setBillingByFunction(prev => ({
+                                                    ...prev,
+                                                    [funcName]: {
+                                                        ...(prev[funcName] || { billing_multiplier: '1', billing_add_credits: '0' }),
+                                                        billing_add_credits: e.target.value,
+                                                    },
+                                                }))}
+                                                className="w-28 bg-black/40 border border-white/10 rounded px-2 py-1.5 text-sm text-white"
+                                                title="在乘倍率后的结果上再加固定积分"
+                                            />
+                                        </label>
+                                        <span className="text-[11px] text-gray-500 pb-1.5">用户价 = ceil(规则结果 × 倍率) + 加价</span>
+                                    </div>
                                 </div>
                                 <button
                                     onClick={() => handleSave(funcName)}
