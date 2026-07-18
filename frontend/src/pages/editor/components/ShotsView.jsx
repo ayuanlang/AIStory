@@ -802,6 +802,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const width = preferredRes.width || null;
             const height = preferredRes.height || null;
             const videoResolutionLabel = isDraftMode ? '480p' : `${videoTier}p`;
+            // Draft = 480p tier only; omit project 720 dims so estimate cannot keep the higher tier.
             const payload = {
                 system_api_id: systemApiId,
                 function_name: 'generate_videos',
@@ -814,8 +815,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 has_video_input: !!usePrevVideo,
                 input_duration_seconds: (usePrevVideo && Number.isFinite(prevDur) && prevDur > 0) ? prevDur : undefined,
                 aspect_ratio: preferredAspect,
-                width: width || undefined,
-                height: height || undefined,
+                width: isDraftMode ? undefined : (width || undefined),
+                height: isDraftMode ? undefined : (height || undefined),
                 resolution: videoResolutionLabel,
                 video_resolution: isDraftMode ? '480' : videoTier,
             };

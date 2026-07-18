@@ -194,6 +194,7 @@ def _build_video_credit_estimate_details(
 
     draft_mode = bool(req.draft_mode)
     if draft_mode:
+        # Draft always bills/generates at 480p; ignore client width/height from project 720 prefs.
         resolved_video_image_size = "0.5K"
         resolved_video_resolution = "480p"
         draft_dims = _infer_dims_from_video_resolution_tier(
@@ -204,6 +205,9 @@ def _build_video_credit_estimate_details(
         )
         if draft_dims:
             resolved_video_width, resolved_video_height = draft_dims
+        else:
+            resolved_video_width = None
+            resolved_video_height = None
     else:
         video_tier = (
             _normalize_project_video_resolution(req.video_resolution)

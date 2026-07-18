@@ -36259,6 +36259,34 @@ def get_transactions(
         if not display_description and task_text:
             display_description = task_text
             
+        details_dict = details_payload if isinstance(details_payload, dict) else {}
+        reserved_cost = None
+        actual_cost = None
+        if action is not None:
+            try:
+                reserved_cost = int(getattr(action, "reserved_cost", 0) or 0)
+            except Exception:
+                reserved_cost = None
+            try:
+                actual_cost = int(getattr(action, "actual_cost", 0) or 0)
+            except Exception:
+                actual_cost = None
+        if reserved_cost in (None, 0) and details_dict.get("reserved_cost") is not None:
+            try:
+                reserved_cost = int(details_dict.get("reserved_cost") or 0)
+            except Exception:
+                pass
+        if actual_cost in (None, 0) and details_dict.get("actual_cost") is not None:
+            try:
+                actual_cost = int(details_dict.get("actual_cost") or 0)
+            except Exception:
+                pass
+
+        personal_balance_after = details_dict.get("personal_balance_after")
+        if personal_balance_after is None:
+            personal_balance_after = row.balance_after
+        group_balance_after = details_dict.get("group_balance_after")
+
         payload = {
             "id": row.id,
             "user_id": row.user_id,
@@ -36272,6 +36300,10 @@ def get_transactions(
             "project_id": project_id,
             "episode_id": episode_id,
             "created_at": row.created_at,
+            "reserved_cost": reserved_cost,
+            "actual_cost": actual_cost,
+            "personal_balance_after": personal_balance_after,
+            "group_balance_after": group_balance_after,
         }
         if provider_alias:
             payload["provider_alias"] = provider_alias

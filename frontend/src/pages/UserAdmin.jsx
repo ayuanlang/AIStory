@@ -4671,17 +4671,27 @@ const UserAdmin = () => {
         );
         const multiplier = Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : null;
 
-        let baseCost = toNullableNonNegInt(
+        // 预估价：预留/预估扣费
+        let estimatedCost = toNullableNonNegInt(
+            details?.reserved_cost
+            ?? txn?.reserved_cost
+            ?? program?.user_cost_before_function
+        );
+        // 实际供应商价：倍率前基础成本
+        let supplierCost = toNullableNonNegInt(
             program?.base_cost
             ?? ruleDetail?.computed_base_cost
+            ?? breakdown?.selected_rule_detail?.computed_base_cost
             ?? details?.base_cost
             ?? txn?.base_cost
         );
+        // 实际用户价：结算后用户实扣（未结算时回退用户价/预留）
         let userCost = toNullableNonNegInt(
-            program?.user_cost
+            details?.actual_cost
+            ?? txn?.actual_cost
+            ?? program?.user_cost
             ?? ruleDetail?.computed_cost
             ?? breakdown?.total_cost
-            ?? details?.actual_cost
             ?? details?.reserved_cost
             ?? txn?.user_cost
         );
@@ -4689,15 +4699,33 @@ const UserAdmin = () => {
         if (userCost === null && typeof txn?.amount === 'number' && txn.amount !== 0) {
             userCost = Math.abs(Math.floor(txn.amount));
         }
-        if (baseCost === null && userCost !== null && multiplier) {
-            baseCost = Math.max(0, Math.round(userCost / multiplier));
+        if (estimatedCost === null && userCost !== null && String(details?.status || '').toUpperCase() !== 'SETTLED') {
+            estimatedCost = userCost;
+        }
+        if (supplierCost === null && userCost !== null && multiplier) {
+            supplierCost = Math.max(0, Math.round(userCost / multiplier));
         }
 
+        const personalBalance = toNullableNonNegInt(
+            details?.personal_balance_after
+            ?? txn?.personal_balance_after
+            ?? txn?.balance_after
+        );
+        const groupBalanceRaw = details?.group_balance_after ?? txn?.group_balance_after;
+        const groupBalance = (groupBalanceRaw === null || groupBalanceRaw === undefined || groupBalanceRaw === '')
+            ? null
+            : toNullableNonNegInt(groupBalanceRaw);
+
         return {
-            baseCost,
+            estimatedCost,
+            supplierCost,
             userCost,
+            personalBalance,
+            groupBalance,
+            // legacy aliases used elsewhere
+            baseCost: supplierCost,
             multiplier,
-            hasPricing: baseCost !== null || userCost !== null,
+            hasPricing: estimatedCost !== null || supplierCost !== null || userCost !== null,
         };
     };
 
@@ -6683,23 +6711,31 @@ const UserAdmin = () => {
                                           </div>
                                           <div className="grid grid-cols-2 gap-3 text-sm">
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
-                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('成本', 'Cost')}</div>
-                                                <div className="font-mono text-sky-200">{formatCreditsCell(pricing.baseCost)}</div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('预估价', 'Estimate')}</div>
+                                                <div className="font-mono text-sky-200">{formatCreditsCell(pricing.estimatedCost)}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
-                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('用户价', 'User Price')}</div>
-                                                <div className="font-mono text-amber-200">{formatCreditsCell(pricing.userCost)}</div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('实际供应商价', 'Supplier')}</div>
+                                                <div className="font-mono text-cyan-200">{formatCreditsCell(pricing.supplierCost)}</div>
                                                 {pricing.multiplier ? (
                                                     <div className="text-[10px] text-gray-500 mt-0.5">×{Number(pricing.multiplier).toFixed(2)}</div>
                                                 ) : null}
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('实际用户价', 'User Price')}</div>
+                                                <div className="font-mono text-amber-200">{formatCreditsCell(pricing.userCost)}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
                                                 <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('流水', 'Ledger')}</div>
                                                     <div className={`font-mono ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>{txn.amount > 0 ? '+' : ''}{txn.amount}</div>
                                             </div>
                                             <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
-                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('余额', 'Balance')}</div>
-                                                    <div className="font-mono text-gray-300">{txn.balance_after}</div>
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('组积分余额', 'Group Balance')}</div>
+                                                    <div className="font-mono text-violet-200">{formatCreditsCell(pricing.groupBalance)}</div>
+                                            </div>
+                                            <div className="rounded-lg bg-black/20 border border-white/5 px-3 py-2">
+                                                <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">{t('个人积分余额', 'Personal Balance')}</div>
+                                                    <div className="font-mono text-gray-300">{formatCreditsCell(pricing.personalBalance)}</div>
                                             </div>
                                         </div>
                                         <div>
@@ -6725,10 +6761,12 @@ const UserAdmin = () => {
                                               <th className="p-3">{t('渠道', 'Provider')}</th>
                                               <th className="p-3">{t('模型', 'Model')}</th>
                                               <th className="p-3 max-w-[300px]">{t('详情', 'Details')}</th>
-                                              <th className="p-3 text-right whitespace-nowrap">{t('成本', 'Cost')}</th>
-                                              <th className="p-3 text-right whitespace-nowrap">{t('用户价', 'User Price')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap" title={t('预留/预估扣费积分', 'Reserved / estimated credits')}>{t('预估价', 'Estimate')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap" title={t('倍率前供应商基础成本', 'Supplier base cost before multiplier')}>{t('实际供应商价', 'Supplier')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap" title={t('结算后用户实扣积分', 'Actual user charged credits')}>{t('实际用户价', 'User Price')}</th>
                                               <th className="p-3 text-right">{t('流水', 'Ledger')}</th>
-                                              <th className="p-3 text-right">{t('余额', 'Balance')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap" title={t('扣费后用户组积分余额', 'Group credits after charge')}>{t('组积分余额', 'Group Bal.')}</th>
+                                              <th className="p-3 text-right whitespace-nowrap" title={t('扣费后个人积分余额', 'Personal credits after charge')}>{t('个人积分余额', 'Personal Bal.')}</th>
                                           </tr>
                                       </thead>
                                       <tbody>
@@ -6754,19 +6792,23 @@ const UserAdmin = () => {
                                                           {JSON.stringify(txn.details, null, 2)}
                                                       </div>
                                                   </td>
-                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200" title={t('基础成本积分（倍率前）', 'Base cost credits (before multiplier)')}>
-                                                      {formatCreditsCell(pricing.baseCost)}
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-sky-200">
+                                                      {formatCreditsCell(pricing.estimatedCost)}
                                                   </td>
-                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200" title={pricing.multiplier ? `${t('倍率', 'Multiplier')} ×${Number(pricing.multiplier).toFixed(2)}` : t('用户扣费积分', 'User charged credits')}>
-                                                      {formatCreditsCell(pricing.userCost)}
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-cyan-200" title={pricing.multiplier ? `${t('倍率', 'Multiplier')} ×${Number(pricing.multiplier).toFixed(2)}` : undefined}>
+                                                      {formatCreditsCell(pricing.supplierCost)}
                                                       {pricing.multiplier ? (
                                                           <div className="text-[10px] text-gray-500 mt-0.5">×{Number(pricing.multiplier).toFixed(2)}</div>
                                                       ) : null}
                                                   </td>
+                                                  <td className="p-3 text-right font-mono whitespace-nowrap text-amber-200">
+                                                      {formatCreditsCell(pricing.userCost)}
+                                                  </td>
                                                   <td className={`p-3 text-right font-mono whitespace-nowrap ${txn.amount < 0 ? 'text-red-400' : 'text-green-400'}`}>
                                                       {txn.amount > 0 ? '+' : ''}{txn.amount}
                                                   </td>
-                                                  <td className="p-3 text-right font-mono text-gray-400 whitespace-nowrap">{txn.balance_after}</td>
+                                                  <td className="p-3 text-right font-mono text-violet-200 whitespace-nowrap">{formatCreditsCell(pricing.groupBalance)}</td>
+                                                  <td className="p-3 text-right font-mono text-gray-400 whitespace-nowrap">{formatCreditsCell(pricing.personalBalance)}</td>
                                               </tr>
                                               );
                                           })}

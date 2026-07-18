@@ -492,6 +492,98 @@ class BillingService:
         return bool(getattr(group, "allow_group_credit_billing", False))
 
     @staticmethod
+    def _attach_balance_snapshots(
+        details: Optional[dict],
+        *,
+        user: Optional[User] = None,
+        group: Optional[UserGroup] = None,
+        db: Optional[Session] = None,
+    ) -> dict:
+        """Snapshot personal/group balances after a billing mutation for history UI."""
+        payload = dict(details or {}) if isinstance(details, dict) else {}
+        if user is not None:
+            personal = int(user.credits or 0)
+            payload["personal_balance_after"] = personal
+            payload["balance_after"] = personal
+        if group is not None:
+            payload["group_id"] = payload.get("group_id") or group.id
+            payload["group_balance_after"] = int(group.credits or 0)
+        elif db is not None and payload.get("group_id"):
+            gid = BillingService._to_int(payload.get("group_id"), 0)
+            if gid > 0:
+                g = db.query(UserGroup).filter(UserGroup.id == gid).first()
+                if g is not None:
+                    payload["group_balance_after"] = int(g.credits or 0)
+        return payload
+
+    @staticmethod
+    def _reserve_wallet_split(details: Optional[dict], reserved_cost: int) -> Dict[str, int]:
+        """Return how a reservation was split across group vs personal wallets."""
+        payload = details if isinstance(details, dict) else {}
+        billed_group = max(0, BillingService._to_int(payload.get("billed_group_credits", 0), 0))
+        billed_personal = max(0, BillingService._to_int(payload.get("billed_personal_credits", 0), 0))
+        reserved = max(0, int(reserved_cost or 0))
+        if billed_group + billed_personal <= 0 and reserved > 0:
+            # Legacy rows without split metadata: treat as personal-only.
+            billed_personal = reserved
+            billed_group = 0
+        elif billed_group + billed_personal != reserved and reserved > 0:
+            # Prefer recorded group share; put remainder on personal.
+            billed_group = min(billed_group, reserved)
+            billed_personal = max(0, reserved - billed_group)
+        return {
+            "billed_group_credits": billed_group,
+            "billed_personal_credits": billed_personal,
+        }
+
+    @staticmethod
+    def _settle_refund_split(
+        *,
+        refund: int,
+        billed_group_credits: int,
+        billed_personal_credits: int,
+        actual_cost: int,
+    ) -> Dict[str, int]:
+        """
+        Refund settle over-reserve using the same priority as reserve (group first).
+
+        Final charge stays on group first, then personal; leftover reserved amounts
+        are returned to their original wallets.
+        """
+        refund = max(0, int(refund or 0))
+        billed_group = max(0, int(billed_group_credits or 0))
+        billed_personal = max(0, int(billed_personal_credits or 0))
+        actual = max(0, int(actual_cost or 0))
+
+        group_final = min(actual, billed_group)
+        personal_final = max(0, actual - group_final)
+        refund_group = max(0, billed_group - group_final)
+        refund_personal = max(0, billed_personal - personal_final)
+
+        # Guard against rounding / legacy mismatch: distribute remainder by original priority.
+        assigned = refund_group + refund_personal
+        if assigned < refund:
+            leftover = refund - assigned
+            # Prefer returning leftover to group when any group was billed.
+            if billed_group > 0:
+                refund_group += leftover
+            else:
+                refund_personal += leftover
+        elif assigned > refund:
+            overflow = assigned - refund
+            take_personal = min(overflow, refund_personal)
+            refund_personal -= take_personal
+            overflow -= take_personal
+            refund_group = max(0, refund_group - overflow)
+
+        return {
+            "refund_group_credits": max(0, refund_group),
+            "refund_personal_credits": max(0, refund_personal),
+            "final_group_credits": max(0, group_final),
+            "final_personal_credits": max(0, personal_final),
+        }
+
+    @staticmethod
     def _safe_json_dict(value: Any) -> Dict[str, Any]:
         if value is None:
             return {}
@@ -581,6 +673,7 @@ class BillingService:
         rows: List[SystemAPIBillingRule],
         *,
         prefer_token_unit: bool = False,
+        prefer_per_second_unit: bool = False,
     ) -> Optional[SystemAPIBillingRule]:
         """Prefer explicit base_pricing; else undimensioned active rule (legacy orphans)."""
         if not rows:
@@ -601,6 +694,19 @@ class BillingService:
                         )
                     )
                     return token_bases[0]
+            if prefer_per_second_unit:
+                second_bases = [
+                    row for row in base_rows
+                    if str(getattr(row, "billing_unit_type", "") or "").strip().lower() == "per_second"
+                ]
+                if second_bases:
+                    second_bases.sort(
+                        key=lambda row: (
+                            int(getattr(row, "priority", 0) or 0),
+                            -int(getattr(row, "id", 0) or 0),
+                        )
+                    )
+                    return second_bases[0]
             base_rows.sort(
                 key=lambda row: (
                     int(getattr(row, "priority", 0) or 0),
@@ -642,6 +748,7 @@ class BillingService:
         system_api_id: int,
         *,
         prefer_token_unit: bool = False,
+        prefer_per_second_unit: bool = False,
     ) -> Optional[SystemAPIBillingRule]:
         rows = db.query(SystemAPIBillingRule).filter(
             SystemAPIBillingRule.system_api_id == system_api_id,
@@ -650,6 +757,7 @@ class BillingService:
         return BillingService._pick_undimensioned_base_fallback(
             rows,
             prefer_token_unit=prefer_token_unit,
+            prefer_per_second_unit=prefer_per_second_unit,
         )
 
     @staticmethod
@@ -716,11 +824,13 @@ class BillingService:
         mode: Optional[str],
         *,
         prefer_token_unit: bool = False,
+        prefer_per_second_unit: bool = False,
     ) -> Optional[SystemAPIBillingRule]:
         rows = BillingService._query_active_rules_by_identity(db, provider, model, mode)
         return BillingService._pick_undimensioned_base_fallback(
             rows,
             prefer_token_unit=prefer_token_unit,
+            prefer_per_second_unit=prefer_per_second_unit,
         )
 
     @staticmethod
@@ -1309,18 +1419,37 @@ class BillingService:
             import math
             return max(0, int(math.ceil(cost_val))) if cost_val > 0 else 0
 
-        if unit_type == 'per_second':
-            quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0)
-            if quantity <= 0 and payload.get('image_count'):
-                # fallback for misconfigured per_second image pricing rules
-                quantity = float(BillingService._to_int(payload.get('image_count'), 1))
-        elif unit_type == 'per_minute':
-            quantity = float(payload.get('duration_seconds', payload.get('duration', 0)) or 0) / 60.0
-            if quantity <= 0 and payload.get('image_count'):
-                quantity = float(BillingService._to_int(payload.get('image_count'), 1))
+        if unit_type in {"per_second", "per_minute"}:
+            # Includes KIE Seedance / SparkVideo resolution matrices (CNY/s or KIE/s).
+            from app.services.billing_pricing import estimate_base_amount_by_unit
+            amount = float(
+                estimate_base_amount_by_unit(
+                    {
+                        "unit_type": unit_type,
+                        "cost": base_cost,
+                        "cost_input": cost_input,
+                        "cost_output": cost_output,
+                        "video_second_cny_resolution_rates": (
+                            payload.get("video_second_cny_resolution_rates")
+                            or config.get("video_second_cny_resolution_rates")
+                        ),
+                        "video_second_resolution_rates": (
+                            payload.get("video_second_resolution_rates")
+                            or config.get("video_second_resolution_rates")
+                        ),
+                        "video_second_min_billable_by_output": (
+                            payload.get("video_second_min_billable_by_output")
+                            or config.get("video_second_min_billable_by_output")
+                        ),
+                    },
+                    payload,
+                )
+            )
+            if return_float:
+                return float(max(0.0, amount))
+            import math
+            return max(0, int(math.ceil(amount))) if amount > 0 else 0
 
-        if quantity <= 0 and unit_type in {'per_second', 'per_minute'}:
-            return 0.0 if return_float else 0
         cost_val = float(base_cost) * float(quantity)
         if return_float: return cost_val
         
@@ -2033,6 +2162,8 @@ class BillingService:
             if isinstance(rates, dict) and rates:
                 usage_for_cost["video_token_resolution_rates"] = rates
             second_rates = extra.get("video_second_resolution_rates")
+            if not (isinstance(second_rates, dict) and second_rates):
+                second_rates = usage_for_cost.get("video_second_resolution_rates")
             if isinstance(second_rates, dict) and second_rates:
                 usage_for_cost["video_second_resolution_rates"] = second_rates
                 # Per-second resolution matrix wins over Ark video-token flags.
@@ -2043,11 +2174,16 @@ class BillingService:
                     usage_for_cost["estimation_method"] = "video_second_resolution"
                 usage_for_cost.pop("video_token_branch", None)
             cny_rates = extra.get("video_second_cny_resolution_rates")
+            if not (isinstance(cny_rates, dict) and cny_rates):
+                cny_rates = usage_for_cost.get("video_second_cny_resolution_rates")
             if isinstance(cny_rates, dict) and cny_rates:
                 usage_for_cost["video_second_cny_resolution_rates"] = cny_rates
                 usage_for_cost.pop("video_token_estimate", None)
                 usage_for_cost.pop("video_token_branch", None)
-                min_table_probe = extra.get("video_second_min_billable_by_output")
+                min_table_probe = (
+                    extra.get("video_second_min_billable_by_output")
+                    or usage_for_cost.get("video_second_min_billable_by_output")
+                )
                 has_upscale_probe = any(
                     isinstance(row, dict)
                     and (
@@ -2062,6 +2198,8 @@ class BillingService:
                 else:
                     usage_for_cost["estimation_method"] = "video_second_cny_kie"
             min_table = extra.get("video_second_min_billable_by_output")
+            if not (isinstance(min_table, dict) and min_table):
+                min_table = usage_for_cost.get("video_second_min_billable_by_output")
             if isinstance(min_table, dict) and min_table:
                 usage_for_cost["video_second_min_billable_by_output"] = min_table
             if usage_for_cost.get("video_second_cny_resolution_rates"):
@@ -2086,9 +2224,23 @@ class BillingService:
             or str(usage.get("estimation_method") or "").startswith("video_token")
             or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
         )
+        uses_second_cny_matrix = bool(
+            (
+                isinstance(usage.get("video_second_cny_resolution_rates"), dict)
+                and usage.get("video_second_cny_resolution_rates")
+            )
+            or (
+                isinstance(extra.get("video_second_cny_resolution_rates"), dict)
+                and extra.get("video_second_cny_resolution_rates")
+            )
+            or str(usage.get("estimation_method") or "").startswith("video_second_cny")
+            or str(usage.get("estimation_method") or "").startswith("sparkvideo_second_cny")
+        )
         runtime_enabled = extra.get("seedance_runtime_price_adjustment_enabled")
         runtime_enabled = True if runtime_enabled is None else bool(BillingService._normalize_bool_value(runtime_enabled))
         cny_rates_audit = extra.get("video_second_cny_resolution_rates")
+        if not (isinstance(cny_rates_audit, dict) and cny_rates_audit):
+            cny_rates_audit = (usage or {}).get("video_second_cny_resolution_rates")
         if isinstance(cny_rates_audit, dict) and cny_rates_audit and raw_cfg["unit_type"] == "per_second":
             from app.services.billing_pricing import (
                 estimate_sparkvideo_second_cny_amount,
@@ -2123,9 +2275,13 @@ class BillingService:
             if est.get("with_video_addon_cny") is not None:
                 runtime_adjustments["sparkvideo_with_video_addon_cny"] = est.get("with_video_addon_cny")
         if is_seedance_video and runtime_enabled:
-            # Seedance 2.0 / video-token formula already folds draft & video-input duration
-            # into token usage; skip legacy continuation markup for that branch.
-            if bool(usage.get("draft_mode")) and not uses_video_token_formula:
+            # Token formula folds draft into tokens; KIE/SparkVideo second CNY matrix
+            # already bills draft as the 480p tier — do not stack legacy 0.7 draft odds.
+            if (
+                bool(usage.get("draft_mode"))
+                and not uses_video_token_formula
+                and not uses_second_cny_matrix
+            ):
                 draft_multiplier = BillingService._first_positive_float(
                     extra,
                     [
@@ -2137,7 +2293,9 @@ class BillingService:
                 )
                 runtime_multiplier *= draft_multiplier
                 runtime_adjustments["seedance_draft_price_multiplier"] = draft_multiplier
-            if bool(usage.get("use_prev_video")) and not (is_seedance_2 or uses_video_token_formula):
+            if bool(usage.get("use_prev_video")) and not (
+                is_seedance_2 or uses_video_token_formula or uses_second_cny_matrix
+            ):
                 continuation_multiplier = BillingService._first_positive_float(
                     extra,
                     [
@@ -2656,12 +2814,19 @@ class BillingService:
             )
             # Video token fallback / Seedance 2.0 branch: derive tokens when missing.
             # KIE Seedance 2 bills per-second by resolution (not Ark token formula).
+            is_kie_provider = BillingService._is_kie_provider(provider_text)
+            usage["is_kie_provider"] = bool(is_kie_provider)
+            usage["provider"] = provider_text
+            # Inject published KIE Seedance 2 CNY/s matrix when rule extras are empty.
+            # Seedance 1.5 keeps dimensional per_call rules; do not force the 2.0 matrix there.
+            if is_kie_provider and (
+                usage.get("is_seedance_2")
+                or "seedance-2" in identity_text
+                or "seedance2" in identity_text.replace("-", "").replace("_", "").replace(" ", "")
+            ):
+                usage["is_seedance_video"] = True
+                usage = BillingService._ensure_kie_seedance_second_matrix(usage)
             provider_lower = str(provider_text or "").strip().lower()
-            is_kie_provider = (
-                provider_lower == BillingService.KIE_STANDARD_PROVIDER
-                or provider_lower.startswith(f"{BillingService.KIE_STANDARD_PROVIDER}/")
-                or "kie.ai" in provider_lower
-            )
             is_runninghub_provider = (
                 provider_lower == "runninghub"
                 or provider_lower.startswith("runninghub/")
@@ -2737,6 +2902,17 @@ class BillingService:
             or str(usage.get("estimation_method") or "").startswith("video_token")
             or str(usage.get("estimation_method") or "").startswith("seedance2_video_token")
         )
+        # KIE Seedance 2: always prefer per_second base (never Ark token base).
+        prefer_per_second_unit = bool(
+            usage.get("is_kie_provider")
+            and (
+                usage.get("is_seedance_2")
+                or str(usage.get("estimation_method") or "").startswith("video_second_cny")
+                or usage.get("kie_seedance_default_matrix")
+            )
+        )
+        if prefer_per_second_unit:
+            prefer_token_unit = False
         base_rule: Optional[SystemAPIBillingRule] = None
         base_rule_pricing: Optional[Dict[str, Any]] = None
         if system_row is not None:
@@ -2744,6 +2920,7 @@ class BillingService:
                 db,
                 int(system_row.id),
                 prefer_token_unit=prefer_token_unit,
+                prefer_per_second_unit=prefer_per_second_unit,
             )
         if base_rule is None and provider_text and model_text:
             base_rule = BillingService._get_base_billing_rule_by_identity(
@@ -2752,6 +2929,7 @@ class BillingService:
                 model_text,
                 mode,
                 prefer_token_unit=prefer_token_unit,
+                prefer_per_second_unit=prefer_per_second_unit,
             )
 
         if base_rule is not None:
@@ -2769,6 +2947,9 @@ class BillingService:
                 if isinstance(extra_for_cfg.get(key), dict) and extra_for_cfg.get(key):
                     api_cfg[key] = extra_for_cfg.get(key)
                     usage[key] = extra_for_cfg.get(key)
+                elif isinstance(usage.get(key), dict) and usage.get(key):
+                    # Preserve KIE Seedance injected defaults when rule extras are empty.
+                    api_cfg[key] = usage.get(key)
             api_pricing_source = "system_api_base_rule"
             api_pricing_source_detail = {
                 "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
@@ -2778,12 +2959,35 @@ class BillingService:
             }
             api_cost_fallback = int((base_rule_pricing or {}).get("cost") or 0)
         elif provider_text and model_text:
-            api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
+            api_cfg = dict(BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text) or {})
+            # No base rule: still apply injected KIE Seedance CNY/s matrix via unit estimator.
+            for key in (
+                "video_second_cny_resolution_rates",
+                "video_second_resolution_rates",
+                "video_second_min_billable_by_output",
+            ):
+                if isinstance(usage.get(key), dict) and usage.get(key):
+                    api_cfg[key] = usage.get(key)
+            if usage.get("is_kie_provider") and (
+                usage.get("kie_seedance_default_matrix")
+                or isinstance(usage.get("video_second_cny_resolution_rates"), dict)
+                and usage.get("video_second_cny_resolution_rates")
+            ):
+                api_cfg["unit_type"] = "per_second"
+                if not api_cfg.get("cost"):
+                    api_cfg["cost"] = 0
             api_pricing_source = "default_api_pricing"
             api_pricing_source_detail = {"reason": "system_api_has_no_base_rule"}
             api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
         else:
-            api_cfg = BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text)
+            api_cfg = dict(BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text) or {})
+            for key in (
+                "video_second_cny_resolution_rates",
+                "video_second_resolution_rates",
+                "video_second_min_billable_by_output",
+            ):
+                if isinstance(usage.get(key), dict) and usage.get(key):
+                    api_cfg[key] = usage.get(key)
             api_pricing_source = "default_api_pricing"
             api_pricing_source_detail = {"reason": "system_api_not_resolved"}
             api_cost_fallback = BillingService._estimate_api_cost_from_config(api_cfg, usage)
@@ -3246,6 +3450,55 @@ class BillingService:
         return bool(re.search(r"(^|[^0-9])2([^0-9]|$)", text))
 
     @staticmethod
+    def _is_kie_provider(provider: Any) -> bool:
+        provider_lower = str(provider or "").strip().lower()
+        if not provider_lower:
+            return False
+        return (
+            provider_lower == BillingService.KIE_STANDARD_PROVIDER
+            or provider_lower.startswith(f"{BillingService.KIE_STANDARD_PROVIDER}/")
+            or "kie.ai" in provider_lower
+        )
+
+    @staticmethod
+    def _ensure_kie_seedance_second_matrix(usage: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        KIE Seedance bills per-second by resolution matrix (CNY/s).
+        When the selected rule has not persisted matrix extras yet, inject published defaults
+        so estimate/reserve hit video_second_cny_kie instead of flat per_second / zero base cost.
+        """
+        payload = dict(usage or {})
+        if not payload.get("is_seedance_video"):
+            return payload
+        if not (
+            payload.get("is_kie_provider")
+            or BillingService._is_kie_provider(payload.get("provider") or payload.get("resolved_provider"))
+        ):
+            return payload
+        has_cny = isinstance(payload.get("video_second_cny_resolution_rates"), dict) and payload.get(
+            "video_second_cny_resolution_rates"
+        )
+        has_kie = isinstance(payload.get("video_second_resolution_rates"), dict) and payload.get(
+            "video_second_resolution_rates"
+        )
+        if has_cny or has_kie:
+            return payload
+        from app.services.billing_pricing import (
+            DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES,
+            normalize_sparkvideo_second_cny_rates,
+        )
+        injected = normalize_sparkvideo_second_cny_rates(DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES)
+        if not injected:
+            injected = dict(DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES)
+        payload["video_second_cny_resolution_rates"] = injected
+        payload["estimation_method"] = "video_second_cny_kie"
+        payload["kie_seedance_default_matrix"] = True
+        # Never let Ark token formula tags leak into KIE Seedance second billing.
+        payload.pop("video_token_estimate", None)
+        payload.pop("video_token_branch", None)
+        return payload
+
+    @staticmethod
     def resolve_has_video_input(usage: Optional[Dict[str, Any]] = None) -> bool:
         payload = dict(usage or {})
         if payload.get("has_video_input") is True:
@@ -3521,9 +3774,13 @@ class BillingService:
 
         reserve_details["billed_group_credits"] = billed_group_credits
         reserve_details["billed_personal_credits"] = billed_personal_credits
+        reserve_details["reserved_cost"] = reserved_cost
         if group:
             reserve_details["group_id"] = group.id
             reserve_details["allow_group_credit_billing"] = can_use_group_credits
+        reserve_details = BillingService._attach_balance_snapshots(
+            reserve_details, user=user, group=group if can_use_group_credits else None
+        )
 
         tx = TransactionHistory(
             user_id=user_id,
@@ -3642,6 +3899,9 @@ class BillingService:
             if allocation:
                 allocation.used_credits = max(0, (allocation.used_credits or 0) - reserved_cost)
 
+        refund_group = None
+        if group_id > 0:
+            refund_group = db.query(UserGroup).filter(UserGroup.id == group_id).first()
         refund_details = {
             "status": "REFUND",
             "reason": "RESERVATION_CANCELED",
@@ -3649,9 +3909,13 @@ class BillingService:
             "refunded_group_credits": restored_group,
             "refunded_personal_credits": restored_personal,
             "reservation_billing_breakdown": tx_details_dict.get("billing_breakdown") or {},
+            "group_id": group_id or None,
         }
         if error_msg:
             refund_details["error"] = str(error_msg)[:500]
+        refund_details = BillingService._attach_balance_snapshots(
+            refund_details, user=user, group=refund_group
+        )
 
         refund_tx = TransactionHistory(
             user_id=tx.user_id,
@@ -3798,21 +4062,87 @@ class BillingService:
         charged_amount = 0
         refunded_amount = 0
 
+        settle_group = None
+        settle_group_id = BillingService._to_int(res_details_dict.get("group_id"), 0)
+        if settle_group_id > 0:
+            settle_group = db.query(UserGroup).filter(UserGroup.id == settle_group_id).first()
+
+        wallet_split = BillingService._reserve_wallet_split(res_details_dict, reserved_cost)
+        billed_group_credits = wallet_split["billed_group_credits"]
+        billed_personal_credits = wallet_split["billed_personal_credits"]
+        refunded_group_credits = 0
+        refunded_personal_credits = 0
+        charged_group_credits = 0
+        charged_personal_credits = 0
+        final_group_credits = min(actual_cost, billed_group_credits) if delta <= 0 else billed_group_credits
+        final_personal_credits = max(0, actual_cost - final_group_credits) if delta <= 0 else billed_personal_credits
+
+        project_id_for_alloc = (
+            res_details_dict.get("project_id")
+            or (res_action.project_id if res_action else None)
+            or getattr(reservation_tx, "project_id", None)
+        )
+
         if delta < 0:
             refund = -delta
-            user.credits = (user.credits or 0) + refund
+            refund_split = BillingService._settle_refund_split(
+                refund=refund,
+                billed_group_credits=billed_group_credits,
+                billed_personal_credits=billed_personal_credits,
+                actual_cost=actual_cost,
+            )
+            refunded_group_credits = refund_split["refund_group_credits"]
+            refunded_personal_credits = refund_split["refund_personal_credits"]
+            final_group_credits = refund_split["final_group_credits"]
+            final_personal_credits = refund_split["final_personal_credits"]
+
+            if refunded_group_credits > 0:
+                if settle_group is None and settle_group_id > 0:
+                    settle_group = db.query(UserGroup).filter(UserGroup.id == settle_group_id).first()
+                if settle_group is not None:
+                    settle_group.credits = (settle_group.credits or 0) + refunded_group_credits
+                else:
+                    # Group missing: fall back to personal so credits are not lost.
+                    logger.warning(
+                        "Settlement refund group_id=%s missing; returning %s credits to personal",
+                        settle_group_id,
+                        refunded_group_credits,
+                    )
+                    refunded_personal_credits += refunded_group_credits
+                    refunded_group_credits = 0
+
+            if refunded_personal_credits > 0:
+                user.credits = (user.credits or 0) + refunded_personal_credits
+
+            if project_id_for_alloc and settle_group_id > 0 and refund > 0:
+                allocation = db.query(ProjectGroupCreditAllocation).filter(
+                    ProjectGroupCreditAllocation.group_id == settle_group_id,
+                    ProjectGroupCreditAllocation.project_id == project_id_for_alloc,
+                ).first()
+                if allocation:
+                    allocation.used_credits = max(0, (allocation.used_credits or 0) - refund)
+
             settlement_tx = TransactionHistory(
                 user_id=user.id,
                 amount=refund,
                 balance_after=user.credits or 0,
                 description=f"Partial refund for {reservation_tx.description or 'task'}",
-                details={
-                    "status": "REFUND",
-                    "reason": "RESERVATION_SETTLEMENT",
-                    "reservation_tx_id": reservation_tx.id,
-                    "reserved_cost": reserved_cost,
-                    "actual_cost": actual_cost,
-                },
+                details=BillingService._attach_balance_snapshots(
+                    {
+                        "status": "REFUND",
+                        "reason": "RESERVATION_SETTLEMENT",
+                        "reservation_tx_id": reservation_tx.id,
+                        "reserved_cost": reserved_cost,
+                        "actual_cost": actual_cost,
+                        "group_id": settle_group_id or None,
+                        "refunded_group_credits": refunded_group_credits,
+                        "refunded_personal_credits": refunded_personal_credits,
+                        "final_group_credits": final_group_credits,
+                        "final_personal_credits": final_personal_credits,
+                    },
+                    user=user,
+                    group=settle_group,
+                ),
                 project_id=res_action.project_id if res_action else None,
                 episode_id=res_action.episode_id if res_action else None,
             )
@@ -3820,29 +4150,71 @@ class BillingService:
             refunded_amount = refund
         elif delta > 0:
             extra = delta
-            can_deduct = min(int(user.credits or 0), extra)
-            if can_deduct > 0:
-                user.credits -= can_deduct
+            remaining_extra = extra
+            # Extra settle charge follows reserve priority when group billing was used / allowed.
+            can_use_group = (
+                settle_group is not None
+                and (
+                    billed_group_credits > 0
+                    or BillingService._group_allows_credit_billing(settle_group)
+                )
+            )
+            if can_use_group and remaining_extra > 0 and (settle_group.credits or 0) > 0:
+                take_group = min(int(settle_group.credits or 0), remaining_extra)
+                settle_group.credits = int(settle_group.credits or 0) - take_group
+                charged_group_credits = take_group
+                remaining_extra -= take_group
+
+            take_personal = min(int(user.credits or 0), remaining_extra)
+            if take_personal > 0:
+                user.credits = int(user.credits or 0) - take_personal
+                charged_personal_credits = take_personal
+                remaining_extra -= take_personal
+
+            charged_amount = charged_group_credits + charged_personal_credits
+            final_group_credits = billed_group_credits + charged_group_credits
+            final_personal_credits = billed_personal_credits + charged_personal_credits
+
+            if charged_amount > 0:
+                if project_id_for_alloc and settle_group_id > 0 and charged_group_credits > 0:
+                    allocation = db.query(ProjectGroupCreditAllocation).filter(
+                        ProjectGroupCreditAllocation.group_id == settle_group_id,
+                        ProjectGroupCreditAllocation.project_id == project_id_for_alloc,
+                    ).first()
+                    if allocation and allocation.credit_limit != -1:
+                        # Soft-track usage; do not block settle mid-flight.
+                        allocation.used_credits = (allocation.used_credits or 0) + charged_group_credits
+                    elif allocation:
+                        allocation.used_credits = (allocation.used_credits or 0) + charged_group_credits
+
                 settlement_tx = TransactionHistory(
                     user_id=user.id,
-                    amount=-can_deduct,
+                    amount=-charged_amount,
                     balance_after=user.credits or 0,
                     description=f"Extra charge for {reservation_tx.description or 'task'}",
-                    details={
-                        "status": "CHARGE",
-                        "reason": "RESERVATION_SETTLEMENT",
-                        "reservation_tx_id": reservation_tx.id,
-                        "reserved_cost": reserved_cost,
-                        "actual_cost": actual_cost,
-                        "delta": delta,
-                    },
+                    details=BillingService._attach_balance_snapshots(
+                        {
+                            "status": "CHARGE",
+                            "reason": "RESERVATION_SETTLEMENT",
+                            "reservation_tx_id": reservation_tx.id,
+                            "reserved_cost": reserved_cost,
+                            "actual_cost": actual_cost,
+                            "delta": delta,
+                            "group_id": settle_group_id or None,
+                            "billed_group_credits": charged_group_credits,
+                            "billed_personal_credits": charged_personal_credits,
+                            "final_group_credits": final_group_credits,
+                            "final_personal_credits": final_personal_credits,
+                        },
+                        user=user,
+                        group=settle_group,
+                    ),
                     project_id=res_action.project_id if res_action else None,
                     episode_id=res_action.episode_id if res_action else None,
                 )
                 db.add(settlement_tx)
-                charged_amount = can_deduct
 
-            outstanding = extra - can_deduct
+            outstanding = remaining_extra
             if outstanding > 0:
                 logger.warning(
                     f"User {user.id} could not cover settlement delta={extra}. outstanding={outstanding}"
@@ -3859,6 +4231,16 @@ class BillingService:
         res_details["reserved_cost"] = reserved_cost
         res_details["actual_cost"] = actual_cost
         res_details["delta"] = delta
+        res_details["billed_group_credits"] = billed_group_credits
+        res_details["billed_personal_credits"] = billed_personal_credits
+        res_details["final_group_credits"] = final_group_credits
+        res_details["final_personal_credits"] = final_personal_credits
+        if refunded_group_credits or refunded_personal_credits:
+            res_details["refunded_group_credits"] = refunded_group_credits
+            res_details["refunded_personal_credits"] = refunded_personal_credits
+        if charged_group_credits or charged_personal_credits:
+            res_details["settlement_charged_group_credits"] = charged_group_credits
+            res_details["settlement_charged_personal_credits"] = charged_personal_credits
         if outstanding > 0:
             res_details["outstanding_delta"] = outstanding
 
@@ -4136,9 +4518,14 @@ class BillingService:
         )
         tx_details["billed_group_credits"] = billed_group_credits
         tx_details["billed_personal_credits"] = billed_personal_credits
+        tx_details["reserved_cost"] = final_cost
+        tx_details["actual_cost"] = final_cost
         if group:
             tx_details["group_id"] = group.id
             tx_details["allow_group_credit_billing"] = can_use_group_credits
+        tx_details = BillingService._attach_balance_snapshots(
+            tx_details, user=user, group=group if can_use_group_credits else None
+        )
 
         transaction = TransactionHistory(
             user_id=user_id,

@@ -15,7 +15,11 @@ class TransactionOut(BaseModel):
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     created_at: str
-    
+    reserved_cost: Optional[int] = None
+    actual_cost: Optional[int] = None
+    personal_balance_after: Optional[int] = None
+    group_balance_after: Optional[int] = None
+
     class Config:
         from_attributes = True
 
