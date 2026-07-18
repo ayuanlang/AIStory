@@ -1820,6 +1820,20 @@ class BillingService:
             usage_out["provider_usage"] = dict(payload.get("provider_usage") or {})
         if payload.get("usage_source"):
             usage_out["usage_source"] = str(payload.get("usage_source") or "").strip()
+        token_source = str(payload.get("token_source") or "").strip().lower()
+        if not token_source and isinstance(usage_out.get("provider_usage"), dict):
+            token_source = str(usage_out["provider_usage"].get("token_source") or "").strip().lower()
+        if token_source:
+            usage_out["token_source"] = token_source
+        if payload.get("billing_basis") and not usage_out.get("billing_basis"):
+            usage_out["billing_basis"] = str(payload.get("billing_basis") or "").strip()
+        elif token_source == "api_usage" and total_tokens > 0 and not usage_out.get("billing_basis"):
+            usage_out["billing_basis"] = "provider_tokens"
+        # Keep OpenAI-style aliases for LLM provider usage audits (Grsai etc.).
+        if input_tokens > 0:
+            usage_out.setdefault("prompt_tokens", input_tokens)
+        if output_tokens > 0:
+            usage_out.setdefault("completion_tokens", output_tokens)
         if payload.get("resolution"):
             usage_out["resolution"] = payload.get("resolution")
         if payload.get("resolution_tier"):
@@ -2038,6 +2052,21 @@ class BillingService:
                 if key in source and source.get(key) is not None:
                     payload[key] = bool(source.get(key))
                     break
+
+        # RunningHub callback usage (coins / money / task runtime).
+        for key in (
+            "consumeCoins",
+            "consumeMoney",
+            "thirdPartyConsumeMoney",
+            "taskCostTime",
+            "provider_cost_time_seconds",
+            "cost_time",
+        ):
+            value = _first(key)
+            if value not in (None, ""):
+                payload[key] = value
+        if payload.get("taskCostTime") not in (None, "") and payload.get("provider_cost_time_seconds") in (None, ""):
+            payload["provider_cost_time_seconds"] = payload.get("taskCostTime")
 
         return payload
 
@@ -3317,6 +3346,8 @@ class BillingService:
         "kie_credits_consumed", "credits_consumed", "creditsConsumed", "credits",
         "is_seedance_2", "is_seedance_video", "is_kie_provider", "generation_mode",
         "provider_task_id", "task_id", "taskId", "query_endpoint",
+        "consumeMoney", "consumeCoins", "thirdPartyConsumeMoney",
+        "taskCostTime", "provider_cost_time_seconds", "cost_time",
     }
 
     @staticmethod
@@ -3334,8 +3365,17 @@ class BillingService:
             for key in (
                 "input_tokens", "output_tokens", "total_tokens", "completion_tokens",
                 "creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits",
+                "consumeMoney", "consumeCoins", "thirdPartyConsumeMoney",
+                "taskCostTime", "provider_cost_time_seconds", "cost_time",
             ):
-                if out.get(key) in (None, "", 0, 0.0) and nested.get(key) not in (None, ""):
+                if out.get(key) in (None, "") and nested.get(key) not in (None, ""):
+                    out[key] = nested.get(key)
+                elif (
+                    key in {"input_tokens", "output_tokens", "total_tokens", "completion_tokens",
+                            "creditsConsumed", "credits_consumed", "kie_credits_consumed", "credits"}
+                    and out.get(key) in (0, 0.0)
+                    and nested.get(key) not in (None, "", 0, 0.0)
+                ):
                     out[key] = nested.get(key)
         compacted = BillingService._compact_audit_payload(
             out,
@@ -4045,7 +4085,13 @@ class BillingService:
         return tx
 
     @staticmethod
-    def cancel_reservation(db: Session, reservation_tx_id: int, error_msg: str = None) -> Optional[TransactionHistory]:
+    def cancel_reservation(
+        db: Session,
+        reservation_tx_id: int,
+        error_msg: str = None,
+        usage_metadata: Optional[Dict[str, Any]] = None,
+        extra_details: Optional[Dict[str, Any]] = None,
+    ) -> Optional[TransactionHistory]:
         """Refunds a reservation when an upstream call fails."""
         tx = db.query(TransactionHistory).filter(TransactionHistory.id == reservation_tx_id).first()
         if not tx:
@@ -4069,6 +4115,8 @@ class BillingService:
         billed_personal_credits = max(0, BillingService._to_int(tx_details_dict.get("billed_personal_credits", 0), 0))
         group_id = BillingService._to_int(tx_details_dict.get("group_id", 0), 0)
         project_id = tx_details_dict.get("project_id") or (tx_action.project_id if tx_action else None)
+        slim_usage = BillingService._slim_usage_metadata_for_storage(usage_metadata)
+        cancel_extra = dict(extra_details or {}) if isinstance(extra_details, dict) else {}
 
         # Restore group/personal split using reserve-time metadata when available.
         restored_group = 0
@@ -4115,6 +4163,24 @@ class BillingService:
         }
         if error_msg:
             refund_details["error"] = str(error_msg)[:500]
+        for copy_key in (
+            "consumeCoins",
+            "consumeMoney",
+            "thirdPartyConsumeMoney",
+            "taskCostTime",
+            "provider_cost_time_seconds",
+            "cost_time",
+            "usage_source",
+        ):
+            value = cancel_extra.get(copy_key)
+            if value in (None, ""):
+                value = slim_usage.get(copy_key) if isinstance(slim_usage, dict) else None
+            if value not in (None, ""):
+                refund_details[copy_key] = value
+        refund_details = BillingService._promote_media_context_for_history(
+            refund_details,
+            usage=slim_usage if isinstance(slim_usage, dict) else None,
+        )
         refund_details = BillingService._attach_balance_snapshots(
             refund_details, user=user, group=refund_group
         )
@@ -4153,7 +4219,7 @@ class BillingService:
             refunded_amount=reserved_cost,
             outstanding_amount=0,
             matched_rule_ids=[],
-            usage_metadata={},
+            usage_metadata=slim_usage if isinstance(slim_usage, dict) else {},
             billing_metadata={
                 "phase": "cancel",
                 "reason": "RESERVATION_CANCELED",
@@ -4162,6 +4228,18 @@ class BillingService:
                 "system_api_id": tx_details_dict.get("system_api_id"),
                 "matched_rule_id": tx_details_dict.get("matched_rule_id"),
                 "matched_rule_name": tx_details_dict.get("matched_rule_name"),
+                **{
+                    k: cancel_extra.get(k)
+                    for k in (
+                        "consumeCoins",
+                        "consumeMoney",
+                        "thirdPartyConsumeMoney",
+                        "taskCostTime",
+                        "provider_cost_time_seconds",
+                        "usage_source",
+                    )
+                    if cancel_extra.get(k) not in (None, "")
+                },
             },
             phase="cancel",
         )
@@ -4171,7 +4249,25 @@ class BillingService:
         tx_details["refund_tx_id"] = refund_tx.id  # may be None until commit
         if error_msg:
             tx_details["error"] = str(error_msg)[:500]
-        tx.details = tx_details
+        for copy_key in (
+            "consumeCoins",
+            "consumeMoney",
+            "thirdPartyConsumeMoney",
+            "taskCostTime",
+            "provider_cost_time_seconds",
+            "cost_time",
+            "usage_source",
+        ):
+            value = cancel_extra.get(copy_key)
+            if value in (None, ""):
+                value = slim_usage.get(copy_key) if isinstance(slim_usage, dict) else None
+            if value not in (None, ""):
+                tx_details[copy_key] = value
+        tx_details = BillingService._promote_media_context_for_history(
+            tx_details,
+            usage=slim_usage if isinstance(slim_usage, dict) else None,
+        )
+        tx.details = BillingService._compact_history_ledger_details(tx_details)
 
         db.commit()
         db.refresh(refund_tx)
@@ -4534,6 +4630,9 @@ class BillingService:
             "provider_cost_time_seconds",
             "cost_time",
             "taskCostTime",
+            "consumeCoins",
+            "consumeMoney",
+            "thirdPartyConsumeMoney",
             "provider_create_time_ms",
             "provider_complete_time_ms",
         ):

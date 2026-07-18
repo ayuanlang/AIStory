@@ -3243,6 +3243,16 @@ export const purgeAdminProjectRetention = async (payload = {}) => {
     return response.data;
 };
 
+export const getAdminBillingReconcileCandidates = async (params = {}) => {
+    const response = await api.get('/admin/billing-reconcile/candidates', { params });
+    return response.data;
+};
+
+export const runAdminBillingReconcile = async (payload = {}) => {
+    const response = await api.post('/admin/billing-reconcile/run', payload || {});
+    return response.data;
+};
+
 export const getAdminMaintenanceConfig = async () => {
     const response = await api.get('/admin/maintenance-config');
     return response.data;

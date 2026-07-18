@@ -782,7 +782,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 estimated_credits: null,
                 error: 'no video system_api_id',
             });
-            onLog?.(t('计费预估跳过：未选择视频 API', 'Billing estimate skipped: no video API selected'), 'warning');
             return null;
         }
         const seq = ++videoCreditEstimateSeqRef.current;
@@ -835,21 +834,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             setVideoCreditEstimate(res || null);
             const process = res?.billing_process || {};
             const usage = res?.usage || {};
-            const summary = [
-                t('计费预估', 'Billing estimate'),
-                `${res?.estimated_credits ?? '—'}${t('积分', ' credits')}`,
-                (process?.charge_multiplier != null && Number(process.charge_multiplier) > 0)
-                    ? `${t('倍率', 'Multiplier')}×${Number(process.charge_multiplier).toFixed(2)}`
-                    : '',
-                (process?.base_cost != null) ? `${t('基础', 'Base')}${process.base_cost}` : '',
-                process?.logic_branch || '',
-                `${usage?.width || payload.width || '—'}x${usage?.height || payload.height || '—'}`,
-                usage?.resolution_tier || payload.resolution || '',
-                res?.provider || '',
-                res?.model || '',
-                process?.matched_rule_id ? `rule#${process.matched_rule_id}` : '',
-            ].filter(Boolean).join(' | ');
-            onLog?.(summary, 'info');
             console.info('[videoCreditEstimate] result', {
                 credits: res?.estimated_credits,
                 rule: res?.matched_rule_id || process?.matched_rule_id,
@@ -869,7 +853,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 estimated_credits: null,
                 error: detail,
             });
-            onLog?.(`${t('计费预估失败', 'Billing estimate failed')}: ${detail}`, 'error');
             return null;
         } finally {
             if (seq === videoCreditEstimateSeqRef.current) {
@@ -891,8 +874,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         getProjectPreferredAspectRatio,
         getProjectPreferredResolution,
         getProjectPreferredVideoResolution,
-        onLog,
-        t,
     ]);
 
     const projectVideoResolution = project?.global_info?.tech_params?.visual_standard?.video_resolution
@@ -931,30 +912,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const creditsText = (credits === 0 || credits)
             ? String(credits)
             : '—';
-        const usage = videoCreditEstimate?.usage || {};
-        const process = videoCreditEstimate?.billing_process || {};
-        const tipParts = [
-            t('按当前视频 API / 时长 / 草稿 / 上镜续写预估单次生成积分', 'Estimated credits for one video generation with current API / duration / draft / continuation'),
-            process?.logic_branch ? `${t('计费逻辑', 'Billing logic')}: ${process.logic_branch}${process?.new_logic ? ' ✓' : ''}` : '',
-            process?.unit_type ? `${t('单位', 'Unit')}: ${process.unit_type}` : '',
-            process?.api_pricing_source ? `${t('来源', 'Source')}: ${process.api_pricing_source}` : '',
-            (videoCreditEstimate?.provider || videoCreditEstimate?.model)
-                ? `${videoCreditEstimate?.provider || ''} / ${videoCreditEstimate?.model || ''}`.trim()
-                : '',
-            usage?.resolution_tier || usage?.resolution ? `${t('分辨率档', 'Tier')}: ${usage.resolution_tier || usage.resolution}` : '',
-            `${t('尺寸', 'Size')}: ${usage?.width || '—'}x${usage?.height || '—'}`,
-            usage?.has_video_input ? t('含视频输入', 'Includes video input') : t('无视频输入', 'No video input'),
-            process?.matched_rule_id ? `${t('规则', 'Rule')}#${process.matched_rule_id}` : '',
-            (process?.charge_multiplier != null && Number(process.charge_multiplier) > 0)
-                ? `${t('倍率', 'Multiplier')} ×${Number(process.charge_multiplier).toFixed(2)}`
-                : '',
-            (process?.base_cost != null) ? `${t('基础积分', 'Base')}: ${process.base_cost}` : '',
-            videoCreditEstimate?.error ? String(videoCreditEstimate.error) : '',
-        ].filter(Boolean);
         return (
             <div
                 className={`flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 ${compact ? 'px-1.5 py-0.5' : 'px-2 py-1'}`}
-                title={tipParts.join(' | ')}
             >
                 <span className={`${compact ? 'text-[10px]' : 'text-[11px]'} text-amber-200 whitespace-nowrap`}>
                     {t('预计', 'Est.')}{' '}
@@ -8526,6 +8486,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             
             // Duration Logic: Seedance2 auto duration uses -1; otherwise use shot table duration.
             const durParam = resolveShotVideoDurationParam(editingShot.duration);
+            const prevContShot = (usePrevVideo || shouldInjectContinuationPrompt)
+                ? findPrevContinuationShot(targetShotId || editingShot.id)
+                : null;
+            const prevContDur = Number(prevContShot?.duration || 0);
 
             // NEW: Inject Global Context
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
@@ -8566,6 +8530,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     resolution: videoResolutionForGen,
                     video_resolution: isDraftMode ? '480' : videoTierForGen,
                     use_prev_video: shouldInjectContinuationPrompt,
+                    has_video_input: !!(shouldInjectContinuationPrompt || (Array.isArray(apiRefVideoUrls) && apiRefVideoUrls.length > 0)),
+                    // KIE Seedance bills with-video as (input+output) seconds — must match estimate.
+                    input_duration_seconds: (
+                        (shouldInjectContinuationPrompt || usePrevVideo)
+                        && Number.isFinite(prevContDur)
+                        && prevContDur > 0
+                    ) ? prevContDur : undefined,
                     shot_number: shotSnapshot.shot_id,
                     shot_name: shotSnapshot.shot_name,
                     ref_mode: effectiveVideoMode,

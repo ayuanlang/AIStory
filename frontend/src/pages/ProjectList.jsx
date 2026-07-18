@@ -165,6 +165,84 @@ const resolveProjectListImageUrl = (url) => {
     return `${API_URL}/assets/proxy?url=${encodeURIComponent(directUrl)}`;
 };
 
+const PROJECT_CARD_COVER_ROTATE_MS = 4500;
+
+/** Randomly cycles through each episode's cover poster on the project card. */
+const ProjectCardCover = ({ coverImage, coverImages }) => {
+    const images = React.useMemo(() => {
+        const raw = Array.isArray(coverImages) && coverImages.length > 0
+            ? coverImages
+            : (coverImage ? [coverImage] : []);
+        const seen = new Set();
+        const out = [];
+        for (const item of raw) {
+            const resolved = resolveProjectListImageUrl(item);
+            if (!resolved || seen.has(resolved)) continue;
+            seen.add(resolved);
+            out.push(resolved);
+        }
+        return out;
+    }, [coverImage, coverImages]);
+
+    const imagesKey = images.join('\0');
+    const [index, setIndex] = useState(0);
+    const [visible, setVisible] = useState(true);
+
+    useEffect(() => {
+        if (images.length === 0) return;
+        setIndex(Math.floor(Math.random() * images.length));
+        setVisible(true);
+    }, [imagesKey, images.length]);
+
+    useEffect(() => {
+        if (images.length <= 1) return undefined;
+
+        let fadeTimer;
+        let intervalId;
+        const pickNext = (prev) => {
+            if (images.length === 2) return prev === 0 ? 1 : 0;
+            let next = prev;
+            while (next === prev) {
+                next = Math.floor(Math.random() * images.length);
+            }
+            return next;
+        };
+
+        const tick = () => {
+            setVisible(false);
+            fadeTimer = window.setTimeout(() => {
+                setIndex((prev) => pickNext(prev));
+                setVisible(true);
+            }, 280);
+        };
+
+        // Stagger start so neighboring cards don't flip in sync.
+        const stagger = 500 + Math.floor(Math.random() * PROJECT_CARD_COVER_ROTATE_MS);
+        const startId = window.setTimeout(() => {
+            tick();
+            intervalId = window.setInterval(tick, PROJECT_CARD_COVER_ROTATE_MS);
+        }, stagger);
+
+        return () => {
+            window.clearTimeout(startId);
+            window.clearTimeout(fadeTimer);
+            window.clearInterval(intervalId);
+        };
+    }, [imagesKey, images.length]);
+
+    if (images.length === 0) return null;
+
+    const src = images[Math.min(index, images.length - 1)] || images[0];
+    return (
+        <img
+            src={src}
+            alt=""
+            loading="lazy"
+            className={`absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-300 ${visible ? 'opacity-100' : 'opacity-0'}`}
+        />
+    );
+};
+
 const USER_PROFILE_UPDATED_EVENT = 'aistory.user.profile.updated';
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
 const PROJECT_CREATE_FALLBACK_ASPECT_RATIO_OPTIONS = [...PROJECT_ASPECT_RATIO_OPTIONS];
@@ -2332,13 +2410,11 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                     <div className="aspect-video w-full bg-black/60 relative overflow-hidden group-hover:bg-black/40 transition-colors">
 
 
-                                                       {/* Cover Image or Fallback */}
-                                                       {p.cover_image && (
-                                                           <img 
-                                                               src={resolveProjectListImageUrl(p.cover_image)} 
-                                                                 loading="lazy"
-                                                           />
-                                                       )}
+                                                       {/* Cover posters: randomly cycle per-episode covers */}
+                                                       <ProjectCardCover
+                                                           coverImage={p.cover_image}
+                                                           coverImages={p.cover_images}
+                                                       />
                                                        
                                                        {/* Fallback Icon (Always rendered behind image) */}
                                                        <div className="absolute inset-0 flex items-center justify-center z-0">

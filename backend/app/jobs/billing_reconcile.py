@@ -67,6 +67,13 @@ def _provider_is_kie(provider: Optional[str]) -> bool:
     return text == "kie" or text.startswith("kie/") or "kie.ai" in text
 
 
+def _has_runninghub_supplier_cost(payload: Dict[str, Any]) -> bool:
+    for key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney"):
+        if payload.get(key) is not None and str(payload.get(key)).strip() != "":
+            return True
+    return False
+
+
 def _has_actual_supplier_usage(
     action: TransactionAction,
     history: Optional[TransactionHistory],
@@ -93,9 +100,17 @@ def _has_actual_supplier_usage(
     if token_source == "api_usage" and total_tokens > 0:
         return True
 
+    if _has_runninghub_supplier_cost(usage) or _has_runninghub_supplier_cost(details):
+        return True
+    nested_usage = usage.get("provider_usage") if isinstance(usage.get("provider_usage"), dict) else {}
+    nested_details = details.get("provider_usage") if isinstance(details.get("provider_usage"), dict) else {}
+    if _has_runninghub_supplier_cost(nested_usage) or _has_runninghub_supplier_cost(nested_details):
+        return True
+
     if billing_meta.get("reconcile_status") == "ok" and (
         _safe_float(billing_meta.get("reconciled_kie_credits")) > 0
         or _safe_int_tokens(billing_meta.get("reconciled_total_tokens")) > 0
+        or _has_runninghub_supplier_cost(billing_meta)
     ):
         return True
     return False
@@ -230,6 +245,12 @@ def _resolve_system_api_credentials(
         query_endpoint = str(getattr(row, "base_url", "") or "").strip()
     if _provider_is_kie(getattr(row, "provider", None)) and not query_endpoint:
         query_endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
+    provider_text = str(getattr(row, "provider", "") or "").strip().lower()
+    base_url = str(getattr(row, "base_url", "") or "").strip().rstrip("/")
+    if ("runninghub" in provider_text or "runninghub.cn" in base_url.lower()) and not query_endpoint:
+        query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
+    elif query_endpoint.startswith("/") and ("runninghub" in provider_text or "runninghub" in base_url.lower()):
+        query_endpoint = f"{base_url or 'https://www.runninghub.cn'}{query_endpoint}"
     return api_key, query_endpoint, int(getattr(row, "id", 0) or 0) or None
 
 
@@ -299,6 +320,9 @@ def _apply_usage_to_records(
         slim_usage["credits_consumed"] = kie
         slim_usage["creditsConsumed"] = kie
         slim_usage["billing_basis"] = "provider_kie_credits"
+    for rh_key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "taskCostTime"):
+        if rh_key in usage:
+            slim_usage[rh_key] = usage.get(rh_key)
     if total_tokens > 0:
         slim_usage["total_tokens"] = total_tokens
         if usage.get("completion_tokens") not in (None, ""):
@@ -321,6 +345,9 @@ def _apply_usage_to_records(
         billing_meta["reconciled_supplier_system_credits"] = int(kie_credits_to_system_credits(kie))
     if total_tokens > 0:
         billing_meta["reconciled_total_tokens"] = total_tokens
+    for rh_key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "taskCostTime"):
+        if rh_key in usage:
+            billing_meta[rh_key] = usage.get(rh_key)
     action.billing_metadata = billing_meta
 
     if history is not None:
@@ -336,6 +363,17 @@ def _apply_usage_to_records(
             details["total_tokens"] = total_tokens
             details["token_source"] = "api_usage"
             details["usage_source"] = usage_source
+        rh_usage = {
+            k: usage.get(k)
+            for k in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "taskCostTime")
+            if k in usage
+        }
+        if rh_usage:
+            details["provider_usage"] = rh_usage
+            details["usage"] = dict(rh_usage)
+            details["usage_source"] = usage_source
+            if not details.get("billing_basis"):
+                details["billing_basis"] = "provider_runninghub_usage"
         details["reconcile_status"] = "ok"
         details["reconciled_at"] = billing_meta["reconciled_at"]
         history.details = details
@@ -343,11 +381,15 @@ def _apply_usage_to_records(
     db.add(action)
     if history is not None:
         db.add(history)
-    return {
+    out = {
         "kie_credits": kie,
         "total_tokens": total_tokens,
         "supplier_system_credits": int(kie_credits_to_system_credits(kie)) if kie > 0 else 0,
     }
+    for rh_key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "taskCostTime"):
+        if rh_key in usage:
+            out[rh_key] = usage.get(rh_key)
+    return out
 
 
 def _mark_reconcile_failure(
@@ -419,17 +461,14 @@ def reconcile_one(
         db.commit()
         return {"action_id": int(action.id), "status": "skipped_no_task_id", "provider": provider}
 
-    if "runninghub" in str(provider or "").lower():
-        _mark_reconcile_failure(db, action=action, history=history, reason="skipped_runninghub")
-        db.commit()
-        return {"action_id": int(action.id), "status": "skipped_runninghub", "provider": provider}
-
     api_key, resolved_endpoint, resolved_api_id = _resolve_system_api_credentials(
         db, system_api_id=system_api_id, provider=provider
     )
     query_endpoint = query_endpoint or resolved_endpoint
     if _provider_is_kie(provider) and not query_endpoint:
         query_endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
+    if "runninghub" in str(provider or "").lower() and not query_endpoint:
+        query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
     if not api_key:
         _mark_reconcile_failure(db, action=action, history=history, reason="skipped_no_api_key")
         db.commit()
@@ -456,7 +495,11 @@ def reconcile_one(
     total_tokens = _safe_int_tokens(
         usage.get("total_tokens") or usage.get("completion_tokens") or usage.get("output_tokens")
     )
-    if kie <= 0 and total_tokens <= 0:
+    has_rh_cost = _has_runninghub_supplier_cost(usage)
+    has_rh_usage_block = any(
+        k in usage for k in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "taskCostTime")
+    )
+    if kie <= 0 and total_tokens <= 0 and not has_rh_cost and not has_rh_usage_block:
         _mark_reconcile_failure(db, action=action, history=history, reason="query_no_usage")
         db.commit()
         return {
@@ -576,3 +619,220 @@ def run_nightly_billing_reconcile(
         len(errors),
     )
     return summary
+
+def summarize_reconcile_candidate(action: TransactionAction, history: Optional[TransactionHistory]) -> Dict[str, Any]:
+    details = _as_dict(getattr(history, "details", None)) if history else {}
+    usage = _as_dict(getattr(action, "usage_metadata", None))
+    billing_meta = _as_dict(getattr(action, "billing_metadata", None))
+    provider = (
+        str(
+            getattr(action, "provider", None)
+            or details.get("resolved_provider")
+            or details.get("provider")
+            or ""
+        ).strip()
+        or None
+    )
+    model = (
+        str(getattr(action, "model", None) or details.get("resolved_model") or details.get("model") or "").strip()
+        or None
+    )
+    task_id = _extract_task_id(details, usage, billing_meta)
+    missing_reasons = []
+    if not resolve_provider_kie_credits(usage) and not resolve_provider_kie_credits(details):
+        if str(usage.get("billing_basis") or details.get("billing_basis") or "") != "provider_kie_credits":
+            missing_reasons.append("missing_kie_credits")
+    token_source = str(usage.get("token_source") or details.get("token_source") or "").strip().lower()
+    total_tokens = _safe_int_tokens(
+        usage.get("total_tokens")
+        or details.get("actual_total_tokens")
+        or details.get("total_tokens")
+    )
+    if token_source == "estimate" or (total_tokens <= 0 and token_source != "api_usage"):
+        missing_reasons.append("missing_api_tokens")
+    if not _has_runninghub_supplier_cost(usage) and not _has_runninghub_supplier_cost(details):
+        nested = details.get("provider_usage") if isinstance(details.get("provider_usage"), dict) else {}
+        if not _has_runninghub_supplier_cost(nested):
+            missing_reasons.append("missing_runninghub_cost")
+    if not missing_reasons:
+        missing_reasons.append("missing_supplier_usage")
+
+    return {
+        "action_id": int(action.id),
+        "transaction_id": int(getattr(history, "id", 0) or 0) or None,
+        "user_id": int(getattr(action, "user_id", 0) or 0) or None,
+        "stage": str(getattr(action, "stage", "") or ""),
+        "task_type": str(getattr(action, "task_type", "") or ""),
+        "provider": provider,
+        "model": model,
+        "system_api_id": getattr(action, "system_api_id", None) or details.get("system_api_id"),
+        "created_at": (
+            action.created_at.isoformat(timespec="seconds")
+            if getattr(action, "created_at", None) is not None and hasattr(action.created_at, "isoformat")
+            else (str(getattr(action, "created_at", "") or "") or None)
+        ),
+        "reserved_cost": int(getattr(action, "reserved_cost", 0) or 0),
+        "actual_cost": int(getattr(action, "actual_cost", 0) or 0),
+        "billing_basis": str(usage.get("billing_basis") or details.get("billing_basis") or "") or None,
+        "token_source": token_source or None,
+        "usage_source": str(usage.get("usage_source") or details.get("usage_source") or "") or None,
+        "reconcile_status": str(billing_meta.get("reconcile_status") or details.get("reconcile_status") or "") or None,
+        "reconcile_attempts": int(billing_meta.get("reconcile_attempts") or 0),
+        "task_id": task_id or None,
+        "has_task_id": bool(task_id),
+        "missing_reasons": missing_reasons,
+        "description": str(getattr(history, "description", "") or "") or None,
+    }
+
+
+def list_billing_reconcile_candidates(
+    *,
+    lookback_days: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    days = int(
+        lookback_days
+        if lookback_days is not None
+        else getattr(settings, "BILLING_RECONCILE_LOOKBACK_DAYS", 3)
+    )
+    max_rows = int(
+        limit if limit is not None else getattr(settings, "BILLING_RECONCILE_MAX_ROWS", 500)
+    )
+    with SessionLocal() as db:
+        pairs = find_reconcile_candidates(db, lookback_days=days)[: max(1, max_rows)]
+        rows = [summarize_reconcile_candidate(action, history) for action, history in pairs]
+    return {
+        "ok": True,
+        "lookback_days": days,
+        "cutoff_at": (now_bj() - timedelta(days=days)).isoformat(timespec="seconds"),
+        "total_count": len(rows),
+        "candidates": rows,
+        "created_at": now_bj().isoformat(timespec="seconds"),
+    }
+
+
+def run_billing_reconcile_by_action_ids(
+    action_ids: List[int],
+    *,
+    lookback_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Manual admin reconcile for selected TransactionAction IDs."""
+    days = int(
+        lookback_days
+        if lookback_days is not None
+        else getattr(settings, "BILLING_RECONCILE_LOOKBACK_DAYS", 3)
+    )
+    requested: List[int] = []
+    seen = set()
+    for raw in action_ids or []:
+        try:
+            aid = int(raw)
+        except Exception:
+            continue
+        if aid <= 0 or aid in seen:
+            continue
+        seen.add(aid)
+        requested.append(aid)
+
+    process_log: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    def _log(step: str, **extra: Any) -> None:
+        process_log.append(
+            {
+                "ts": now_bj().isoformat(timespec="seconds"),
+                "step": step,
+                **extra,
+            }
+        )
+
+    _log("start", requested_count=len(requested), lookback_days=days)
+
+    with SessionLocal() as db:
+        stale_pairs = find_reconcile_candidates(db, lookback_days=days)
+        stale_ids = {int(action.id) for action, _ in stale_pairs}
+
+    for action_id in requested:
+        if action_id not in stale_ids:
+            item = {
+                "action_id": action_id,
+                "status": "skipped_not_candidate",
+            }
+            results.append(item)
+            _log("skip", action_id=action_id, reason="not_in_candidate_list")
+            continue
+        try:
+            with SessionLocal() as row_db:
+                row_action = (
+                    row_db.query(TransactionAction)
+                    .filter(TransactionAction.id == action_id)
+                    .first()
+                )
+                if row_action is None:
+                    item = {"action_id": action_id, "status": "skipped_not_found"}
+                    results.append(item)
+                    _log("skip", action_id=action_id, reason="not_found")
+                    continue
+                row_history = None
+                tx_id = (
+                    getattr(row_action, "transaction_id", None)
+                    or getattr(row_action, "reservation_tx_id", None)
+                )
+                if tx_id:
+                    row_history = (
+                        row_db.query(TransactionHistory)
+                        .filter(TransactionHistory.id == int(tx_id))
+                        .first()
+                    )
+                if _has_actual_supplier_usage(row_action, row_history):
+                    item = {"action_id": action_id, "status": "skipped_already_has_usage"}
+                    results.append(item)
+                    _log("skip", action_id=action_id, reason="already_has_usage")
+                    continue
+                summary = summarize_reconcile_candidate(row_action, row_history)
+                _log(
+                    "query_start",
+                    action_id=action_id,
+                    provider=summary.get("provider"),
+                    task_id=summary.get("task_id"),
+                    transaction_id=summary.get("transaction_id"),
+                )
+                result = reconcile_one(row_db, row_action, row_history)
+            results.append(result)
+            _log(
+                "query_done",
+                action_id=action_id,
+                status=result.get("status"),
+                provider=result.get("provider"),
+                task_id=result.get("task_id"),
+                kie_credits=result.get("kie_credits"),
+                total_tokens=result.get("total_tokens"),
+                consumeMoney=result.get("consumeMoney"),
+                consumeCoins=result.get("consumeCoins"),
+            )
+        except Exception as exc:
+            logger.exception("Manual billing reconcile failed | action_id=%s", action_id)
+            errors.append({"action_id": action_id, "error": str(exc)})
+            _log("error", action_id=action_id, error=str(exc))
+
+    ok_count = sum(1 for row in results if row.get("status") == "ok")
+    skipped_count = sum(1 for row in results if str(row.get("status") or "").startswith("skipped"))
+    _log(
+        "finished",
+        reconciled_ok=ok_count,
+        skipped_count=skipped_count,
+        error_count=len(errors),
+    )
+    return {
+        "ok": len(errors) == 0,
+        "lookback_days": days,
+        "requested_count": len(requested),
+        "reconciled_ok": ok_count,
+        "skipped_count": skipped_count,
+        "error_count": len(errors),
+        "results": results,
+        "errors": errors,
+        "process_log": process_log,
+        "created_at": now_bj().isoformat(timespec="seconds"),
+    }

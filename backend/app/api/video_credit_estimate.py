@@ -2,7 +2,6 @@
 """Video generation credit dry-run estimate API."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Dict, Optional, Tuple
 
@@ -14,9 +13,9 @@ from app.db.session import get_db
 from app.api.deps import get_current_user
 from app.models import all_models as models
 from app.services.billing_service import billing_service
+from app.services.video_billing_details import build_video_generation_billing_details
 
 User = models.User
-Project = models.Project
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["billing"])
@@ -31,17 +30,6 @@ def _log_video_estimate(message: str, *args: Any) -> None:
             logger.info("%s | args=%s", message, args)
         except Exception:
             pass
-
-
-def _is_per_second_provider(provider: Any) -> bool:
-    provider_lower = str(provider or "").strip().lower()
-    if not provider_lower:
-        return False
-    if provider_lower == "kie" or provider_lower.startswith("kie/") or "kie.ai" in provider_lower:
-        return True
-    if provider_lower == "runninghub" or provider_lower.startswith("runninghub/") or "runninghub" in provider_lower:
-        return True
-    return False
 
 
 class VideoCreditEstimateRequest(BaseModel):
@@ -60,56 +48,6 @@ class VideoCreditEstimateRequest(BaseModel):
     height: Optional[int] = None
     resolution: Optional[str] = None
     video_resolution: Optional[str] = None
-    video_resolution: Optional[str] = None
-
-
-def _to_positive_int_or_none(value: Any) -> Optional[int]:
-    try:
-        parsed = int(value)
-    except Exception:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _pick_project_visual_for_estimate(info: Any) -> Dict[str, Any]:
-    if not isinstance(info, dict):
-        return {}
-    defaults = info.get("project_generation_defaults") if isinstance(info.get("project_generation_defaults"), dict) else {}
-    tech = info.get("tech_params") if isinstance(info.get("tech_params"), dict) else {}
-    vis = tech.get("visual_standard") if isinstance(tech.get("visual_standard"), dict) else {}
-    out: Dict[str, Any] = {
-        "aspect_ratio": (
-            vis.get("aspect_ratio") or vis.get("aspectRatio")
-            or defaults.get("aspect_ratio") or defaults.get("aspectRatio")
-            or info.get("aspect_ratio") or info.get("aspectRatio")
-        ),
-        "width": (
-            vis.get("horizontal_resolution") or vis.get("width")
-            or defaults.get("horizontal_resolution") or info.get("width")
-        ),
-        "height": (
-            vis.get("vertical_resolution") or vis.get("height")
-            or defaults.get("vertical_resolution") or info.get("height")
-        ),
-        "resolution": vis.get("resolution") or defaults.get("resolution") or info.get("resolution"),
-        "video_resolution": (
-            vis.get("video_resolution")
-            or defaults.get("video_resolution")
-            or info.get("video_resolution")
-        ),
-        "image_size": (
-            vis.get("image_size") or vis.get("imageSize")
-            or defaults.get("image_size") or defaults.get("imageSize")
-            or info.get("image_size") or info.get("imageSize")
-        ),
-    }
-    nested = info.get("e_global_info") if isinstance(info.get("e_global_info"), dict) else None
-    if nested:
-        nested_values = _pick_project_visual_for_estimate(nested)
-        for key in ("aspect_ratio", "width", "height", "resolution", "video_resolution", "image_size"):
-            if not out.get(key) and nested_values.get(key):
-                out[key] = nested_values.get(key)
-    return out
 
 
 def _build_video_credit_estimate_details(
@@ -117,213 +55,28 @@ def _build_video_credit_estimate_details(
     current_user: User,
     req: VideoCreditEstimateRequest,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    from app.api.endpoints import (
-        _resolve_media_runtime_target,
-        _infer_project_resolution,
-        _normalize_project_image_size,
-        _normalize_project_video_resolution,
-        _project_video_resolution_label,
-        _infer_dims_from_video_resolution_tier,
-    )
-
-    runtime_target = _resolve_media_runtime_target(
-        provider=None,
-        model=None,
-        media_type="video",
-        category="Video",
-        user_id=current_user.id,
-        user_credits=(current_user.credits or 0),
+    """Thin wrapper: estimate + reserve share build_video_generation_billing_details."""
+    return build_video_generation_billing_details(
+        db,
+        user_id=getattr(current_user, "id", None),
+        user_credits=(getattr(current_user, "credits", None) or 0),
+        billing_mode="ESTIMATE",
         function_name=str(req.function_name or "generate_videos").strip() or "generate_videos",
         system_api_id=req.system_api_id,
+        project_id=req.project_id,
+        episode_id=req.episode_id,
+        shot_id=req.shot_id,
+        duration=req.duration,
+        draft_mode=bool(req.draft_mode),
+        use_prev_video=bool(req.use_prev_video),
+        has_video_input=req.has_video_input,
+        input_duration_seconds=req.input_duration_seconds,
+        aspect_ratio=req.aspect_ratio,
+        width=req.width,
+        height=req.height,
+        resolution=req.resolution,
+        video_resolution=req.video_resolution,
     )
-    reserve_provider = runtime_target.get("resolved_provider")
-    reserve_model = runtime_target.get("resolved_model")
-    reserve_system_api_id = runtime_target.get("resolved_system_api_id")
-    if req.system_api_id and not reserve_system_api_id:
-        reserve_system_api_id = int(req.system_api_id)
-
-    project_global_info: Dict[str, Any] = {}
-    resolved_project_id = _to_positive_int_or_none(req.project_id)
-    if resolved_project_id:
-        project = db.query(Project).filter(Project.id == int(resolved_project_id)).first()
-        if project:
-            raw_gi = getattr(project, "global_info", None)
-            if isinstance(raw_gi, dict):
-                project_global_info = raw_gi
-            elif isinstance(raw_gi, str) and raw_gi.strip():
-                try:
-                    parsed = json.loads(raw_gi)
-                    if isinstance(parsed, dict):
-                        project_global_info = parsed
-                except Exception:
-                    project_global_info = {}
-
-    project_visual = _pick_project_visual_for_estimate(project_global_info)
-    aspect_ratio = str(req.aspect_ratio or "").strip() or str(project_visual.get("aspect_ratio") or "").strip() or "16:9"
-
-    resolved_video_width = _to_positive_int_or_none(req.width)
-    resolved_video_height = _to_positive_int_or_none(req.height)
-    resolved_video_resolution = str(req.resolution or "").strip() or None
-    resolved_video_image_size = str(project_visual.get("image_size") or "").strip() or None
-    if resolved_video_image_size:
-        resolved_video_image_size = _normalize_project_image_size(resolved_video_image_size) or resolved_video_image_size
-
-    draft_mode = bool(req.draft_mode)
-    if draft_mode:
-        # Draft always bills/generates at 480p; ignore client width/height from project 720 prefs.
-        resolved_video_image_size = "0.5K"
-        resolved_video_resolution = "480p"
-        draft_dims = _infer_dims_from_video_resolution_tier(
-            aspect_ratio,
-            "480",
-            provider=reserve_provider,
-            model=reserve_model,
-        )
-        if draft_dims:
-            resolved_video_width, resolved_video_height = draft_dims
-        else:
-            resolved_video_width = None
-            resolved_video_height = None
-    else:
-        video_tier = (
-            _normalize_project_video_resolution(req.video_resolution)
-            or _normalize_project_video_resolution(req.resolution)
-            or _normalize_project_video_resolution(project_visual.get("video_resolution"))
-            or "720"
-        )
-        resolved_video_resolution = _project_video_resolution_label(video_tier)
-        video_dims = _infer_dims_from_video_resolution_tier(
-            aspect_ratio,
-            video_tier,
-            provider=reserve_provider,
-            model=reserve_model,
-        )
-        if video_dims:
-            resolved_video_width, resolved_video_height = video_dims
-
-    if (not resolved_video_width or not resolved_video_height) and resolved_video_image_size and aspect_ratio:
-        inferred_dims = _infer_project_resolution(aspect_ratio, resolved_video_image_size)
-        if inferred_dims:
-            inferred_w, inferred_h = inferred_dims
-            if not resolved_video_width and inferred_w:
-                resolved_video_width = int(inferred_w)
-            if not resolved_video_height and inferred_h:
-                resolved_video_height = int(inferred_h)
-            if resolved_video_width and resolved_video_height and not resolved_video_resolution:
-                resolved_video_resolution = f"{int(resolved_video_width)}x{int(resolved_video_height)}"
-
-    try:
-        duration_raw = float(req.duration) if req.duration is not None else 5.0
-    except Exception:
-        duration_raw = 5.0
-    est_duration = max(5, int(duration_raw)) if duration_raw > 0 else 5
-
-    has_video_input = req.has_video_input
-    if has_video_input is None:
-        has_video_input = bool(req.use_prev_video)
-    has_video_input = bool(has_video_input)
-
-    input_duration = None
-    try:
-        if req.input_duration_seconds is not None and float(req.input_duration_seconds) > 0:
-            input_duration = float(req.input_duration_seconds)
-    except Exception:
-        input_duration = None
-
-    # KIE / RunningHub Seedance use per-second resolution matrices; never Ark token formula.
-    _is_token_billing = (
-        (not _is_per_second_provider(reserve_provider))
-        and billing_service.is_token_pricing(db, "video_gen", reserve_provider, reserve_model)
-    )
-    details: Dict[str, Any] = {
-        "billing_mode": "ESTIMATE",
-        "duration": duration_raw if duration_raw > 0 else est_duration,
-        "duration_seconds": est_duration,
-        "estimated_duration": est_duration,
-        "draft_mode": draft_mode,
-        "draft": draft_mode,
-        "use_prev_video": bool(req.use_prev_video),
-        "shot_continuation": bool(req.use_prev_video),
-        "has_video_input": has_video_input,
-        "function_name": str(req.function_name or "generate_videos").strip() or "generate_videos",
-        "aspect_ratio": aspect_ratio,
-    }
-    if input_duration is not None:
-        details["input_duration_seconds"] = input_duration
-    if resolved_video_width:
-        details["width"] = int(resolved_video_width)
-    if resolved_video_height:
-        details["height"] = int(resolved_video_height)
-    if resolved_video_resolution:
-        details["resolution"] = str(resolved_video_resolution)
-    if resolved_video_image_size:
-        details["image_size"] = str(resolved_video_image_size)
-    if reserve_provider:
-        details["provider"] = reserve_provider
-        details["resolved_provider"] = reserve_provider
-    if reserve_model:
-        details["model"] = reserve_model
-        details["resolved_model"] = reserve_model
-    if reserve_system_api_id is not None:
-        details["system_api_id"] = int(reserve_system_api_id)
-        details["resolved_system_api_id"] = int(reserve_system_api_id)
-    if resolved_project_id:
-        details["project_id"] = int(resolved_project_id)
-    if _to_positive_int_or_none(req.episode_id):
-        details["episode_id"] = int(req.episode_id)
-    if _to_positive_int_or_none(req.shot_id):
-        details["shot_id"] = int(req.shot_id)
-
-    if _is_token_billing:
-        _video_token_cfg = billing_service.resolve_video_token_config(db, reserve_provider, reserve_model)
-        reserve_width = int(resolved_video_width) if resolved_video_width else int(_video_token_cfg.get("default_width", 1280))
-        reserve_height = int(resolved_video_height) if resolved_video_height else int(_video_token_cfg.get("default_height", 720))
-        reserve_fps = int(_video_token_cfg.get("default_fps", 24))
-        _draft_coeff = float(_video_token_cfg.get("draft_token_coefficient", 1.0) or 1.0)
-        if not (0 < _draft_coeff):
-            _draft_coeff = 1.0
-        _is_seedance_2 = bool(_video_token_cfg.get("is_seedance_2")) or billing_service.is_seedance_2_model(
-            reserve_provider, reserve_model
-        )
-        _token_estimate = billing_service.estimate_video_token_usage(
-            width=reserve_width,
-            height=reserve_height,
-            fps=reserve_fps,
-            output_duration_seconds=est_duration,
-            has_video_input=has_video_input,
-            input_duration_seconds=input_duration,
-            draft_token_coefficient=_draft_coeff,
-            method=("seedance2_video_token_formula" if _is_seedance_2 else "video_token_formula"),
-        )
-        _estimated_tokens = int(_token_estimate.get("tokens") or 0)
-        details.update({
-            "output_tokens": _estimated_tokens,
-            "total_tokens": _estimated_tokens,
-            "estimation_method": _token_estimate.get("estimation_method") or "video_token_formula",
-            "video_token_branch": "seedance2" if _is_seedance_2 else "fallback",
-            "video_token_estimate": _token_estimate,
-            "width": reserve_width,
-            "height": reserve_height,
-            "fps": reserve_fps,
-            "input_duration_seconds": _token_estimate.get("input_duration_seconds"),
-            "is_seedance_2": bool(_is_seedance_2),
-            "draft_token_coefficient": _draft_coeff,
-        })
-
-    meta = {
-        "resolved_provider": reserve_provider,
-        "resolved_model": reserve_model,
-        "resolved_system_api_id": reserve_system_api_id,
-        "is_token_billing": bool(_is_token_billing),
-        "aspect_ratio": aspect_ratio,
-        "width": details.get("width"),
-        "height": details.get("height"),
-        "resolution": details.get("resolution"),
-        "duration_seconds": est_duration,
-        "has_video_input": has_video_input,
-        "draft_mode": draft_mode,
-    }
-    return details, meta
 
 
 @router.post("/billing/estimate/video")
@@ -356,7 +109,6 @@ def estimate_video_generation_credits(
     if not billing_process:
         billing_process = billing_service._build_billing_process_snapshot(breakdown, phase="estimate")
     usage_meta = billing_process.get("usage") if isinstance(billing_process.get("usage"), dict) else {}
-    # Preview estimates: one short debug line (UI can poll often). Failures stay at info.
     logger.debug(
         "[BillingProcess] estimate user=%s credits=%s logic=%s rule=%s unit=%s tier=%s dur=%s %s/%s",
         getattr(current_user, "id", None),

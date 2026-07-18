@@ -1572,98 +1572,203 @@ const assertWorkspaceSceneImportComplete = ({
     ));
 };
 
+const collectEpisodeSceneIdsWithShots = (shots) => {
+    const sceneIds = new Set();
+    (Array.isArray(shots) ? shots : []).forEach((row) => {
+        const sceneId = Number(row?.scene_id || 0);
+        if (Number.isFinite(sceneId) && sceneId > 0) sceneIds.add(sceneId);
+    });
+    return sceneIds;
+};
+
+const resolveEpisodeStoryboardCoverage = async ({
+    fetchScenesFn,
+    fetchEpisodeShotsFn,
+    episodeId,
+}) => {
+    const id = Number(episodeId || 0);
+    if (!id || typeof fetchScenesFn !== 'function' || typeof fetchEpisodeShotsFn !== 'function') {
+        return {
+            sceneCount: 0,
+            sceneCountWithShots: 0,
+            shotCount: 0,
+            missingSceneIds: [],
+            ok: true,
+        };
+    }
+    const [scenes, shots] = await Promise.all([
+        fetchScenesFn(id).catch(() => []),
+        fetchEpisodeShotsFn(id, { compact: true }).catch(() => []),
+    ]);
+    const sceneList = Array.isArray(scenes) ? scenes : [];
+    const shotList = Array.isArray(shots) ? shots : [];
+    const sceneIds = sceneList
+        .map((scene) => Number(scene?.id || 0))
+        .filter((sceneId) => Number.isFinite(sceneId) && sceneId > 0);
+    const withShots = collectEpisodeSceneIdsWithShots(shotList);
+    const missingSceneIds = sceneIds.filter((sceneId) => !withShots.has(sceneId));
+    const sceneCountWithShots = sceneIds.filter((sceneId) => withShots.has(sceneId)).length;
+    return {
+        sceneCount: sceneIds.length,
+        sceneCountWithShots,
+        shotCount: shotList.length,
+        missingSceneIds,
+        ok: sceneIds.length <= 0 || missingSceneIds.length === 0,
+    };
+};
+
+const waitForEpisodeStoryboardCoverage = async (
+    fetchScenesFn,
+    fetchEpisodeShotsFn,
+    episodeId,
+    { retries = 8, delayMs = 500 } = {},
+) => {
+    let last = {
+        sceneCount: 0,
+        sceneCountWithShots: 0,
+        shotCount: 0,
+        missingSceneIds: [],
+        ok: true,
+    };
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+        last = await resolveEpisodeStoryboardCoverage({
+            fetchScenesFn,
+            fetchEpisodeShotsFn,
+            episodeId,
+        });
+        if (last.ok || last.sceneCount <= 0) return last;
+        if (attempt < retries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+    return last;
+};
+
 const runAnalysisPipelineIntegrityGate = async ({
     t,
     onLog,
     fetchScenesFn,
     fetchEntitiesFn,
+    fetchEpisodeShotsFn,
     projectId,
     episodeId,
     importReport,
     postImportSceneSubjectReport,
     expectedSceneCount,
     subjectIndexText,
+    checkStoryboards = false,
+    skipNonStoryboardChecks = false,
 }) => {
     const failures = [];
-    const resolvedSubjectIndex = String(subjectIndexText || '').trim();
+    let dbSceneCount = 0;
+    let storyboardCoverage = null;
 
-    if (!resolvedSubjectIndex) {
-        failures.push(t('资产清单尚未生成或尚未保存', 'Asset inventory was not generated or saved'));
-    }
+    if (!skipNonStoryboardChecks) {
+        const resolvedSubjectIndex = String(subjectIndexText || '').trim();
 
-    const expected = Math.max(1, Number(expectedSceneCount) || 0);
-    onLog?.(
-        t(
-            `开始本集齐套检查：期望入库 ${expected} 场，资产清单已准备就绪`,
-            `Starting episode readiness check: expecting ${expected} scene(s) imported; asset inventory is ready`
-        ),
-        'info'
-    );
-    const dbSceneCount = await waitForEpisodeSceneCount(
-        fetchScenesFn,
-        episodeId,
-        expected,
-        { retries: 10, delayMs: 500 },
-    );
-    try {
-        assertWorkspaceSceneImportComplete({
-            importReport,
-            expectedSceneCount: expected,
-            dbSceneCount,
-            t,
-        });
-    } catch (sceneErr) {
-        failures.push(String(sceneErr?.message || sceneErr || ''));
-    }
+        if (!resolvedSubjectIndex) {
+            failures.push(t('资产清单尚未生成或尚未保存', 'Asset inventory was not generated or saved'));
+        }
 
-    const subtaskReports = Array.isArray(postImportSceneSubjectReport?.subtaskReports)
-        ? postImportSceneSubjectReport.subtaskReports
-        : [];
-    const failedSubtasks = subtaskReports.filter(
-        (report) => String(report?.status || '').trim().toLowerCase() !== 'ok'
-    );
-    if (failedSubtasks.length > 0) {
-        failures.push(t(
-            `资产设计子任务失败：${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`,
-            `Visual asset subtasks failed: ${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`
-        ));
-    }
+        const expected = Math.max(1, Number(expectedSceneCount) || 0);
+        onLog?.(
+            t(
+                `开始本集齐套检查：期望入库 ${expected} 场，资产清单已准备就绪`,
+                `Starting episode readiness check: expecting ${expected} scene(s) imported; asset inventory is ready`
+            ),
+            'info'
+        );
+        dbSceneCount = await waitForEpisodeSceneCount(
+            fetchScenesFn,
+            episodeId,
+            expected,
+            { retries: 10, delayMs: 500 },
+        );
+        try {
+            assertWorkspaceSceneImportComplete({
+                importReport,
+                expectedSceneCount: expected,
+                dbSceneCount,
+                t,
+            });
+        } catch (sceneErr) {
+            failures.push(String(sceneErr?.message || sceneErr || ''));
+        }
 
-    const supplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
-    if (supplementFailed > 0 && subtaskReports.length === 0) {
-        failures.push(t(
-            `资产入库存在 ${supplementFailed} 项失败`,
-            `${supplementFailed} asset import item(s) failed`
-        ));
-    }
-
-    if (projectId && fetchEntitiesFn && String(subjectIndexText || '').trim()) {
-        const importedCounts = postImportSceneSubjectReport?.importedSubjectCounts || importReport?.importedSubjectCounts || {};
-        const handledAssets = Number(importedCounts.character || 0)
-            + Number(importedCounts.prop || 0)
-            + Number(importedCounts.environment || 0)
-            + Number(importedCounts.poster || 0);
-        const okSubtaskCount = subtaskReports.filter(
-            (report) => String(report?.status || '').trim().toLowerCase() === 'ok'
-        ).length;
-        if (subtaskReports.length > 0 && okSubtaskCount > 0 && handledAssets <= 0) {
+        const subtaskReports = Array.isArray(postImportSceneSubjectReport?.subtaskReports)
+            ? postImportSceneSubjectReport.subtaskReports
+            : [];
+        const failedSubtasks = subtaskReports.filter(
+            (report) => String(report?.status || '').trim().toLowerCase() !== 'ok'
+        );
+        if (failedSubtasks.length > 0) {
             failures.push(t(
-                '资产设计子任务已完成但未检测到本轮入库记录',
-                'Visual asset subtasks completed but no assets were imported in this run'
+                `资产设计子任务失败：${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`,
+                `Visual asset subtasks failed: ${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`
             ));
-        } else if (subtaskReports.length > 0 && okSubtaskCount <= 0 && handledAssets <= 0) {
-            const entities = await fetchEntitiesFn(projectId, {
-                episode_id: Number(episodeId) || undefined,
-            }).catch(() => []);
-            const episodeScoped = (Array.isArray(entities) ? entities : []).filter(
-                (entity) => String(entity?.episode_id || '').trim() === String(episodeId || '').trim()
-            );
-            if (episodeScoped.length <= 0) {
+        }
+
+        const supplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+        if (supplementFailed > 0 && subtaskReports.length === 0) {
+            failures.push(t(
+                `资产入库存在 ${supplementFailed} 项失败`,
+                `${supplementFailed} asset import item(s) failed`
+            ));
+        }
+
+        if (projectId && fetchEntitiesFn && String(subjectIndexText || '').trim()) {
+            const importedCounts = postImportSceneSubjectReport?.importedSubjectCounts || importReport?.importedSubjectCounts || {};
+            const handledAssets = Number(importedCounts.character || 0)
+                + Number(importedCounts.prop || 0)
+                + Number(importedCounts.environment || 0)
+                + Number(importedCounts.poster || 0);
+            const okSubtaskCount = subtaskReports.filter(
+                (report) => String(report?.status || '').trim().toLowerCase() === 'ok'
+            ).length;
+            if (subtaskReports.length > 0 && okSubtaskCount > 0 && handledAssets <= 0) {
                 failures.push(t(
-                    '资产设计已完成但未检测到本集实体记录',
-                    'Visual asset generation finished but no entities were found for this episode'
+                    '资产设计子任务已完成但未检测到本轮入库记录',
+                    'Visual asset subtasks completed but no assets were imported in this run'
                 ));
+            } else if (subtaskReports.length > 0 && okSubtaskCount <= 0 && handledAssets <= 0) {
+                const entities = await fetchEntitiesFn(projectId, {
+                    episode_id: Number(episodeId) || undefined,
+                }).catch(() => []);
+                const episodeScoped = (Array.isArray(entities) ? entities : []).filter(
+                    (entity) => String(entity?.episode_id || '').trim() === String(episodeId || '').trim()
+                );
+                if (episodeScoped.length <= 0) {
+                    failures.push(t(
+                        '资产设计已完成但未检测到本集实体记录',
+                        'Visual asset generation finished but no entities were found for this episode'
+                    ));
+                }
             }
+        }
+    }
+
+    if (checkStoryboards) {
+        onLog?.(
+            t(
+                '开始本集分镜齐套检查：按每个场景是否已有分镜核对',
+                'Starting storyboard readiness check: each scene must have storyboards'
+            ),
+            'info'
+        );
+        storyboardCoverage = await waitForEpisodeStoryboardCoverage(
+            fetchScenesFn,
+            fetchEpisodeShotsFn,
+            episodeId,
+        );
+        if (storyboardCoverage.sceneCount > 0 && !storyboardCoverage.ok) {
+            const missing = Math.max(
+                0,
+                Number(storyboardCoverage.sceneCount || 0) - Number(storyboardCoverage.sceneCountWithShots || 0),
+            );
+            failures.push(t(
+                `分镜未齐套：本集 ${storyboardCoverage.sceneCount} 场中仅 ${storyboardCoverage.sceneCountWithShots} 场有分镜（还差 ${missing} 场）`,
+                `Storyboards incomplete: ${storyboardCoverage.sceneCountWithShots}/${storyboardCoverage.sceneCount} scene(s) have shots (${missing} still missing)`
+            ));
         }
     }
 
@@ -1676,14 +1781,30 @@ const runAnalysisPipelineIntegrityGate = async ({
         ));
     }
 
-    onLog?.(
-        t(
-            `本集齐套检查通过：已入库 ${dbSceneCount} 场，资产清单与资产设计均已完成。`,
-            `Episode readiness check passed: ${dbSceneCount} scene(s) imported; asset inventory and asset design are complete.`
-        ),
-        'success'
-    );
-    return { dbSceneCount, ok: true };
+    if (checkStoryboards && skipNonStoryboardChecks) {
+        onLog?.(
+            t(
+                `本集分镜齐套检查通过：${storyboardCoverage?.sceneCountWithShots || 0}/${storyboardCoverage?.sceneCount || 0} 场已有分镜。`,
+                `Storyboard readiness check passed: ${storyboardCoverage?.sceneCountWithShots || 0}/${storyboardCoverage?.sceneCount || 0} scene(s) have shots.`
+            ),
+            'success'
+        );
+    } else {
+        const storyboardSuffix = checkStoryboards && storyboardCoverage
+            ? t(
+                `；分镜 ${storyboardCoverage.sceneCountWithShots}/${storyboardCoverage.sceneCount} 场已齐`,
+                `; storyboards ready for ${storyboardCoverage.sceneCountWithShots}/${storyboardCoverage.sceneCount} scene(s)`
+            )
+            : '';
+        onLog?.(
+            t(
+                `本集齐套检查通过：已入库 ${dbSceneCount} 场，资产清单与资产设计均已完成${storyboardSuffix}。`,
+                `Episode readiness check passed: ${dbSceneCount} scene(s) imported; asset inventory and asset design are complete${storyboardSuffix}.`
+            ),
+            'success'
+        );
+    }
+    return { dbSceneCount, storyboardCoverage, ok: true };
 };
 
 const ANALYSIS_FLOW_HISTORY_CAP = 500;
@@ -15101,6 +15222,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const aiShotsBatchStarted = Boolean(storyboardWaitResult?.started);
             const storyboardProgressSnapshot = storyboardWaitResult?.progress || EMPTY_STORYBOARD_TASK_PROGRESS;
 
+            if (await isStoryboardAutoStartEnabled()) {
+                setAnalysisFlowStatus({
+                    phase: 'supplement',
+                    message: t('🔍 正在检查本集分镜是否齐套…', 'Checking whether every scene has storyboards...'),
+                });
+                const storyboardGateResult = await runAnalysisPipelineIntegrityGate({
+                    t,
+                    onLog,
+                    fetchScenesFn: fetchScenes,
+                    fetchEpisodeShotsFn: fetchEpisodeShots,
+                    episodeId: activeEpisode?.id,
+                    checkStoryboards: true,
+                    skipNonStoryboardChecks: true,
+                });
+                const coverage = storyboardGateResult?.storyboardCoverage;
+                if (coverage) {
+                    setDiagnosticsEpisodeShotStats({
+                        shotCount: Number(coverage.shotCount || 0),
+                        sceneCountWithShots: Number(coverage.sceneCountWithShots || 0),
+                    });
+                }
+            }
+
             setPendingSwitchAfterPostChecks(false);
             phaseMarks.completedAt = Date.now();
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
@@ -18353,6 +18497,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         };
 
+        // Storyboards: expected = workspace/analysis scene count; ready = scenes that already have ≥1 shot.
+        const expectedStoryboardSceneCount = firstPositiveFiniteNumber(
+            importedSceneCount,
+            analysisSceneCount,
+        );
+        const sceneCountWithShots = Number(diagnosticsEpisodeShotStats?.sceneCountWithShots || 0);
+
         const rows = [
             {
                 key: 'scenes',
@@ -18368,6 +18519,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             buildAssetRow('prop', '道具', 'Props', 'props'),
             buildAssetRow('environment', '环境', 'Environments', 'environments'),
             buildAssetRow('poster', '封面', 'Poster', 'posters'),
+            {
+                key: 'storyboards',
+                labelZh: '分镜',
+                labelEn: 'Storyboards',
+                analysisCount: expectedStoryboardSceneCount,
+                importedCount: sceneCountWithShots,
+                status: resolveCompletenessStatus(expectedStoryboardSceneCount, sceneCountWithShots),
+                failed: false,
+                errorMessage: '',
+            },
         ];
 
         const visibleRows = rows.filter((row) => row.analysisCount > 0 || row.importedCount > 0 || row.status === 'missing');
@@ -18383,7 +18544,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         const hasAnyData = rows.some((row) => row.analysisCount > 0 || row.importedCount > 0);
         const hasIncomplete = rows.some((row) => ['partial', 'missing'].includes(row.status));
-        const failedCategories = rows.filter((row) => row.status === 'missing' && row.key !== 'scenes');
+        // Asset regenerate CTA only covers visual-asset categories (not scenes / storyboards).
+        const failedCategories = rows.filter(
+            (row) => row.status === 'missing' && row.key !== 'scenes' && row.key !== 'storyboards'
+        );
         const hasFailedSubtask = rows.some((row) => row.failed);
 
         return {
@@ -18400,6 +18564,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisUiReport,
         availableSubjectAssets,
         diagnosticsEpisodeSceneCount,
+        diagnosticsEpisodeShotStats?.sceneCountWithShots,
         getAnalysisEntitiesPayloadFromJsonText,
         getStageOutputContent,
         llmAssetRawResultContent,
@@ -19231,27 +19396,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             {t('本集齐套', 'Episode readiness')}:
                         </span>
                         {workflowCompletenessStats.summaryItems.map((item, index) => {
+                            const missingCount = Math.max(0, item.analysisCount - item.importedCount);
                             const statusTip = item.errorMessage
                                 || (
-                                    item.status === 'missing'
-                                        ? t(
-                                            `本集还没有可用的${item.labelZh}，请检查后重新生成。`,
-                                            `No usable ${item.labelEn.toLowerCase()} in this episode yet. Please review and regenerate.`
-                                        )
-                                        : item.status === 'partial'
-                                            ? t(
-                                                `本集应有 ${item.analysisCount} 个${item.labelZh}，目前齐套 ${item.importedCount} 个，还差 ${Math.max(0, item.analysisCount - item.importedCount)} 个。`,
-                                                `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready, ${Math.max(0, item.analysisCount - item.importedCount)} still missing.`
-                                            )
-                                            : item.status === 'extra'
+                                    item.key === 'storyboards'
+                                        ? (
+                                            item.status === 'missing'
                                                 ? t(
-                                                    `本集工作区里的${item.labelZh}比清单多，请确认是否需要清理多余项。`,
-                                                    `Workspace has more ${item.labelEn.toLowerCase()} than the episode list; confirm whether extras should be cleaned up.`
+                                                    `本集 ${item.analysisCount} 个场景都还没有分镜，请检查后重跑分镜。`,
+                                                    `None of the ${item.analysisCount} scene(s) in this episode have storyboards yet. Please review and regenerate.`
                                                 )
-                                                : t(
-                                                    `本集应有 ${item.analysisCount} 个${item.labelZh}，已齐套 ${item.importedCount} 个。`,
-                                                    `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready.`
+                                                : item.status === 'partial'
+                                                    ? t(
+                                                        `本集 ${item.analysisCount} 个场景中，已有分镜 ${item.importedCount} 场，还差 ${missingCount} 场。`,
+                                                        `${item.importedCount}/${item.analysisCount} scene(s) have storyboards; ${missingCount} still missing.`
+                                                    )
+                                                    : t(
+                                                        `本集 ${item.analysisCount} 个场景均已有分镜（${item.importedCount}/${item.analysisCount}）。`,
+                                                        `All ${item.analysisCount} scene(s) have storyboards (${item.importedCount}/${item.analysisCount}).`
+                                                    )
+                                        )
+                                        : item.status === 'missing'
+                                            ? t(
+                                                `本集还没有可用的${item.labelZh}，请检查后重新生成。`,
+                                                `No usable ${item.labelEn.toLowerCase()} in this episode yet. Please review and regenerate.`
+                                            )
+                                            : item.status === 'partial'
+                                                ? t(
+                                                    `本集应有 ${item.analysisCount} 个${item.labelZh}，目前齐套 ${item.importedCount} 个，还差 ${missingCount} 个。`,
+                                                    `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready, ${missingCount} still missing.`
                                                 )
+                                                : item.status === 'extra'
+                                                    ? t(
+                                                        `本集工作区里的${item.labelZh}比清单多，请确认是否需要清理多余项。`,
+                                                        `Workspace has more ${item.labelEn.toLowerCase()} than the episode list; confirm whether extras should be cleaned up.`
+                                                    )
+                                                    : t(
+                                                        `本集应有 ${item.analysisCount} 个${item.labelZh}，已齐套 ${item.importedCount} 个。`,
+                                                        `This episode needs ${item.analysisCount} ${item.labelEn.toLowerCase()}, ${item.importedCount} ready.`
+                                                    )
                                 );
                             return (
                                 <span
@@ -19261,10 +19444,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 >
                                     {t(item.labelZh, item.labelEn)}
                                     {' '}
-                                    {t(
-                                        `应有${item.analysisCount}/已齐${item.importedCount}`,
-                                        `need ${item.analysisCount}/ready ${item.importedCount}`
-                                    )}
+                                    {item.key === 'storyboards'
+                                        ? t(
+                                            `应有${item.analysisCount}场/已齐${item.importedCount}场`,
+                                            `need ${item.analysisCount} scenes/ready ${item.importedCount}`
+                                        )
+                                        : t(
+                                            `应有${item.analysisCount}/已齐${item.importedCount}`,
+                                            `need ${item.analysisCount}/ready ${item.importedCount}`
+                                        )}
                                     {item.mark}
                                 </span>
                             );

@@ -150,6 +150,31 @@ def _safe_usage_float(value: Any) -> float:
         return 0.0
 
 
+def _optional_usage_non_negative_float(value: Any) -> Optional[float]:
+    """Parse provider usage scalars; keep 0, drop null/empty/invalid."""
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed < 0 or parsed != parsed:  # NaN
+        return None
+    return parsed
+
+
+_RUNNINGHUB_USAGE_KEYS = (
+    "consumeCoins",
+    "consume_coins",
+    "consumeMoney",
+    "consume_money",
+    "thirdPartyConsumeMoney",
+    "third_party_consume_money",
+    "taskCostTime",
+    "task_cost_time",
+)
+
+
 def _extract_scalar_provider_credits(payload: Any) -> Dict[str, Any]:
     """Pull scalar credit fields (e.g. KIE webhook data.creditsConsumed)."""
     if not isinstance(payload, dict):
@@ -179,7 +204,7 @@ def _extract_scalar_provider_credits(payload: Any) -> Dict[str, Any]:
 
 
 def _extract_provider_task_usage(payload: Any, *, _depth: int = 0) -> Dict[str, Any]:
-    """Extract usage/credits from provider task-query / webhook payloads (Ark, KIE, ZLHub, etc.)."""
+    """Extract usage/credits from provider task-query / webhook payloads (Ark, KIE, ZLHub, RunningHub, etc.)."""
     if not isinstance(payload, dict) or _depth > 4:
         return {}
     for key in ("usage", "consume", "consumption", "billing", "cost"):
@@ -206,7 +231,7 @@ def _extract_provider_task_usage(payload: Any, *, _depth: int = 0) -> Dict[str, 
 
 
 def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
-    """Normalize OpenAI/Ark/KIE usage into billing-friendly token/credit keys."""
+    """Normalize OpenAI/Ark/KIE/RunningHub usage into billing-friendly token/credit keys."""
     if not isinstance(usage, dict) or not usage:
         return {}
     normalized = dict(usage)
@@ -242,9 +267,77 @@ def _normalize_provider_task_usage(usage: Any) -> Dict[str, Any]:
         normalized["creditsConsumed"] = credits
         normalized["credits_consumed"] = credits
         normalized["kie_credits_consumed"] = credits
-    # Keep only payloads that carry at least one billable quantity.
-    if total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0:
+
+    # RunningHub webhook/query: eventData.usage.{consumeCoins,consumeMoney,thirdPartyConsumeMoney,taskCostTime}
+    has_runninghub_usage = any(key in normalized for key in _RUNNINGHUB_USAGE_KEYS)
+    consume_coins = _optional_usage_non_negative_float(
+        normalized.get("consumeCoins") if normalized.get("consumeCoins") not in (None, "") else normalized.get("consume_coins")
+    )
+    consume_money = _optional_usage_non_negative_float(
+        normalized.get("consumeMoney") if normalized.get("consumeMoney") not in (None, "") else normalized.get("consume_money")
+    )
+    third_party_money = _optional_usage_non_negative_float(
+        normalized.get("thirdPartyConsumeMoney")
+        if normalized.get("thirdPartyConsumeMoney") not in (None, "")
+        else normalized.get("third_party_consume_money")
+    )
+    task_cost_time = _optional_usage_non_negative_float(
+        normalized.get("taskCostTime") if normalized.get("taskCostTime") not in (None, "") else normalized.get("task_cost_time")
+    )
+    if consume_coins is not None:
+        normalized["consumeCoins"] = consume_coins
+        normalized["consume_coins"] = consume_coins
+    else:
+        normalized.pop("consumeCoins", None)
+        normalized.pop("consume_coins", None)
+    if consume_money is not None:
+        normalized["consumeMoney"] = consume_money
+        normalized["consume_money"] = consume_money
+    else:
+        normalized.pop("consumeMoney", None)
+        normalized.pop("consume_money", None)
+    if third_party_money is not None:
+        normalized["thirdPartyConsumeMoney"] = third_party_money
+        normalized["third_party_consume_money"] = third_party_money
+    else:
+        normalized.pop("thirdPartyConsumeMoney", None)
+        normalized.pop("third_party_consume_money", None)
+    if task_cost_time is not None:
+        normalized["taskCostTime"] = task_cost_time
+        normalized["task_cost_time"] = task_cost_time
+        normalized["provider_cost_time_seconds"] = task_cost_time
+        normalized["cost_time"] = task_cost_time
+    else:
+        normalized.pop("taskCostTime", None)
+        normalized.pop("task_cost_time", None)
+
+    # Keep token/credit payloads, or RunningHub usage blocks (including all-null + taskCostTime=0).
+    if total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0 and not has_runninghub_usage:
         return {}
+    if has_runninghub_usage and total <= 0 and credits <= 0 and prompt <= 0 and completion <= 0:
+        # Drop unrelated empty noise; keep RH audit scalars (+ aliases already set).
+        slim: Dict[str, Any] = {}
+        for key in (
+            "consumeCoins",
+            "consume_coins",
+            "consumeMoney",
+            "consume_money",
+            "thirdPartyConsumeMoney",
+            "third_party_consume_money",
+            "taskCostTime",
+            "task_cost_time",
+            "provider_cost_time_seconds",
+            "cost_time",
+        ):
+            if normalized.get(key) not in (None, ""):
+                slim[key] = normalized.get(key)
+        # Preserve presence even when RH returned only nulls / zero runtime.
+        if not slim and has_runninghub_usage:
+            slim["taskCostTime"] = 0.0
+            slim["task_cost_time"] = 0.0
+            slim["provider_cost_time_seconds"] = 0.0
+            slim["cost_time"] = 0.0
+        return slim
     return normalized
 
 
@@ -2088,10 +2181,10 @@ class MediaGenerationService:
         provider: Optional[str] = None,
         refresh_if_missing: bool = True,
     ) -> Dict[str, Any]:
-        """GET provider task once (optionally twice) and return normalized usage for billing.
+        """Query provider task usage and return normalized billing fields.
 
         KIE Market uses: GET /api/v1/jobs/recordInfo?taskId=...
-        (not path-appended /{taskId}).
+        RunningHub uses: POST /openapi/v2/query {"taskId": ...}
         """
         stable_task_id = str(task_id or "").strip()
         stable_key = str(api_key or "").strip()
@@ -2102,11 +2195,91 @@ class MediaGenerationService:
         endpoint = str(query_endpoint or "").strip()
         if not _is_kie_record_info_endpoint(endpoint, provider_l):
             endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
-        # RunningHub uses POST query bodies; skip GET re-query for that family.
-        if "runninghub" in provider_l:
-            return {}
-
         headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
+
+        # RunningHub: POST /openapi/v2/query  body {"taskId": "..."}
+        is_runninghub = (
+            "runninghub" in provider_l
+            or "runninghub.cn" in str(endpoint or "").lower()
+            or "/openapi/v2/query" in str(endpoint or "").lower()
+        )
+        if is_runninghub:
+            if not endpoint:
+                endpoint = "https://www.runninghub.cn/openapi/v2/query"
+            elif endpoint.startswith("/"):
+                endpoint = "https://www.runninghub.cn" + endpoint
+
+            def _rh_post_once(use_proxy: bool = True):
+                kwargs = {
+                    "headers": headers,
+                    "json": {"taskId": stable_task_id},
+                    "timeout": 30,
+                    "verify": False,
+                }
+                if not use_proxy:
+                    kwargs["proxies"] = {"http": None, "https": None}
+                return requests.post(endpoint, **kwargs)
+
+            raw_payload: Dict[str, Any] = {}
+            try:
+                try:
+                    resp = _rh_post_once(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _rh_post_once(False)
+                if resp is not None and getattr(resp, "status_code", None) == 200:
+                    try:
+                        data = resp.json() if resp.content else {}
+                    except Exception:
+                        data = {}
+                    raw_payload = data if isinstance(data, dict) else {}
+
+                usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+                # Keep RH usage keys even when money/coins are still null.
+                if not usage and isinstance(raw_payload.get("usage"), dict):
+                    usage = _normalize_provider_task_usage(dict(raw_payload.get("usage") or {})) or dict(raw_payload.get("usage") or {})
+
+                need_retry = False
+                if refresh_if_missing:
+                    has_cost = False
+                    probe = usage or {}
+                    for key in ("consumeMoney", "consumeCoins", "thirdPartyConsumeMoney", "creditsConsumed", "kie_credits_consumed"):
+                        if probe.get(key) not in (None, "") and str(probe.get(key)).strip() != "":
+                            has_cost = True
+                            break
+                    need_retry = not has_cost
+
+                if need_retry:
+                    time.sleep(0.5)
+                    try:
+                        resp = _rh_post_once(True)
+                    except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                        resp = _rh_post_once(False)
+                    if resp is not None and getattr(resp, "status_code", None) == 200:
+                        try:
+                            data = resp.json() if resp.content else {}
+                        except Exception:
+                            data = {}
+                        if isinstance(data, dict) and data:
+                            raw_payload = data
+                            usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
+                            if not usage and isinstance(raw_payload.get("usage"), dict):
+                                usage = _normalize_provider_task_usage(dict(raw_payload.get("usage") or {})) or dict(raw_payload.get("usage") or {})
+            except Exception as exc:
+                logger.warning(
+                    "[TaskUsage] RunningHub query failed | task_id=%s error=%s",
+                    stable_task_id,
+                    exc,
+                )
+                return {}
+
+            if usage:
+                usage["raw_task"] = {
+                    "id": raw_payload.get("taskId") or stable_task_id,
+                    "status": raw_payload.get("status") or raw_payload.get("state"),
+                    "model": raw_payload.get("model"),
+                }
+            return usage
+
         is_kie = _is_kie_record_info_endpoint(endpoint, provider_l)
         endpoint_candidates = [endpoint] if endpoint else []
         if is_kie and endpoint:

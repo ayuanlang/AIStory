@@ -8,8 +8,9 @@ import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
 import GroupsAdmin from '../components/GroupsAdmin';
 import ProjectRetentionAdmin from '../components/ProjectRetentionAdmin';
+import BillingReconcileAdmin from '../components/BillingReconcileAdmin';
 import UserEditModal from '../components/UserEditModal';
-import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search, Archive } from 'lucide-react';
+import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search, Archive, Scale } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -4775,6 +4776,9 @@ const UserAdmin = () => {
             provider_cost_time_seconds: details.provider_cost_time_seconds
                 ?? details.cost_time
                 ?? details.taskCostTime,
+            consumeCoins: details.consumeCoins,
+            consumeMoney: details.consumeMoney,
+            thirdPartyConsumeMoney: details.thirdPartyConsumeMoney,
             kie_credits_consumed: isSettled
                 ? (details.kie_credits_consumed ?? details.creditsConsumed ?? details.credits_consumed)
                 : undefined,
@@ -4846,12 +4850,21 @@ const UserAdmin = () => {
 
     const getTransactionProviderUsage = (txn) => {
         const details = txn?.details && typeof txn.details === 'object' ? txn.details : {};
-        const usage = details?.provider_usage && typeof details.provider_usage === 'object'
+        const nestedUsage = details?.provider_usage && typeof details.provider_usage === 'object'
             ? details.provider_usage
             : details?.usage && typeof details.usage === 'object'
                 ? details.usage
-                : null;
-        if (!usage) return null;
+                : {};
+        // RunningHub settle/cancel may promote usage scalars onto details root.
+        const usage = {
+            thirdPartyConsumeMoney: nestedUsage.thirdPartyConsumeMoney ?? details.thirdPartyConsumeMoney,
+            consumeMoney: nestedUsage.consumeMoney ?? details.consumeMoney,
+            consumeCoins: nestedUsage.consumeCoins ?? details.consumeCoins,
+            taskCostTime: nestedUsage.taskCostTime
+                ?? details.taskCostTime
+                ?? details.provider_cost_time_seconds
+                ?? details.cost_time,
+        };
 
         const items = [
             { key: 'thirdPartyConsumeMoney', label: t('第三方消耗金额', 'Third-Party Cost') },
@@ -4864,6 +4877,7 @@ const UserAdmin = () => {
 
         return {
             items,
+            usage,
             source: String(details?.usage_source || '').trim(),
         };
     };
@@ -4872,9 +4886,10 @@ const UserAdmin = () => {
         const usageInfo = getTransactionProviderUsage(txn);
         if (!usageInfo) return null;
 
+        const usageValues = usageInfo.usage || {};
         const summaryText = usageInfo.items
             .slice(0, 2)
-            .map((item) => `${item.label}: ${txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key]}`)
+            .map((item) => `${item.label}: ${usageValues[item.key]}`)
             .join(' · ');
 
         return (
@@ -4887,7 +4902,7 @@ const UserAdmin = () => {
                     {usageInfo.items.map((item) => (
                         <div key={item.key} className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
                             <div className="text-[10px] uppercase tracking-wide text-cyan-100/60">{item.label}</div>
-                            <div className="mt-1 break-all font-mono text-[11px] text-cyan-50">{String(txn.details.provider_usage?.[item.key] ?? txn.details.usage?.[item.key] ?? '')}</div>
+                            <div className="mt-1 break-all font-mono text-[11px] text-cyan-50">{String(usageValues[item.key] ?? '')}</div>
                         </div>
                     ))}
                     {usageInfo.source ? (
@@ -5497,6 +5512,7 @@ const UserAdmin = () => {
         { id: 'prompt_skills', label: t('Prompt Skills', 'Prompt Skills'), icon: List },
         { id: 'storage_usage', label: t('磁盘统计', 'Storage Usage'), icon: HardDrive },
         { id: 'project_retention', label: t('项目清理', 'Project Cleanup'), icon: Archive },
+        { id: 'billing_reconcile', label: t('用量对账', 'Usage Reconcile'), icon: Scale },
         { id: 'runtime_logs', label: t('运行日志', 'Runtime Logs'), icon: List },
         { id: 'llm_logs', label: t('LLM 调用日志', 'LLM Call Logs'), icon: List },
         { id: 'payment', label: t('支付', 'Payment'), icon: CreditCard },
@@ -9501,6 +9517,9 @@ const UserAdmin = () => {
 
                     {activeTab === 'project_retention' && (
                         <ProjectRetentionAdmin />
+                    )}
+                    {activeTab === 'billing_reconcile' && (
+                        <BillingReconcileAdmin />
                     )}
                     {activeTab === 'prompt_skills' && (
                         <div className="space-y-4">

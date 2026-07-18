@@ -1309,6 +1309,8 @@ app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices"
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
 from app.api.project_retention_admin import router as project_retention_admin_router
 app.include_router(project_retention_admin_router, prefix=settings.API_V1_STR)
+from app.api.billing_reconcile_admin import router as billing_reconcile_admin_router
+app.include_router(billing_reconcile_admin_router, prefix=settings.API_V1_STR)
 
 # --- 静态 SPA (React Vite) 前端挂载配置 ---
 # Vite 建立的 Dist 目录通常在这个路径（基于 Dockerfile 第阶段配置）

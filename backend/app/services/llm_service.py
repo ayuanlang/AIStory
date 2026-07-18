@@ -887,6 +887,10 @@ class LLMService:
         normalized["prompt_tokens_estimated_local"] = est_prompt
         normalized["completion_tokens_estimated_local"] = est_completion
         normalized["usage_normalized_by_local_estimate"] = usage_normalized
+        if prompt_tokens > 0 or completion_tokens > 0 or _to_int(normalized.get("total_tokens")) > 0:
+            normalized["token_source"] = "api_usage"
+            normalized.setdefault("billing_basis", "provider_tokens")
+            normalized.setdefault("usage_source", "provider")
         return normalized
 
     async def _raw_kie_llm_request_full(self, base_url: str, api_key: str, model: str, messages: List[Dict], extra_config: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -2168,7 +2172,7 @@ class LLMService:
             raw_content = self._extract_text_from_response(full_response)
             content = self._sanitize_response_content(raw_content)
             finish_reason = self._extract_finish_reason_from_response(full_response)
-            usage = full_response.get("usage", {})
+            usage = self._normalize_provider_llm_usage(full_response.get("usage", {}))
             token_limit_hints = full_response.get("_token_limit_hints", []) if isinstance(full_response, dict) else []
             extraction_diagnostics = self._build_extraction_diagnostics(full_response)
             self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
@@ -2209,6 +2213,40 @@ class LLMService:
         except Exception:
             return int(default)
 
+    def _normalize_provider_llm_usage(self, usage: Any) -> Dict[str, Any]:
+        """Normalize OpenAI-compatible LLM usage and mark it as real API tokens for billing."""
+        if not isinstance(usage, dict) or not usage:
+            return {}
+        normalized = dict(usage)
+        prompt = self._to_positive_int(
+            normalized.get("prompt_tokens") if normalized.get("prompt_tokens") not in (None, "") else normalized.get("input_tokens"),
+            0,
+        )
+        completion = self._to_positive_int(
+            normalized.get("completion_tokens")
+            if normalized.get("completion_tokens") not in (None, "")
+            else normalized.get("output_tokens"),
+            0,
+        )
+        total = self._to_positive_int(normalized.get("total_tokens"), 0)
+        if total <= 0:
+            total = prompt + completion
+        if prompt <= 0 and completion <= 0 and total <= 0:
+            return {}
+        if prompt > 0:
+            normalized["prompt_tokens"] = prompt
+            normalized["input_tokens"] = prompt
+        if completion > 0:
+            normalized["completion_tokens"] = completion
+            normalized["output_tokens"] = completion
+        if total > 0:
+            normalized["total_tokens"] = total
+        # Same marker as Seedance/Ark token settles: actual supplier usage from provider.
+        normalized["token_source"] = "api_usage"
+        normalized.setdefault("billing_basis", "provider_tokens")
+        normalized.setdefault("usage_source", "provider")
+        return normalized
+
     def _merge_usage_dict(self, total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(total or {})
         incoming = dict(part or {})
@@ -2230,6 +2268,15 @@ class LLMService:
                 continue
             if isinstance(v, (int, float, str)):
                 merged[k] = v
+
+        # Prefer API usage marker once any segment reported real provider tokens.
+        if (
+            str(merged.get("token_source") or "").strip().lower() == "api_usage"
+            or str(incoming.get("token_source") or "").strip().lower() == "api_usage"
+        ):
+            merged["token_source"] = "api_usage"
+            merged.setdefault("billing_basis", "provider_tokens")
+            merged.setdefault("usage_source", incoming.get("usage_source") or merged.get("usage_source") or "provider")
 
         return merged
 
@@ -2408,7 +2455,7 @@ class LLMService:
                     raw_content += str(chunk.get("content", ""))
                 elif chunk.get("type") == "done":
                     if chunk.get("usage"):
-                        usage = chunk["usage"]
+                        usage = self._normalize_provider_llm_usage(chunk.get("usage"))
                     if chunk.get("finish_reason"):
                         finish_reason = chunk["finish_reason"]
 
@@ -2422,9 +2469,10 @@ class LLMService:
             finish_reason = "incomplete"
 
         content = self._sanitize_response_content(raw_content)
+        usage = self._normalize_provider_llm_usage(usage)
         logger.info(
-            "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s snippet=%r",
-            parts_count, len(raw_content), len(content or ""), finish_reason, (content or "")[:120],
+            "[COLLECT] parts=%d raw_len=%d content_len=%d finish_reason=%s usage=%s snippet=%r",
+            parts_count, len(raw_content), len(content or ""), finish_reason, usage, (content or "")[:120],
         )
         provider = (extra_config or {}).get("__provider") or self._infer_provider(base_url, model)
         self._safe_log_json("LLM_RESPONSE", { "request_id": extra_config.get("request_id") if extra_config else None,
@@ -2434,6 +2482,7 @@ class LLMService:
             "response": {
                 "content": content,
                 "finish_reason": finish_reason,
+                "usage": usage,
             }
         })
         return {
@@ -3145,6 +3194,12 @@ class LLMService:
                 ((data.get("choices") or [{}])[0] or {}).get("finish_reason"),
             )
             raise RuntimeError(self._vendor_failed_message(provider, "LLM content blocked by provider (PROHIBITED_CONTENT)"))
+
+        # Tag OpenAI-compatible usage (Grsai etc.) so settle fills 实际供应商价 from API tokens.
+        if isinstance(data, dict) and data.get("usage"):
+            normalized_usage = self._normalize_provider_llm_usage(data.get("usage"))
+            if normalized_usage:
+                data["usage"] = normalized_usage
         
         if ("choices" in data and len(data["choices"]) > 0) or (use_claude_api and data.get("type") == "message"):
             return data
@@ -3317,6 +3372,22 @@ class LLMService:
                 if not self._should_drop_runtime_override_key(k, provider, resolved_category):
                     payload[k] = v
 
+        # OpenAI-compatible streams (Grsai/Gemini etc.) omit usage unless include_usage is set.
+        # Needed so settle can fill 实际供应商价 from provider token usage (same as Seedance 2).
+        if (
+            payload.get("stream")
+            and not use_claude_api
+            and not n1n_use_responses
+            and not (provider == "kie" and kie_transport_kind == "responses")
+        ):
+            stream_options = payload.get("stream_options")
+            if not isinstance(stream_options, dict):
+                stream_options = {}
+            else:
+                stream_options = dict(stream_options)
+            stream_options.setdefault("include_usage", True)
+            payload["stream_options"] = stream_options
+
         self._safe_log_json("LLM_REQUEST", { "request_id": extra_config.get("request_id") if extra_config else None,
             "provider": provider,
             "category": resolved_category,
@@ -3430,9 +3501,9 @@ class LLMService:
                             )
                         if text:
                             yield {"type": "token", "content": text}
-                        usage_res = full_json.get("usage", {}) if full_json else {}
-                        if use_claude_api and not usage_res:
-                            usage_res = full_json.get("usage", {}) if full_json else {}
+                        usage_res = self._normalize_provider_llm_usage(
+                            full_json.get("usage", {}) if full_json else {}
+                        )
                         finish_res = (self._extract_finish_reason_from_response(full_json) if full_json else None) or "stop"
                         yield {"type": "done", "usage": usage_res, "finish_reason": finish_res}
                         return
@@ -3463,12 +3534,13 @@ class LLMService:
                                 return [], False, False
 
                             # Capture usage if the provider includes it in a chunk
+                            # (with stream_options.include_usage, final chunk often has usage + empty choices)
                             if chunk.get("usage"):
-                                usage = chunk["usage"]
+                                usage = self._normalize_provider_llm_usage(chunk.get("usage")) or usage
                             else:
                                 response_obj = chunk.get("response") if isinstance(chunk.get("response"), dict) else {}
                                 if response_obj.get("usage"):
-                                    usage = response_obj.get("usage")
+                                    usage = self._normalize_provider_llm_usage(response_obj.get("usage")) or usage
 
                             content, chunk_finish_reason = self._extract_stream_chunk_text_and_finish(chunk)
                             if chunk_finish_reason:
@@ -3646,6 +3718,7 @@ class LLMService:
         if token_batch_buf:
             logger.debug("[STREAM_TOKEN][claude_batch_final] provider=%s len=%d snippet=%r", provider, len(token_batch_buf), token_batch_buf[:80])
             yield {"type": "token", "content": token_batch_buf}
+        usage = self._normalize_provider_llm_usage(usage)
         logger.info("[STREAM_DONE] provider=%s finish_reason=%s usage=%s", provider, finish_reason, usage)
         yield {"type": "done", "usage": usage, "finish_reason": finish_reason}
 
