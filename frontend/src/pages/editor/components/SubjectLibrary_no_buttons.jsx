@@ -89,7 +89,6 @@ import {
     startShotMediaBatch,
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
-    getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
     stopAllGenerationJobs,

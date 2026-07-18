@@ -9,7 +9,6 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
-import LLMResultPanel from './LLMResultPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
 import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -20,7 +19,7 @@ import { unwrapInjectionSection, wrapInjectionSection } from '../../../lib/promp
 import { collectLlmJsonTextCandidates, sanitizeLlmTextForJsonImport } from '../../../lib/llmJsonExtract';
 
 import {
-    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, useTabMediaRefreshEffect, TabMediaRefreshButton
+    getFullUrl, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, buildAutoVideoRefList, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, buildShotDiptychPlan, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, mergeEntityPoolWithSubjectIndex, useTabMediaRefreshEffect
 } from '../editorHelpers';
 
 import { 
@@ -94,7 +93,6 @@ import {
     startShotMediaBatch,
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
-    getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
     stopAllGenerationJobs,
@@ -253,13 +251,13 @@ const createSceneOrchestrationPanelReporter = ({ totalScenes = 1, t }) => {
         const labels = [...importedScenes].sort().join('、');
         if (imported >= totalCount && totalCount > 0) {
             return t(
-                `✅ 场景拆解已完成 (${imported}/${totalCount}${labels ? `：${labels}` : ''})`,
-                `Scene breakdown completed (${imported}/${totalCount}${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})`
+                `✅ 场景编排已完成 (${imported}/${totalCount}${labels ? `：${labels}` : ''})`,
+                `Scene orchestration completed (${imported}/${totalCount}${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})`
             );
         }
         return t(
-            `场景拆解进行中 (${imported}/${totalCount} 已入库${labels ? `：${labels}` : ''})...`,
-            `Scene breakdown in progress (${imported}/${totalCount} imported${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})...`
+            `场景编排进行中 (${imported}/${totalCount} 已入库${labels ? `：${labels}` : ''})...`,
+            `Scene orchestration in progress (${imported}/${totalCount} imported${labels ? `: ${labels.replace(/、/g, ', ')}` : ''})...`
         );
     };
 
@@ -1626,7 +1624,7 @@ const runAnalysisPipelineIntegrityGate = async ({
     );
     if (failedSubtasks.length > 0) {
         failures.push(t(
-            `视觉资产子任务失败：${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`,
+            `资产设计子任务失败：${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`,
             `Visual asset subtasks failed: ${failedSubtasks.map((item) => item?.key || 'unknown').join(', ')}`
         ));
     }
@@ -1650,7 +1648,7 @@ const runAnalysisPipelineIntegrityGate = async ({
         ).length;
         if (subtaskReports.length > 0 && okSubtaskCount > 0 && handledAssets <= 0) {
             failures.push(t(
-                '视觉资产子任务已完成但未检测到本轮入库记录',
+                '资产设计子任务已完成但未检测到本轮入库记录',
                 'Visual asset subtasks completed but no assets were imported in this run'
             ));
         } else if (subtaskReports.length > 0 && okSubtaskCount <= 0 && handledAssets <= 0) {
@@ -1658,7 +1656,7 @@ const runAnalysisPipelineIntegrityGate = async ({
             const entityCount = Array.isArray(entities) ? entities.length : 0;
             if (entityCount <= 0) {
                 failures.push(t(
-                    '视觉资产生成已完成但未检测到项目实体记录',
+                    '资产设计已完成但未检测到项目实体记录',
                     'Visual asset generation finished but no project entities were found'
                 ));
             }
@@ -1676,7 +1674,7 @@ const runAnalysisPipelineIntegrityGate = async ({
 
     onLog?.(
         t(
-            `[Integrity Gate] 完整性检查通过：${dbSceneCount} 场已入库，Subject Index 与视觉资产任务均已完成。`,
+            `[Integrity Gate] 完整性检查通过：${dbSceneCount} 场已入库，资产清单与资产设计任务均已完成。`,
             `[Integrity Gate] Integrity check passed: ${dbSceneCount} scene(s) in workspace; Subject Index and visual asset tasks completed.`
         ),
         'success'
@@ -1773,27 +1771,45 @@ const hasAnalysisHistoryEndedAt = (item) => {
     return Number.isFinite(endedAt) && endedAt > 0;
 };
 
+/** Canonical pipeline order for progress UI + final report (5 stages). */
 const ANALYSIS_LIVE_STEP_ORDER = [
-    'script_opt',
-    'extract_assets',
-    'scene_beats',
-    'storyboard',
-    'assets_gen',
-    'completed',
+    'script_opt',      // 1. 剧本统筹
+    'extract_assets',  // 2. 资产清单
+    'scene_beats',     // 3. 场景编排
+    'assets_gen',      // 4. 资产设计
+    'storyboard',      // 5. 分镜生成
 ];
+
+const ANALYSIS_STAGE_LABELS = {
+    script_opt: { zh: '剧本统筹', en: 'Script Coordination' },
+    extract_assets: { zh: '资产清单', en: 'Asset Inventory' },
+    scene_beats: { zh: '场景编排', en: 'Scene Orchestration' },
+    assets_gen: { zh: '资产设计', en: 'Asset Design' },
+    storyboard: { zh: '分镜生成', en: 'Storyboard Generation' },
+};
+
+const getAnalysisStageLabel = (stepKey, tFn) => {
+    const meta = ANALYSIS_STAGE_LABELS[String(stepKey || '').trim()] || null;
+    if (!meta) return String(stepKey || '');
+    return typeof tFn === 'function' ? tFn(meta.zh, meta.en) : meta.zh;
+};
 
 const normalizeAnalysisLivePhase = (phase) => {
     const key = String(phase || '').trim().toLowerCase();
     if (key === 'supplement') return 'assets_gen';
     if (key === 'running') return 'script_opt';
+    // Terminal "completed" means all 5 stages finished; treat as past storyboard.
+    if (key === 'completed') return 'storyboard';
     return key;
 };
 
 /** During a live run, ignore leftover artifacts from stages not yet reached. */
 const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } = {}) => {
     if (!isLive) return true;
+    const rawPhase = String(phase || '').trim().toLowerCase();
+    if (['failed', 'warning', 'idle'].includes(rawPhase)) return true;
+    if (rawPhase === 'completed') return true;
     const normalizedPhase = normalizeAnalysisLivePhase(phase);
-    if (['failed', 'warning', 'completed', 'idle'].includes(normalizedPhase)) return true;
     const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
     const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
     if (phaseIdx < 0 || stepIdx < 0) return false;
@@ -1805,15 +1821,16 @@ const canTrustStageArtifactDuringLiveRun = (phase, stepKey, { isLive = false } =
 
 const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false } = {}) => {
     if (!isLive) return false;
+    const rawPhase = String(phase || '').trim().toLowerCase();
+    if (['failed', 'warning', 'completed', 'idle'].includes(rawPhase)) return false;
     const normalizedPhase = normalizeAnalysisLivePhase(phase);
-    if (['failed', 'warning', 'completed', 'idle'].includes(normalizedPhase)) return false;
     const phaseIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(normalizedPhase);
     const stepIdx = ANALYSIS_LIVE_STEP_ORDER.indexOf(String(stepKey || '').trim());
     if (phaseIdx < 0 || stepIdx < 0) return false;
     if (phaseIdx === stepIdx) return true;
-    // Mirror concurrent fan-out after Subject Index.
+    // Mirror concurrent fan-out after Subject Index (scene orchestration ∥ asset design).
     if (phaseIdx === 2 && stepKey === 'assets_gen') return true;
-    if (phaseIdx === 4 && stepKey === 'scene_beats') return true;
+    if (phaseIdx === 3 && stepKey === 'scene_beats') return true;
     return false;
 };
 
@@ -2139,6 +2156,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [isSavingAnalysisAttentionNotes, setIsSavingAnalysisAttentionNotes] = useState(false);
     const [availableSubjectAssets, setAvailableSubjectAssets] = useState([]);
     const [diagnosticsEpisodeSceneCount, setDiagnosticsEpisodeSceneCount] = useState(0);
+    const [diagnosticsEpisodeShotStats, setDiagnosticsEpisodeShotStats] = useState({
+        shotCount: 0,
+        sceneCountWithShots: 0,
+    });
     const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
     const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('all');
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
@@ -3078,16 +3099,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const getBusinessPhaseLabel = useCallback((phase) => {
         const key = String(phase || '').trim().toLowerCase();
+        if (ANALYSIS_STAGE_LABELS[key]) return getAnalysisStageLabel(key, t);
         const map = {
-            script_opt: t('剧本整理与可拍化', 'Script adaptation and shootability planning'),
-            extract_assets: t('角色道具场景清单整理', 'Character/prop/environment list preparation'),
-            scene_beats: t('场景拆解与节拍规划', 'Scene breakdown and beat planning'),
-            storyboard: t('镜头任务准备', 'Storyboard task preparation'),
-            assets_gen: t('视觉资产生成', 'Visual asset generation'),
-            completed: t('分析总结与入库完成', 'Analysis summary and import completed'),
+            completed: t('分析完成', 'Analysis completed'),
             warning: t('结果需人工复核', 'Result needs manual review'),
             failed: t('本轮处理失败', 'This run failed'),
             running: t('处理中', 'In progress'),
+            supplement: getAnalysisStageLabel('assets_gen', t),
         };
         return map[key] || key || t('步骤', 'Step');
     }, [t]);
@@ -3098,9 +3116,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const replacements = [
             [/\bLLM\b/gi, t('AI引擎', 'AI engine')],
             [/\bSubject Index\b/gi, t('角色/道具/场景清单', 'Character/prop/environment list')],
-            [/\bscene_markdown\b/gi, t('场景拆解内容', 'scene breakdown content')],
-            [/\bscript_optimization\b/gi, t('剧本整理阶段', 'script adaptation stage')],
-            [/\bassets_extraction\b/gi, t('资产清单整理阶段', 'asset list stage')],
+            [/\bscene_markdown\b/gi, t('场景编排内容', 'scene orchestration content')],
+            [/\bscript_optimization\b/gi, t('剧本统筹阶段', 'script coordination stage')],
+            [/\bassets_extraction\b/gi, t('资产清单阶段', 'asset inventory stage')],
             [/\bcover_poster\b/gi, t('封面海报', 'cover poster')],
             [/\bproject_visual_backfill\b/gi, t('项目视觉基调信息', 'project visual baseline info')],
             [/\bJSON\b/g, t('结构化结果', 'structured result')],
@@ -3309,10 +3327,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             normalized.includes('分析管线完整性检查未通过')
             || normalized.includes('analysis pipeline integrity check failed')
         ) {
-            const suffixZh = normalized.includes('视觉资产子任务失败') || normalized.includes('visual asset subtask')
+            const suffixZh = normalized.includes('资产设计子任务失败') || normalized.includes('视觉资产子任务失败') || normalized.includes('visual asset subtask')
                 ? '角色/道具/环境三类子资产默认不允许为 0，请在下方“进度诊断面板 → 完整性”查看具体失败类型，并点击“重跑失败项”。'
                 : '请在下方“进度诊断面板 → 完整性”查看具体缺失项，并按需重跑。';
-            const suffixEn = normalized.includes('视觉资产子任务失败') || normalized.includes('visual asset subtask')
+            const suffixEn = normalized.includes('资产设计子任务失败') || normalized.includes('视觉资产子任务失败') || normalized.includes('visual asset subtask')
                 ? 'Character/prop/environment asset categories must not be 0 by default. See the "Workflow Diagnostics → Completeness" panel below for the exact failed categories and click "Rerun failed".'
                 : 'See the "Workflow Diagnostics → Completeness" panel below for the exact missing items and rerun as needed.';
             return t(`${stable}。${suffixZh}`, `${stable}. ${suffixEn}`);
@@ -6151,35 +6169,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let highlightHint = '';
         if (stableMarker && (statusKey === 'starting' || statusKey === 'generating')) {
             highlightHint = t(
-                `「${stableMarker}」镜头任务已调起${orderLabel}`,
-                `"${stableMarker}" storyboard task started${orderLabel}`
+                `「${stableMarker}」分镜生成已调起${orderLabel}`,
+                `"${stableMarker}" storyboard generation started${orderLabel}`
             );
         } else if (stableMarker && statusKey === 'importing') {
             highlightHint = t(
-                `「${stableMarker}」镜头结果写入中${orderLabel}`,
+                `「${stableMarker}」分镜结果写入中${orderLabel}`,
                 `"${stableMarker}" applying storyboard rows${orderLabel}`
             );
         } else if (stableMarker && statusKey === 'completed') {
             highlightHint = t(
-                `「${stableMarker}」镜头任务完成${orderLabel}`,
-                `"${stableMarker}" storyboard task completed${orderLabel}`
+                `「${stableMarker}」分镜生成完成${orderLabel}`,
+                `"${stableMarker}" storyboard generation completed${orderLabel}`
             );
         } else if (stableMarker && statusKey === 'failed') {
             highlightHint = t(
-                `「${stableMarker}」镜头任务失败${orderLabel}${errorMessage ? `：${errorMessage}` : ''}`,
-                `"${stableMarker}" storyboard task failed${orderLabel}${errorMessage ? `: ${errorMessage}` : ''}`
+                `「${stableMarker}」分镜生成失败${orderLabel}${errorMessage ? `：${errorMessage}` : ''}`,
+                `"${stableMarker}" storyboard generation failed${orderLabel}${errorMessage ? `: ${errorMessage}` : ''}`
             );
         }
         const finished = completed + failed;
         const allSettled = started > 0 && running <= 0 && finished >= started;
         const nextMessage = allSettled
             ? t(
-                `镜头任务已结束（完成 ${completed}/${started}${failed > 0 ? `，失败 ${failed}` : ''}）`,
-                `Storyboard tasks finished (${completed}/${started} done${failed > 0 ? `, ${failed} failed` : ''})`
+                `分镜生成已结束（完成 ${completed}/${started}${failed > 0 ? `，失败 ${failed}` : ''}）`,
+                `Storyboard generation finished (${completed}/${started} done${failed > 0 ? `, ${failed} failed` : ''})`
             )
             : t(
-                `镜头任务进行中（已启动 ${started}，完成 ${completed}，失败 ${failed}，运行中 ${running}）`,
-                `Storyboard tasks in progress (started ${started}, done ${completed}, failed ${failed}, running ${running})`
+                `分镜生成进行中（已启动 ${started}，完成 ${completed}，失败 ${failed}，运行中 ${running}）`,
+                `Storyboard generation in progress (started ${started}, done ${completed}, failed ${failed}, running ${running})`
             );
         setAnalysisFlowStatus((prev) => {
             const prevPhase = String(prev?.phase || '').trim().toLowerCase();
@@ -6208,8 +6226,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!alreadyReady || pendingCount > 0) {
             onLog?.(
                 t(
-                    `[镜头任务] 环境视觉资产已就绪${reason ? `（${reason}）` : ''}，待启动分镜 ${pendingCount} 场`,
-                    `[Storyboard] Environment visual assets ready${reason ? ` (${reason})` : ''}; ${pendingCount} scene(s) queued for shot generation`
+                    `[分镜生成] 环境资产设计已就绪${reason ? `（${reason}）` : ''}，待启动分镜 ${pendingCount} 场`,
+                    `[Storyboard] Environment asset design ready${reason ? ` (${reason})` : ''}; ${pendingCount} scene(s) queued for shot generation`
                 ),
                 'info'
             );
@@ -6233,7 +6251,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (['starting', 'generating', 'importing'].includes(priorStatus)) {
             onLog?.(
                 t(
-                    `[镜头任务] ${stableMarker} 仍在运行中，跳过重复调起`,
+                    `[分镜生成] ${stableMarker} 仍在运行中，跳过重复调起`,
                     `[Storyboard] ${stableMarker} is already running; skipped duplicate kickoff`
                 ),
                 'warning'
@@ -6265,12 +6283,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     return {
                         phase: prevPhase === 'storyboard' ? prevPhase : (prevPhase || 'scene_beats'),
                         message: t(
-                            '镜头任务等待环境视觉资产完成后再启动...',
-                            'Storyboard tasks waiting for environment visual assets...'
+                            '分镜生成等待环境资产设计完成后再启动...',
+                            'Storyboard generation waiting for environment asset design...'
                         ),
                         highlightHint: t(
-                            `「${stableMarker}」已入库，等待环境视觉资产完成后启动分镜`,
-                            `"${stableMarker}" imported; waiting for environment visual assets before storyboard`
+                            `「${stableMarker}」已入库，等待环境资产设计完成后启动分镜`,
+                            `"${stableMarker}" imported; waiting for environment asset design before storyboard`
                         ),
                     };
                 });
@@ -6280,8 +6298,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }));
                 onLog?.(
                     t(
-                        `[镜头任务] ${stableMarker} 已入库，等待环境视觉资产完成后再启动分镜`,
-                        `[Storyboard] ${stableMarker} imported; waiting for environment visual assets before shot generation`
+                        `[分镜生成] ${stableMarker} 已入库，等待环境资产设计完成后再启动分镜`,
+                        `[Storyboard] ${stableMarker} imported; waiting for environment asset design before shot generation`
                     ),
                     'info'
                 );
@@ -6320,7 +6338,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
             onLog?.(
                 t(
-                    `[镜头任务] ${stableMarker} 入库后未解析到数据库 Scene.id，跳过分镜启动`,
+                    `[分镜生成] ${stableMarker} 入库后未解析到数据库 Scene.id，跳过分镜启动`,
                     `[Storyboard] ${stableMarker}: could not resolve DB Scene.id after import; skipped shot kickoff`
                 ),
                 'warning'
@@ -6352,7 +6370,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         });
         onLog?.(
             t(
-                `[镜头任务] ${stableMarker} 已入库，正在调起分镜生成（Scene #${dbSceneId}）...`,
+                `[分镜生成] ${stableMarker} 已入库，正在调起分镜生成（Scene #${dbSceneId}）...`,
                 `[Storyboard] ${stableMarker} imported; starting shot generation (Scene #${dbSceneId})...`
             ),
             'info'
@@ -6392,7 +6410,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 onLog?.(
                     t(
-                        `[镜头任务] ${stableMarker} 分镜已生成并写入（${generatedRows.length} 镜）`,
+                        `[分镜生成] ${stableMarker} 分镜已生成并写入（${generatedRows.length} 镜）`,
                         `[Storyboard] ${stableMarker} shots generated and applied (${generatedRows.length} rows)`
                     ),
                     'success'
@@ -6410,7 +6428,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 onLog?.(
                     t(
-                        `[镜头任务] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
+                        `[分镜生成] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
                         `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
                     ),
                     'warning'
@@ -6523,7 +6541,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (err) {
                 onLog?.(
                     t(
-                        `镜头任务补齐调起失败：${err?.message || err}`,
+                        `分镜生成补齐调起失败：${err?.message || err}`,
                         `Failed to kick off residual storyboard tasks: ${err?.message || err}`
                     ),
                     'warning'
@@ -6543,8 +6561,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAnalysisFlowStatus({
                 phase: 'storyboard',
                 message: t(
-                    `正在等待镜头任务完成（已启动 ${progress.started}，完成 ${progress.completed}，失败 ${progress.failed}，运行中 ${progress.running}）...`,
-                    `Waiting for storyboard tasks (started ${progress.started}, done ${progress.completed}, failed ${progress.failed}, running ${progress.running})...`
+                    `正在等待分镜生成完成（已启动 ${progress.started}，完成 ${progress.completed}，失败 ${progress.failed}，运行中 ${progress.running}）...`,
+                    `Waiting for storyboard generation (started ${progress.started}, done ${progress.completed}, failed ${progress.failed}, running ${progress.running})...`
                 ),
             });
             setAnalysisUiReport((prev) => ({
@@ -6559,8 +6577,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         publishWaitingStatus();
         onLog?.(
             t(
-                `分析总结前等待镜头任务完成（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）...`,
-                `Waiting for storyboard tasks before summary (${storyboardKickoffByDbIdRef.current.size} tracked)...`
+                `分析报告前等待分镜生成完成（已跟踪 ${storyboardKickoffByDbIdRef.current.size} 场）...`,
+                `Waiting for storyboard generation before report (${storyboardKickoffByDbIdRef.current.size} tracked)...`
             ),
             'process'
         );
@@ -6590,7 +6608,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const finalProgress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
         onLog?.(
             t(
-                `镜头任务等待结束：完成 ${finalProgress.completed}/${finalProgress.started}${finalProgress.failed > 0 ? `，失败 ${finalProgress.failed}` : ''}。`,
+                `分镜生成等待结束：完成 ${finalProgress.completed}/${finalProgress.started}${finalProgress.failed > 0 ? `，失败 ${finalProgress.failed}` : ''}。`,
                 `Storyboard wait finished: ${finalProgress.completed}/${finalProgress.started} done${finalProgress.failed > 0 ? `, ${finalProgress.failed} failed` : ''}.`
             ),
             finalProgress.failed > 0 ? 'warning' : 'success'
@@ -6606,7 +6624,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const failed = Number(progress.failed || 0);
         if (started <= 0) return '';
         return t(
-            ` 镜头任务 ${completed}/${started} 完成${failed > 0 ? `（失败 ${failed}）` : ''}。`,
+            ` 分镜生成 ${completed}/${started} 完成${failed > 0 ? `（失败 ${failed}）` : ''}。`,
             ` Storyboard ${completed}/${started} done${failed > 0 ? ` (${failed} failed)` : ''}.`
         );
     }, [t]);
@@ -7194,6 +7212,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
              }
              }
         }
+        // Persisted ai_stage_outputs may omit scene_markdown while the episode field still has it.
+        if (persisted?.stages?.stage2?.outputs) {
+            const sceneMarkdownSlot = persisted.stages.stage2.outputs.scene_markdown
+                || (persisted.stages.stage2.outputs.scene_markdown = { key: 'scene_markdown', content: '' });
+            if (!String(sceneMarkdownSlot?.content || '').trim()) {
+                const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+                if (episodeSceneMarkdown) {
+                    sceneMarkdownSlot.content = episodeSceneMarkdown;
+                }
+            }
+        }
         if (persisted) return persisted;
         return buildStageOutputsObject({
             analysisRawText: '',
@@ -7658,6 +7687,40 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.id,
         analysisUiReport?.importReport,
         analysisUiReport?.resolvedSceneImportCount,
+        isAnalyzing,
+        isRetryingPhase2,
+    ]);
+
+    useEffect(() => {
+        let mounted = true;
+        const loadEpisodeShotStats = async () => {
+            if (!activeEpisode?.id) {
+                if (mounted) setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
+                return;
+            }
+            try {
+                const rows = await fetchEpisodeShots(activeEpisode.id, { compact: true });
+                if (!mounted) return;
+                const shots = Array.isArray(rows) ? rows : [];
+                const sceneIds = new Set(
+                    shots
+                        .map((row) => Number(row?.scene_id || 0))
+                        .filter((id) => Number.isFinite(id) && id > 0)
+                );
+                setDiagnosticsEpisodeShotStats({
+                    shotCount: shots.length,
+                    sceneCountWithShots: sceneIds.size,
+                });
+            } catch (_) {
+                if (mounted) setDiagnosticsEpisodeShotStats({ shotCount: 0, sceneCountWithShots: 0 });
+            }
+        };
+        loadEpisodeShotStats();
+        return () => { mounted = false; };
+    }, [
+        activeEpisode?.id,
+        analysisUiReport?.storyboardTaskProgress,
+        analysisUiReport?.storyboardAutoStarted,
         isAnalyzing,
         isRetryingPhase2,
     ]);
@@ -8382,14 +8445,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'script_opt') {
             const content = resolveScriptOptBeatsContent();
             if (!content) {
-                alert(t('暂无剧本优化（Beats 分割）内容可查看。', 'No script-opt beats content available yet.'));
+                alert(t('暂无剧本统筹（Beats 分割）内容可查看。', 'No script-coordination beats content available yet.'));
                 return;
             }
             setStageArtifactEditModal({
                 open: true,
                 kind: 'script_opt',
-                titleZh: '剧本优化 · Beats 分割内容',
-                titleEn: 'Script Opt · Beats Portion',
+                titleZh: '剧本统筹 · Beats 分割内容',
+                titleEn: 'Script Coordination · Beats Portion',
                 hintZh: '仅展示/编辑优化后剧本中用于下游的环境块与 Beat 分割部分（不含修改说明与全局风格 JSON）。',
                 hintEn: 'View/edit only the ENV + Beat portion of the optimized script used downstream (excludes revision notes and global-style JSON).',
                 content,
@@ -8401,16 +8464,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'subject_index') {
             const content = resolveSubjectIndexEditContent();
             if (!content) {
-                alert(t('暂无清单整理内容可查看。', 'No subject-index content available yet.'));
+                alert(t('暂无资产清单内容可查看。', 'No asset inventory content available yet.'));
                 return;
             }
             setStageArtifactEditModal({
                 open: true,
                 kind: 'subject_index',
-                titleZh: '清单整理 · 资产清单',
-                titleEn: 'List Preparation · Subject Index',
-                hintZh: '支持 Markdown 预览与编辑；保存后作为第二阶段 Subject Index 权威输入。',
-                hintEn: 'Markdown preview and edit; saved content becomes the Stage 2 Subject Index source of truth.',
+                titleZh: '资产清单 · Subject Index',
+                titleEn: 'Asset Inventory · Subject Index',
+                hintZh: '支持 Markdown 预览与编辑；保存后作为资产清单权威输入。',
+                hintEn: 'Markdown preview and edit; saved content becomes the authoritative Asset Inventory input.',
                 content,
                 editing: false,
                 saving: false,
@@ -9944,7 +10007,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
         if (sceneBeatsOnlyRerunInFlightRef.current) {
             const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
-            onLog?.('仅场景重排期间，视觉资产流程已按保护策略暂停。', 'info');
+            onLog?.('仅场景重排期间，资产设计流程已按保护策略暂停。', 'info');
             return {
                 checkedSceneCount: importedSceneRows.length,
                 missingSceneCount: 0,
@@ -14201,13 +14264,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (onLog) onLog(`Failed to persist clean Subject Index immediately: ${persistErr?.message || persistErr}`, 'warning');
                 }
 
-                if (onLog) onLog('Subject Index 已就绪，开始并发执行：场景编排 + 视觉资产生成（角色/道具/环境）...', 'info');
+                if (onLog) onLog('资产清单已就绪，开始并发执行：场景编排 + 资产设计（角色/道具/环境）...', 'info');
 
                 setAnalysisFlowStatus({
                     phase: 'scene_beats',
                     message: t(
-                        '📝 Subject Index 已生成，正在并发执行场景编排与视觉资产生成...',
-                        'Subject Index ready; running scene beats and visual asset generation in parallel...'
+                        '📝 资产清单已生成，正在并发执行场景编排与资产设计...',
+                        'Asset inventory ready; running scene orchestration and asset design in parallel...'
                     ),
                 });
 
@@ -14609,7 +14672,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!splitStage1Flow && !postImportSceneSubjectReport) {
                 setAnalysisFlowStatus({
                     phase: 'asset_generation',
-                    message: t('🎨 场景已入库，正在生成视觉资产（角色/道具/环境）...', 'Scenes imported; generating visual assets (characters/props/environments)...'),
+                    message: t('🎨 场景已入库，正在进行资产设计（角色/道具/环境）...', 'Scenes imported; running asset design (characters/props/environments)...'),
                 });
                 try {
                     postImportSceneSubjectReport = await runPostImportSceneSubjectPipeline(
@@ -14977,11 +15040,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             const stage2_1SubjectIndexText = String(stage2_1Validation.subjectIndexText || '').trim() || extractPureSubjectIndexText(stage2_1Text).trim() || String(stage2_1Text || '').trim();
             let globalStage2_1Text = stage2_1SubjectIndexText;
-            if (onLog) onLog('清单整理完成（重跑场景），开始并发执行：场景拆解 + 视觉资产生成。', 'info');
+            if (onLog) onLog('资产清单完成（重跑场景），开始并发执行：场景编排 + 资产设计。', 'info');
 
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
-                message: t('📝 正在并发执行：场景拆解与视觉资产生成...', 'Running scene breakdown and visual asset generation in parallel...'),
+                message: t('📝 正在并发执行：场景编排与资产设计...', 'Running scene orchestration and asset design in parallel...'),
             });
 
             const runSceneOrchestrationRestartBranch = async () => {
@@ -15932,7 +15995,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ? list.filter((item) => String(item?.sceneId || '').trim() === targetSceneId)
             : list;
         if (!targets.length) {
-            alert(t('没有可重跑的镜头任务场景。', 'No storyboard scenes available to rerun.'));
+            alert(t('没有可重跑的分镜生成场景。', 'No storyboard scenes available to rerun.'));
             return;
         }
 
@@ -15941,8 +16004,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setAnalysisFlowStatus({
             phase: 'storyboard',
             message: rerunMode === 'single'
-                ? t(`正在重跑镜头任务：${targetSceneId}...`, `Rerunning storyboard for ${targetSceneId}...`)
-                : t(`正在重跑全部 ${targets.length} 场镜头任务...`, `Rerunning storyboard for all ${targets.length} scenes...`),
+                ? t(`正在重跑分镜生成：${targetSceneId}...`, `Rerunning storyboard for ${targetSceneId}...`)
+                : t(`正在重跑全部 ${targets.length} 场分镜生成...`, `Rerunning storyboard for all ${targets.length} scenes...`),
         });
 
         let started = 0;
@@ -15963,7 +16026,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }));
             onLog?.(
                 t(
-                    `[镜头任务] 已按场景重跑调起 ${started}/${targets.length} 场`,
+                    `[分镜生成] 已按场景重跑调起 ${started}/${targets.length} 场`,
                     `[Storyboard] Rerun kickoff started for ${started}/${targets.length} scene(s)`
                 ),
                 started > 0 ? 'success' : 'warning'
@@ -15971,7 +16034,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (started <= 0) {
                 setAnalysisFlowStatus({
                     phase: 'warning',
-                    message: t('镜头任务重跑未成功调起（可能仍在运行或缺少场景 ID）。', 'Storyboard rerun did not start (already running or missing scene id).'),
+                    message: t('分镜生成重跑未成功调起（可能仍在运行或缺少场景 ID）。', 'Storyboard rerun did not start (already running or missing scene id).'),
                 });
             }
         } finally {
@@ -15992,7 +16055,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const candidates = await buildStoryboardRerunCandidates();
             if (!candidates.length) {
                 setStoryboardRerunModal((prev) => ({ ...prev, open: false, loading: false, candidates: [] }));
-                alert(t('当前集没有已入库的场景，无法重跑镜头任务。请先完成场景拆解并入库。', 'No imported scenes in this episode. Finish scene breakdown/import before rerunning storyboard.'));
+                alert(t('当前集没有已入库的场景，无法重跑分镜生成。请先完成场景编排并入库。', 'No imported scenes in this episode. Finish scene orchestration/import before rerunning storyboard.'));
                 return;
             }
             setStoryboardRerunModal({
@@ -16063,7 +16126,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!adapted) {
-                    alert(t('暂无可导入的剧本优化内容。', 'No script-opt content available to import.'));
+                    alert(t('暂无可导入的剧本统筹内容。', 'No script-coordination content available to import.'));
                     return;
                 }
                 if (!activeEpisode?.id) return;
@@ -16076,8 +16139,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setRawContent(adapted);
                 onLog?.(
                     t(
-                        '已将剧本优化（Beats）内容写入数据表（script_content / adaptation）。',
-                        'Imported script-opt (beats) content into the database (script_content / adaptation).'
+                        '已将剧本统筹（Beats）内容写入数据表（script_content / adaptation）。',
+                        'Imported script-coordination (beats) content into the database (script_content / adaptation).'
                     ),
                     'success'
                 );
@@ -16086,7 +16149,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'subject_index') {
                 const content = resolveSubjectIndexEditContent();
                 if (!content) {
-                    alert(t('暂无可导入的清单整理内容。', 'No subject-index content available to import.'));
+                    alert(t('暂无可导入的资产清单内容。', 'No asset inventory content available to import.'));
                     return;
                 }
                 await handleImportStageArtifact({
@@ -16103,7 +16166,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     || ''
                 ).trim();
                 if (!content) {
-                    alert(t('暂无可导入的场景拆解内容。', 'No scene-breakdown content available to import.'));
+                    alert(t('暂无可导入的场景编排内容。', 'No scene orchestration content available to import.'));
                     return;
                 }
                 await handleImportStageArtifact({
@@ -16172,7 +16235,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (stableKind === 'assets') {
                 const { assetDesignJson, assetDesignPayload } = resolveDiagnosticAssetDesignImport();
                 if (!assetDesignJson) {
-                    alert(t('暂无可导入的视觉资产内容。', 'No visual-asset content available to import.'));
+                    alert(t('暂无可导入的资产设计内容。', 'No asset design content available to import.'));
                     return;
                 }
                 await handleImportStageArtifact({
@@ -18241,38 +18304,46 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return cards;
     }, [activeEpisode?.ai_entity_design_result, formatArtifactContent, getAnalysisEntitiesPayloadFromJsonText, getStageOutputContent, handleImportStageArtifact, hasAssetGenerationPrerequisite, handleRetryPhase2, isAnalyzing, isRetryingPhase2, llmAssetRawResultContent, openPhase2RerunModal, t]);
 
+    void stage1StageCards;
+    void stage2StageCards;
+    void stage3StageCards;
+
     if (!activeEpisode) return <div className="p-8 text-muted-foreground">{t('请选择或创建一个分集开始写作。', 'Select or create an episode to start writing.')}</div>;
 
     return (
-        <div className="p-4 sm:p-8 h-full flex flex-col w-full max-w-full overflow-hidden">
+        <div className="relative p-4 sm:p-6 lg:p-8 h-full flex flex-col w-full max-w-full overflow-hidden">
             <MarkdownHelpModal
                 open={manualModalOpen}
                 initialDocKey="analysis"
                 onClose={() => setManualModalOpen(false)}
                 uiLang={uiLang}
             />
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4 shrink-0">
-                <h2 className="text-2xl font-bold flex items-center gap-2">
-                    {buildEpisodeDisplayLabel({
-                        episodeNumber: activeEpisode?.episode_number,
-                        title: activeEpisode?.title,
-                    })}
-                    <span className="text-sm font-normal text-muted-foreground bg-white/5 px-2 py-0.5 rounded-full">
-                        {isRawMode ? t('原始编辑器', 'Raw Editor') : `${segments.length} ${t('段', 'Segments')}`}
-                    </span>
-                </h2>
-                <div className="flex items-center gap-2">
-                    <TabMediaRefreshButton
-                        onClick={() => onMediaRefreshRequest?.()}
-                        uiLang={uiLang}
-                    />
+            <div className="relative shrink-0 mb-5 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent px-4 py-4 sm:px-6 sm:py-5">
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(168,85,247,0.10),transparent_55%)]" />
+                <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="min-w-0">
+                    <h2 className="text-2xl font-bold tracking-tight flex flex-wrap items-center gap-2.5">
+                        {buildEpisodeDisplayLabel({
+                            episodeNumber: activeEpisode?.episode_number,
+                            title: activeEpisode?.title,
+                        })}
+                        <span className="text-[11px] font-medium tracking-wide text-primary/90 bg-primary/10 border border-primary/25 px-2.5 py-0.5 rounded-full">
+                            {isRawMode ? t('原始编辑器', 'Raw Editor') : `${segments.length} ${t('段', 'Segments')}`}
+                        </span>
+                    </h2>
+                    <p className="mt-1.5 text-xs text-white/45">
+                        {t('编写与分析本集剧本，产物将同步到场景与资产工作区。', 'Write and analyze this episode; outputs sync to scenes and assets.')}
+                    </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                     <button
                         type="button"
                         onClick={() => setManualModalOpen(true)}
-                        className="px-4 py-2 rounded-lg text-sm font-bold bg-white/10 text-white hover:bg-white/20 border border-white/10 flex items-center gap-2"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
                         title={t('查看剧本分析操作手册', 'View script analysis manual')}
+                        aria-label={t('剧本分析操作手册', 'Script Analysis Manual')}
                     >
-                        <Info className="w-4 h-4" /> {t('剧本分析操作手册', 'Script Analysis Manual')}
+                        <Info className="w-4 h-4" />
                     </button>
                     {isRawMode && (
                         <>
@@ -18285,16 +18356,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             <button 
                                 onClick={handleAnalysisClick} 
                                 disabled={isAnalyzing}
-                                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
+                                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors ${isAnalyzing ? 'bg-purple-900/50 text-purple-200 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-500'}`}
                                 title={t('分析原始剧本并生成结构', 'Analyze raw script to generate structure')}
                             >
                                 {isAnalyzing ? (
                                     <>
-                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('AI正在为您深度拆解剧本...', 'Analyzing...')}
+                                        <Loader2 className="w-4 h-4 animate-spin" /> {t('分析中...', 'Analyzing...')}
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 className="w-4 h-4" /> {t('AI 剧本分析与生成', 'AI Script Analysis & Generation')}
+                                        <Wand2 className="w-4 h-4" /> {t('AI 剧本分析', 'AI Script Analysis')}
                                     </>
                                 )}
                             </button>
@@ -18304,28 +18375,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <button
                             onClick={handleStopAnalysisTask}
                             disabled={isStoppingAnalysisTask}
-                            className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 text-red-100 border-red-400/40'}`}
+                            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border transition-colors ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/15 hover:bg-red-500/25 text-red-100 border-red-400/35'}`}
                             title={t('手动停止当前 AI 剧本分析任务', 'Stop the current AI script analysis task')}
                         >
                             {isStoppingAnalysisTask ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止分析', 'Stop Analysis')}
+                            {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止', 'Stop')}
                         </button>
                     )}
                     {!isRawMode && (
                         <button 
                             onClick={handleMerge} 
-                            className="px-4 py-2 bg-white/10 text-white rounded-lg text-sm font-bold hover:bg-white/20 flex items-center gap-2"
+                            className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border border-white/10 bg-white/5 text-white/90 hover:bg-white/10 transition-colors"
                             title={t('将所有分段合并为单一剧本', 'Merge all segments into a single script')}
                         >
                             <LayoutList className="w-4 h-4" />
                             {t('合并剧本', 'Merge Script')}
                         </button>
                     )}
-                    <button onClick={handleSave} className="px-4 py-2 bg-primary text-black rounded-lg text-sm font-bold hover:bg-primary/90">{t('保存修改', 'Save Changes')}</button>
+                    <button
+                        onClick={handleSave}
+                        className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold bg-primary text-black hover:bg-primary/90 transition-colors shadow-[0_0_20px_rgba(168,85,247,0.15)]"
+                    >
+                        <Save className="w-4 h-4" />
+                        {t('保存修改', 'Save Changes')}
+                    </button>
+                </div>
                 </div>
             </div>
 
-            <div className="mb-4 rounded-xl border border-white/10 bg-black/20 p-4">
+            <div className="mb-4 shrink-0 rounded-2xl border border-white/10 bg-black/25 p-4 backdrop-blur-sm">
                 <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
                     <div className="flex items-center gap-2 font-bold text-sm shrink-0">
                         <div className="w-1 h-5 bg-purple-500 rounded-full"></div>
@@ -18337,17 +18415,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             storyboardTaskProgressRef.current,
                             analysisUiReport?.storyboardTaskProgress,
                         );
-                        const storyboardStartedCount = Number(progress?.started || 0);
-                        const storyboardCompletedCount = Number(progress?.completed || 0);
+                        const trackedStoryboardStartedCount = Number(progress?.started || 0);
+                        const trackedStoryboardCompletedCount = Number(progress?.completed || 0);
                         const storyboardFailedCount = Number(progress?.failed || 0);
                         const storyboardRunningCount = Number(progress?.running || 0);
-                        const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted) || storyboardStartedCount > 0;
+                        const workspaceSceneCount = Number(diagnosticsEpisodeSceneCount || 0);
+                        const workspaceShotCount = Number(diagnosticsEpisodeShotStats?.shotCount || 0);
+                        const workspaceSceneCountWithShots = Number(diagnosticsEpisodeShotStats?.sceneCountWithShots || 0);
+                        const workspaceStoryboardPresent = workspaceShotCount > 0 || workspaceSceneCountWithShots > 0;
+                        // Prefer live task tracking; fall back to workspace shots when panel was refreshed
+                        // without persisted storyboardTaskProgress.
+                        const inferredStoryboardCompleted = workspaceSceneCountWithShots > 0
+                            ? workspaceSceneCountWithShots
+                            : (workspaceShotCount > 0 ? 1 : 0);
+                        const inferredStoryboardStarted = Math.max(
+                            inferredStoryboardCompleted,
+                            workspaceSceneCount,
+                        );
+                        const storyboardStartedCount = trackedStoryboardStartedCount > 0
+                            ? trackedStoryboardStartedCount
+                            : inferredStoryboardStarted;
+                        const storyboardCompletedCount = trackedStoryboardStartedCount > 0
+                            ? trackedStoryboardCompletedCount
+                            : inferredStoryboardCompleted;
+                        const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted)
+                            || trackedStoryboardStartedCount > 0
+                            || workspaceStoryboardPresent;
                         const livePhase = analysisFlowStatus?.phase || 'idle';
                         const trustArtifact = (stepKey) => canTrustStageArtifactDuringLiveRun(livePhase, stepKey, { isLive: isAnalyzing });
                         const stepActive = (stepKey) => isAnalysisLiveStepActive(livePhase, stepKey, { isLive: isAnalyzing });
                         const hasScriptOptArtifact = !!getStageOutputContent('stage1', 'adapted_script');
                         const hasSubjectIndexArtifact = !!getStageOutputContent('stage2', 'subject_index');
-                        const hasSceneMarkdownArtifact = !!getStageOutputContent('stage2', 'scene_markdown');
+                        const episodeSceneMarkdown = String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim();
+                        const hasSceneMarkdownArtifact = Boolean(
+                            getStageOutputContent('stage2', 'scene_markdown')
+                            || episodeSceneMarkdown
+                            || workspaceSceneCount > 0
+                            || workspaceStoryboardPresent
+                        );
                         const hasAssetDesignArtifact = !!getStageOutputContent('stage3', 'asset_design_json');
                         const scriptOptReady = hasScriptOptArtifact && trustArtifact('script_opt');
                         const subjectIndexReady = hasSubjectIndexArtifact && trustArtifact('extract_assets');
@@ -18362,7 +18467,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         );
                         const storyboardCanStart = Boolean(sceneMarkdownReady || hasSceneMarkdownArtifact);
                         const storyboardInFlight = storyboardRunningCount > 0
-                            || (storyboardStartedCount > (storyboardCompletedCount + storyboardFailedCount));
+                            || (trackedStoryboardStartedCount > (trackedStoryboardCompletedCount + storyboardFailedCount));
                         const storyboardSettled = storyboardAutoStarted
                             && !storyboardInFlight
                             && storyboardStartedCount > 0;
@@ -18409,7 +18514,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {scriptOptReady ? <Check className="w-4 h-4" /> : (scriptOptActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 1)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('剧本优化', 'Script Opt')}</span>
+                                <span className="text-xs font-semibold">{getAnalysisStageLabel('script_opt', t)}</span>
                                 {scriptOptReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
@@ -18438,7 +18543,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {subjectIndexReady ? <Check className="w-4 h-4" /> : (subjectIndexActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 2)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('清单整理', 'List Preparation')}</span>
+                                <span className="text-xs font-semibold">{getAnalysisStageLabel('extract_assets', t)}</span>
                                 {subjectIndexReady ? (
                                      <div className="flex items-center gap-1 flex-wrap justify-center">
                                          <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
@@ -18475,7 +18580,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 {sceneMarkdownReady ? <Check className="w-4 h-4" /> : (sceneMarkdownActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 3)}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('场景拆解', 'Scene Breakdown')}</span>
+                                <span className="text-xs font-semibold">{getAnalysisStageLabel('scene_beats', t)}</span>
                                 {sceneMarkdownReady ? (
                                     <div className="flex items-center gap-1 flex-wrap justify-center">
                                         <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
@@ -18502,6 +18607,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                         <div className="flex flex-col items-center gap-2 relative">
                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
+                                showAssetFailure
+                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                                    : assetDesignReady
+                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                                        : (assetDesignActive || subjectIndexReady || hasAssetGenerationPrerequisite
+                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
+                            }`}>
+                                {showAssetFailure
+                                    ? <X className="w-4 h-4" />
+                                    : (assetDesignReady
+                                        ? <Check className="w-4 h-4" />
+                                        : (assetDesignActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 4))}
+                            </div>
+                            <div className="flex flex-col items-center gap-1 text-center">
+                                <span className="text-xs font-semibold">{getAnalysisStageLabel('assets_gen', t)}</span>
+                                {showAssetFailure ? (
+                                    <div
+                                        className="flex flex-col items-center gap-0.5"
+                                        title={workflowCompletenessStats.failedCategories.map((row) => `${t(row.labelZh, row.labelEn)}: ${row.errorMessage || t('生成失败', 'Generation failed')}`).join('\n')}
+                                    >
+                                        <span className="text-[10px] text-red-300 font-semibold">
+                                            {t('失败：', 'Failed: ')}{workflowCompletenessStats.failedCategories.map((row) => t(row.labelZh, row.labelEn)).join('、')}
+                                        </span>
+                                        <div className="flex items-center gap-1 flex-wrap justify-center">
+                                            {renderImportButton('assets', canImportAssets)}
+                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : assetDesignReady ? (
+                                    <div className="flex items-center gap-1 flex-wrap justify-center">
+                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
+                                        {renderImportButton('assets', canImportAssets)}
+                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className={`${diagnosticBtnClass} flex items-center gap-1`}>
+                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                            {t('重跑', 'Rerun')}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center gap-1">
+                                        {assetDesignActive ? renderProcessingLabel() : ((subjectIndexReady || hasAssetGenerationPrerequisite) ? (
+                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-white/30">{t('待资产清单完成', 'Wait asset inventory')}</span>
+                                        ))}
+                                        {renderImportButton('assets', canImportAssets)}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-col items-center gap-2 relative">
+                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
                                 storyboardFailedCount > 0 && storyboardSettled && storyboardCompletedCount <= 0
                                     ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
                                     : storyboardSettled
@@ -18514,10 +18677,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     ? <X className="w-4 h-4" />
                                     : (storyboardSettled
                                         ? <Check className="w-4 h-4" />
-                                        : (storyboardInFlight ? <Loader2 className="w-4 h-4 animate-spin" /> : 4))}
+                                        : (storyboardInFlight ? <Loader2 className="w-4 h-4 animate-spin" /> : 5))}
                             </div>
                             <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('镜头任务', 'Storyboard Tasks')}</span>
+                                <span className="text-xs font-semibold">{getAnalysisStageLabel('storyboard', t)}</span>
                                 {storyboardAutoStarted ? (
                                     <div className="flex flex-col items-center gap-1">
                                         <div className="flex items-center gap-1 flex-wrap justify-center">
@@ -18567,7 +18730,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     : t('可重跑', 'Ready')}
                                             </button>
                                         ) : (
-                                            <span className="text-[10px] text-white/30">{t('待场景拆解完成', 'Wait scene breakdown')}</span>
+                                            <span className="text-[10px] text-white/30">{t('待场景编排完成', 'Wait scene orchestration')}</span>
                                         )}
                                         {renderImportButton('storyboard', canImportStoryboard)}
                                     </div>
@@ -18575,64 +18738,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             </div>
                         </div>
 
-                        <div className="flex flex-col items-center gap-2 relative">
-                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold z-10 border ${
-                                showAssetFailure
-                                    ? 'bg-red-500/70 border-red-400 text-white shadow-[0_0_10px_rgba(239,68,68,0.35)]'
-                                    : assetDesignReady
-                                        ? 'bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]'
-                                        : (assetDesignActive || subjectIndexReady || hasAssetGenerationPrerequisite
-                                            ? 'bg-purple-500/50 border-purple-400 text-white backdrop-blur-sm shadow-[0_0_10px_rgba(168,85,247,0.3)]'
-                                            : 'bg-white/5 border-white/20 text-white/50 backdrop-blur-sm')
-                            }`}>
-                                {showAssetFailure
-                                    ? <X className="w-4 h-4" />
-                                    : (assetDesignReady
-                                        ? <Check className="w-4 h-4" />
-                                        : (assetDesignActive ? <Loader2 className="w-4 h-4 animate-spin" /> : 5))}
-                            </div>
-                            <div className="flex flex-col items-center gap-1 text-center">
-                                <span className="text-xs font-semibold">{t('视觉资产', 'Visual Assets')}</span>
-                                {showAssetFailure ? (
-                                    <div
-                                        className="flex flex-col items-center gap-0.5"
-                                        title={workflowCompletenessStats.failedCategories.map((row) => `${t(row.labelZh, row.labelEn)}: ${row.errorMessage || t('生成失败', 'Generation failed')}`).join('\n')}
-                                    >
-                                        <span className="text-[10px] text-red-300 font-semibold">
-                                            {t('失败：', 'Failed: ')}{workflowCompletenessStats.failedCategories.map((row) => t(row.labelZh, row.labelEn)).join('、')}
-                                        </span>
-                                        <div className="flex items-center gap-1 flex-wrap justify-center">
-                                            {renderImportButton('assets', canImportAssets)}
-                                            <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-red-400/50 text-red-100 bg-red-500/20 hover:bg-red-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('重跑失败项', 'Rerun failed')}
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : assetDesignReady ? (
-                                    <div className="flex items-center gap-1 flex-wrap justify-center">
-                                        <span className="text-[10px] text-emerald-400/80">{t('已完成', 'Ready')}</span>
-                                        {renderImportButton('assets', canImportAssets)}
-                                        <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className={`${diagnosticBtnClass} flex items-center gap-1`}>
-                                            {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                            {t('重跑', 'Rerun')}
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center gap-1">
-                                        {assetDesignActive ? renderProcessingLabel() : ((subjectIndexReady || hasAssetGenerationPrerequisite) ? (
-                                             <button onClick={() => openPhase2RerunModal({ mode: 'all' })} disabled={isAnalyzing || isRetryingPhase2} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
-                                                {isRetryingPhase2 ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
-                                                {isRetryingPhase2 ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
-                                            </button>
-                                        ) : (
-                                            <span className="text-[10px] text-white/30">{t('待清单整理完成', 'Wait list preparation')}</span>
-                                        ))}
-                                        {renderImportButton('assets', canImportAssets)}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
                     </div>
                         );
                     })()}
@@ -18678,7 +18783,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs text-red-100 space-y-1.5">
                         <div className="flex items-center gap-2 font-semibold">
                             <X className="w-3.5 h-3.5" />
-                            {t('视觉资产完整性检测未通过', 'Visual asset integrity check failed')}
+                            {t('资产设计完整性检测未通过', 'Asset design integrity check failed')}
                         </div>
                         <ul className="list-disc list-inside space-y-1">
                             {workflowCompletenessStats.failedCategories.map((row) => (
@@ -18703,8 +18808,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 )}
             </div>
 
+            
+
             {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (
-                <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+                <div className={`mb-4 shrink-0 rounded-2xl border px-4 py-3 text-sm backdrop-blur-sm ${
                     analysisFlowStatus.phase === 'failed'
                         ? 'border-red-500/30 bg-red-500/10 text-red-100'
                         : analysisFlowStatus.phase === 'warning'
@@ -18713,376 +18820,95 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
                                 : 'border-purple-500/30 bg-purple-500/10 text-purple-100'
                 }`}>
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                        <div className="flex items-center gap-2 font-semibold">
-                            {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4" /> : <Loader2 className="w-4 h-4 animate-spin" />}
-                            <span>{t('场景拆解进度', 'AI Script Analysis Status')}</span>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                            {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4 shrink-0" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4 shrink-0" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4 shrink-0" /> : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />}
+                            <div className="min-w-0">
+                                <div className="font-semibold tracking-wide">
+                                    {analysisFlowStatus.phase === 'completed'
+                                        ? t('分析已完成', 'Analysis complete')
+                                        : analysisFlowStatus.phase === 'failed'
+                                            ? t('分析失败', 'Analysis failed')
+                                            : analysisFlowStatus.phase === 'warning'
+                                                ? t('分析完成（有提示）', 'Analysis finished with notices')
+                                                : t('剧本分析进行中', 'Script analysis in progress')}
+                                </div>
+                                <div className="mt-0.5 truncate text-xs opacity-80">
+                                    {String(toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || '').trim()
+                                        || (isAnalyzing
+                                            ? `${t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')} · ${formatDurationMs(analysisHeartbeatElapsedMs)}`
+                                            : t('可关闭此提示，继续编辑剧本。', 'You can dismiss this and keep editing.'))}
+                                </div>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                            <FunctionApiSelector
-                                functionName="script_analysis"
-                                configs={functionApiConfigs}
-                                label={t('剧本分析 API', 'Script Analysis API')}
-                                value={selectedScriptAnalysisApiId}
-                                onChange={setSelectedScriptAnalysisApiId}
-                                className="min-w-[220px] justify-end"
-                            />
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            {!isAnalyzing && (analysisFlowStatus.phase === 'warning' || analysisFlowStatus.phase === 'failed') && (
+                                <button
+                                    type="button"
+                                    onClick={handleAnalysisClick}
+                                    className="rounded-xl border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/20 transition-colors"
+                                >
+                                    {t('重试', 'Retry')}
+                                </button>
+                            )}
                             {!isAnalyzing && (
                                 <button
                                     type="button"
                                     onClick={dismissAnalysisProgressPanel}
-                                    className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20"
+                                    className="rounded-xl border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-semibold hover:bg-white/10 transition-colors"
                                 >
                                     {t('关闭', 'Close')}
                                 </button>
                             )}
                         </div>
                     </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
-                        {(() => {
-                            const progress = pickRicherStoryboardTaskProgress(
-                                storyboardTaskProgress,
-                                storyboardTaskProgressRef.current,
-                                analysisUiReport?.storyboardTaskProgress,
-                            );
-                            const storyboardStartedCount = Number(progress?.started || 0);
-                            const storyboardCompletedCount = Number(progress?.completed || 0);
-                            const storyboardFailedCount = Number(progress?.failed || 0);
-                            const storyboardRunningCount = Number(progress?.running || 0);
-                            const storyboardAutoStarted = Boolean(analysisUiReport?.storyboardAutoStarted)
-                                || storyboardStartedCount > 0;
-                            const storyboardInFlight = storyboardRunningCount > 0
-                                || (storyboardStartedCount > (storyboardCompletedCount + storyboardFailedCount));
-                            const storyboardSettled = storyboardAutoStarted
-                                && !storyboardInFlight
-                                && storyboardStartedCount > 0;
-                            const storyboardItems = Object.values(progress?.items || {});
-                            return (
-                                <>
-                            {[
-                            { key: 'script_opt', label: t('剧本统筹', 'Script Opt') },
-                            { key: 'extract_assets', label: t('清单整理', 'List Preparation') },
-                            { key: 'scene_beats', label: t('场景拆解', 'Scene Breakdown') },
-                            {
-                                key: 'storyboard',
-                                label: storyboardAutoStarted && storyboardStartedCount > 0
-                                    ? t(
-                                        `镜头任务 ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardInFlight ? ` · 运行${storyboardRunningCount}` : ''}${storyboardFailedCount > 0 ? ` · 失败${storyboardFailedCount}` : ''}`,
-                                        `Storyboard ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardInFlight ? ` · ${storyboardRunningCount} active` : ''}${storyboardFailedCount > 0 ? ` · ${storyboardFailedCount} failed` : ''}`
-                                    )
-                                    : t('镜头任务', 'Storyboard Tasks'),
-                            },
-                            { key: 'assets_gen', label: t('视觉资产', 'Visual Assets') },
-                            { key: 'completed', label: t('AI 总结报告', 'Report') },
-                        ].map((step, idx) => {
-                            const stepOrder = ANALYSIS_LIVE_STEP_ORDER;
-                            const phase = analysisFlowStatus.phase || 'idle';
-                            const normalizedPhase = normalizeAnalysisLivePhase(phase);
-                            const currentIndex = stepOrder.indexOf(normalizedPhase);
-                            const stepIndex = stepOrder.indexOf(step.key);
-                            const hasFinalReport = !!(analysisUiReport && analysisUiReport.status !== 'running');
-                            const isTerminalWarning = phase === 'warning';
-                            const isTerminalFailed = phase === 'failed';
-                            
-                            const hasArtifact = (key) => {
-                                if (key === 'script_opt') return !!getStageOutputContent('stage1', 'adapted_script');
-                                if (key === 'extract_assets') return !!getStageOutputContent('stage2', 'subject_index');
-                                if (key === 'scene_beats') return !!getStageOutputContent('stage2', 'scene_markdown');
-                                if (key === 'storyboard') return storyboardSettled;
-                                if (key === 'assets_gen') return !!getStageOutputContent('stage3', 'asset_design_json');
-                                if (key === 'completed') return hasFinalReport && !storyboardInFlight;
-                                return false;
-                            };
-                            const trustedArtifact = (key) => (
-                                hasArtifact(key)
-                                && canTrustStageArtifactDuringLiveRun(phase, key, { isLive: isAnalyzing })
-                            );
-                            
-                            let isDone = !isTerminalFailed && (
-                                isTerminalWarning
-                                    ? stepIndex <= 2
-                                    : ((currentIndex > stepIndex) || phase === 'completed' || trustedArtifact(step.key))
-                            );
-                            let isActive = !isTerminalFailed && !isTerminalWarning && (
-                                currentIndex === stepIndex
-                                || isAnalysisLiveStepActive(phase, step.key, { isLive: isAnalyzing })
-                            );
-                            if (step.key === 'storyboard') {
-                                isActive = !isTerminalFailed && (storyboardInFlight || phase === 'storyboard');
-                                isDone = !isTerminalFailed && storyboardSettled;
-                            } else if (step.key === 'completed') {
-                                isActive = !isTerminalFailed && !storyboardInFlight && phase === 'completed';
-                                isDone = !isTerminalFailed && hasFinalReport && !storyboardInFlight;
-                            } else if (hasFinalReport && !isAnalyzing && stepIndex < 3) {
-                                isDone = !isTerminalFailed;
-                            }
-                            // Concurrent fan-out can mark a step both active and done; prefer done.
-                            if (isDone && step.key !== 'storyboard') isActive = false;
-                            const isFailed = (isTerminalFailed && step.key === 'analyzing')
-                                || (step.key === 'storyboard' && storyboardSettled && storyboardFailedCount > 0 && storyboardCompletedCount <= 0);
-                            return (
-                                <div
-                                    key={step.key}
-                                    className={`rounded-lg border px-3 py-2 flex items-center gap-2 ${
-                                        isFailed
-                                            ? 'border-red-400/50 bg-red-500/20'
-                                            : isActive
-                                                ? 'border-purple-300/60 bg-purple-400/20'
-                                                : isDone
-                                                    ? 'border-emerald-300/60 bg-emerald-400/20'
-                                                    : 'border-white/15 bg-black/20'
-                                    }`}
-                                >
-                                    <span className="text-[11px] font-bold opacity-80">{idx + 1}</span>
-                                    <span className="text-xs leading-tight">{step.label}</span>
-                                </div>
-                            );
-                        })}
-                            {storyboardAutoStarted && storyboardItems.length > 0 && (
-                                <div className="col-span-2 md:col-span-6 rounded-lg border border-purple-400/30 bg-black/20 px-3 py-2">
-                                    <div className="text-[10px] font-semibold text-purple-100/90 mb-1.5">
-                                        {t('镜头任务明细', 'Storyboard task details')}
-                                        <span className="ml-2 opacity-70">
-                                            {t(
-                                                `完成 ${storyboardCompletedCount}/${storyboardStartedCount}${storyboardRunningCount > 0 ? ` · 运行中 ${storyboardRunningCount}` : ''}${storyboardFailedCount > 0 ? ` · 失败 ${storyboardFailedCount}` : ''}`,
-                                                `${storyboardCompletedCount}/${storyboardStartedCount} done${storyboardRunningCount > 0 ? ` · ${storyboardRunningCount} running` : ''}${storyboardFailedCount > 0 ? ` · ${storyboardFailedCount} failed` : ''}`
-                                            )}
-                                        </span>
-                                    </div>
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {storyboardItems
-                                            .slice()
-                                            .sort((a, b) => String(a?.markerSceneId || '').localeCompare(String(b?.markerSceneId || '')))
-                                            .map((item) => {
-                                                const status = String(item?.status || '').toLowerCase();
-                                                const label = String(item?.markerSceneId || item?.dbSceneId || '?');
-                                                const tone = status === 'completed'
-                                                    ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
-                                                    : status === 'failed'
-                                                        ? 'border-red-400/40 bg-red-500/15 text-red-100'
-                                                        : status === 'waiting_env'
-                                                            ? 'border-amber-400/40 bg-amber-500/15 text-amber-100'
-                                                            : 'border-purple-400/40 bg-purple-500/15 text-purple-100';
-                                                const statusLabel = status === 'completed'
-                                                    ? t('完成', 'Done')
-                                                    : status === 'failed'
-                                                        ? t('失败', 'Fail')
-                                                        : status === 'waiting_env'
-                                                            ? t('等环境', 'Wait ENV')
-                                                            : status === 'importing'
-                                                                ? t('写入', 'Apply')
-                                                                : status === 'generating'
-                                                                    ? t('生成', 'Gen')
-                                                                    : t('启动', 'Start');
-                                                return (
-                                                    <span
-                                                        key={label}
-                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${tone}`}
-                                                        title={item?.error || label}
-                                                    >
-                                                        {label} · {statusLabel}
-                                                    </span>
-                                                );
-                                            })}
-                                    </div>
-                                </div>
-                            )}
-                                </>
-                            );
-                        })()}
-                    </div>
-
-                    {analysisFlowStatusHistory.length > 0 && (
-                        <div className="mb-2 space-y-1.5">
-                            {analysisFlowStatusHistory.map((item, index) => {
-                                const isLatest = index === analysisFlowStatusHistory.length - 1;
-                                const startedTime = formatHistoryClock(item?.createdAt);
-                                const endedTime = formatHistoryClock(item?.endedAt);
-                                const phaseLabel = getBusinessPhaseLabel(item?.phase);
-                                const displayMessage = toBusinessHistoryMessage(item?.message);
-                                const highlightHint = String(item?.highlightHint || '').trim();
-                                return (
-                                    <div key={item.id} className={`text-xs rounded-md px-2.5 py-2 border ${isLatest ? 'border-white/20 bg-black/20 opacity-100' : 'border-white/10 bg-black/10 opacity-90'}`}>
-                                        <div className="flex items-start justify-between gap-3">
-                                            <span className="font-semibold tracking-wide text-[10px] opacity-80">{phaseLabel}</span>
-                                            <span className="text-[10px] opacity-60">
-                                                {startedTime
-                                                    ? (
-                                                        endedTime
-                                                            ? `${startedTime} ~ ${endedTime} · #${index + 1}`
-                                                            : `${startedTime} ~ ${t('进行中', 'Running')} · #${index + 1}`
-                                                    )
-                                                    : `#${index + 1}`
-                                                }
-                                            </span>
-                                        </div>
-                                        <div className="mt-1 opacity-95 whitespace-pre-wrap">{displayMessage || item.message}</div>
-                                        {highlightHint && (
-                                            <div className={`mt-1.5 rounded-md border px-2 py-1.5 text-[11px] font-semibold leading-snug ${isLatest ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.15)] animate-pulse' : 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200/90'}`}>
-                                                🎨 {highlightHint}
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-
-                    {(isAnalyzing || isRetryingPhase2) && String(analysisFlowStatus?.highlightHint || '').trim() && (
-                        <div className="mb-2 rounded-lg border border-emerald-400/45 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 shadow-[0_0_14px_rgba(52,211,153,0.18)] animate-pulse">
-                            🎨 {String(analysisFlowStatus.highlightHint).trim()}
-                        </div>
-                    )}
-
-                    {isAnalyzing && (
-                        <div className="mb-2 text-[11px] text-amber-200/90">
-                            {t('剧本分析进行中...', 'Script analysis in progress...')} ({formatDurationMs(analysisHeartbeatElapsedMs)})
-                            <span className="ml-2 text-amber-100/80">
-                                {t('复杂剧本通常需要较长时间。', 'Complex scripts usually take longer.')}
-                            </span>
-                        </div>
-                    )}
-
-                    {canStopAnalysisTask && (
-                        <div className="mb-2">
-                            <button
-                                onClick={handleStopAnalysisTask}
-                                disabled={isStoppingAnalysisTask}
-                                className={`px-3 py-1.5 rounded-md text-[11px] font-bold border ${isStoppingAnalysisTask ? 'bg-white/5 text-muted-foreground border-white/10 cursor-not-allowed' : 'bg-red-500/20 hover:bg-red-500/30 border-red-400/40 text-red-100'}`}
-                            >
-                                {isStoppingAnalysisTask ? t('停止中...', 'Stopping...') : t('停止任务', 'Stop Task')}
-                            </button>
-                        </div>
-                    )}
-
-                    {!isAnalyzing && (analysisFlowStatus.phase === 'warning' || analysisFlowStatus.phase === 'failed') && (
-                        <div className="mb-2">
-                            <button
-                                onClick={handleAnalysisClick}
-                                className="px-3 py-1.5 rounded-md text-[11px] font-bold bg-white/10 hover:bg-white/20 border border-white/15 text-white"
-                            >
-                                {t('重试分析', 'Retry Analysis')}
-                            </button>
-                        </div>
-                    )}
-
-                    {analysisUiReport && analysisUiReport.status !== 'running' && (
-                        <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm space-y-3 mb-2">
-                            <div className="font-bold text-white/90 text-base flex items-center gap-2">
-                                <CheckCircle className="w-5 h-5 text-emerald-400" /> {t('阅读与段落梳理完毕！', 'Analysis & Import Completed!')}
-                            </div>
-                            <div className="text-white/80 space-y-2 bg-black/20 p-3 rounded-md border border-white/5">
-                                <div>
-                                    <span className="font-medium">✨ {t('资产入库统计', 'Asset Insert Stats')}:</span> {t('本次新增', 'Inserted this run')}
-                                    <span className="text-purple-300 font-semibold"> {analysisAssetCounts.inserted.character} </span>{t('位角色', 'characters')}、
-                                    <span className="text-emerald-300 font-semibold"> {analysisAssetCounts.inserted.environment} </span>{t('个空镜', 'environments')}、
-                                    <span className="text-amber-300 font-semibold"> {analysisAssetCounts.inserted.prop} </span>{t('个道具', 'props')}
-                                    <span className="ml-1 text-white/70">(
-                                        {t('当前总量', 'Current total')}:
-                                        <span className="text-purple-200 font-semibold"> {analysisAssetCounts.total.character} </span>{t('角色', 'characters')}、
-                                        <span className="text-emerald-200 font-semibold"> {analysisAssetCounts.total.environment} </span>{t('空镜', 'environments')}、
-                                        <span className="text-amber-200 font-semibold"> {analysisAssetCounts.total.prop} </span>{t('道具', 'props')}
-                                    )</span>。
-                                </div>
-                                <div>
-                                    <span className="font-medium">🔍 {t('场景画面搭建', 'Scene Construction')}:</span> {t('本次新增', 'Inserted this run')}
-                                    <span className="text-white font-semibold"> {(analysisUiReport.importReport?.dbRunInsertedCounts?.scenes?.created) || (analysisUiReport.importReport?.importStats?.scenesCreated) || (analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount) || (analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode) || 0} </span>{t('个场景', 'shots')}
-                                    <span className="ml-1 text-white/70">({t('当前分集总量', 'Current episode total')}: <span className="text-white font-semibold">{analysisUiReport.importReport?.dbPersistedCounts?.scenes?.currentEpisode ?? analysisUiReport.importReport?.sceneSubjectPostImportReport?.checkedSceneCount ?? 0}</span>)</span>。
-                                </div>
-                                <div>
-                                    <span className="font-medium">⏱️ {t('运行时长', 'Duration')}:</span> <span className="text-blue-300 font-semibold">{formatDurationMs(analysisUiReport.durationMs || analysisUiReport?.phaseTimings?.totalMs)}</span>
-                                </div>
-                                {String(analysisUiReport?.warning || '').trim() && (
-                                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-amber-100 whitespace-pre-wrap">
-                                        <span className="font-medium">⚠️ {t('提示', 'Notice')}:</span> {String(analysisUiReport.warning).trim()}
-                                    </div>
-                                )}
-                                {displayedReviewIssues.length > 0 && (
-                                    <div className="rounded-md border border-amber-400/35 bg-amber-500/10 px-2.5 py-2 text-amber-100 space-y-2">
-                                        <div className="font-medium">⚠️ {t('待复核问题', 'Issues to review')}</div>
-                                        <ol className="list-decimal list-inside space-y-1 text-xs whitespace-pre-wrap">
-                                            {displayedReviewIssues.map((issue, idx) => (
-                                                <li key={`review-issue-${idx}`}>{issue}</li>
-                                            ))}
-                                        </ol>
-                                        <div className="pt-1 space-y-2">
-                                            <textarea
-                                                value={analysisAttentionNotes}
-                                                onChange={(e) => setAnalysisAttentionNotes(e.target.value)}
-                                                placeholder={t('可补充修正要求（选填），例如：统一角色命名、补全缺失道具、同一场景不要拆太碎。', 'Optional refinement notes, e.g. unify character names or fill missing props.')}
-                                                className="w-full h-20 bg-black/30 border border-amber-400/20 rounded-md px-3 py-2 text-xs text-amber-50 focus:outline-none focus:border-amber-300/40 custom-scrollbar resize-none"
-                                            />
-                                            <div className="flex flex-wrap justify-end gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={handleSupplementSubmitClick}
-                                                    disabled={isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim()}
-                                                    className={`px-3 py-1.5 rounded-md text-xs font-bold ${isAnalyzing || !String(llmRawResultContent || llmResultContent || '').trim() ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 border border-amber-400/30'}`}
-                                                >
-                                                    {t('修正生成结果', 'Refine Generated Result')}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={handleSaveAnalysisAttentionNotes}
-                                                    disabled={isSavingAnalysisAttentionNotes}
-                                                    className={`px-3 py-1.5 rounded-md text-xs font-bold ${isSavingAnalysisAttentionNotes ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'}`}
-                                                >
-                                                    {isSavingAnalysisAttentionNotes ? t('保存中...', 'Saving...') : t('保存补充说明', 'Save Notes')}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="text-xs text-white/60 space-y-1 pt-1">
-                                
-                            </div>
-                            
-                            
+                    {String(analysisFlowStatus?.highlightHint || '').trim() && (isAnalyzing || isRetryingPhase2) && (
+                        <div className="mt-2 text-xs font-medium text-emerald-100/90">
+                            {String(analysisFlowStatus.highlightHint).trim()}
                         </div>
                     )}
                 </div>
             )}
 
-            <div className="flex-1 overflow-hidden border border-white/10 rounded-xl bg-black/20 flex flex-col">
+            <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-black/35 via-black/25 to-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] flex flex-col">
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
                 <div className="flex-1 overflow-hidden">
                     {isRawMode ? (
                         <div className="h-full w-full flex flex-col overflow-hidden">
-                            <div className="px-6 py-3 border-b border-white/10 bg-black/10 flex items-center justify-between">
-                                <div className="text-sm text-primary uppercase font-extrabold tracking-wide">{t('输入脚本（Input）', 'Script Input')}</div>
-                                <div className="text-[10px] text-muted-foreground">{(rawContent || '').length} {t('字符', 'chars')}</div>
+                            <div className="px-6 py-3 border-b border-white/10 bg-white/[0.03] flex items-center justify-between">
+                                <div className="text-xs text-primary uppercase font-bold tracking-[0.14em]">{t('输入脚本', 'Script Input')}</div>
+                                <div className="text-[10px] tabular-nums text-white/40">{(rawContent || '').length} {t('字符', 'chars')}</div>
                             </div>
                             <textarea
-                                className="w-full flex-1 min-h-[420px] p-6 bg-transparent text-white/90 font-mono text-sm leading-relaxed focus:outline-none custom-scrollbar resize-none"
+                                className="w-full flex-1 min-h-[420px] p-6 sm:p-8 bg-transparent text-white/90 font-mono text-[13px] leading-7 focus:outline-none custom-scrollbar resize-none selection:bg-primary/30"
                                 placeholder={t('在这里粘贴或输入你的剧本...', 'Paste or type your script here...')}
                                 value={rawContent}
                                 onChange={(e) => setRawContent(e.target.value)}
                             />
                         </div>
                     ) : (
-        <div className="overflow-auto custom-scrollbar flex-1 w-full">
-            <table className="w-full text-left border-collapse text-sm">
-                                <thead className="bg-white/5 sticky top-0 z-10 backdrop-blur-md">
+                        <div className="overflow-auto custom-scrollbar flex-1 w-full">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead className="bg-[#141414]/95 sticky top-0 z-10 backdrop-blur-md">
                                     <tr>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-16">{t('编号', 'ID')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('标题', 'Title')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground min-w-[220px] sm:min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-48">{t('叙事功能', 'Narrative Function')}</th>
-                                        <th className="p-4 border-b border-white/10 font-medium text-muted-foreground w-64">{t('从剧本提炼的导演备注', 'Analysis & Adaptation Notes')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 w-16">{t('编号', 'ID')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 w-48">{t('标题', 'Title')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 min-w-[220px] sm:min-w-[300px]">{t('内容（修订）', 'Content (Revised)')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 min-w-[220px] sm:min-w-[300px]">{t('内容（原始）', 'Content (Original)')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 w-48">{t('叙事功能', 'Narrative Function')}</th>
+                                        <th className="p-4 border-b border-white/10 text-[11px] font-semibold uppercase tracking-wider text-white/40 w-64">{t('导演备注', 'Director Notes')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-white/5">
                                     {segments.map((seg, idx) => (
-                                        <tr key={idx} className="hover:bg-white/5 transition-colors group">
-                                            <td className="p-4 align-top font-mono text-xs text-muted-foreground">{seg.id}</td>
+                                        <tr key={idx} className="hover:bg-white/[0.04] transition-colors group">
+                                            <td className="p-4 align-top font-mono text-xs text-white/35">{seg.id}</td>
                                             <td className="p-4 align-top font-bold text-primary">
                                                 {seg.title}
                                             </td>
                                             <td className="p-4 align-top">
-                                                <textarea 
-                                                    className="w-full bg-transparent border-none text-white/90 leading-relaxed font-serif focus:outline-none focus:ring-0 resize-none overflow-hidden"
+                                                <textarea
+                                                    className="w-full bg-transparent border-none text-white/90 leading-relaxed font-serif focus:outline-none focus:ring-0 resize-none overflow-hidden selection:bg-primary/30"
                                                     style={{ minHeight: '60px' }}
                                                     ref={(el) => {
                                                         if (el) {
@@ -19098,51 +18924,22 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     onChange={(e) => handleSegmentChange(idx, 'content', e.target.value)}
                                                 />
                                             </td>
-                                            <td className="p-4 align-top whitespace-pre-wrap text-muted-foreground leading-relaxed text-xs italic">
+                                            <td className="p-4 align-top whitespace-pre-wrap text-white/40 leading-relaxed text-xs italic">
                                                 {seg.original}
                                             </td>
-                                            <td className="p-4 align-top text-xs text-muted-foreground whitespace-pre-wrap">
+                                            <td className="p-4 align-top text-xs text-white/45 whitespace-pre-wrap">
                                                 {seg.narrative_role}
                                             </td>
-                                            <td className="p-4 align-top text-xs text-indigo-300/80 bg-white/5 group-hover:bg-white/10 whitespace-pre-wrap">
+                                            <td className="p-4 align-top text-xs text-indigo-300/70 bg-white/[0.02] group-hover:bg-white/[0.04] whitespace-pre-wrap">
                                                 {seg.analysis}
                                             </td>
                                         </tr>
                                     ))}
                                 </tbody>
                             </table>
-        </div>
+                        </div>
                     )}
-        <div className="flex flex-col gap-4 flex-none max-h-[60vh] mt-4 border-t border-white/10 pt-4 px-6 pb-6 overflow-y-auto custom-scrollbar">
-        {/* Stage 1 Panel */}
-        <div className="flex-none min-h-[300px]">
-            <LLMResultPanel
-                title={t('第一阶段：剧本修改说明 / 优化后剧本 / 全局风格', 'Stage 1: Script Notes / Optimized Script / Global Style')}
-                t={t}
-                stageCards={stage1StageCards}
-                placeholder={t('第一阶段产物...', 'Stage 1 outputs...')}
-            />
-        </div>
-        {/* Stage 2 Panel */}
-        <div className="flex-none h-auto min-h-[400px]">
-            <LLMResultPanel
-                title={t('第二阶段：场景分析结果 / 资产清单', 'Stage 2: Scene Analysis Result / Asset Index')}
-                t={t}
-                stageCards={stage2StageCards}
-                placeholder={t('第二阶段产物...', 'Stage 2 outputs...')}
-            />
-        </div>
-        {/* Stage 3 Panel */}
-        <div className="flex-none min-h-[300px]">
-            <LLMResultPanel
-                title={t('第三阶段：资产设计', 'Stage 3: Asset Design')}
-                t={t}
-                stageCards={stage3StageCards}
-                placeholder={t('第三阶段产物...', 'Stage 3 outputs...')}
-            />
-        </div>
-    </div>
-        
+
                 </div>
             </div>
 
@@ -19291,7 +19088,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-white/5">
                             <h3 className="text-lg font-bold flex items-center gap-2">
                                 <Film className="w-5 h-5 text-sky-400" />
-                                {t('镜头任务重跑选择', 'Storyboard Rerun')}
+                                {t('分镜生成重跑选择', 'Storyboard Rerun')}
                             </h3>
                             <button
                                 onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, open: false }))}
@@ -19343,7 +19140,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                             {storyboardRerunModal.mode === 'all' && (
                                 <div className="rounded-lg border border-sky-400/25 bg-sky-500/10 px-3 py-3 text-sky-100">
-                                    <div className="font-semibold">{t('将按场调起全部镜头任务', 'All scene storyboard tasks will be kicked off')}</div>
+                                    <div className="font-semibold">{t('将按场调起全部分镜生成', 'All scene storyboard tasks will be kicked off')}</div>
                                     <div className="mt-1 text-xs text-sky-100/75">
                                         {t(`共 ${storyboardRerunModal.candidates.length} 场；已在运行中的场景会跳过。`, `${storyboardRerunModal.candidates.length} scene(s); already-running scenes are skipped.`)}
                                     </div>
@@ -19692,7 +19489,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     {t('新增 Subject Index 条目', 'New Subject Index Entry')}
                                                 </div>
                                                 <div className="text-[11px] text-emerald-100/70">
-                                                    {t('保存后写入资产清单，再确认重跑即可生成视觉资产。', 'Save writes into the Subject Index; then confirm rerun to generate visuals.')}
+                                                    {t('保存后写入资产清单，再确认重跑即可进行资产设计。', 'Save writes into the Asset Inventory; then confirm rerun to run asset design.')}
                                                 </div>
                                             </div>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

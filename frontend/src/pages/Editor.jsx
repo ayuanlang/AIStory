@@ -7,7 +7,7 @@ import { useLog } from '../context/LogContext';
 import ReactMarkdown from 'react-markdown';
 import { useStore } from '../lib/store';
 import LogPanel from '../components/LogPanel';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw, TrendingUp } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, FolderOpen, Maximize2, Info, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, ArrowUp, Sparkles, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import { setUiLang as setGlobalUiLang } from '../lib/uiLang';
@@ -102,11 +102,6 @@ import {
     stopEpisodeScenesGeneration,
     startShotMediaBatch,
     getShotMediaBatchStatus,
-    getVideoGenerationJobStatus,
-    getGenerationJobPool,
-    stopGenerationJob,
-    deleteGenerationJob,
-    stopAllGenerationJobs,
     stopShotMediaBatch,
     saveProjectStoryGeneratorGlobalInput,
     exportProjectStoryGlobalPackage,
@@ -185,11 +180,11 @@ const ScriptEditor = React.lazy(() => import('./editor/components/ScriptEditor')
 const SubjectLibrary = React.lazy(() => import('./editor/components/SubjectLibrary').then(m => ({ default: m.SubjectLibrary })));
 const SceneManager = React.lazy(() => import('./editor/components/SceneManager').then(m => ({ default: m.SceneManager })));
 const ShotsView = React.lazy(() => import('./editor/components/ShotsView').then(m => ({ default: m.ShotsView })));
-const VideoStudio = React.lazy(() => import('../components/VideoStudio'));
 
 const PROJECT_SETTINGS_RETURN_SNAPSHOT_KEY = 'aistory.projects.return.snapshot';
-const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots', 'montage']);
-const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator', 'market_research']);
+const EPISODE_REQUIRED_TABS = new Set(['script', 'subjects', 'scenes', 'shots']);
+const normalizeEditorTab = (tab) => (tab === 'montage' ? 'shots' : tab);
+const EPISODE_FULL_LOAD_TABS = new Set(['script', 'overview', 'generator']);
 
 const buildProjectReturnSnapshot = ({
     projectId,
@@ -227,30 +222,20 @@ const Editor = ({
     const [activeEpisodeId, setActiveEpisodeId] = useState(initialEpisodeId);
     const pendingInitialEpisodeIdRef = useRef(initialEpisodeId);
     const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
-    const resolveInitialEditorTab = () => (
-        (initialActiveTab === 'ep_info' ? 'overview' : initialActiveTab)
-        || initialProject?.global_info?.workflow_stage
-        || 'overview'
-    );
+    const resolveInitialEditorTab = () => {
+        const raw = initialActiveTab === 'ep_info' || initialActiveTab === 'market_research'
+            ? 'overview'
+            : initialActiveTab;
+        return normalizeEditorTab(raw || initialProject?.global_info?.workflow_stage || 'overview');
+    };
     const [activeTab, setActiveTab] = useState(resolveInitialEditorTab);
     const [visitedTabs, setVisitedTabs] = useState(() => new Set([resolveInitialEditorTab()]));
     const [isImportOpen, setIsImportOpen] = useState(false);
-    const [isJobPoolOpen, setIsJobPoolOpen] = useState(false);
     const [trashModalOpen, setTrashModalOpen] = useState(false);
     const [isProjectBackupExporting, setIsProjectBackupExporting] = useState(false);
     const [isProjectBackupImporting, setIsProjectBackupImporting] = useState(false);
-    const [jobPoolLoading, setJobPoolLoading] = useState(false);
-    const [jobPoolStoppingId, setJobPoolStoppingId] = useState('');
-    const [jobPoolDeletingId, setJobPoolDeletingId] = useState('');
-    const [jobPoolStoppingAll, setJobPoolStoppingAll] = useState(false);
-    const [jobPoolStoppingAllApi, setJobPoolStoppingAllApi] = useState(false);
     const projectBackupFileInputRef = useRef(null);
-    const [jobPoolStopLimit, setJobPoolStopLimit] = useState('20');
-    const [jobPoolFilterKind, setJobPoolFilterKind] = useState('all');
-    const [jobPoolRunningOnly, setJobPoolRunningOnly] = useState(true);
-    const [jobPoolData, setJobPoolData] = useState({ total: 0, status_counts: {}, items: [] });
     const [isSuperuser, setIsSuperuser] = useState(false);
-    const [currentUserId, setCurrentUserId] = useState(null);
     const [currentUserCredits, setCurrentUserCredits] = useState(0);
     const [userBatchParallelLimit, setUserBatchParallelLimit] = useState(3);
     const [projectBillingStats, setProjectBillingStats] = useState({ user_cost: 0, total_cost: 0 });
@@ -260,12 +245,10 @@ const Editor = ({
     const [tabMediaRefreshSignals, setTabMediaRefreshSignals] = useState(() => ({
         overview: 0,
         generator: 0,
-        market_research: 0,
         script: 0,
         subjects: 0,
         scenes: 0,
         shots: 0,
-        montage: 0,
     }));
     const [editingShot, setEditingShot] = useState(null);
     const [shotsFocusRequest, setShotsFocusRequest] = useState(null);
@@ -617,9 +600,8 @@ const Editor = ({
                 allVideosReady = anyActive && allVids;
             }
 
-            if (allVideosReady) {
-                nextStage = 'montage';
-            } else if (hasAssets && allAssetsReady) {
+            // Montage menu is hidden: keep completed storyboards on the shots stage.
+            if (allVideosReady || (hasAssets && allAssetsReady)) {
                 nextStage = 'shots';
             } else if (hasAssets || hasScenes) {
                 nextStage = 'subjects';
@@ -669,12 +651,10 @@ const Editor = ({
                 
                 if (user) {
                     setIsSuperuser(!!user?.is_superuser);
-                    setCurrentUserId(Number(user?.id || 0) || null);
                     setCurrentUserCredits(typeof user?.credits === 'number' ? user.credits : 0);
                     setUserBatchParallelLimit(normalizeBatchParallelLimit(user?.is_active));
                 } else {
                     setIsSuperuser(false);
-                    setCurrentUserId(null);
                     setCurrentUserCredits(0);
                     setUserBatchParallelLimit(3);
                 }
@@ -684,10 +664,10 @@ const Editor = ({
                     if (stats) setProjectBillingStats({ user_cost: stats.user_cost || 0, total_cost: stats.total_cost || 0 });
                 }).catch(() => {});
 
-                const currentStage = p?.global_info?.workflow_stage || 'script';
-                let startTab = initialActiveTab || 'overview';
+                const currentStage = normalizeEditorTab(p?.global_info?.workflow_stage || 'script');
+                let startTab = normalizeEditorTab(initialActiveTab || 'overview');
                 
-                if (!initialActiveTab || initialActiveTab === 'overview' || initialActiveTab === 'ep_info') {
+                if (!initialActiveTab || initialActiveTab === 'overview' || initialActiveTab === 'ep_info' || initialActiveTab === 'montage') {
                     // Start tab defaults to the currently saved stage without heavy recalculation
                     startTab = currentStage;
                 }
@@ -779,6 +759,17 @@ const Editor = ({
             prevActiveTabRef.current = activeTab;
         }
     }, [activeTab, visitedTabs, bumpTabMediaRefresh]);
+
+    useEffect(() => {
+        if (activeTab !== 'montage') return;
+        setActiveTab('shots');
+        setVisitedTabs((prev) => {
+            if (prev.has('shots')) return prev;
+            const next = new Set(prev);
+            next.add('shots');
+            return next;
+        });
+    }, [activeTab]);
 
     const handleUpdateScript = async (epId, content) => {
         try {
@@ -3418,321 +3409,6 @@ const Editor = ({
         }
     };
 
-    const refreshGenerationJobPool = useCallback(async (override = {}) => {
-        const kind = String(override.kind || jobPoolFilterKind || 'all');
-        const runningOnly = typeof override.runningOnly === 'boolean' ? override.runningOnly : jobPoolRunningOnly;
-        setJobPoolLoading(true);
-        try {
-            const data = await getGenerationJobPool({
-                kind,
-                running_only: runningOnly,
-                limit: 300,
-            });
-            setJobPoolData({
-                total: Number(data?.total || 0),
-                status_counts: data?.status_counts || {},
-                items: Array.isArray(data?.items) ? data.items : [],
-            });
-        } catch (e) {
-            addLog(`Failed to load job pool: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setJobPoolLoading(false);
-        }
-    }, [addLog, jobPoolFilterKind, jobPoolRunningOnly]);
-
-    useEffect(() => {
-        if (!isJobPoolOpen) return;
-        refreshGenerationJobPool();
-    }, [isJobPoolOpen, refreshGenerationJobPool]);
-
-    const handleStopJobFromPool = async (item) => {
-        const kind = String(item?.kind || '').trim();
-        const jobId = String(item?.job_id || '').trim();
-        if (!kind || !jobId) return;
-        const ok = await confirmUiMessage(t(
-            `确认强制停止任务？\n${kind} / ${jobId}`,
-            `Force stop this task?\n${kind} / ${jobId}`
-        ));
-        if (!ok) return;
-
-        setJobPoolStoppingId(`${kind}:${jobId}`);
-        try {
-            const res = await stopGenerationJob(kind, jobId, { force: true });
-            if (kind === 'video') {
-                releaseShotVideoUiByJobId(jobId);
-            } else if (kind === 'image') {
-                releaseShotImageUiByJobId(jobId);
-            }
-            addLog(`Job force stopped: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
-            await refreshShots();
-            await refreshGenerationJobPool();
-        } catch (e) {
-            addLog(`Failed to stop job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setJobPoolStoppingId('');
-        }
-    };
-
-    const handleDeleteJobFromPool = async (item) => {
-        const kind = String(item?.kind || '').trim();
-        const jobId = String(item?.job_id || '').trim();
-        if (!kind || !jobId) return;
-        const ownerId = Number(item?.user_id || 0) || null;
-        const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
-        if (!canDelete) {
-            addLog(t('仅可删除自己的任务（超级用户可删除全部）。', 'You can only delete your own jobs (superuser can delete all).'), 'warning');
-            return;
-        }
-
-        const ok = await confirmUiMessage(t(
-            `确认删除任务记录？\n${kind} / ${jobId}\n若任务仍在运行，将一并终止并清除当前页面的挂起状态。`,
-            `Delete this job record?\n${kind} / ${jobId}\nIf the job is still running, this will also terminate it and clear the pending UI state.`
-        ));
-        if (!ok) return;
-
-        const rowKey = `${kind}:${jobId}`;
-        setJobPoolDeletingId(rowKey);
-        try {
-            const res = await deleteGenerationJob(kind, jobId);
-            if (kind === 'video') {
-                releaseShotVideoUiByJobId(jobId);
-            } else if (kind === 'image') {
-                releaseShotImageUiByJobId(jobId);
-            }
-            addLog(`Job deleted: ${kind}/${jobId} - ${res?.message || 'ok'}`, 'warning');
-            await refreshShots();
-            await refreshGenerationJobPool();
-        } catch (e) {
-            addLog(`Failed to delete job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setJobPoolDeletingId('');
-        }
-    };
-
-    const isJobPoolItemStoppable = () => {
-        return true;
-    };
-
-    const runningJobPoolItems = (jobPoolData?.items || []).filter(isJobPoolItemStoppable);
-    const parsedStopLimit = Number.parseInt(String(jobPoolStopLimit || '0'), 10);
-    const stopAllUsesUnlimited = String(jobPoolStopLimit || '').toLowerCase() === 'all' || !Number.isFinite(parsedStopLimit) || parsedStopLimit <= 0;
-    const stopAllTargetItems = stopAllUsesUnlimited ? runningJobPoolItems : runningJobPoolItems.slice(0, parsedStopLimit);
-
-    const handleStopAllJobsFromPool = async () => {
-        if (jobPoolStoppingAll) return;
-        const candidates = stopAllTargetItems;
-        if (!candidates.length) {
-            addLog(t('当前没有可停止的运行中任务。', 'No running tasks can be stopped right now.'), 'warning');
-            return;
-        }
-
-        const limitLabel = stopAllUsesUnlimited ? t('全部', 'all') : String(parsedStopLimit);
-        const ok = await confirmUiMessage(t(
-            `确认批量强制停止任务？\n将停止前 ${limitLabel} 个（本次 ${candidates.length} / 可停止 ${runningJobPoolItems.length}）。`,
-            `Force stop tasks in batch?\nWill stop first ${limitLabel} (this run ${candidates.length} / stoppable ${runningJobPoolItems.length}).`
-        ));
-        if (!ok) return;
-
-        setJobPoolStoppingAll(true);
-        setJobPoolStoppingId('');
-        let successCount = 0;
-        let failedCount = 0;
-
-        try {
-            for (const item of candidates) {
-                const kind = String(item?.kind || '').trim();
-                const jobId = String(item?.job_id || '').trim();
-                if (!kind || !jobId) {
-                    failedCount += 1;
-                    continue;
-                }
-                try {
-                    await stopGenerationJob(kind, jobId, { force: true });
-                    successCount += 1;
-                } catch (e) {
-                    failedCount += 1;
-                    addLog(`Failed to stop job ${kind}/${jobId}: ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-                }
-            }
-
-            if (failedCount > 0) {
-                addLog(t(
-                    `批量停止完成：成功 ${successCount}，失败 ${failedCount}（目标 ${candidates.length}）。`,
-                    `Batch stop completed: ${successCount} succeeded, ${failedCount} failed (target ${candidates.length}).`
-                ), 'warning');
-            } else {
-                addLog(t(
-                    `批量停止完成：共停止 ${successCount} 个任务（目标 ${candidates.length}）。`,
-                    `Batch stop completed: ${successCount} tasks stopped (target ${candidates.length}).`
-                ), 'warning');
-            }
-        } finally {
-            setJobPoolStoppingAll(false);
-            await refreshGenerationJobPool();
-        }
-    };
-
-    const handleStopAllJobsFromApi = async () => {
-        if (jobPoolStoppingAllApi) return;
-        const targetKind = String(jobPoolFilterKind || 'all').trim().toLowerCase() || 'all';
-        const ok = await confirmUiMessage(t(
-            `确认调用“停止全部任务”接口？\n范围：${targetKind}`,
-            `Call stop-all endpoint now?\nScope: ${targetKind}`
-        ));
-        if (!ok) return;
-
-        setJobPoolStoppingAllApi(true);
-        try {
-            const res = await stopAllGenerationJobs(targetKind, { force: true });
-            const stopped = Number(res?.stopped || 0);
-            addLog(t(
-                `已请求停止全部任务：kind=${targetKind}，停止 ${stopped} 个。`,
-                `Stop-all requested: kind=${targetKind}, stopped ${stopped}.`
-            ), 'warning');
-        } catch (e) {
-            addLog(`Failed to stop-all (${targetKind}): ${e?.response?.data?.detail || e?.message || 'unknown error'}`, 'error');
-        } finally {
-            setJobPoolStoppingAllApi(false);
-            await refreshGenerationJobPool();
-        }
-    };
-
-    const getJobPoolScopeText = useCallback((item) => {
-        if (!item || typeof item !== 'object') return '-';
-        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
-        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
-        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
-        const ownerPage = String(
-            item?.ownerPage
-            || metadata?.ownerPage
-            || payload?.ownerPage
-            || context?.ownerPage
-            || ''
-        ).trim();
-        const ownerScopeType = String(
-            item?.ownerScopeType
-            || metadata?.ownerScopeType
-            || payload?.ownerScopeType
-            || context?.ownerScopeType
-            || ''
-        ).trim();
-        const ownerScopeId = String(
-            item?.ownerScopeId
-            || metadata?.ownerScopeId
-            || payload?.ownerScopeId
-            || context?.ownerScopeId
-            || ''
-        ).trim();
-        const ownerSceneId = String(
-            item?.ownerSceneId
-            || metadata?.ownerSceneId
-            || payload?.ownerSceneId
-            || context?.ownerSceneId
-            || ''
-        ).trim();
-        const ownerShotId = String(
-            item?.ownerShotId
-            || metadata?.ownerShotId
-            || payload?.ownerShotId
-            || context?.ownerShotId
-            || ''
-        ).trim();
-        const ownerEntityId = String(
-            item?.ownerEntityId
-            || metadata?.ownerEntityId
-            || payload?.ownerEntityId
-            || context?.ownerEntityId
-            || ''
-        ).trim();
-        const ownerMediaKind = String(
-            item?.ownerMediaKind
-            || metadata?.ownerMediaKind
-            || payload?.ownerMediaKind
-            || context?.ownerMediaKind
-            || ''
-        ).trim();
-        const jobKind = String(
-            item?.jobKind
-            || metadata?.jobKind
-            || payload?.jobKind
-            || context?.jobKind
-            || ''
-        ).trim();
-
-        const episodeId = Number(
-            item?.episode_id
-            || metadata?.episode_id
-            || payload?.episode_id
-            || context?.episode_id
-            || 0
-        );
-        const currentSceneLabel = String(
-            item?.current_scene_label
-            || metadata?.current_scene_label
-            || payload?.current_scene_label
-            || context?.current_scene_label
-            || ''
-        ).trim();
-        const sceneId = Number(
-            item?.scene_id
-            || metadata?.scene_id
-            || payload?.scene_id
-            || context?.scene_id
-            || 0
-        );
-        const shotId = Number(
-            item?.shot_id
-            || metadata?.shot_id
-            || payload?.shot_id
-            || context?.shot_id
-            || 0
-        );
-        const sceneIds =
-            (Array.isArray(payload?.scene_ids) && payload.scene_ids.length > 0 ? payload.scene_ids : null)
-            || (Array.isArray(metadata?.scene_ids) && metadata.scene_ids.length > 0 ? metadata.scene_ids : null)
-            || (Array.isArray(context?.scene_ids) && context.scene_ids.length > 0 ? context.scene_ids : null)
-            || [];
-        const shotIds =
-            (Array.isArray(payload?.shot_ids) && payload.shot_ids.length > 0 ? payload.shot_ids : null)
-            || (Array.isArray(metadata?.shot_ids) && metadata.shot_ids.length > 0 ? metadata.shot_ids : null)
-            || (Array.isArray(context?.shot_ids) && context.shot_ids.length > 0 ? context.shot_ids : null)
-            || [];
-
-        const chunks = [];
-        if (ownerPage) chunks.push(`page:${ownerPage}`);
-        if (ownerScopeType && ownerScopeId) chunks.push(`${ownerScopeType}:${ownerScopeId}`);
-        if (ownerSceneId) chunks.push(`scene:${ownerSceneId}`);
-        if (ownerShotId) chunks.push(`shot:${ownerShotId}`);
-        if (ownerEntityId) chunks.push(`entity:${ownerEntityId}`);
-        if (ownerMediaKind) chunks.push(`media:${ownerMediaKind}`);
-        if (jobKind) chunks.push(`job:${jobKind}`);
-        if (Number.isFinite(episodeId) && episodeId > 0) chunks.push(`EP:${episodeId}`);
-        if (currentSceneLabel) chunks.push(`${t('当前场景', 'Current Scene')}:${currentSceneLabel}`);
-        if (Number.isFinite(sceneId) && sceneId > 0) chunks.push(`SC:${sceneId}`);
-        if (sceneIds.length > 0) chunks.push(`SCx${sceneIds.length}`);
-        if (Number.isFinite(shotId) && shotId > 0) chunks.push(`SH:${shotId}`);
-        if (shotIds.length > 0) chunks.push(`SHx${shotIds.length}`);
-        return chunks.length > 0 ? chunks.join(' · ') : '-';
-    }, [t]);
-
-    const getJobPoolOwnerPageText = useCallback((item) => {
-        if (!item || typeof item !== 'object') return '-';
-        const metadata = (item?.metadata && typeof item.metadata === 'object') ? item.metadata : {};
-        const payload = (item?.payload && typeof item.payload === 'object') ? item.payload : {};
-        const context = (item?.context && typeof item.context === 'object') ? item.context : {};
-        const ownerPage = String(
-            item?.ownerPage
-            || metadata?.ownerPage
-            || payload?.ownerPage
-            || context?.ownerPage
-            || ''
-        ).trim();
-        if (ownerPage === 'subject-library') return t('主体页', 'Subject Library');
-        if (ownerPage === 'shot-editor') return t('镜头页', 'Shot Editor');
-        if (ownerPage) return ownerPage;
-        return t('未标记', 'Unscoped');
-    }, [t]);
-
     // Lazy load full episode payload only when a tab that needs script/analysis fields is active.
     useEffect(() => {
         if (!activeEpisodeId) return;
@@ -3774,7 +3450,6 @@ const Editor = ({
     { id: 'scenes', label: '场景', icon: ImageIcon },
     { id: 'subjects', label: '资产', icon: Users },
     { id: 'shots', label: '分镜', icon: Film },
-    { id: 'montage', label: '剪辑', icon: Video }
 ];
     const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
     const shouldRenderScriptTab = activeTab === 'script' || visitedTabs.has('script') || Boolean(assetRerunRequest);
@@ -3970,16 +3645,6 @@ const Editor = ({
                         
                     </button>
                     <button
-                        onClick={() => {
-                            trackMenuAction('editor.action.market_research', t('行业分析 & 热榜', 'Industry & Trending'), () => setActiveTab('market_research'));
-                        }}
-                        className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${activeTab === 'market_research' ? 'text-primary bg-white/10' : 'text-muted-foreground hover:text-white hover:bg-white/10'}`}
-                        title={t('行业分析 & 热榜', 'Industry & Trending')}
-                    >
-                        <TrendingUp className="w-4 h-4" />
-                        <span className="text-xs font-medium hidden sm:block">{t('行业分析', 'Industry')}</span>
-                    </button>
-                    <button
                         onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
                         title={t('切换到英文界面', 'Switch to Chinese UI')}
@@ -4010,11 +3675,11 @@ const Editor = ({
                             trackMenuAction('editor.action.project_backup_export', t('导出备份', 'Export Backup'), handleExport);
                         }}
                         disabled={isProjectBackupExporting}
-                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                         title={t('导出当前项目完整备份', 'Export full backup for current project')}
+                        aria-label={t('导出备份', 'Export Backup')}
                     >
                         {isProjectBackupExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                        <span className="text-xs font-medium hidden sm:block">{t('导出备份', 'Export Backup')}</span>
                     </button>
 
                     <button
@@ -4022,22 +3687,11 @@ const Editor = ({
                             trackMenuAction('editor.action.project_backup_import', t('导入备份', 'Import Backup'), handleImportBackupClick);
                         }}
                         disabled={isProjectBackupImporting}
-                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                         title={t('从备份文件新建项目', 'Create a new project from backup file')}
+                        aria-label={t('导入备份', 'Import Backup')}
                     >
                         {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                        <span className="text-xs font-medium hidden sm:block">{t('导入备份', 'Import Backup')}</span>
-                    </button>
-
-                    <button
-                        onClick={() => {
-                            trackMenuAction('editor.action.job_pool', t('任务池', 'Job Pool'), () => setIsJobPoolOpen(true));
-                        }}
-                        className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
-                        title={t('全局任务池', 'Global Job Pool')}
-                    >
-                        <Layers className="w-4 h-4" />
-                        <span className="text-xs font-medium hidden sm:block">{t('任务池', 'Job Pool')}</span>
                     </button>
 
                     <button
@@ -4172,22 +3826,6 @@ const Editor = ({
                                     }}
                                 />
                             )}
-                            {activeTab === 'market_research' && (
-                                <ProjectOverview
-                                    id={id}
-                                    project={project}
-                                    key={`market-research-${refreshKey}`}
-                                    episodes={episodes}
-                                    uiLang={uiLang}
-                                    mode="market_research"
-                                    onProjectUpdate={loadProjectData}
-                                    onRefreshEpisodes={refreshEpisodesForEditor}
-                                    onTabChange={setActiveTab}
-                                    tabMediaRefreshSignal={tabMediaRefreshSignals.market_research}
-                                    isTabActive={activeTab === 'market_research'}
-                                    onMediaRefreshRequest={() => bumpTabMediaRefresh('market_research')}
-                                />
-                            )}
                             {shouldRenderScriptTab && (
                                 <div className={activeTab === 'script' ? 'contents' : 'hidden'} aria-hidden={activeTab !== 'script'}>
                                     <ScriptEditor key={`script-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onUpdateScript={handleUpdateScript} onUpdateEpisodeInfo={handleUpdateEpisodeInfo} onRefreshEpisodes={refreshEpisodesForEditor} onLog={addLog} onImportText={handleImport} onSwitchToScenes={() => setActiveTab('scenes')} assetRerunRequest={assetRerunRequest} onAssetRerunRequestConsumed={() => setAssetRerunRequest(null)} uiLang={uiLang} tabMediaRefreshSignal={tabMediaRefreshSignals.script} isTabActive={activeTab === 'script'} onMediaRefreshRequest={() => bumpTabMediaRefresh('script')} />
@@ -4232,7 +3870,6 @@ const Editor = ({
                                     <ShotsView key={`shots-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} project={project} onLog={addLog} editingShot={editingShot} setEditingShot={setEditingShot} isSuperuser={isSuperuser} uiLang={uiLang} focusRequest={shotsFocusRequest} restoreEditingShotId={initialEditingShotId} userBatchParallelLimit={userBatchParallelLimit} tabMediaRefreshSignal={tabMediaRefreshSignals.shots} isTabActive={activeTab === 'shots'} onMediaRefreshRequest={() => bumpTabMediaRefresh('shots')} />
                                 </div>
                             )}
-                            {activeTab === 'montage' && <VideoStudio key={`montage-${activeEpisode?.id || 'none'}-${tabResetKey}`} activeEpisode={activeEpisode} projectId={id} onLog={addLog} tabMediaRefreshSignal={tabMediaRefreshSignals.montage} isTabActive={activeTab === 'montage'} onMediaRefreshRequest={() => bumpTabMediaRefresh('montage')} />}
                                 </>
                             )}
                         </React.Suspense>
@@ -4243,205 +3880,6 @@ const Editor = ({
 
             <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} onImport={handleImport} project={project} activeEpisodeId={activeEpisode?.id || null} uiLang={uiLang} />
 
-            {isJobPoolOpen && (
-                <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setIsJobPoolOpen(false)}>
-                    <div className="bg-[#09090b] border border-white/10 rounded-xl w-full max-w-5xl max-h-[88vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-                        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
-                            <div>
-                                <div className="text-sm font-bold text-white">{t('全局任务池', 'Global Job Pool')}</div>
-                                <div className="text-[11px] text-muted-foreground">{t('可查询并强制停止 image/video 及批处理任务。', 'Query and force-stop async image/video and batch tasks.')}</div>
-                            </div>
-                            <button className="p-2 rounded hover:bg-white/10" onClick={() => setIsJobPoolOpen(false)}><X size={16} /></button>
-                        </div>
-
-                        <div className="px-4 py-3 border-b border-white/10 flex flex-wrap items-center gap-2 text-xs">
-                            <select
-                                value={jobPoolFilterKind}
-                                onChange={(e) => setJobPoolFilterKind(e.target.value)}
-                                className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
-                            >
-                                <option value="all">all</option>
-                                <option value="image">image</option>
-                                <option value="video">video</option>
-                                <option value="episode-scenes">episode-scenes</option>
-                                <option value="episode-scripts">episode-scripts</option>
-                                <option value="scene-ai-shots-batch">scene-ai-shots-batch</option>
-                                <option value="shot-media-batch">shot-media-batch</option>
-                            </select>
-                            <label className="flex items-center gap-1 text-muted-foreground">
-                                <input
-                                    type="checkbox"
-                                    checked={jobPoolRunningOnly}
-                                    onChange={(e) => setJobPoolRunningOnly(e.target.checked)}
-                                />
-                                {t('仅运行中', 'Running only')}
-                            </label>
-                            <button
-                                onClick={() => refreshGenerationJobPool()}
-                                disabled={jobPoolLoading}
-                                className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 text-white flex items-center gap-1 disabled:opacity-50"
-                            >
-                                {jobPoolLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} {t('刷新', 'Refresh')}
-                            </button>
-                            <button
-                                onClick={handleStopAllJobsFromPool}
-                                disabled={jobPoolStoppingAll || stopAllTargetItems.length === 0}
-                                className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAll ? 'bg-red-500/30' : 'bg-red-500/20 hover:bg-red-500/30'}`}
-                                title={t('按列表批量强制停止任务', 'Force stop tasks in current list')}
-                            >
-                                {jobPoolStoppingAll ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-                                {jobPoolStoppingAll ? t('批量强停中...', 'Force stopping...') : t('批量强制停止', 'Batch Force Stop')}
-                            </button>
-                            <button
-                                onClick={handleStopAllJobsFromApi}
-                                disabled={jobPoolStoppingAllApi}
-                                className={`px-3 py-1.5 rounded text-white flex items-center gap-1 disabled:opacity-50 ${jobPoolStoppingAllApi ? 'bg-red-600/40' : 'bg-red-600/25 hover:bg-red-600/35'}`}
-                                title={t('直接调用后端强制 stop-all 接口', 'Directly call backend force stop-all endpoint')}
-                            >
-                                {jobPoolStoppingAllApi ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-                                {jobPoolStoppingAllApi ? t('接口强停中...', 'Force stopping via API...') : t('强制停止全部（接口）', 'Force Stop All (API)')}
-                            </button>
-                            <label className="flex items-center gap-1 text-muted-foreground">
-                                {t('阈值', 'Limit')}
-                                <select
-                                    value={jobPoolStopLimit}
-                                    onChange={(e) => setJobPoolStopLimit(e.target.value)}
-                                    className="bg-black/40 border border-white/10 rounded px-2 py-1.5 text-xs text-white"
-                                    disabled={jobPoolStoppingAll || jobPoolStoppingAllApi}
-                                >
-                                    <option value="10">10</option>
-                                    <option value="20">20</option>
-                                    <option value="50">50</option>
-                                    <option value="100">100</option>
-                                    <option value="all">{t('全部', 'All')}</option>
-                                </select>
-                            </label>
-                            <div className="w-full md:w-auto md:ml-auto text-muted-foreground">
-                                {t('任务数', 'Tasks')}: <b className="text-white">{Number(jobPoolData?.total || 0)}</b>
-                                <span className="ml-3">{t('可停止', 'Stoppable')}: <b className="text-white">{runningJobPoolItems.length}</b></span>
-                                <span className="ml-3">{t('本次目标', 'Target now')}: <b className="text-white">{stopAllTargetItems.length}</b></span>
-                            </div>
-                        </div>
-
-                        <div className="px-4 py-2 text-[11px] text-muted-foreground border-b border-white/10">
-                            {Object.entries(jobPoolData?.status_counts || {}).map(([key, value]) => `${key}:${value}`).join(' · ') || '-'}
-                        </div>
-
-                        <div className="flex-1 overflow-auto custom-scrollbar">
-                            <div className="md:hidden p-3 space-y-3">
-                                {(jobPoolData?.items || []).map((item) => {
-                                    const rowKey = `${item.kind}:${item.job_id}`;
-                                    const stopping = jobPoolStoppingId === rowKey;
-                                    const canStop = isJobPoolItemStoppable(item);
-                                    const deleting = jobPoolDeletingId === rowKey;
-                                    const ownerId = Number(item?.user_id || 0) || null;
-                                    const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
-                                    return (
-                                        <div key={`mobile-${rowKey}`} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2.5">
-                                            <div className="flex items-start justify-between gap-2">
-                                                <div className="text-[12px] font-semibold text-white/90 break-all">{item.kind}</div>
-                                                <span className="text-[11px] px-2.5 py-1 rounded bg-white/10 border border-white/10 text-white/80">{item.status || '-'}</span>
-                                            </div>
-                                            <div className="text-[12px] font-mono text-white/80 break-all">{item.job_id || '-'}</div>
-                                            <div className="text-[11px] text-cyan-200/80">{getJobPoolOwnerPageText(item)}</div>
-                                            <div className="text-[11px] text-white/70 break-all">{getJobPoolScopeText(item)}</div>
-                                            <div className="text-[11px] text-muted-foreground">{item.created_at || '-'}</div>
-                                            {item.error ? (
-                                                <div className="text-[11px] text-amber-300/80 bg-black/30 border border-white/10 rounded px-2.5 py-1.5 break-all">{item.error}</div>
-                                            ) : null}
-                                            <div className="flex justify-end">
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        onClick={() => handleStopJobFromPool(item)}
-                                                        disabled={stopping || deleting || jobPoolStoppingAll || !canStop}
-                                                        className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || deleting || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                    >
-                                                        {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                    </button>
-                                                    {canDelete && (
-                                                        <button
-                                                            onClick={() => handleDeleteJobFromPool(item)}
-                                                            disabled={stopping || deleting || jobPoolStoppingAll}
-                                                            className={`px-3 py-2 rounded-md text-[12px] font-semibold ${(stopping || deleting || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-orange-500/20 text-orange-200 hover:bg-orange-500/30'}`}
-                                                        >
-                                                            {deleting ? t('删除中...', 'Deleting...') : t('删除', 'Delete')}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                                {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
-                                    <div className="px-3 py-8 text-center text-muted-foreground text-xs">{t('暂无任务', 'No tasks')}</div>
-                                )}
-                            </div>
-                            <table className="hidden md:table w-full min-w-[760px] text-xs">
-                                <thead className="sticky top-0 bg-[#111] border-b border-white/10">
-                                    <tr className="text-muted-foreground">
-                                        <th className="px-3 py-2 text-left">kind</th>
-                                        <th className="px-3 py-2 text-left">job_id</th>
-                                        <th className="px-3 py-2 text-left">status</th>
-                                        <th className="hidden lg:table-cell px-3 py-2 text-left">page</th>
-                                        <th className="hidden md:table-cell px-3 py-2 text-left">user</th>
-                                        <th className="hidden lg:table-cell px-3 py-2 text-left">scope</th>
-                                        <th className="px-3 py-2 text-left">created_at</th>
-                                        <th className="hidden lg:table-cell px-3 py-2 text-left">error</th>
-                                        <th className="px-3 py-2 text-right">action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(jobPoolData?.items || []).map((item) => {
-                                        const rowKey = `${item.kind}:${item.job_id}`;
-                                        const stopping = jobPoolStoppingId === rowKey;
-                                        const canStop = isJobPoolItemStoppable(item);
-                                        const deleting = jobPoolDeletingId === rowKey;
-                                        const ownerId = Number(item?.user_id || 0) || null;
-                                        const canDelete = isSuperuser || (ownerId !== null && currentUserId !== null && ownerId === currentUserId);
-                                        return (
-                                            <tr key={rowKey} className="border-b border-white/5 hover:bg-white/5">
-                                                <td className="px-3 py-2 text-white/80">{item.kind}</td>
-                                                <td className="px-3 py-2 font-mono text-[11px] text-white/80">{item.job_id}</td>
-                                                <td className="px-3 py-2 text-white">{item.status}</td>
-                                                <td className="hidden lg:table-cell px-3 py-2 text-cyan-200/80">{getJobPoolOwnerPageText(item)}</td>
-                                                <td className="hidden md:table-cell px-3 py-2 text-white/70">{item.username || item.user_id || '-'}</td>
-                                                <td className="hidden lg:table-cell px-3 py-2 text-white/70 max-w-[280px] truncate" title={getJobPoolScopeText(item)}>{getJobPoolScopeText(item)}</td>
-                                                <td className="px-3 py-2 text-white/60">{item.created_at || '-'}</td>
-                                                <td className="hidden lg:table-cell px-3 py-2 text-amber-300/80 max-w-[220px] truncate" title={item.error || ''}>{item.error || '-'}</td>
-                                                <td className="px-3 py-2 text-right">
-                                                    <div className="flex justify-end items-center gap-1.5">
-                                                        <button
-                                                            onClick={() => handleStopJobFromPool(item)}
-                                                            disabled={stopping || deleting || jobPoolStoppingAll || !canStop}
-                                                            className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(stopping || deleting || jobPoolStoppingAll || !canStop) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
-                                                        >
-                                                            {stopping ? t('停止中...', 'Stopping...') : t('强制停止', 'Force Stop')}
-                                                        </button>
-                                                        {canDelete && (
-                                                            <button
-                                                                onClick={() => handleDeleteJobFromPool(item)}
-                                                                disabled={stopping || deleting || jobPoolStoppingAll}
-                                                                className={`px-2.5 py-1 rounded text-[11px] font-semibold ${(stopping || deleting || jobPoolStoppingAll) ? 'bg-white/5 text-muted-foreground cursor-not-allowed' : 'bg-orange-500/20 text-orange-200 hover:bg-orange-500/30'}`}
-                                                            >
-                                                                {deleting ? t('删除中...', 'Deleting...') : t('删除', 'Delete')}
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {(!jobPoolData?.items || jobPoolData.items.length === 0) && (
-                                        <tr>
-                                            <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">{t('暂无任务', 'No tasks')}</td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Log Panel */}
             <LogPanel />

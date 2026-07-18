@@ -38,6 +38,7 @@ import Editor from './Editor';
 import InputGroup from './editor/components/InputGroup';
 import SettingsPage from './Settings';
 import AssetsLibrary from '../components/AssetsLibrary';
+import { ProjectOverview } from './editor/components/ProjectOverview';
 import { 
     Plus, 
     Folder, 
@@ -71,7 +72,8 @@ import {
     ChevronsRight,
     Info,
     ChevronDown,
-    Layers
+    Layers,
+    TrendingUp,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -117,6 +119,8 @@ const cinematicImages = [
     "https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500&q=80", // Movie set
     "https://images.unsplash.com/photo-1517602302552-471fe67acf66?w=500&q=80", // Vibes
 ];
+
+const MARKET_RESEARCH_PROJECT_KEY = 'aistory.market_research.project_id';
 
 const normalizeExternalMediaUrl = (url) => {
     const stable = String(url || '').trim();
@@ -536,6 +540,15 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [selectedProjectId, setSelectedProjectId] = useState(null);
     const [restoredEditorState, setRestoredEditorState] = useState(null);
     const [assetsScopeSnapshot, setAssetsScopeSnapshot] = useState(null);
+    const [marketResearchProjectId, setMarketResearchProjectId] = useState(() => {
+        try {
+            const saved = localStorage.getItem(MARKET_RESEARCH_PROJECT_KEY);
+            const parsed = Number(saved);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        } catch {
+            return null;
+        }
+    });
     const [currentUser, setCurrentUser] = useState(null); // Simple user state to check permissions if we had endpoint
     const navigate = useNavigate();
 
@@ -842,10 +855,25 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
     }, [projectPage, PROJECT_LIMIT]);
 
     useEffect(() => {
-        if (activeTab === 'projects') {
+        if (activeTab === 'projects' || activeTab === 'market_research') {
             loadProjects();
         }
     }, [activeTab, loadProjects]);
+
+    useEffect(() => {
+        if (activeTab !== 'market_research' || !projects.length) return;
+        const exists = marketResearchProjectId
+            && projects.some((item) => Number(item?.id) === Number(marketResearchProjectId));
+        if (exists) return;
+        const firstId = Number(projects[0]?.id) || null;
+        if (!firstId) return;
+        setMarketResearchProjectId(firstId);
+        try {
+            localStorage.setItem(MARKET_RESEARCH_PROJECT_KEY, String(firstId));
+        } catch {
+            /* ignore */
+        }
+    }, [activeTab, projects, marketResearchProjectId]);
 
     useEffect(() => {
         if (activeTab !== 'projects' || selectedProjectId) return undefined;
@@ -1609,21 +1637,25 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
         ? t('我的项目', 'My Projects')
         : activeTab === 'assets'
             ? t('素材库', 'Assets Library')
-            : activeTab === 'settings'
-                ? t('设置', 'Settings')
-                : activeTab === 'about'
-                    ? t('关于', 'About')
-                    : activeTab;
+            : activeTab === 'market_research'
+                ? t('行业分析 & 热榜', 'Industry & Trending')
+                : activeTab === 'settings'
+                    ? t('设置', 'Settings')
+                    : activeTab === 'about'
+                        ? t('关于', 'About')
+                        : activeTab;
 
     const activeTabDescription = activeTab === 'projects'
         ? t('管理和编辑你的分镜脚本。', 'Manage and edit your storyboard scripts.')
         : activeTab === 'assets'
             ? t('管理你生成的角色和场景素材。', 'Manage your generated characters and scenes.')
-            : activeTab === 'settings'
-                ? t('管理你的账户偏好设置。', 'Manage your account preferences.')
-                : activeTab === 'about'
-                    ? t('了解产品定位与支持方式。', 'Learn about the product and support channels.')
-                    : '';
+            : activeTab === 'market_research'
+                ? t('拉取 AI 短剧行业分析与热榜，并按时间存档。', 'Fetch AI short-drama industry analysis and trending lists, archived by time.')
+                : activeTab === 'settings'
+                    ? t('管理你的账户偏好设置。', 'Manage your account preferences.')
+                    : activeTab === 'about'
+                        ? t('了解产品定位与支持方式。', 'Learn about the product and support channels.')
+                        : '';
 
     const openSettingsPage = () => {
         trackMenuAction('project_list.sidebar.settings', t('设置', 'Settings'), () => {
@@ -1767,6 +1799,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                         onClick={openTrashModal}
                     />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} />
+                    <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} />
                     
                     {currentUser?.is_superuser && (
                         <>
@@ -1840,6 +1873,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                 <div className="space-y-2 flex-1 overflow-y-auto pr-1">
                     <SidebarItem id="projects" icon={Folder} label={t('我的项目', 'My Projects')} compact={false} mobile badgeCount={totalUnreadReviewCount} />
                     <SidebarItem id="assets" icon={Image} label={t('素材库', 'Assets Library')} compact={false} mobile />
+                    <SidebarItem id="market_research" icon={TrendingUp} label={t('行业分析', 'Industry')} compact={false} mobile />
                     {currentUser?.is_superuser && (
                         <>
                             <SidebarActionItem
@@ -2409,6 +2443,64 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     currentEpisodeId={assetsScopeSnapshot?.activeEpisodeId ?? null}
                                     projectOptionsProp={projects}
                                 />
+                            </div>
+                        )}
+
+                        {activeTab === 'market_research' && (
+                            <div className="h-full bg-card/30 rounded-3xl border border-white/5 overflow-hidden">
+                                {projects.length === 0 ? (
+                                    <div className="p-8 text-muted-foreground">
+                                        {t('请先创建一个项目，以便存档行业分析与热榜。', 'Create a project first so industry analysis and trending reports can be archived.')}
+                                    </div>
+                                ) : (
+                                    <div className="h-full overflow-y-auto">
+                                        <div className="px-4 sm:px-6 lg:px-8 pt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                            <div className="text-xs text-muted-foreground">
+                                                {t('选择关联项目用于存档与「引用到天马行空」。', 'Choose a linked project for archiving and “Append to Wild Ideas”.')}
+                                            </div>
+                                            <select
+                                                value={marketResearchProjectId ? String(marketResearchProjectId) : ''}
+                                                onChange={(e) => {
+                                                    const nextId = Number(e.target.value) || null;
+                                                    setMarketResearchProjectId(nextId);
+                                                    try {
+                                                        if (nextId) {
+                                                            localStorage.setItem(MARKET_RESEARCH_PROJECT_KEY, String(nextId));
+                                                        } else {
+                                                            localStorage.removeItem(MARKET_RESEARCH_PROJECT_KEY);
+                                                        }
+                                                    } catch {
+                                                        /* ignore */
+                                                    }
+                                                }}
+                                                className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none focus:border-primary/40 min-w-[12rem]"
+                                            >
+                                                {projects.map((item) => (
+                                                    <option key={`market-research-project-${item.id}`} value={String(item.id)}>
+                                                        {item.title || `#${item.id}`}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        {marketResearchProjectId ? (
+                                            <ProjectOverview
+                                                key={`market-research-${marketResearchProjectId}`}
+                                                id={marketResearchProjectId}
+                                                project={projects.find((item) => Number(item.id) === Number(marketResearchProjectId)) || null}
+                                                uiLang={uiLang}
+                                                mode="market_research"
+                                                isTabActive={activeTab === 'market_research'}
+                                                onTabChange={(tab) => {
+                                                    if (tab !== 'generator') return;
+                                                    const target = projects.find((item) => Number(item.id) === Number(marketResearchProjectId)) || null;
+                                                    setSelectedProject(target);
+                                                    setRestoredEditorState({ activeTab: 'generator' });
+                                                    setSelectedProjectId(marketResearchProjectId);
+                                                }}
+                                            />
+                                        ) : null}
+                                    </div>
+                                )}
                             </div>
                         )}
 

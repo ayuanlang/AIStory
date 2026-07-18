@@ -89,7 +89,6 @@ import {
     startShotMediaBatch,
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
-    getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
     stopAllGenerationJobs,
@@ -1577,6 +1576,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         setSubjectGenerationHistoryDeletingId(assetId);
         try {
             await deleteAsset(assetId);
+            setAssets((prev) => (Array.isArray(prev) ? prev.filter((asset) => String(asset?.id || '').trim() !== assetId) : prev));
+            setAssetNameFilter((prev) => (String(prev || '').trim() === assetId ? '' : prev));
             await fetchSubjectGenerationHistory(selectedEntity);
             onLog?.(t('主体历史图片已删除。', 'Subject history image deleted.'), 'warning');
         } catch (e) {
@@ -2722,7 +2723,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 });
             });
 
-            const imageAssets = Array.from(uniqueById.values()).filter((a) => isImageType(a?.type));
+            const imageAssets = Array.from(uniqueById.values()).filter(
+                (a) => isImageType(a?.type) && !a?.is_deleted
+            );
             setAssets(imageAssets);
 
             const currentProjectKey = String(projectId || '').trim();
@@ -2981,7 +2984,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         if (!isActivePoll() || !getCurrentJobEntry(entityId, jobId)) {
                             continue;
                         }
-                        const startedAtMs = Number(job?.startedAt || 0) || 0;
+                        // Prefer backend started_at (worker actually began). Fall back to local
+                        // startedAt set at true submit — never queuedAt / deps-wait timestamps.
+                        const backendStartedAtMs = Date.parse(String(statusResp?.started_at || '').trim()) || 0;
+                        const localStartedAtMs = Number(job?.startedAt || 0) || 0;
+                        const startedAtMs = backendStartedAtMs > 0 ? backendStartedAtMs : localStartedAtMs;
                         if (startedAtMs > 0 && (Date.now() - startedAtMs) > SUBJECT_IMAGE_JOB_MAX_RUNNING_MS) {
                             await forceClearSubjectImageJob(
                                 entityId,
@@ -2995,6 +3002,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             statusFailureCount: 0,
                             lastStatusError: '',
                             lastPolledAt: Date.now(),
+                            ...(localStartedAtMs <= 0 && backendStartedAtMs > 0 ? { startedAt: backendStartedAtMs } : {}),
                         };
                         continue;
                     }
@@ -5338,7 +5346,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
     const libraryFilteredAssets = useMemo(() => {
         const sourceAssets = Array.isArray(assets) ? assets : [];
-        const nonShotAssets = sourceAssets.filter((asset) => !isExplicitShotAsset(asset));
+        // Soft-deleted rows should never appear in reuse pickers (defense in depth).
+        const activeAssets = sourceAssets.filter((asset) => !asset?.is_deleted);
+        const nonShotAssets = activeAssets.filter((asset) => !isExplicitShotAsset(asset));
         const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
             .map(normalizeEntityLookupKey)
             .filter(Boolean);
@@ -5371,13 +5381,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     })(),
                 };
             });
-                const activeEpisodeId = String(currentEpisode?.id || '').trim();
-        const selectedWantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
-        const isCurrentEpisode = assetEpisodeFilter === 'all' || selectedWantedEpisodeId === activeEpisodeId;
 
-        const entityMatchedAssets = (assetImageTypeFilter === 'all' || !isCurrentEpisode)
-            ? nonShotAssets 
-            : nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset));
+        // Reuse picker: only assets belonging to the currently selected subject.
+        const hasSelectedEntity = Boolean(String(activeAssetLibraryEntity?.id || '').trim());
+        const entityMatchedAssets = hasSelectedEntity
+            ? nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset))
+            : nonShotAssets;
         const episodeMatchedAssets = entityMatchedAssets.filter((asset) => {
             if (assetEpisodeFilter === 'all') return true;
             const episodeId = getAssetEpisodeId(asset);
@@ -5416,6 +5425,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 },
                 counts: {
                     source: sourceAssets.length,
+                    active: activeAssets.length,
                     nonShot: nonShotAssets.length,
                     entityMatched: entityMatchedAssets.length,
                     episodeMatched: episodeMatchedAssets.length,
@@ -5447,6 +5457,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     },
                     counts: {
                         source: sourceAssets.length,
+                        active: activeAssets.length,
                         nonShot: nonShotAssets.length,
                         entityMatched: entityMatchedAssets.length,
                         episodeMatched: episodeMatchedAssets.length,
@@ -5465,7 +5476,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
 
         return typeMatchedAssets;
-    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, currentEpisode?.id, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, resolveAssetEntityByName, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
+    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, resolveAssetEntityByName, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
 
     const assetNameOptions = useMemo(() => {
         return libraryFilteredAssets
@@ -5506,6 +5517,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const filteredAssets = useMemo(() => {
         const keyword = String(assetKeyword || '').trim().toLowerCase();
         return (assets || []).filter((asset) => {
+            if (asset?.is_deleted) return false;
             const projectId = getAssetProjectId(asset);
             if (assetProjectFilter !== 'all' && projectId !== assetProjectFilter) return false;
 
@@ -6276,16 +6288,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         setIsStoppingBatchGenerateEntities(false);
 
         updateGenerateBatchRuntimeState(true, { current: 0, total: orderedToGenerate.length, status: 'Initializing...' });
-        const batchStartedAt = Date.now();
+        const batchQueuedAt = Date.now();
         updateSubjectImageJobsAndStorage(prev => {
             const next = { ...(prev || {}) };
             orderedToGenerate.forEach((entity) => {
                 const stableEntityId = String(entity?.id || '').trim();
                 if (!stableEntityId) return;
+                // Do NOT stamp startedAt here: dependency-waiting items must not burn the
+                // running-timeout budget. Clock starts only when the job is truly submitted.
                 next[stableEntityId] = {
                     ...(next[stableEntityId] || {}),
                     status: 'queued',
-                    startedAt: Number(next[stableEntityId]?.startedAt || 0) || batchStartedAt,
+                    queuedAt: batchQueuedAt,
+                    startedAt: 0,
+                    jobId: '',
                     entityName: entity?.name || entity?.name_en || stableEntityId,
                     ...buildSubjectJobMeta(stableEntityId, 'generate', next[stableEntityId]),
                 };
@@ -6507,9 +6523,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
                 queue = queue.filter(item => item.id !== nextEntity.id);
                 const entityId = String(nextEntity?.id || '');
+                // Deps are ready and we are about to submit — still keep startedAt unset until
+                // on_job_created / trackSubjectBatchImageJob records the real backend job.
                 setLocalSubjectImageJobState(entityId, {
                     status: 'running',
-                    startedAt: Date.now(),
+                    startedAt: 0,
+                    depsReadyAt: Date.now(),
                     entityName: nextEntity?.name || nextEntity?.name_en || entityId,
                     ...buildSubjectJobMeta(entityId, 'generate'),
                 });

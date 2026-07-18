@@ -31,19 +31,14 @@ export default function ProjectStatusBar({
     },
     { 
       id: 'storyboard', 
-      tabs: ['assets', 'videos'], 
+      tabs: ['assets', 'videos', 'shots', 'montage'], 
       label: t ? t('生成分镜', 'Storyboarding') : '生成分镜',
       tooltip: t ? t('为每场戏和极个别镜头生成画面与视频', 'Generate frames and videos for shots.') : '为每个分镜生成画面与视频段落'
     },
-    { 
-      id: 'post', 
-      tabs: ['post'], 
-      label: t ? t('剪辑成片', 'Post Production') : '剪辑成片',
-      tooltip: t ? t('合并带有语音、音效的视频片段并最终导出视频', 'Merge video clips and export.') : '合并并导出带音效的最终成片',
-    }
   ], [t]);
 
-  const stageIndexMap = { 'script': 0, 'subjects': 1, 'shots': 2, 'montage': 3 };
+  // montage stage is retired; treat it as shots/storyboard
+  const stageIndexMap = { 'script': 0, 'subjects': 1, 'shots': 2, 'montage': 2 };
   const currentStageIndex = stageIndexMap[workflowStage] !== undefined ? stageIndexMap[workflowStage] : Math.max(0, STAGES.findIndex(s => s.tabs.includes(activeTab)));
 
   return (

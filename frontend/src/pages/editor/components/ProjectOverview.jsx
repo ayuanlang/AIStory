@@ -85,7 +85,6 @@ import {
     startShotMediaBatch,
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
-    getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
     stopAllGenerationJobs,
@@ -461,7 +460,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
         }
         setProjectTab((prev) => {
             if (prev === 'promo_generator') return 'promo_generator';
-            // Legacy sub-tabs moved to top-level market_research menu
+            // Legacy sub-tabs moved to project-list market_research entry
             if (prev === 'trending_dramas' || prev === 'industry_analysis' || prev === 'market_research') {
                 return 'story_generator';
             }
@@ -2613,8 +2612,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     {mode === 'overview' && (
                         <div className="flex items-center px-3 py-1 rounded-full bg-primary/20 border border-primary/30 text-primary text-sm font-medium">
                             {t('阶段', 'Stage')}: {
-                                (info?.workflow_stage === 'montage') ? t('剪辑', 'Montage') :
-                                (info?.workflow_stage === 'shots') ? t('分镜', 'Shots') :
+                                (info?.workflow_stage === 'montage' || info?.workflow_stage === 'shots') ? t('分镜', 'Shots') :
                                 (info?.workflow_stage === 'subjects') ? t('资产', 'Assets') :
                                 t('剧本', 'Script')
                             }

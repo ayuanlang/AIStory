@@ -1143,7 +1143,10 @@ VIDEO_JOB_TASKS: Dict[str, Any] = {}
 
 IMAGE_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("IMAGE_JOB_MAX_RUNNING_SECONDS", "900")))
 VIDEO_JOB_MAX_RUNNING_SECONDS = max(120, int(os.getenv("VIDEO_JOB_MAX_RUNNING_SECONDS", "1200")))
-_JOB_TIMEOUT_CHECK_STATUSES = frozenset({"queued", "running", "waiting_callback", "callback_processing"})
+# Running-timeout only after the worker has claimed the job (started_at set).
+# "queued" waits for capacity / prior dependency work and must not burn this budget;
+# abandoned queue age is handled separately by the generation task queue sweeper.
+_JOB_TIMEOUT_CHECK_STATUSES = frozenset({"running", "submit", "waiting_callback", "callback_processing"})
 
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
@@ -39789,7 +39792,10 @@ async def _run_generate_image_job(
 
 
 def _resolve_job_elapsed_seconds(job: Dict[str, Any]) -> Optional[int]:
-    anchor = job.get("started_at") or job.get("created_at")
+    # Running-timeout clock starts when the worker actually begins (started_at),
+    # not when the job was enqueued (created_at). Dependent subject images may sit
+    # queued until refs are ready / capacity frees — that wait must not count.
+    anchor = job.get("started_at")
     anchor_dt = _parse_iso_datetime(anchor)
     if not anchor_dt:
         return None
@@ -39799,6 +39805,8 @@ def _resolve_job_elapsed_seconds(job: Dict[str, Any]) -> Optional[int]:
 def _job_is_subject_to_running_timeout(job: Dict[str, Any]) -> bool:
     status = _normalize_generation_status(job.get("status"))
     upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
+    if status == "queued":
+        return False
     if status in _JOB_TIMEOUT_CHECK_STATUSES:
         return True
     return "callback_pending" in upstream_state
