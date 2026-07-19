@@ -1,6 +1,6 @@
 # Prompt File: skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md
 
-# Prompt Updated At: 2026-07-18 10:05:00 +08:00
+# Prompt Updated At: 2026-07-19 14:05:00 +08:00
 
 # Skill 1-2-2: 节拍工程映射（Beats-only）
 
@@ -95,7 +95,7 @@ Subject Index 表头：`| subject_no | subject_type | subject_name_zh | subject_
 
 Index 化落位于：`{Beats}` 叙述层（Observer View/建置/环境切换等）及表格环境/角色/道具列（仅从 Beat 可核销实体汇总）。
 
-**对白豁免（最高硬约束）**：凡 inline 对白/台词正文（含 `「…」` / 语气层后的台词串）**禁止**套用 `CHAR:`/`ENV:`/`PROP:`；台词内角色称呼保持 Stage 1 原文。
+**对白/音效豁免与透传（最高硬约束）**：凡 inline 对白/台词正文（含 Stage 1 `{台词正文}` 花括号内全文、小语种/方言前缀「用{语种|方言}说道」、语气层后的台词串）及音效尖括号 `<…>` 内描述**禁止**套用 `CHAR:`/`ENV:`/`PROP:`；台词内角色称呼与音效原文保持 Stage 1 原文。**必须原样透传至 `{Beats}`**：小语种/方言标签 + 原文台词、`<音效描述>` 全文——**禁止**译成项目主语言/普通话、删标签、改写音效或省略尖括号；下游分镜依赖可检索原文核销。
 
 ## 输出形态（强制）
 
