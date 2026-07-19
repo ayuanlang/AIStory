@@ -1,5 +1,5 @@
 # Prompt File: skills/scene_analysis_feature_stack/entity_design_character.md
-# Prompt Updated At: 2026-07-18 11:00:00 +08:00
+# Prompt Updated At: 2026-07-19 22:55:00 +08:00
 
 # Skill 1-3: 资产设计、实体美化与可视化 AI 提示词生成
 
@@ -115,6 +115,8 @@
 - `appearance_cn` / `clothing`：结构化可见数据；真人须覆盖 §2.3 七必锚；须完整转写进 `generation_prompt_cn`。
 - `archetype`：上游 Action Characteristics 原文；只保留静态姿态语义转入 prompt。
 - `role`=职业/社会身份；`plot_role` 不得与 `role` 混写。
+- **`gender`（强制继承）**：读取 Index `entity_attributes.gender`（`男`→`M`，`女`→`F`；群演簇 `混合`→按簇主导或写 `M/F` 并在 logic 注明混合）；**禁止**留空或与 Index 矛盾；缺 `gender:` 时据 `plot_role`/身份说明补写并在 logic 注明「上游缺 gender，已据…补」。
+- **年龄（强制继承）**：读取 Index `entity_attributes.age_tier`（及并存的 `约N岁`）；写入 `description_cn`/`appearance_cn`/`generation_prompt_cn` 可检索年龄语义——有岁数用岁数，无则用层次（如「青年」）；**禁止**留空或与 Index 矛盾；缺 `age_tier:` 时默认「青年」并在 logic 注明。
 - 默认表情中性、静态站姿；上游另有指定时覆盖。
 
 ### 2.3 真人感七必锚 + 五层增强（权威 · 仅 §1.6 判真人；群演豁免择型/七必锚全量）

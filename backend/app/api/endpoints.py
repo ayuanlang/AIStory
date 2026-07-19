@@ -24893,6 +24893,9 @@ class SceneCreate(BaseModel):
 class SceneBatchUpsertRequest(BaseModel):
     scenes: List[SceneCreate]
     recompute_cost: Optional[bool] = False
+    # When True (default), skip rows whose scene_no already exists (do not overwrite).
+    # Set False only when an intentional full replace/update is required.
+    skip_existing: Optional[bool] = True
 
 class ScenePurgeRequest(BaseModel):
     clear_progress: Optional[bool] = True
@@ -26022,29 +26025,10 @@ def create_scene(
         _active_scene_clause(),
     ).first()
     if existing_scene:
-        logger.info(
-            "[SceneImportAPI] upsert-existing start | episode_id=%s | project_id=%s | scene_no=%s | scene_name=%s",
-            episode_id,
-            episode.project_id,
-            str(scene.scene_no or "").strip(),
-            str(scene.scene_name or "").strip(),
-        )
-        existing_scene.scene_name = scene.scene_name
-        existing_scene.original_script_text = scene.original_script_text
-        existing_scene.equivalent_duration = scene.equivalent_duration
-        existing_scene.core_scene_info = scene.core_scene_info
-        existing_scene.environment_name = scene.environment_name
-        existing_scene.linked_characters = scene.linked_characters
-        existing_scene.key_props = scene.key_props
-        try:
-            _recompute_and_persist_project_cost_estimation(db, int(episode.project_id))
-        except Exception as cost_exc:
-            logger.warning("create_scene(upsert) cost recompute skipped | project_id=%s err=%s", episode.project_id, cost_exc)
-        db.commit()
-        db.refresh(existing_scene)
+        # Import control: scene_no already present — abandon overwrite, return existing.
         elapsed_ms = int((time.perf_counter() - scene_api_started_perf) * 1000)
         logger.info(
-            "[SceneImportAPI] upsert-existing done | episode_id=%s | project_id=%s | scene_id=%s | scene_no=%s | elapsed_ms=%s",
+            "[SceneImportAPI] skip-existing | episode_id=%s | project_id=%s | scene_id=%s | scene_no=%s | elapsed_ms=%s",
             episode_id,
             episode.project_id,
             existing_scene.id,
@@ -26116,6 +26100,27 @@ def batch_upsert_scenes(
             "scenes": [],
         }
 
+    # Dedupe identical scene_no within the same import payload (keep first).
+    deduped_input: List[Any] = []
+    seen_input_scene_nos: set = set()
+    for item in input_scenes:
+        scene_no = str(getattr(item, "scene_no", "") or "").strip()
+        if not scene_no:
+            deduped_input.append(item)
+            continue
+        if scene_no in seen_input_scene_nos:
+            logger.warning(
+                "[SceneImportAPI] batch_upsert skip duplicate scene_no in payload | episode_id=%s scene_no=%s",
+                episode_id,
+                scene_no,
+            )
+            continue
+        seen_input_scene_nos.add(scene_no)
+        deduped_input.append(item)
+    input_scenes = deduped_input
+
+    skip_existing = bool(getattr(request, "skip_existing", True))
+
     normalized_scene_nos = [
         str(item.scene_no or "").strip()
         for item in input_scenes
@@ -26130,7 +26135,32 @@ def batch_upsert_scenes(
         )
         .all()
     ) if normalized_scene_nos else []
-    existing_by_no = {str(row.scene_no or "").strip(): row for row in existing_rows}
+    # If duplicate active rows share the same scene_no, keep the newest and soft-delete the rest.
+    existing_by_no: Dict[str, Any] = {}
+    duplicate_scene_ids: List[int] = []
+    for row in existing_rows:
+        scene_no = str(row.scene_no or "").strip()
+        if not scene_no:
+            continue
+        prev = existing_by_no.get(scene_no)
+        if prev is None:
+            existing_by_no[scene_no] = row
+            continue
+        keep = row if int(getattr(row, "id", 0) or 0) >= int(getattr(prev, "id", 0) or 0) else prev
+        drop = prev if keep is row else row
+        existing_by_no[scene_no] = keep
+        duplicate_scene_ids.append(int(drop.id))
+    if duplicate_scene_ids:
+        now = now_bj_iso()
+        db.query(Scene).filter(Scene.id.in_(duplicate_scene_ids)).update(
+            {Scene.is_deleted: True, Scene.deleted_at: now},
+            synchronize_session=False,
+        )
+        logger.info(
+            "[SceneImportAPI] soft_deleted duplicate active scenes count=%s episode_id=%s",
+            len(duplicate_scene_ids),
+            episode_id,
+        )
 
     created = 0
     updated = 0
@@ -26145,6 +26175,9 @@ def batch_upsert_scenes(
         touched_scene_nos.append(scene_no)
         existing = existing_by_no.get(scene_no)
         if existing is not None:
+            if skip_existing:
+                skipped += 1
+                continue
             existing.scene_name = item.scene_name
             existing.original_script_text = item.original_script_text
             existing.equivalent_duration = item.equivalent_duration
@@ -26787,6 +26820,8 @@ class ShotBatchCreateItem(BaseModel):
 class ShotBatchCreateRequest(BaseModel):
     items: List[ShotBatchCreateItem]
     recompute_cost: Optional[bool] = False
+    # When True (default), skip entire scene if it already has active shots.
+    skip_existing_scene_shots: Optional[bool] = True
 
 
 class ShotUpdate(BaseModel):
@@ -26845,7 +26880,16 @@ _SHOT_LIST_COMPACT_TECH_KEYS = (
     "end_frame_cn",
     "keyframes",
     "keyframes_cn",
+    "keyframe_images",
     "voiceover_url",
+    # Persist storyboard extract / preview media in compact list payloads so
+    # reopening a shot can show previously captured frames without waiting on hydrate.
+    "prev_shot_frames",
+    "prev_shot_frame_images",
+    "prev_shot_frame_meta",
+    "multi_panel_image_url",
+    "multi_panel_image_preset",
+    "storyboard_url",
 )
 def _compact_shot_list_technical_notes(raw_notes: Any) -> Tuple[Optional[str], str, str]:
     notes = _asset_meta_to_dict(raw_notes)
@@ -28221,6 +28265,9 @@ async def preview_shot_generation_route(
 
 class AnalysisContent(BaseModel):
     content: Union[Dict[str, Any], List[Any]]
+    # When False (default), abandon import if the scene already has active shots.
+    # Set True only for intentional replace flows (UI confirm).
+    replace_existing: Optional[bool] = False
 
 
 class SceneAiShotsBatchStartRequest(BaseModel):
@@ -28339,6 +28386,24 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int,
         user_principal = _snapshot_user_principal(user)
 
         scene_label = str(scene.scene_no or scene.scene_name or f"#{scene_id}")
+        existing_shot_count = (
+            item_db.query(Shot)
+            .filter(Shot.scene_id == scene_id, _active_shot_clause())
+            .count()
+        )
+        if existing_shot_count > 0:
+            logger.info(
+                "[scene_ai_shots_batch] abandon scene already has shots | scene_id=%s count=%s",
+                scene_id,
+                existing_shot_count,
+            )
+            return {
+                "scene_id": int(scene_id),
+                "scene_label": scene_label,
+                "ok": True,
+                "skipped": True,
+                "reason": f"scene already has {existing_shot_count} shot(s); import abandoned",
+            }
         _release_db_connection(item_db, "scene_ai_shots_batch_item")
         generated = asyncio.run(
             asyncio.wait_for(
@@ -28352,7 +28417,7 @@ def _run_scene_ai_shots_batch_item(scene_id: int, episode_id: int, user_id: int,
 
         apply_scene_ai_result(
             scene_id=scene_id,
-            data=AnalysisContent(content=generated_rows),
+            data=AnalysisContent(content=generated_rows, replace_existing=False),
             db=item_db,
             current_user=user_principal,
         )
@@ -29522,16 +29587,36 @@ def _import_scene_shot_rows_to_db(
     project: Project,
     shots_data: List[Dict[str, Any]],
     skipped_row_errors: Optional[List[str]] = None,
+    replace_existing: bool = False,
 ) -> List[Shot]:
     """
     Import validated shot rows into Shot table.
     This method is DB-import only and does NOT call LLM or write staged LLM markdown.
+
+    Default policy: if the scene already has active shots, abandon the import
+    (unless replace_existing=True for intentional UI replace).
     """
     skipped_row_errors = list(skipped_row_errors or [])
 
     locked_scene = db.query(Scene).filter(Scene.id == scene_id).with_for_update().first()
     if not locked_scene:
         raise HTTPException(status_code=404, detail="Scene not found")
+
+    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
+    existing_count = len(existing_shots or [])
+    if existing_count > 0 and not replace_existing:
+        logger.info(
+            "[apply_scene_ai_result] abandon_import scene already has shots | scene_id=%s count=%s",
+            scene_id,
+            existing_count,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Scene already has {existing_count} shot(s); import abandoned. "
+                "Delete existing shots first, or pass replace_existing=true to overwrite."
+            ),
+        )
 
     deduped_shots_data, dedupe_warnings = _dedupe_shot_rows_for_import(
         list(shots_data or []),
@@ -29564,8 +29649,7 @@ def _import_scene_shot_rows_to_db(
     except Exception as e:
         logger.error(f"[Import] Entity auto-linking failed: {e}")
 
-    # 2) Replace scene shots with imported rows.
-    existing_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
+    # 2) Replace scene shots with imported rows (only when empty or replace_existing).
     old_shot_map = {(str(s.shot_id or "").strip()): s for s in existing_shots if str(s.shot_id or "").strip()}
     _soft_delete_shots(db, scene_id=scene_id)
 
@@ -29795,7 +29879,10 @@ def apply_scene_ai_result(
 ):
     """
     Apply the stored (or provided) shot list to the actual Shots table.
-    WARNING: This replaces existing shots for the scene.
+
+    Default: abandon import when the scene already has active shots.
+    Pass replace_existing=true only for intentional overwrite (UI confirm).
+    Duplicate Shot IDs within the payload are deduped (last row wins).
     """
     scene = db.query(Scene).filter(Scene.id == scene_id).first()
     if not scene:
@@ -29806,6 +29893,7 @@ def apply_scene_ai_result(
          
     shots_data = []
     skipped_row_errors: List[str] = []
+    replace_existing = bool(getattr(data, "replace_existing", False)) if data is not None else False
     
     # 1. Determine Source
     provided_content = None
@@ -29859,6 +29947,7 @@ def apply_scene_ai_result(
         project=project,
         shots_data=shots_data,
         skipped_row_errors=skipped_row_errors,
+        replace_existing=replace_existing,
     )
 
 @router.get("/scenes/{scene_id}/shots", response_model=List[ShotOut])
@@ -29919,6 +30008,29 @@ def create_shot(
     try:
         _assert_allowed_shot_media_payload(shot.dict(exclude_unset=True), db=db)
 
+        business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
+        if business_id:
+            dup = (
+                db.query(Shot)
+                .filter(
+                    Shot.scene_id == scene_id,
+                    _active_shot_clause(),
+                )
+                .all()
+            )
+            for existing in dup:
+                if _normalize_shot_business_id(getattr(existing, "shot_id", "")) == business_id:
+                    logger.warning(
+                        "[create_shot] abandon duplicate Shot ID | scene_id=%s shot_id=%s existing_db_id=%s",
+                        scene_id,
+                        business_id,
+                        existing.id,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Shot ID '{shot.shot_id}' already exists in this scene; import abandoned.",
+                    )
+
         db_shot = Shot(
             scene_id=scene_id,
             project_id=project.id,
@@ -29955,6 +30067,9 @@ def create_shot(
              logger.error(f"[create_shot] CRITICAL FAILURE. Shot {db_shot.id} not found immediately after commit!")
 
         return _refresh_shot_media_urls(db_shot, db)
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         logger.error(f"[create_shot] EXCEPTION: {e}")
         db.rollback()
@@ -29997,19 +30112,60 @@ def batch_create_shots(
     ) if scene_ids else []
     scene_by_id = {int(scene.id): scene for scene in scenes}
 
-    if scene_ids:
-        for scene_id in scene_ids:
-            if scene_id in scene_by_id:
-                _soft_delete_shots(db, scene_id=scene_id)
+    skip_existing_scene_shots = bool(getattr(request, "skip_existing_scene_shots", True))
+    scenes_with_existing_shots: set = set()
+    if skip_existing_scene_shots and scene_ids:
+        existing_rows = (
+            db.query(Shot.scene_id)
+            .filter(
+                Shot.scene_id.in_(scene_ids),
+                _active_shot_clause(),
+            )
+            .distinct()
+            .all()
+        )
+        scenes_with_existing_shots = {
+            int(row[0]) for row in existing_rows if row and int(row[0] or 0) > 0
+        }
+        if scenes_with_existing_shots:
+            logger.info(
+                "[ShotImportAPI] batch_create abandon scenes with existing shots | episode_id=%s scene_ids=%s",
+                episode_id,
+                sorted(scenes_with_existing_shots),
+            )
+
+    # Only clear scenes that are empty (or when skip_existing_scene_shots is off).
+    clearable_scene_ids = [
+        sid for sid in scene_ids
+        if sid in scene_by_id and sid not in scenes_with_existing_shots
+    ]
+    for scene_id in clearable_scene_ids:
+        _soft_delete_shots(db, scene_id=scene_id)
 
     created = 0
     skipped = 0
+    seen_shot_keys: set = set()
     for item in items:
         scene_id = int(getattr(item, "scene_id", 0) or 0)
         shot = item.shot
         if scene_id <= 0 or scene_id not in scene_by_id:
             skipped += 1
             continue
+        if scene_id in scenes_with_existing_shots:
+            skipped += 1
+            continue
+        business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
+        if business_id:
+            dedup_key = f"{scene_id}::{business_id}"
+            if dedup_key in seen_shot_keys:
+                skipped += 1
+                logger.warning(
+                    "[ShotImportAPI] batch_create skip duplicate Shot ID | scene_id=%s shot_id=%s",
+                    scene_id,
+                    business_id,
+                )
+                continue
+            seen_shot_keys.add(dedup_key)
         payload = shot.dict(exclude_unset=True)
         _assert_allowed_shot_media_payload(payload, db=db)
 
@@ -30044,12 +30200,13 @@ def batch_create_shots(
     db.commit()
     elapsed_ms = int((time.perf_counter() - started_perf) * 1000)
     logger.info(
-        "[ShotImportAPI] batch_create done | episode_id=%s | project_id=%s | processed=%s | created=%s | skipped=%s | elapsed_ms=%s",
+        "[ShotImportAPI] batch_create done | episode_id=%s | project_id=%s | processed=%s | created=%s | skipped=%s | abandoned_scenes=%s | elapsed_ms=%s",
         episode_id,
         project.id,
         len(items),
         created,
         skipped,
+        len(scenes_with_existing_shots),
         elapsed_ms,
     )
     return {
@@ -30059,6 +30216,7 @@ def batch_create_shots(
         "processed": int(len(items)),
         "created": int(created),
         "skipped": int(skipped),
+        "abandoned_scenes": sorted(scenes_with_existing_shots),
         "elapsed_ms": elapsed_ms,
     }
 

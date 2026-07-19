@@ -2576,9 +2576,19 @@ const Editor = ({
                 const deferredShots = [];
                 const pendingShotItems = [];
                 const pendingSceneRows = [];
+                const queuedShotKeys = new Set();
                 const queueShotItem = (sceneId, shotData) => {
                     const sid = Number(sceneId || 0);
                     if (!Number.isFinite(sid) || sid <= 0 || !shotData?.shot_id) return;
+                    const shotKey = `${sid}::${String(shotData.shot_id || '').trim().toUpperCase()}`;
+                    if (queuedShotKeys.has(shotKey)) {
+                        addLog(
+                            `Skipped Shot ${shotData.shot_id}: duplicate Shot ID in import payload for Scene ${sid}.`,
+                            'warning'
+                        );
+                        return;
+                    }
+                    queuedShotKeys.add(shotKey);
                     pendingShotItems.push({ scene_id: sid, shot: shotData });
                 };
                 const normalizeSceneNoToken = (value) => {
@@ -2843,6 +2853,21 @@ const Editor = ({
                                     continue;
                                 }
 
+                                const sceneNoKey = String(scData.scene_no || '').replace(/\s+/g, '');
+                                const duplicatePending = pendingSceneRows.some(
+                                    (row) => String(row?.scene_no || '').replace(/\s+/g, '') === sceneNoKey
+                                );
+                                const duplicateExisting = (existingScenes || []).some(
+                                    (s) => String(s?.scene_no || '').replace(/\s+/g, '') === sceneNoKey
+                                );
+                                if (duplicatePending || duplicateExisting) {
+                                    addLog(
+                                        `Skipped Scene ${scData.scene_no}: already queued or exists in workspace; import abandoned.`,
+                                        'warning'
+                                    );
+                                    continue;
+                                }
+
                                 addLog(`Processing Scene Row: No=${scData.scene_no} Name=${(scData.scene_name || '').substring(0, 20)}...`, "info");
                                 importedSceneRows.push({
                                     ...scData,
@@ -3051,13 +3076,10 @@ const Editor = ({
                                 currentSceneDbId = match.id;
                                 const rowRef = importedSceneRows.find((x) => String(x?.scene_no || '').replace(/\s+/g, '') === currentSceneNo);
                                 if (rowRef) rowRef.id = match.id;
-                                try {
-                                    await updateScene(match.id, scData);
-                                    importStats.scenesUpdated += 1;
-                                    addLog(`Updated existing Scene ${scData.scene_no}`, 'success');
-                                } catch (updateErr) {
-                                    addLog(`Failed to update existing Scene ${scData.scene_no}: ${updateErr?.message || updateErr}`, 'error');
-                                }
+                                addLog(
+                                    `Skipped existing Scene ${scData.scene_no}: already in workspace; import abandoned.`,
+                                    'warning'
+                                );
                             } else {
                                 const newScene = await createScene(activeEpisodeId, scData);
                                 currentSceneDbId = newScene.id;
@@ -3113,24 +3135,58 @@ const Editor = ({
                 }
 
                 if (pendingShotItems.length > 0) {
-                    try {
-                        const shotBatchResp = await batchCreateShots(activeEpisodeId, pendingShotItems, { recomputeCost: false });
-                        importStats.shotsCreated += Number(shotBatchResp?.created || 0);
-                        addLog(
-                            `Batch shot import done: processed=${Number(shotBatchResp?.processed || pendingShotItems.length)}, created=${Number(shotBatchResp?.created || 0)}, skipped=${Number(shotBatchResp?.skipped || 0)}, elapsed=${Number(shotBatchResp?.elapsed_ms || 0)}ms`,
-                            'success'
-                        );
-                    } catch (shotBatchErr) {
-                        addLog(`Batch shot import failed, fallback to row-by-row create: ${shotBatchErr.message || shotBatchErr}`, 'warning');
-                        for (const item of pendingShotItems) {
-                            try {
-                                await createShot(item.scene_id, item.shot);
-                                importStats.shotsCreated += 1;
-                            } catch (shotErr) {
-                                console.error('Shot DB Sync Error', shotErr);
-                                addLog(`Failed to create shot ${item?.shot?.shot_id || '(unknown)'}: ${shotErr.message}`, 'error');
+                    // Abandon import for scenes that already have shots.
+                    const sceneIdsToCheck = [...new Set(
+                        pendingShotItems
+                            .map((item) => Number(item?.scene_id || 0))
+                            .filter((sid) => Number.isFinite(sid) && sid > 0)
+                    )];
+                    const scenesWithShots = new Set();
+                    for (const sid of sceneIdsToCheck) {
+                        try {
+                            const existing = await fetchShots(sid);
+                            if (Array.isArray(existing) && existing.length > 0) {
+                                scenesWithShots.add(sid);
+                                addLog(
+                                    `Skipped shot import for Scene ${sid}: already has ${existing.length} shot(s); import abandoned.`,
+                                    'warning'
+                                );
+                            }
+                        } catch (checkErr) {
+                            addLog(
+                                `Failed to check existing shots for Scene ${sid}: ${checkErr?.message || checkErr}`,
+                                'warning'
+                            );
+                        }
+                    }
+                    const importableShotItems = pendingShotItems.filter(
+                        (item) => !scenesWithShots.has(Number(item?.scene_id || 0))
+                    );
+                    if (importableShotItems.length > 0) {
+                        try {
+                            const shotBatchResp = await batchCreateShots(activeEpisodeId, importableShotItems, { recomputeCost: false });
+                            importStats.shotsCreated += Number(shotBatchResp?.created || 0);
+                            addLog(
+                                `Batch shot import done: processed=${Number(shotBatchResp?.processed || importableShotItems.length)}, created=${Number(shotBatchResp?.created || 0)}, skipped=${Number(shotBatchResp?.skipped || 0)}, elapsed=${Number(shotBatchResp?.elapsed_ms || 0)}ms`,
+                                'success'
+                            );
+                        } catch (shotBatchErr) {
+                            addLog(`Batch shot import failed, fallback to row-by-row create: ${shotBatchErr.message || shotBatchErr}`, 'warning');
+                            for (const item of importableShotItems) {
+                                try {
+                                    await createShot(item.scene_id, item.shot);
+                                    importStats.shotsCreated += 1;
+                                } catch (shotErr) {
+                                    console.error('Shot DB Sync Error', shotErr);
+                                    addLog(`Failed to create shot ${item?.shot?.shot_id || '(unknown)'}: ${shotErr.message}`, 'error');
+                                }
                             }
                         }
+                    } else if (pendingShotItems.length > 0) {
+                        addLog(
+                            `All ${pendingShotItems.length} shot row(s) abandoned: target scene(s) already have shots.`,
+                            'warning'
+                        );
                     }
                 }
 

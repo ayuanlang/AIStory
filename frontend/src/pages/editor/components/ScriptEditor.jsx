@@ -6561,6 +6561,45 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardKickoffByDbIdRef.current.delete(dbSceneId);
         }
 
+        // Import control: if this scene already has shots, abandon kickoff/import.
+        try {
+            const existingShots = await fetchShots(dbSceneId);
+            const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
+            if (existingCount > 0 && !force) {
+                storyboardKickoffByMarkerRef.current.add(stableMarker);
+                storyboardKickoffByDbIdRef.current.add(dbSceneId);
+                const skippedProgress = updateStoryboardTaskItem(stableMarker, {
+                    dbSceneId,
+                    sceneOrder,
+                    status: 'completed',
+                    error: '',
+                });
+                publishStoryboardTaskPanelStatus({
+                    markerSceneId: stableMarker,
+                    sceneOrder,
+                    status: 'completed',
+                    progressSnapshot: skippedProgress,
+                });
+                onLog?.(
+                    t(
+                        `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，放弃导入`,
+                        `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); import abandoned`
+                    ),
+                    'warning'
+                );
+                return false;
+            }
+        } catch (checkErr) {
+            onLog?.(
+                t(
+                    `[分镜生成] ${stableMarker} 检查现有分镜失败：${checkErr?.message || checkErr}`,
+                    `[Storyboard] ${stableMarker} failed to check existing shots: ${checkErr?.message || checkErr}`
+                ),
+                'warning'
+            );
+            return false;
+        }
+
         storyboardKickoffByMarkerRef.current.add(stableMarker);
         storyboardKickoffByDbIdRef.current.add(dbSceneId);
         const startingProgress = updateStoryboardTaskItem(stableMarker, {
@@ -6607,6 +6646,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     status: 'importing',
                     progressSnapshot: importingProgress,
                 });
+                // Re-check right before apply to avoid race with concurrent imports.
+                const latestShots = await fetchShots(dbSceneId);
+                const latestCount = Array.isArray(latestShots) ? latestShots.length : 0;
+                if (latestCount > 0 && !force) {
+                    const skippedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
+                    publishStoryboardTaskPanelStatus({
+                        markerSceneId: stableMarker,
+                        sceneOrder,
+                        status: 'completed',
+                        progressSnapshot: skippedProgress,
+                    });
+                    onLog?.(
+                        t(
+                            `[分镜生成] ${stableMarker} 导入前发现场景已有 ${latestCount} 条分镜，放弃导入`,
+                            `[Storyboard] ${stableMarker}: scene already has ${latestCount} shot(s) before apply; import abandoned`
+                        ),
+                        'warning'
+                    );
+                    return false;
+                }
                 await applySceneAIResult(dbSceneId, { content: generatedRows });
                 const completedProgress = updateStoryboardTaskItem(stableMarker, { status: 'completed', error: '' });
                 publishStoryboardTaskPanelStatus({
@@ -6625,18 +6684,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return true;
             } catch (err) {
                 const errMsg = String(err?.response?.data?.detail || err?.message || err || 'unknown error');
-                const failedProgress = updateStoryboardTaskItem(stableMarker, { status: 'failed', error: errMsg });
+                const abandoned = err?.response?.status === 409 || /already has .*shot/i.test(errMsg);
+                const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                    status: abandoned ? 'completed' : 'failed',
+                    error: abandoned ? '' : errMsg,
+                });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
                     sceneOrder,
-                    status: 'failed',
-                    errorMessage: errMsg,
+                    status: abandoned ? 'completed' : 'failed',
+                    errorMessage: abandoned ? '' : errMsg,
                     progressSnapshot: failedProgress,
                 });
                 onLog?.(
                     t(
-                        `[分镜生成] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
-                        `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
+                        abandoned
+                            ? `[分镜生成] ${stableMarker} 场景已有分镜，放弃导入：${errMsg}`
+                            : `[分镜生成] ${stableMarker} 分镜启动/生成失败：${errMsg}`,
+                        abandoned
+                            ? `[Storyboard] ${stableMarker} already has shots; import abandoned: ${errMsg}`
+                            : `[Storyboard] ${stableMarker} shot kickoff/generation failed: ${errMsg}`
                     ),
                     'warning'
                 );
@@ -16690,6 +16757,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 let skipped = 0;
                 for (const item of candidates) {
                     try {
+                        const existingShots = await fetchShots(item.dbSceneId);
+                        const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
+                        if (existingCount > 0) {
+                            skipped += 1;
+                            updateStoryboardTaskItem(item.sceneId, {
+                                dbSceneId: item.dbSceneId,
+                                sceneOrder: item.sceneOrder,
+                                status: 'completed',
+                                error: '',
+                            });
+                            onLog?.(
+                                t(
+                                    `[镜头导入] ${item.sceneId} 场景已有 ${existingCount} 条分镜，放弃导入`,
+                                    `[Storyboard import] ${item.sceneId} already has ${existingCount} shot(s); import abandoned`
+                                ),
+                                'warning'
+                            );
+                            continue;
+                        }
                         const latest = await getSceneLatestAIResult(item.dbSceneId);
                         const rows = Array.isArray(latest?.content) ? latest.content : [];
                         if (!rows.length) {
@@ -16706,10 +16792,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         });
                     } catch (err) {
                         skipped += 1;
+                        const detail = err?.response?.data?.detail || err?.message || err;
                         onLog?.(
                             t(
-                                `[镜头导入] ${item.sceneId} 失败：${err?.message || err}`,
-                                `[Storyboard import] ${item.sceneId} failed: ${err?.message || err}`
+                                `[镜头导入] ${item.sceneId} 失败：${detail}`,
+                                `[Storyboard import] ${item.sceneId} failed: ${detail}`
                             ),
                             'warning'
                         );
@@ -17695,6 +17782,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const normalizedFields = normalizeSubjectIndexEntryFields(fields, entry);
         setPhase2RerunModal((prev) => ({
             ...prev,
+            // Keep single-mode selection in sync with the entry being edited.
+            subjectKey: entry.key,
             editingSubjectKey: entry.key,
             subjectEdits: {
                 ...((prev.subjectEdits && typeof prev.subjectEdits === 'object') ? prev.subjectEdits : {}),
@@ -17940,6 +18029,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         phase2RerunModal.open,
         phase2RerunModal.subjectKey,
     ]);
+
+    useEffect(() => {
+        if (!phase2RerunModal.open) return;
+        const editingKey = String(phase2RerunModal.editingSubjectKey || '').trim();
+        if (!editingKey) return;
+        const frameId = window.requestAnimationFrame(() => {
+            const entryNode = Array.from(document.querySelectorAll('[data-phase2-rerun-entry-key]'))
+                .find((node) => String(node.getAttribute('data-phase2-rerun-entry-key') || '') === editingKey);
+            if (!entryNode || typeof entryNode.scrollIntoView !== 'function') return;
+            entryNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            const focusTarget = entryNode.querySelector('textarea, input');
+            if (focusTarget && typeof focusTarget.focus === 'function') {
+                focusTarget.focus({ preventScroll: true });
+            }
+        });
+        return () => window.cancelAnimationFrame(frameId);
+    }, [phase2RerunModal.editingSubjectKey, phase2RerunModal.open]);
 
     const confirmPhase2RerunSelection = useCallback(async () => {
         if (phase2RerunModal?.draftNewEntry) {
@@ -20457,8 +20563,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     <div className="rounded-lg border border-white/10 bg-black/20 max-h-[360px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
                                         {filteredPhase2RerunSubjectEntries.length > 0 ? filteredPhase2RerunSubjectEntries.map((item) => {
                                             const isSingleMode = phase2RerunModal.mode === 'single';
-                                            const active = isSingleMode && phase2RerunModal.subjectKey === item.key;
                                             const isEditing = phase2RerunModal.editingSubjectKey === item.key;
+                                            const active = isEditing
+                                                || (isSingleMode && phase2RerunModal.subjectKey === item.key);
                                             const draft = phase2RerunModal.subjectEdits?.[item.key] || {};
                                             const draftFields = (draft.fields && typeof draft.fields === 'object')
                                                 ? draft.fields
@@ -20467,6 +20574,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             return (
                                                 <div
                                                     key={item.key}
+                                                    data-phase2-rerun-entry-key={item.key}
                                                     className={`w-full text-left px-3 py-2.5 transition-colors ${active ? 'bg-purple-500/25 text-purple-50' : 'hover:bg-white/5 text-white/80'}`}
                                                 >
                                                     <div className="flex flex-wrap items-center justify-between gap-2">

@@ -1992,7 +1992,7 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                 }
 
                 await updateSceneLatestAIResult(editingScene.id, resolved.content);
-                await applySceneAIResult(editingScene.id, null);
+                await applySceneAIResult(editingScene.id, { content: resolved.content, replace_existing: true });
                 onLog?.(t(`镜头已应用到数据库（${resolved.content.length} 条）。`, `Shots applied to database (${resolved.content.length} rows).`), 'success');
             }
 

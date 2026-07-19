@@ -3422,9 +3422,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         return changed ? next : shot;
     }, [parseTechnicalNotesSafe]);
 
-    const mergeLiveSyncTechnicalNotes = useCallback((currentRaw, latestRaw) => {
+    const mergeLiveSyncTechnicalNotes = useCallback((currentRaw, latestRaw, options = {}) => {
         const currentNotes = parseTechnicalNotesSafe(currentRaw);
         const latestNotes = parseTechnicalNotesSafe(latestRaw);
+        const latestIsCompact = options?.latestIsCompact === true;
         const syncedKeys = [
             'end_frame_url',
             'end_frame_reused_from_start',
@@ -3440,6 +3441,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             'voiceover_metadata',
             'voiceover_plan',
             'voiceover_plan_prompts',
+            'prev_shot_frames',
+            'prev_shot_frame_images',
+            'prev_shot_frame_meta',
+            'multi_panel_image_url',
+            'multi_panel_image_preset',
+            'storyboard_url',
         ];
 
         let changed = false;
@@ -3449,6 +3456,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const nextValue = latestNotes[key];
             const prevValue = currentNotes[key];
             if (nextValue === undefined) {
+                // Compact list payloads intentionally omit many tech keys.
+                // Treat omission as "unknown", never as an explicit delete.
+                if (latestIsCompact) return;
                 if (Object.prototype.hasOwnProperty.call(nextNotes, key)) {
                     delete nextNotes[key];
                     changed = true;
@@ -3714,12 +3724,22 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const nextShot = (updatedShot && typeof updatedShot === 'object')
                 ? { ...(currentShot || editingBase || {}), ...updatedShot, ...changes }
                 : { ...(currentShot || editingBase || {}), ...changes };
-            setShots(prev => prev.map((s) => (String(s?.id || '').trim() === stableShotId ? { ...s, ...nextShot } : s)));
+            setShots(prev => prev.map((s) => {
+                if (String(s?.id || '').trim() !== stableShotId) return s;
+                // Keep list row compact-flagged, but retain any media fields we just persisted
+                // (e.g. prev_shot_frames) so reopen/refresh can still render them.
+                return { ...s, ...nextShot, is_compact: s?.is_compact === true ? true : nextShot?.is_compact };
+            }));
 
             // Sync editingShot safely
             setEditingShot(prev => {
                 if (prev && String(prev?.id || '').trim() === stableShotId) {
-                    return { ...prev, ...nextShot };
+                    const merged = { ...prev, ...nextShot };
+                    // Never re-compact a hydrated drawer after a partial/list-based merge.
+                    if (prev.is_compact === false || changes?.technical_notes != null) {
+                        merged.is_compact = false;
+                    }
+                    return merged;
                 }
                 return prev;
             });
@@ -6132,7 +6152,11 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setEditingShot((prev) => {
             if (!prev || String(prev.id) !== String(latest.id)) return prev;
 
-            const nextTechnicalNotes = mergeLiveSyncTechnicalNotes(prev.technical_notes, latest.technical_notes);
+            const nextTechnicalNotes = mergeLiveSyncTechnicalNotes(
+                prev.technical_notes,
+                latest.technical_notes,
+                { latestIsCompact: latest?.is_compact === true }
+            );
             const prevImageUrl = String(prev.image_url || '').trim();
             const latestImageUrl = String(latest.image_url || '').trim();
             const prevVideoUrl = String(prev.video_url || '').trim();
@@ -6152,6 +6176,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 image_url: imageAssetChanged ? latestImageUrl : prevImageUrl,
                 video_url: videoAssetChanged ? latestVideoUrl : prevVideoUrl,
                 technical_notes: nextTechnicalNotes.value,
+                // Keep hydrated detail when list refresh only brings a compact stub.
+                is_compact: latest?.is_compact === true ? (prev.is_compact === false ? false : true) : false,
             };
         });
     }, [editingShot?.id, mergeLiveSyncTechnicalNotes, normalizeAssetUrlToken, setEditingShot, shots]);
@@ -6787,8 +6813,34 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setLocalPrevShotFrames(parsed);
     }, [editingShot?.id, editingShot?.technical_notes]);
 
+    const loadFullShotTechnicalNotesBase = async (shotId, fallbackRaw = '{}') => {
+        const stableShotId = String(shotId || '').trim();
+        let tech = parseTechnicalNotesSafe(fallbackRaw);
+        if (!stableShotId) return tech;
+
+        // Always merge writes against the full shot payload so compact list stubs
+        // cannot wipe previously persisted prev-shot / keyframe / multi-panel fields.
+        if (editingShot && String(editingShot.id) === stableShotId && editingShot.is_compact === false) {
+            return { ...tech };
+        }
+
+        try {
+            const fullShot = await fetchShot(stableShotId);
+            if (fullShot?.id) {
+                tech = parseTechnicalNotesSafe(fullShot.technical_notes);
+                setEditingShot((prev) => {
+                    if (!prev || String(prev.id) !== String(fullShot.id)) return prev;
+                    return { ...prev, ...fullShot, is_compact: false };
+                });
+            }
+        } catch (error) {
+            console.warn('Failed to hydrate full shot before technical_notes write:', error);
+        }
+        return { ...tech };
+    };
+
     const reconstructPrevShotFrames = async (currentList, newTechOverride = null) => {
-        const tech = JSON.parse(editingShot.technical_notes || '{}');
+        const tech = await loadFullShotTechnicalNotesBase(editingShot?.id, editingShot?.technical_notes);
 
         tech.prev_shot_frames = currentList.map((item) => item.url).filter(Boolean);
 
@@ -6807,7 +6859,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         };
 
         await onUpdateShot(editingShot.id, newData);
-        setEditingShot((prev) => (prev && String(prev.id) === String(editingShot.id) ? { ...prev, technical_notes: newData.technical_notes } : prev));
+        setEditingShot((prev) => (prev && String(prev.id) === String(editingShot.id)
+            ? { ...prev, technical_notes: newData.technical_notes, is_compact: false }
+            : prev));
     };
 
     const handleUpdateKeyframePrompt = (idx, newText) => {
@@ -6829,8 +6883,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
          
          const newKeyframesText = textParts.length > 0 ? textParts.join('\n') : "NO";
          
-         // Rebuild Technical Notes
-         const tech = JSON.parse(editingShot.technical_notes || '{}');
+         // Rebuild Technical Notes against full shot to avoid compact stub overwrites.
+         const tech = await loadFullShotTechnicalNotesBase(editingShot?.id, editingShot?.technical_notes);
          
          // 1. Legacy Array (keep for safety, but sync with list)
          const urls = currentList.map(k => k.url).filter(Boolean);
@@ -6847,24 +6901,12 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
              Object.assign(tech, newTechOverride);
          }
          
-         // Update Local Logic (Optimistic)
-         // We don't setLocalKeyframes here because that would trigger re-render loop if we are not careful
-         // But we need to update 'editingShot' to trigger persistence
-         
          const newData = {
              keyframes: newKeyframesText,
              technical_notes: JSON.stringify(tech)
          };
          
-         // Update parent
          await onUpdateShot(editingShot.id, newData);
-         // setEditingShot handled by onUpdateShot's internal state update wrapper if we used one, 
-         // but local setEditingShot is raw.
-         // onUpdateShot does: setShots ... and setEditingShot ...
-         // So this will trigger useEffect parse again.
-         // This might cause cursor jump in textarea. 
-         // Strategy: Only update 'editingShot' if we are sure? 
-         // Or rely on the fact that we are editing 'localKeyframes' state for text, and only syncing on Blur?
     };
 
     const applyMultiPanelImageResult = useCallback(async ({ shotRecord, compositeUrl, presetKey, basePrompt = '', promptLanguage = 'cn' }) => {
@@ -13915,7 +13957,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                     if(!await confirmUiMessage(t('应用这些镜头吗？这会替换现有镜头。', 'Apply these shots? This will replace existing shots.'))) return;
                                     setShotReviewModal(prev => ({...prev, loading: true}));
                                     try {
-                                        await applySceneAIResult(shotReviewModal.sceneId, { content: shotReviewModal.data });
+                                        await applySceneAIResult(shotReviewModal.sceneId, {
+                                            content: shotReviewModal.data,
+                                            replace_existing: true,
+                                        });
                                         onLog?.(t('镜头已应用到数据库。', 'Shots applied to database.'), "success");
                                         setShotReviewModal({open: false, sceneId: null, data: null, loading: false});
                                         if (typeof refreshShots === 'function') refreshShots();

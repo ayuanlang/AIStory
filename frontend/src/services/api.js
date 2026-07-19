@@ -1261,6 +1261,8 @@ export const batchUpsertScenes = async (episodeId, scenes, options = {}) => {
     const payload = {
         scenes: Array.isArray(scenes) ? scenes : [],
         recompute_cost: options?.recomputeCost !== false,
+        // Default true: do not overwrite scenes that already exist in the workspace.
+        skip_existing: options?.skipExisting !== false,
     };
     const response = await api.post(`/episodes/${episodeId}/scenes/batch_upsert`, payload);
     return response.data;
