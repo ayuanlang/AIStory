@@ -6449,13 +6449,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         importReport = null,
         dbSceneIdHint = null,
         force = false,
+        // Flush path: resume a marker already claimed while waiting_env.
+        resumeQueued = false,
     } = {}) => {
         const stableMarker = String(markerSceneId || '').trim();
         if (!stableMarker) return false;
 
         const priorItem = storyboardTaskProgressRef.current?.items?.[stableMarker];
         const priorStatus = String(priorItem?.status || '').trim().toLowerCase();
-        if (['starting', 'generating', 'importing'].includes(priorStatus)) {
+        if (!force && ['starting', 'generating', 'importing'].includes(priorStatus)) {
             onLog?.(
                 t(
                     `[分镜生成] ${stableMarker} 仍在运行中，跳过重复调起`,
@@ -6465,11 +6467,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             return false;
         }
+        // waiting_env is already claimed; only the env-ready flush may resume it.
+        if (!force && !resumeQueued && priorStatus === 'waiting_env') {
+            return true;
+        }
+        if (!force && priorStatus === 'completed' && !resumeQueued) {
+            return true;
+        }
+
+        // Claim-before-await (same pattern as orchestration poller readyScenes):
+        // prevent poller×ensure / flush×residual races from double-starting scene 1.
+        if (!force) {
+            if (!resumeQueued && storyboardKickoffByMarkerRef.current.has(stableMarker)) {
+                return true;
+            }
+            storyboardKickoffByMarkerRef.current.add(stableMarker);
+        }
+
+        const releaseKickoffClaim = () => {
+            storyboardKickoffByMarkerRef.current.delete(stableMarker);
+        };
 
         if (!force) {
-            if (storyboardKickoffByMarkerRef.current.has(stableMarker)) return true;
             const autoStart = await isStoryboardAutoStartEnabled();
-            if (!autoStart) return false;
+            if (!autoStart) {
+                releaseKickoffClaim();
+                return false;
+            }
             const envReady = await isEnvironmentAssetDesignReady();
             if (!envReady) {
                 enqueuePendingStoryboardKickoff({
@@ -6510,6 +6534,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ),
                     'info'
                 );
+                // Keep marker claimed so residual ensure skips this scene.
                 return false;
             }
         }
@@ -6531,6 +6556,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
         if (!Number.isFinite(dbSceneId) || dbSceneId <= 0) {
+            releaseKickoffClaim();
             const failedProgress = updateStoryboardTaskItem(stableMarker, {
                 sceneOrder,
                 status: 'failed',
@@ -6559,6 +6585,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (force) {
             storyboardKickoffByMarkerRef.current.delete(stableMarker);
             storyboardKickoffByDbIdRef.current.delete(dbSceneId);
+            storyboardKickoffByMarkerRef.current.add(stableMarker);
         }
 
         // Import control: if this scene already has shots, abandon kickoff/import.
@@ -6590,6 +6617,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return false;
             }
         } catch (checkErr) {
+            releaseKickoffClaim();
             onLog?.(
                 t(
                     `[分镜生成] ${stableMarker} 检查现有分镜失败：${checkErr?.message || checkErr}`,
@@ -6740,6 +6768,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const ok = await kickoffStoryboardForImportedScene({
                 ...item,
                 force: false,
+                resumeQueued: true,
             });
             if (ok) started += 1;
         }
@@ -6761,8 +6790,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const enqueue = (markerSceneId, dbSceneIdHint = null) => {
             const marker = String(markerSceneId || '').trim();
             if (!marker || seenMarkers.has(marker)) return;
+            // Marker is claimed at kickoff entry (including waiting_env), so residual
+            // skips scenes already owned by live import / flush — same claim-before-await
+            // pattern as orchestration poller readyScenes.
             if (storyboardKickoffByMarkerRef.current.has(marker)) return;
-            // Already queued waiting for env — kickoff will refresh the queue entry.
+            const priorStatus = String(
+                storyboardTaskProgressRef.current?.items?.[marker]?.status || ''
+            ).trim().toLowerCase();
+            if (['waiting_env', 'starting', 'generating', 'importing', 'completed'].includes(priorStatus)) {
+                return;
+            }
             seenMarkers.add(marker);
             pending.push({ markerSceneId: marker, dbSceneIdHint, importReport });
         };
@@ -8368,7 +8405,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableSceneId = String(sceneId || '').trim();
         const importText = String(markdown || '').trim();
         if (!stableSceneId || !importText) return false;
+        // Claim-before-await (same as poller readyScenes): poller + ensureOrchestration
+        // can race on scene 1; late .add() after awaits caused double import + double kickoff.
         if (orchestrationLiveImportedScenesRef.current.has(stableSceneId)) return true;
+        orchestrationLiveImportedScenesRef.current.add(stableSceneId);
 
         publishSceneOrchestrationPanelStatus({
             sceneId: stableSceneId,
@@ -8377,102 +8417,109 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             totalScenes: sceneOrchestrationPanelReporterRef.current ? undefined : 1,
         });
 
-        if (
-            replaceExistingScenes
-            && orchestrationLiveImportedScenesRef.current.size <= 0
-            && activeEpisode?.id
-        ) {
-            try {
-                await purgeEpisodeScenes(activeEpisode.id, { clearProgress: false });
-                onLog?.('Cleared existing episode scenes before live per-scene orchestration import.', 'info');
-            } catch (clearErr) {
-                onLog?.(`Pre-import live orchestration purge warning: ${clearErr?.message || clearErr}`, 'warning');
+        try {
+            if (
+                replaceExistingScenes
+                && orchestrationLiveImportedScenesRef.current.size <= 1
+                && activeEpisode?.id
+            ) {
+                try {
+                    await purgeEpisodeScenes(activeEpisode.id, { clearProgress: false });
+                    onLog?.('Cleared existing episode scenes before live per-scene orchestration import.', 'info');
+                } catch (clearErr) {
+                    onLog?.(`Pre-import live orchestration purge warning: ${clearErr?.message || clearErr}`, 'warning');
+                }
             }
-        }
 
-        const patchedText = patchSceneTableRowIdentity(importText, {
-            sceneId: stableSceneId,
-            sceneOrder,
-        });
-        const patchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
-            [{ sceneId: stableSceneId, sceneOrder, markdown: patchedText }],
-            unit ? [unit] : []
-        );
-        const patchEntry = patchMap[stableSceneId];
-        if (!patchEntry?.markdown) return false;
-
-        await persistSceneMarkdownPatch(
-            { [stableSceneId]: patchEntry },
-            {
-                source,
-                replaceSceneMarkdownByScene: false,
-            }
-        );
-        if (typeof onRefreshEpisodes === 'function') {
-            try {
-                await onRefreshEpisodes();
-            } catch (_) {
-                // best-effort refresh so subsequent merges see latest episode fields
-            }
-        }
-
-        const importPrecheck = validateAutoSceneTableImport(patchEntry.markdown);
-        let textForImport = patchEntry.markdown;
-        if (importPrecheck?.ok && importPrecheck.tableText) {
-            textForImport = String(importPrecheck.tableText || '').includes('### Part 1')
-                ? importPrecheck.tableText
-                : `### Part 1: Scenes Table\n\n${importPrecheck.tableText}`;
-        } else if (!importPrecheck?.ok) {
-            onLog?.(
-                `[场景导入] ${stableSceneId} 场景表预检未通过：${importPrecheck?.reason || 'unknown'}`,
-                'warning'
+            const patchedText = patchSceneTableRowIdentity(importText, {
+                sceneId: stableSceneId,
+                sceneOrder,
+            });
+            const patchMap = buildSceneMarkdownPatchFromPerSceneOutputs(
+                [{ sceneId: stableSceneId, sceneOrder, markdown: patchedText }],
+                unit ? [unit] : []
             );
-        }
+            const patchEntry = patchMap[stableSceneId];
+            if (!patchEntry?.markdown) {
+                orchestrationLiveImportedScenesRef.current.delete(stableSceneId);
+                return false;
+            }
 
-        const sceneImportReport = await doImportText(textForImport, 'scene', {
-            suppressAlerts: true,
-            autoSupplementSceneSubjects: false,
-        });
-        if (!isSuccessfulSceneImportReport(sceneImportReport)) {
+            await persistSceneMarkdownPatch(
+                { [stableSceneId]: patchEntry },
+                {
+                    source,
+                    replaceSceneMarkdownByScene: false,
+                }
+            );
+            if (typeof onRefreshEpisodes === 'function') {
+                try {
+                    await onRefreshEpisodes();
+                } catch (_) {
+                    // best-effort refresh so subsequent merges see latest episode fields
+                }
+            }
+
+            const importPrecheck = validateAutoSceneTableImport(patchEntry.markdown);
+            let textForImport = patchEntry.markdown;
+            if (importPrecheck?.ok && importPrecheck.tableText) {
+                textForImport = String(importPrecheck.tableText || '').includes('### Part 1')
+                    ? importPrecheck.tableText
+                    : `### Part 1: Scenes Table\n\n${importPrecheck.tableText}`;
+            } else if (!importPrecheck?.ok) {
+                onLog?.(
+                    `[场景导入] ${stableSceneId} 场景表预检未通过：${importPrecheck?.reason || 'unknown'}`,
+                    'warning'
+                );
+            }
+
+            const sceneImportReport = await doImportText(textForImport, 'scene', {
+                suppressAlerts: true,
+                autoSupplementSceneSubjects: false,
+            });
+            if (!isSuccessfulSceneImportReport(sceneImportReport)) {
+                publishSceneOrchestrationPanelStatus({
+                    sceneId: stableSceneId,
+                    phase: 'failed',
+                    sceneOrder,
+                    errorCode: 'workspace_import_failed',
+                });
+                const precheckHint = importPrecheck?.ok ? '' : ` ${importPrecheck?.reason || ''}`.trim();
+                throw new Error(t(
+                    `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No、解析失败或后端不可用）。${precheckHint}`,
+                    `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No, parse failure, or backend unavailable).${precheckHint ? ` ${precheckHint}` : ''}`
+                ));
+            }
+
+            if (projectId && activeEpisode?.id) {
+                try {
+                    await syncSceneUnitsProgress({
+                        project_id: Number(projectId),
+                        episode_id: Number(activeEpisode.id),
+                        script_text: patchEntry.markdown,
+                        partial: true,
+                        target_scene_id: stableSceneId,
+                    });
+                } catch (syncErr) {
+                    onLog?.(`[Scene Units Sync] warning (${stableSceneId}): ${syncErr?.message || syncErr}`, 'warning');
+                }
+            }
+
             publishSceneOrchestrationPanelStatus({
                 sceneId: stableSceneId,
-                phase: 'failed',
+                phase: 'imported',
                 sceneOrder,
-                errorCode: 'workspace_import_failed',
             });
-            const precheckHint = importPrecheck?.ok ? '' : ` ${importPrecheck?.reason || ''}`.trim();
-            throw new Error(t(
-                `[场景导入] ${stableSceneId} 导入失败：场景表未写入数据库（缺少 Scene No、解析失败或后端不可用）。${precheckHint}`,
-                `[Scene import] ${stableSceneId} failed: scene table was not persisted to the database (missing Scene No, parse failure, or backend unavailable).${precheckHint ? ` ${precheckHint}` : ''}`
-            ));
+            void kickoffStoryboardForImportedScene({
+                markerSceneId: stableSceneId,
+                sceneOrder,
+                importReport: sceneImportReport,
+            });
+            return sceneImportReport;
+        } catch (err) {
+            orchestrationLiveImportedScenesRef.current.delete(stableSceneId);
+            throw err;
         }
-
-        if (projectId && activeEpisode?.id) {
-            try {
-                await syncSceneUnitsProgress({
-                    project_id: Number(projectId),
-                    episode_id: Number(activeEpisode.id),
-                    script_text: patchEntry.markdown,
-                    partial: true,
-                    target_scene_id: stableSceneId,
-                });
-            } catch (syncErr) {
-                onLog?.(`[Scene Units Sync] warning (${stableSceneId}): ${syncErr?.message || syncErr}`, 'warning');
-            }
-        }
-
-        orchestrationLiveImportedScenesRef.current.add(stableSceneId);
-        publishSceneOrchestrationPanelStatus({
-            sceneId: stableSceneId,
-            phase: 'imported',
-            sceneOrder,
-        });
-        void kickoffStoryboardForImportedScene({
-            markerSceneId: stableSceneId,
-            sceneOrder,
-            importReport: sceneImportReport,
-        });
-        return sceneImportReport;
     }, [
         activeEpisode?.id,
         buildSceneMarkdownPatchFromPerSceneOutputs,

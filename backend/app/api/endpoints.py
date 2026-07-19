@@ -17846,8 +17846,140 @@ def _looks_like_markdown_table_row_for_shots(line: str) -> bool:
     return s.count("|") >= 2
 
 
+def _is_shot_markdown_header_row(line: str) -> bool:
+    """True when a table row is a Shot List header (not a data row)."""
+    cells = _split_markdown_row_escaped(str(line or "").strip())
+    if not cells:
+        return False
+    first = _normalize_shot_markdown_col_key(cells[0])
+    if first in {"shotid", "镜头id"}:
+        return True
+    normalized_cells = {_normalize_shot_markdown_col_key(cell) for cell in cells}
+    return "shotid" in normalized_cells and "sceneid" in normalized_cells
+
+
+def _is_placeholder_shot_row(row: Dict[str, Any]) -> bool:
+    """Reject prompt example / re-emitted header rows mistaken as shot data."""
+    if not isinstance(row, dict):
+        return True
+    shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
+    raw_id = str(shot_id or "").strip()
+    if not raw_id:
+        return True
+    if re.fullmatch(r"(shot\s*id|镜头\s*id)", raw_id, flags=re.IGNORECASE):
+        return True
+    normalized_id = _normalize_shot_business_id(raw_id)
+    if not normalized_id:
+        return True
+    # Header cell "Shot ID" normalizes to "ID" via _normalize_shot_business_id.
+    if normalized_id in {"ID", "镜头ID", "{SCENE ID}_SHZZ", "{SCENEID}_SHZZ", "EPXX_SCYY_SHZZ"}:
+        return True
+    if "{SCENE" in normalized_id or "SHZZ" in normalized_id:
+        return True
+    if not re.search(r"_SH\d{2}(_\d+)?$", normalized_id, flags=re.IGNORECASE) and (
+        "SHZZ" in raw_id.upper() or "{SCENE" in raw_id.upper()
+    ):
+        return True
+    shot_name = _pick_shot_cell(row, ["Shot Name", "shot_name", "镜头名称"], "")
+    if shot_name and re.search(r"核心动作简述|^\(正整数", shot_name):
+        return True
+    scene_id = _pick_shot_cell(
+        row,
+        ["Scene ID", "scene_id", "Scene Code", "scene_code", "场景ID", "场景编号"],
+        "",
+    )
+    if scene_id and re.search(r"上游\s*Scene\s*ID|原样", scene_id, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+_REAL_SHOT_ID_RE = re.compile(
+    r"^EP\d{2}_SC\d{2}[A-Za-z]*_SH\d{2}(_\d+)?$",
+    re.IGNORECASE,
+)
+
+
+def _shot_id_cell_looks_real(cell: Any) -> bool:
+    text = str(cell or "").strip()
+    if not text:
+        return False
+    text = re.sub(r"\*\*", "", text)
+    text = re.sub(r"(?i)^shot\s*", "", text).strip()
+    return bool(_REAL_SHOT_ID_RE.match(text))
+
+
+def _extract_shot_markdown_table_blocks(lines: List[str]) -> List[List[str]]:
+    """Split LLM output into discrete markdown table blocks (header+sep+data)."""
+    blocks: List[List[str]] = []
+    i = 0
+    total = len(lines)
+    while i < total - 1:
+        header_line = str(lines[i] or "").strip()
+        sep_line = str(lines[i + 1] or "").strip()
+        if not (
+            _looks_like_markdown_table_row_for_shots(header_line)
+            and len(_split_markdown_row_escaped(header_line)) >= 2
+            and _is_markdown_table_separator(sep_line)
+        ):
+            i += 1
+            continue
+
+        kept_lines: List[str] = [str(lines[i]), str(lines[i + 1])]
+        data_row_count = 0
+        j = i + 2
+        while j < total:
+            stripped = str(lines[j] or "").strip()
+            if not stripped:
+                if data_row_count > 0:
+                    break
+                j += 1
+                continue
+            if stripped.startswith("#"):
+                break
+            if _looks_like_markdown_table_row_for_shots(stripped):
+                if _is_markdown_table_separator(stripped):
+                    if data_row_count > 0:
+                        break
+                    j += 1
+                    continue
+                if data_row_count > 0 and _is_shot_markdown_header_row(stripped):
+                    break
+                kept_lines.append(stripped)
+                data_row_count += 1
+                j += 1
+                continue
+            if data_row_count > 0:
+                break
+            j += 1
+
+        if data_row_count > 0:
+            blocks.append(kept_lines)
+        i = max(j, i + 2)
+
+    return blocks
+
+
+def _score_shot_markdown_table_block(block_lines: List[str]) -> int:
+    """Prefer tables with real EP##_SC##_SH## ids over prompt example tables."""
+    real_ids = 0
+    for line in block_lines[2:]:
+        cells = _split_markdown_row_escaped(str(line or "").strip())
+        if not cells:
+            continue
+        if _is_shot_markdown_header_row(line):
+            continue
+        if _shot_id_cell_looks_real(cells[0]):
+            real_ids += 1
+    return real_ids
+
+
 def sanitize_shots_markdown_table_text(text: Any) -> str:
-    """Keep only the first valid markdown table block from LLM shots output."""
+    """Keep one Shot List markdown table from LLM output.
+
+    Stops each table at blank lines / re-headers (no cross-table merge).
+    If multiple tables exist, prefer the block with the most real Shot IDs
+    so prompt example tables do not displace the actual shot list.
+    """
     cleaned = sanitize_llm_markdown_output(str(text or ""))
     if not cleaned:
         return ""
@@ -17856,45 +17988,18 @@ def sanitize_shots_markdown_table_text(text: Any) -> str:
     if not lines:
         return ""
 
-    header_idx = -1
-    separator_idx = -1
-    for i in range(len(lines) - 1):
-        header_line = str(lines[i] or "").strip()
-        sep_line = str(lines[i + 1] or "").strip()
-        if not _looks_like_markdown_table_row_for_shots(header_line):
-            continue
-        if len(_split_markdown_row_escaped(header_line)) < 2:
-            continue
-        if _is_markdown_table_separator(sep_line):
-            header_idx = i
-            separator_idx = i + 1
-            break
-
-    if header_idx < 0 or separator_idx < 0:
+    blocks = _extract_shot_markdown_table_blocks(lines)
+    if not blocks:
         return ""
 
-    kept_lines: List[str] = [str(lines[header_idx]), str(lines[separator_idx])]
-    data_row_count = 0
-    for line in lines[separator_idx + 1 :]:
-        stripped = str(line or "").strip()
-        if not stripped:
-            continue
-        if stripped.startswith("#"):
-            break
-        if _looks_like_markdown_table_row_for_shots(stripped):
-            if _is_markdown_table_separator(stripped):
-                continue
-            kept_lines.append(stripped)
-            data_row_count += 1
-            continue
-        # Stop on first non-table content after table begins.
-        if data_row_count > 0:
-            break
-
-    if data_row_count <= 0:
+    best_block = max(
+        blocks,
+        key=lambda block: (_score_shot_markdown_table_block(block), len(block)),
+    )
+    if not best_block:
         return ""
 
-    return "\n".join(kept_lines).strip()
+    return "\n".join(str(line) for line in best_block).strip()
 
 
 def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict[str, str]], int]:
@@ -18000,7 +18105,10 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
 
     for line in lines[separator_idx + 1:]:
         stripped = line.strip()
+        # Blank line ends the first table (avoid merging a second example/header table).
         if not stripped:
+            if rows or row_cells:
+                break
             continue
 
         # A new markdown heading usually means current table section ended.
@@ -18009,7 +18117,11 @@ def parse_shots_markdown_table(markdown_text: str) -> Tuple[List[str], List[Dict
 
         if _looks_like_markdown_table_row_for_shots(stripped):
             if _is_markdown_table_separator(stripped):
+                if rows or row_cells:
+                    break
                 continue
+            if (rows or row_cells) and _is_shot_markdown_header_row(stripped):
+                break
 
             table_line_count += 1
             cells = _split_markdown_row_escaped(stripped)
@@ -18490,6 +18602,13 @@ def _validate_shot_rows_for_apply_with_tolerance(
             skipped_errors.append(f"row {idx} is not an object")
             continue
         if not any(str(val or "").strip() for val in item.values()):
+            continue
+
+        if _is_placeholder_shot_row(item):
+            shot_id = _pick_shot_cell(item, ["Shot ID", "shot_id", "镜头ID"], "") or "(blank)"
+            skipped_errors.append(
+                f"row {idx}: skipped placeholder/template Shot ID '{shot_id}'"
+            )
             continue
 
         _, duration_warning = _coerce_shot_row_duration_or_default(item)
@@ -28039,7 +28158,10 @@ def _build_shot_prompts(
 {scene_subject_index_section}
 {scene_subject_image_prompts_section}
 # Instruction
-1. Analyze the script and break it down into shots.
+1. Analyze `# Core Scene Info` Beats and break them down into shots per §二.1.5/§二.1.6.
+2. Output exactly one Shot List markdown table. Do not copy prompt example/template rows (e.g. `{{Scene ID}}_SHzz` or a second header).
+3. Scene opening / OT- / 吸睛 must be P segments inside the Shot that covers Beat 1 — never an extra Shot outside Beat-Shot mapping.
+4. Every Beat must appear in some row's `Beat-Shot映射`; do not invent unmapped opening shots.
 """
     
     return system_prompt, user_input
