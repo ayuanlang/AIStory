@@ -47,28 +47,223 @@ def wrap_story_dna_input_block(text: str) -> str:
     return f"{STORY_DNA_INPUT_START}\n{body}\n{STORY_DNA_INPUT_END}"
 
 
-def extract_story_dna_delimited_block(text: str, kind: str) -> str:
-    """Extract inner content between STORY_DNA_{KIND}_START/END (exclusive of markers)."""
+# Closed OUTPUT shorter than this is treated as a false/premature closure (e.g. copied "…" skeleton).
+_STORY_DNA_MIN_OUTPUT_LEN = 200
+
+
+def _story_dna_marker_re(kind: str, side: str):
+    kind_key = str(kind or "").strip().upper()
+    side_key = str(side or "").strip().upper()
+    return re.compile(rf"\[\s*STORY_DNA_{kind_key}_{side_key}\s*\]", flags=re.IGNORECASE)
+
+
+def iter_story_dna_delimited_blocks(text: str, kind: str) -> List[Dict[str, Any]]:
+    """Return all START/END pairs for a kind (non-greedy, scanned left-to-right)."""
     source = str(text or "")
     kind_key = str(kind or "").strip().upper()
-    if kind_key not in {"INPUT", "THINKING", "OUTPUT"}:
+    if kind_key not in {"INPUT", "THINKING", "OUTPUT"} or not source:
+        return []
+    start_re = _story_dna_marker_re(kind_key, "START")
+    end_re = _story_dna_marker_re(kind_key, "END")
+    blocks: List[Dict[str, Any]] = []
+    pos = 0
+    while True:
+        start_match = start_re.search(source, pos)
+        if not start_match:
+            break
+        content_start = start_match.end()
+        end_match = end_re.search(source, content_start)
+        if not end_match:
+            inner = source[content_start:].strip()
+            blocks.append(
+                {
+                    "content": inner,
+                    "start": start_match.start(),
+                    "content_start": content_start,
+                    "end": len(source),
+                    "closed": False,
+                }
+            )
+            break
+        inner = source[content_start : end_match.start()].strip()
+        blocks.append(
+            {
+                "content": inner,
+                "start": start_match.start(),
+                "content_start": content_start,
+                "end": end_match.end(),
+                "closed": True,
+            }
+        )
+        pos = end_match.end()
+    return blocks
+
+
+def extract_story_dna_delimited_block(text: str, kind: str) -> str:
+    """Extract preferred inner content between STORY_DNA_{KIND}_START/END."""
+    blocks = iter_story_dna_delimited_blocks(text, kind)
+    if not blocks:
         return ""
-    start_match = re.search(
-        rf"\[\s*STORY_DNA_{kind_key}_START\s*\]",
-        source,
-        flags=re.IGNORECASE,
-    )
+    if str(kind or "").strip().upper() != "OUTPUT":
+        return str(blocks[0].get("content") or "").strip()
+    # For OUTPUT, prefer the highest-quality candidate (not necessarily the first).
+    ranked = sorted(blocks, key=lambda b: _score_story_dna_output_candidate(str(b.get("content") or "")), reverse=True)
+    return str(ranked[0].get("content") or "").strip()
+
+
+def _trim_story_dna_placeholder_preamble(content: str) -> str:
+    """Drop leading ellipsis/skeleton lines so validation sees SCRIPT_TITLE / headings."""
+    lines = str(content or "").splitlines()
+    idx = 0
+    placeholder_re = re.compile(r"^[.…\s\-—_*]+$")
+    while idx < len(lines):
+        stripped = lines[idx].strip()
+        if not stripped:
+            idx += 1
+            continue
+        if placeholder_re.fullmatch(stripped):
+            idx += 1
+            continue
+        break
+    return "\n".join(lines[idx:]).strip()
+
+
+def _score_story_dna_output_candidate(content: str) -> int:
+    text = _trim_story_dna_placeholder_preamble(content)
+    if not text:
+        return -1
+    # Pure ellipsis / placeholder skeletons from prompt examples.
+    if re.fullmatch(r"[.…\s\-—_]+", text):
+        return -1
+    score = len(text)
+    if re.search(r"\[\s*SCRIPT_TITLE\s*[：:]", text, flags=re.IGNORECASE):
+        score += 50_000
+    if re.search(r"(?im)^(?:##\s*)?9\)\s*", text) or re.search(r"分集规划", text):
+        score += 20_000
+    if re.search(r"\[\s*EPISODE_BLOCK_START", text, flags=re.IGNORECASE):
+        score += 20_000
+    if re.search(r"(?im)^(?:##\s*)?0\)\s*", text):
+        score += 5_000
+    if re.search(r"(?im)^(?:##\s*)?Part\s*2\b", text):
+        score += 2_000
+    if re.search(r"(?im)\bVerdict\s*[：:]\s*通过", text) or re.search(r"Episode\s+Coverage\s+Audit", text, flags=re.I):
+        score += 15_000
+    if re.search(r"(?im)^(?:##\s*)?Part\s*1\b", text):
+        score += 500
+    return score
+
+
+def extract_story_dna_output_between_markers(text: str) -> Dict[str, Any]:
+    """If both OUTPUT_START and OUTPUT_END exist, return the slice between them.
+
+    Prefer the longest closed START…END pair when multiple pairs appear (avoids
+    empty skeleton pairs copied from the prompt).
+    """
+    source = str(text or "")
+    start_re = _story_dna_marker_re("OUTPUT", "START")
+    end_re = _story_dna_marker_re("OUTPUT", "END")
+    has_start = bool(start_re.search(source))
+    has_end = bool(end_re.search(source))
+    if not (has_start and has_end):
+        return {
+            "found": False,
+            "content": "",
+            "has_start": has_start,
+            "has_end": has_end,
+        }
+
+    best_inner = ""
+    best_len = -1
+    pos = 0
+    while True:
+        start_match = start_re.search(source, pos)
+        if not start_match:
+            break
+        end_match = end_re.search(source, start_match.end())
+        if not end_match:
+            break
+        inner = source[start_match.end() : end_match.start()]
+        # Keep raw middle (only strip outer whitespace) — validation does not
+        # require H1 / SCRIPT_TITLE when both markers are present.
+        inner_stripped = inner.strip()
+        if len(inner_stripped) > best_len:
+            best_len = len(inner_stripped)
+            best_inner = inner_stripped
+        pos = end_match.end()
+
+    return {
+        "found": best_len >= 0,
+        "content": best_inner,
+        "has_start": True,
+        "has_end": True,
+    }
+
+
+def is_acceptable_story_dna_markdown(text: str) -> bool:
+    """Pass when both OUTPUT markers exist — middle slice is the deliverable.
+
+    Contract (hard, minimal):
+      [STORY_DNA_OUTPUT_START] … [STORY_DNA_OUTPUT_END]
+    Presence of both markers is enough to pass validation; content between them
+    is what we keep / check. Falls back to a light length+signal check only when
+    markers are missing (legacy / malformed streams).
+    """
+    marked = extract_story_dna_output_between_markers(text)
+    if marked.get("found"):
+        return True
+
+    content = _trim_story_dna_placeholder_preamble(_strip_all_story_dna_markers(text))
+    if len(content) < 800:
+        return False
+    lower = content.lower()
+    if lower.startswith("error:") or "prohibited_content" in lower:
+        return False
+    signals = 0
+    if re.search(r"\[\s*SCRIPT_TITLE\s*[：:]", content, flags=re.IGNORECASE):
+        signals += 2
+    if re.search(r"\[\s*EPISODE_BLOCK_START", content, flags=re.IGNORECASE):
+        signals += 2
+    if re.search(r"(?im)\bVerdict\b", content) or "分集规划" in content:
+        signals += 1
+    if re.search(r"(?im)^(?:##\s*)?(?:Part\s*[12]\b|\d+\))", content):
+        signals += 1
+    if len(content) >= 5000 and signals >= 1:
+        return True
+    return signals >= 2
+
+
+def _recover_output_after_premature_close(full: str) -> str:
+    """If first OUTPUT pair is a tiny skeleton, return body after that premature END."""
+    start_re = _story_dna_marker_re("OUTPUT", "START")
+    end_re = _story_dna_marker_re("OUTPUT", "END")
+    start_match = start_re.search(full)
     if not start_match:
         return ""
-    content_start = start_match.end()
-    end_match = re.search(
-        rf"\[\s*STORY_DNA_{kind_key}_END\s*\]",
-        source[content_start:],
-        flags=re.IGNORECASE,
-    )
+    rest = full[start_match.end() :]
+    end_match = end_re.search(rest)
     if not end_match:
-        return source[content_start:].strip()
-    return source[content_start : content_start + end_match.start()].strip()
+        return _trim_story_dna_placeholder_preamble(end_re.sub("", rest))
+    first_inner = rest[: end_match.start()].strip()
+    if (
+        len(first_inner) >= _STORY_DNA_MIN_OUTPUT_LEN
+        and _score_story_dna_output_candidate(first_inner) > 0
+    ):
+        # First closed block looks real; still allow EOF candidate separately.
+        to_eof = end_re.sub("", rest).strip()
+        return _trim_story_dna_placeholder_preamble(to_eof)
+    # Premature close: keep everything after the bad END (may include more OUTPUT markers).
+    after = rest[end_match.end() :]
+    after = start_re.sub("", after)
+    after = end_re.sub("", after)
+    return _trim_story_dna_placeholder_preamble(after)
+
+
+def _strip_all_story_dna_markers(text: str) -> str:
+    cleaned = str(text or "")
+    for kind in ("INPUT", "THINKING", "OUTPUT"):
+        cleaned = _story_dna_marker_re(kind, "START").sub("", cleaned)
+        cleaned = _story_dna_marker_re(kind, "END").sub("", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 def strip_story_dna_thinking_blocks(text: str) -> str:
@@ -81,7 +276,7 @@ def strip_story_dna_thinking_blocks(text: str) -> str:
         flags=re.IGNORECASE,
     )
     cleaned = pattern.sub("", source)
-    # orphan START without END: drop from START to EOF / next OUTPUT start
+    # orphan START without END: keep body (do NOT wipe to EOF — models often omit THINKING_END).
     orphan = re.search(r"\[\s*STORY_DNA_THINKING_START\s*\]", cleaned, flags=re.IGNORECASE)
     if orphan:
         next_output = re.search(
@@ -93,41 +288,151 @@ def strip_story_dna_thinking_blocks(text: str) -> str:
             cut_at = orphan.start() + next_output.start()
             cleaned = cleaned[: orphan.start()] + cleaned[cut_at:]
         else:
-            cleaned = cleaned[: orphan.start()]
+            # Malformed: THINKING_START … [OUTPUT_END] with no OUTPUT_START / THINKING_END.
+            # Drop only the START marker; keep the body for recovery.
+            cleaned = cleaned[: orphan.start()] + cleaned[orphan.end() :]
+    cleaned = _story_dna_marker_re("OUTPUT", "START").sub("", cleaned)
+    cleaned = _story_dna_marker_re("OUTPUT", "END").sub("", cleaned)
+    cleaned = _story_dna_marker_re("THINKING", "END").sub("", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
-def extract_story_dna_output_for_validation(text: str) -> Dict[str, Any]:
-    """Prefer OUTPUT block for checks; fall back to text with THINKING stripped.
+def _recover_malformed_story_dna_stream(full: str) -> str:
+    """Recover body when model emits THINKING_START … OUTPUT_END without middle markers."""
+    source = str(full or "")
+    think_start = _story_dna_marker_re("THINKING", "START").search(source)
+    out_end = None
+    for match in _story_dna_marker_re("OUTPUT", "END").finditer(source):
+        out_end = match
+    if think_start and out_end and out_end.start() > think_start.end():
+        inner = source[think_start.end() : out_end.start()]
+        return _strip_all_story_dna_markers(inner)
+    if out_end:
+        return _strip_all_story_dna_markers(source[: out_end.start()])
+    return ""
 
-    Returns:
-      content: markdown used for validation / preferred deliverable body
-      full: original text
-      thinking: extracted THINKING inner (may be empty)
-      had_output_markers / had_thinking_markers: bool
-      truncated_thinking: bool
+
+def extract_story_dna_output_for_validation(text: str) -> Dict[str, Any]:
+    """Prefer OUTPUT_START…OUTPUT_END middle; fall back for malformed streams.
+
+    Primary contract: both markers present → middle slice is the deliverable.
+    When multiple pairs exist, keep the longest middle (skip empty skeletons).
     """
     full = str(text or "")
-    thinking = extract_story_dna_delimited_block(full, "THINKING")
-    output = extract_story_dna_delimited_block(full, "OUTPUT")
-    had_output = bool(output)
-    had_thinking = bool(thinking) or bool(
+    thinking_blocks = iter_story_dna_delimited_blocks(full, "THINKING")
+    thinking = str((thinking_blocks[0].get("content") if thinking_blocks else "") or "").strip()
+    if len(thinking_blocks) > 1:
+        thinking = max(
+            (str(b.get("content") or "").strip() for b in thinking_blocks),
+            key=len,
+            default=thinking,
+        )
+    if thinking_blocks and not thinking_blocks[0].get("closed") and len(thinking) > _STORY_DNA_MIN_OUTPUT_LEN:
+        split_m = re.search(
+            r"(?im)^(?:##\s*)?(?:Part\s*2\b|0\)\s*|9\)\s*分集|[\[\s]*SCRIPT_TITLE\s*[：:])",
+            thinking,
+        )
+        if split_m and split_m.start() > 40:
+            thinking = thinking[: split_m.start()].strip()
+        else:
+            thinking = ""
+    had_thinking = bool(
         re.search(r"\[\s*STORY_DNA_THINKING_START\s*\]", full, flags=re.IGNORECASE)
     )
-    if had_output:
-        content = output
-        truncated_thinking = had_thinking
-    else:
-        stripped = strip_story_dna_thinking_blocks(full)
-        content = stripped or full
+
+    # Hard rule: both OUTPUT markers → middle content wins (longest pair).
+    marked = extract_story_dna_output_between_markers(full)
+    if marked.get("found"):
+        middle = str(marked.get("content") or "")
+        # If the longest closed middle is still a tiny placeholder, try recovery
+        # candidates so we do not persist an empty "…" skeleton.
+        if len(middle) >= _STORY_DNA_MIN_OUTPUT_LEN or _score_story_dna_output_candidate(middle) > 0:
+            return {
+                "content": middle,
+                "full": full,
+                "thinking": thinking,
+                "had_output_markers": True,
+                "had_thinking_markers": had_thinking,
+                "truncated_thinking": had_thinking,
+                "output_source": "output_markers_middle",
+                "output_score": max(len(middle), _score_story_dna_output_candidate(middle)),
+            }
+
+    output_blocks = iter_story_dna_delimited_blocks(full, "OUTPUT")
+    candidates: List[tuple[int, str, str]] = []
+
+    if marked.get("found"):
+        middle = str(marked.get("content") or "")
+        candidates.append((len(middle), middle, "output_markers_middle"))
+
+    for block in output_blocks:
+        if not block.get("closed") and not _story_dna_marker_re("OUTPUT", "START").search(full):
+            continue
+        inner = str(block.get("content") or "").strip()
+        candidates.append((_score_story_dna_output_candidate(inner), inner, "closed_or_open_block"))
+
+    first_out_start = _story_dna_marker_re("OUTPUT", "START").search(full)
+    if first_out_start:
+        to_eof = full[first_out_start.end() :]
+        to_eof = _story_dna_marker_re("OUTPUT", "END").sub("", to_eof).strip()
+        candidates.append((_score_story_dna_output_candidate(to_eof), to_eof, "output_start_to_eof"))
+        premature = _recover_output_after_premature_close(full)
+        if premature:
+            candidates.append(
+                (_score_story_dna_output_candidate(premature), premature, "after_premature_output_end")
+            )
+
+    stripped = strip_story_dna_thinking_blocks(full)
+    if stripped:
+        candidates.append((_score_story_dna_output_candidate(stripped), stripped, "strip_thinking"))
+
+    last_thinking_end = None
+    for match in _story_dna_marker_re("THINKING", "END").finditer(full):
+        last_thinking_end = match
+    if last_thinking_end:
+        after = _strip_all_story_dna_markers(full[last_thinking_end.end() :])
+        if after:
+            candidates.append((_score_story_dna_output_candidate(after), after, "after_thinking_end"))
+
+    malformed = _recover_malformed_story_dna_stream(full)
+    if malformed:
+        candidates.append(
+            (_score_story_dna_output_candidate(malformed), malformed, "malformed_thinking_to_output_end")
+        )
+
+    markerless = _strip_all_story_dna_markers(full)
+    if markerless:
+        candidates.append((_score_story_dna_output_candidate(markerless), markerless, "strip_all_markers"))
+
+    best_score = -1
+    best_content = ""
+    best_source = "full"
+    for score, content, source_tag in candidates:
+        content = str(content or "").strip()
+        score = _score_story_dna_output_candidate(content) if source_tag != "output_markers_middle" else max(score, len(content))
+        if score > best_score:
+            best_score = score
+            best_content = content
+            best_source = source_tag
+
+    had_output = bool(marked.get("found"))
+    if best_score < 0 or not best_content:
+        best_content = stripped or markerless or full
+        best_source = "fallback_full"
         truncated_thinking = bool(stripped) and stripped != full.strip()
+        had_output = False
+    else:
+        truncated_thinking = had_thinking and best_source != "full"
+
     return {
-        "content": str(content or "").strip(),
+        "content": str(best_content or "").strip(),
         "full": full,
         "thinking": thinking,
         "had_output_markers": had_output,
         "had_thinking_markers": had_thinking,
         "truncated_thinking": truncated_thinking,
+        "output_source": best_source,
+        "output_score": best_score,
     }
 
 
@@ -137,7 +442,21 @@ def normalize_story_dna_markdown_for_persist(text: str) -> str:
     full = str(info.get("full") or "")
     output = str(info.get("content") or "").strip()
     thinking = str(info.get("thinking") or "").strip()
-    if info.get("had_output_markers"):
+    # Rebuild when we recovered a real deliverable (even if the model closed OUTPUT too early).
+    if output and (
+        info.get("had_output_markers")
+        or info.get("output_source")
+        in {
+            "output_start_to_eof",
+            "after_thinking_end",
+            "strip_thinking",
+            "after_premature_output_end",
+            "malformed_thinking_to_output_end",
+            "strip_all_markers",
+            "fallback_full",
+        }
+        or (info.get("had_thinking_markers") and len(output) >= _STORY_DNA_MIN_OUTPUT_LEN)
+    ):
         parts: List[str] = []
         if thinking or info.get("had_thinking_markers"):
             parts.append(STORY_DNA_THINKING_START)

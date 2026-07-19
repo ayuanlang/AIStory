@@ -80,6 +80,7 @@ from app.services.episode_script_reference_service import (
     collect_episode_script_reference_snippets,
     extract_episode_block_from_global_framework,
     extract_story_dna_output_for_validation,
+    is_acceptable_story_dna_markdown,
     normalize_story_dna_markdown_for_persist,
     wrap_story_dna_input_block,
 )
@@ -18933,15 +18934,18 @@ async def generate_markdown_with_retry(
         """Prefer STORY_DNA_OUTPUT (truncate THINKING) so reasoning cannot fail validation."""
         info = extract_story_dna_output_for_validation(content)
         view = str(info.get("content") or content or "").strip()
-        if info.get("had_output_markers") or info.get("truncated_thinking"):
+        if info.get("had_output_markers") or info.get("truncated_thinking") or info.get("output_source"):
             logger.info(
                 "[generate_markdown_with_retry] story_dna_truncate tag=%s "
                 "had_output=%s had_thinking=%s truncated_thinking=%s "
+                "output_source=%s output_score=%s "
                 "full_len=%s validate_len=%s thinking_len=%s",
                 tag,
                 bool(info.get("had_output_markers")),
                 bool(info.get("had_thinking_markers")),
                 bool(info.get("truncated_thinking")),
+                info.get("output_source"),
+                info.get("output_score"),
                 len(str(info.get("full") or "")),
                 len(view),
                 len(str(info.get("thinking") or "")),
@@ -18951,7 +18955,31 @@ async def generate_markdown_with_retry(
     def _passes_markdown(content: str, tag: str) -> bool:
         if not content or _looks_like_error_text(content):
             return False
-        return is_valid_markdown_output(_validation_view(content, tag), require_h1=require_h1)
+        # Story DNA hard rule: both OUTPUT_START and OUTPUT_END → middle slice passes.
+        if is_acceptable_story_dna_markdown(content):
+            view = _validation_view(content, tag)
+            logger.info(
+                "[generate_markdown_with_retry] story_dna_output_markers_accept tag=%s "
+                "view_len=%s full_len=%s",
+                tag,
+                len(view),
+                len(content),
+            )
+            return True
+        view = _validation_view(content, tag)
+        if is_valid_markdown_output(view, require_h1=require_h1):
+            return True
+        if is_acceptable_story_dna_markdown(view):
+            logger.info(
+                "[generate_markdown_with_retry] story_dna_lenient_accept tag=%s "
+                "view_len=%s full_len=%s require_h1=%s",
+                tag,
+                len(view),
+                len(content),
+                require_h1,
+            )
+            return True
+        return False
 
     raw_1, content_1, meta_1 = await _call_once("initial", user_prompt, sys_prompt)
     if _is_prohibited_marker(raw_1) or _is_prohibited_marker(content_1):
@@ -19716,12 +19744,13 @@ async def generate_project_story_dna_global(
     _release_db_connection(db, "generate_project_story_dna_global_llm_call")
 
     try:
+        # Story DNA: do not strict-retry on H1/marker shape — recover markers on persist instead.
         generated_payload = await generate_markdown_with_retry(
             user_prompt=user_prompt,
             sys_prompt=sys_prompt,
             llm_config=llm_config,
-            strict_markdown=(req.strict_markdown is not False),
-            require_h1=True,
+            strict_markdown=False,
+            require_h1=False,
             return_meta=True,
         )
     except Exception as e:
@@ -23197,8 +23226,8 @@ async def generate_episode_story_dna(
             user_prompt=user_prompt,
             sys_prompt=sys_prompt,
             llm_config=llm_config,
-            strict_markdown=(req.strict_markdown is not False),
-            require_h1=True,
+            strict_markdown=False if (mode == "global" and prompt_filename == "master_story_architect.md") else (req.strict_markdown is not False),
+            require_h1=False if (mode == "global" and prompt_filename == "master_story_architect.md") else True,
             return_meta=True,
         )
     except Exception as e:

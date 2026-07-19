@@ -221,6 +221,7 @@
 | `STORY_DNA_OUTPUT_*` | §0–§9 正式 Story DNA | **唯一正式交付**；校验 / 落库 / 下游只认此块 |
 
 **禁**：标志外寒暄、链上推理、代码围栏；禁把 Part 1 写进 OUTPUT；禁省略任一对起止标志；禁跨块混写。
+**禁空 OUTPUT**：`[STORY_DNA_OUTPUT_START]` 与 `[STORY_DNA_OUTPUT_END]` 之间必须包含完整 §0–§9（含 `[SCRIPT_TITLE:…]` 与全集 `EPISODE_BLOCK`）；**禁止**先写空/省略号骨架再在标志外续写正文；**禁止**过早关闭 OUTPUT。
 
 ### 重心 vs 思考过程
 
@@ -380,26 +381,20 @@
 
 > **3 集微短剧**（样例仅展示 EP01；**实际交付须 EP01–EPN 全集逐集完整展开，禁止省略或合并**）。THINKING = 标签；OUTPUT 内 §9 = 完整句子。实际须按 N 集**每一集独立写全**至 EPN。
 
-### 标志骨架（须原样使用）
+### 标志骨架（顺序示意；正式成稿须写入完整正文，禁止只抄骨架/省略号）
 
 ```
-[STORY_DNA_THINKING_START]
-## Part 1 — …
-[STORY_DNA_THINKING_END]
-
-[STORY_DNA_OUTPUT_START]
+（THINKING 起）## Part 1 — 完整标签正文（THINKING 止）
+（OUTPUT 起）
 [SCRIPT_TITLE:暗潮工牌]
 ## Part 2 — …
-## 0) …
-## 9) …
-[EPISODE_BLOCK_START:EP01]
-…
-[EPISODE_BLOCK_END:EP01]
-…（EP02–EPN）
-### Episode Coverage Audit
-…
-[STORY_DNA_OUTPUT_END]
+## 0) …（完整标签，非省略号）
+## 9) …（EP01–EPN 全集完整块，非省略号）
+### Episode Coverage Audit …
+（OUTPUT 止）
 ```
+
+> 上表仅示意顺序。正式交付必须使用真实独占行标志 `[STORY_DNA_THINKING_START/END]` 与 `[STORY_DNA_OUTPUT_START/END]`，且 OUTPUT 内为完整正文。
 
 ### 思考过程片段（标签密度参考；位于 THINKING 内）
 
