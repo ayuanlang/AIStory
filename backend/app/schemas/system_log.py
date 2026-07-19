@@ -50,11 +50,18 @@ class UiSystemLogListOut(BaseModel):
     log_file: str = ""
 
 
+class ScriptAnalysisAiDiagnosisChatMessage(BaseModel):
+    role: str = "user"
+    content: str = ""
+
+
 class ScriptAnalysisAiDiagnosisRequest(BaseModel):
     manual_text: str = ""
     system_logs: str = ""
     workspace_summary: str = ""
     user_note: str = ""
+    # Multi-turn agent dialogue: prior + current user/assistant turns.
+    history: List[ScriptAnalysisAiDiagnosisChatMessage] = Field(default_factory=list)
     project_id: Optional[int] = None
     episode_id: Optional[int] = None
     episode_label: str = ""

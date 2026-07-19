@@ -18970,7 +18970,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         type="button"
                         onClick={openAiDiagnosisModal}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 hover:text-emerald-100"
-                        title={t('AI 诊断：结合手册、日志与工作区给出下一步建议', 'AI Diagnosis: next-step advice from manual, logs, and workspace')}
+                        title={t('AI 诊断（Agent）：多轮对话，结合手册、日志与工作区给出建议', 'AI Diagnosis (Agent): multi-turn chat with manual, logs, and workspace')}
                         aria-label={t('AI 诊断', 'AI Diagnosis')}
                     >
                         <Stethoscope className="w-4 h-4" />

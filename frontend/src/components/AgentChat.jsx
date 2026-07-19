@@ -151,9 +151,10 @@ const MAX_PERSISTED_MESSAGES = 100; // per mode, to cap localStorage size
 const MAX_HISTORY_TO_SEND = 20;     // max messages sent to backend per request
 
 /** Load saved history from localStorage. Returns default empty structure on failure. */
-const loadPersistedHistory = () => {
+const loadPersistedHistory = (storageKey = HISTORY_STORAGE_KEY) => {
+    if (!storageKey) return null;
     try {
-        const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+        const raw = localStorage.getItem(storageKey);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
@@ -173,16 +174,30 @@ const loadPersistedHistory = () => {
     return null;
 };
 
-const hasSavedHistory = () => {
+const hasSavedHistory = (storageKey = HISTORY_STORAGE_KEY) => {
+    if (!storageKey) return false;
     try {
-        const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+        const raw = localStorage.getItem(storageKey);
         if (!raw) return false;
         const parsed = JSON.parse(raw);
         return !!((parsed?.project?.length) || (parsed?.system_management?.length));
     } catch { return false; }
 };
 
-const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown, customTitle, customPlaceholder, customModeOnly = false, onSendCustom }) => {
+const AgentChat = ({
+    context,
+    onClose,
+    isSuperuser = false,
+    onHeaderPointerDown,
+    customTitle,
+    customPlaceholder,
+    customModeOnly = false,
+    onSendCustom,
+    historyStorageKey = HISTORY_STORAGE_KEY,
+    onHistoryChange = null,
+    loadHistoryLabel = 'Load previous conversation',
+    hideHeader = false,
+}) => {
     const [historyByMode, setHistoryByMode] = useState({ project: [], system_management: [] });
     const [loading, setLoading] = useState(false);
     const [streaming, setStreaming] = useState(false);
@@ -198,31 +213,46 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown,
     const streamModeRef = useRef(mode);
     const historyRef = useRef(historyByMode);
     historyRef.current = historyByMode;
+    const onSendCustomRef = useRef(onSendCustom);
+    onSendCustomRef.current = onSendCustom;
+    const onHistoryChangeRef = useRef(onHistoryChange);
+    onHistoryChangeRef.current = onHistoryChange;
 
     // Persist history to localStorage whenever it changes (skip mid-stream placeholder messages)
     useEffect(() => {
-        if (streaming) return; // don't persist partial streaming content
+        if (streaming || !historyStorageKey) return; // don't persist partial streaming content
         try {
             const toSave = {
                 project: (historyByMode.project || []).filter((m) => !m.streaming).slice(-MAX_PERSISTED_MESSAGES),
                 system_management: (historyByMode.system_management || []).filter((m) => !m.streaming).slice(-MAX_PERSISTED_MESSAGES),
             };
-            localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(toSave));
+            localStorage.setItem(historyStorageKey, JSON.stringify(toSave));
         } catch { /* quota exceeded – ignore */ }
-    }, [historyByMode, streaming]);
+    }, [historyByMode, streaming, historyStorageKey]);
+
+    useEffect(() => {
+        if (typeof onHistoryChangeRef.current !== 'function') return;
+        const clean = (Array.isArray(activeHistory) ? activeHistory : [])
+            .filter((m) => !m?.streaming)
+            .map((m) => ({
+                role: String(m?.role || 'user'),
+                content: String(m?.content || ''),
+            }));
+        onHistoryChangeRef.current(clean);
+    }, [activeHistory]);
 
     const handleClearHistory = useCallback(() => {
         setHistoryByMode((prev) => ({ ...(prev || {}), [mode]: [] }));
     }, [mode]);
 
     const handleLoadHistory = useCallback(() => {
-        const saved = loadPersistedHistory();
+        const saved = loadPersistedHistory(historyStorageKey);
         if (!saved) return;
         setHistoryByMode((prev) => ({
             ...(prev || {}),
             [mode]: saved[mode] || [],
         }));
-    }, [mode]);
+    }, [mode, historyStorageKey]);
 
     const scrollToLatest = useCallback((behavior = 'smooth') => {
         if (endRef.current && typeof endRef.current.scrollIntoView === 'function') {
@@ -296,8 +326,9 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown,
                 },
             };
 
-            const result = (customModeOnly && onSendCustom)
-                ? await onSendCustom(queryText, normalizedHistory, callbacks)
+            const customSender = onSendCustomRef.current;
+            const result = (customModeOnly && typeof customSender === 'function')
+                ? await customSender(queryText, normalizedHistory, callbacks)
                 : (isSystemMode
                     ? await streamSystemManagementAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks)
                     : await streamAgentCommand(queryText, runtimeContext, normalizedHistory, callbacks));
@@ -336,8 +367,7 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown,
             setLoading(false);
             setStreaming(false);
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mode, context]);
+    }, [mode, context, customModeOnly]);
 
     const handleQuickAction = useCallback((actionType) => {
         if (actionType === 'confirm_write') {
@@ -347,34 +377,60 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown,
 
     return (
         <div className="flex flex-col h-full bg-card rounded-lg border shadow-sm">
-            <div className="p-4 border-b font-semibold flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing select-none"
-                 onPointerDown={onHeaderPointerDown}>
-                <div className="flex items-center gap-2">
-                    <Bot className="w-5 h-5 text-primary" />
-                    {customTitle || (mode === 'system_management' ? 'System Management Agent' : 'AI Assistant')}
-                </div>
-                {isSuperuser && !customModeOnly && (
-                    <div className="ml-auto mr-2 flex items-center gap-1 rounded-md border border-white/10 bg-black/20 p-1">
-                        <button
-                            type="button"
-                            className={`px-2 py-1 text-xs rounded ${mode === 'project' ? 'bg-primary text-primary-foreground' : 'text-gray-300 hover:bg-white/10'}`}
-                            onClick={() => setMode('project')}
-                            disabled={loading}
-                        >
-                            Project
-                        </button>
-                        <button
-                            type="button"
-                            className={`px-2 py-1 text-xs rounded ${mode === 'system_management' ? 'bg-primary text-primary-foreground' : 'text-gray-300 hover:bg-white/10'}`}
-                            onClick={() => setMode('system_management')}
-                            disabled={loading}
-                        >
-                            System
-                        </button>
+            {!hideHeader ? (
+                <div className="p-4 border-b font-semibold flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing select-none"
+                     onPointerDown={onHeaderPointerDown}>
+                    <div className="flex items-center gap-2">
+                        <Bot className="w-5 h-5 text-primary" />
+                        {customTitle || (mode === 'system_management' ? 'System Management Agent' : 'AI Assistant')}
                     </div>
-                )}
-                <div className="flex items-center gap-1">
-                    {activeHistory.length > 0 && (
+                    {isSuperuser && !customModeOnly && (
+                        <div className="ml-auto mr-2 flex items-center gap-1 rounded-md border border-white/10 bg-black/20 p-1">
+                            <button
+                                type="button"
+                                className={`px-2 py-1 text-xs rounded ${mode === 'project' ? 'bg-primary text-primary-foreground' : 'text-gray-300 hover:bg-white/10'}`}
+                                onClick={() => setMode('project')}
+                                disabled={loading}
+                            >
+                                Project
+                            </button>
+                            <button
+                                type="button"
+                                className={`px-2 py-1 text-xs rounded ${mode === 'system_management' ? 'bg-primary text-primary-foreground' : 'text-gray-300 hover:bg-white/10'}`}
+                                onClick={() => setMode('system_management')}
+                                disabled={loading}
+                            >
+                                System
+                            </button>
+                        </div>
+                    )}
+                    <div className="flex items-center gap-1">
+                        {activeHistory.length > 0 && (
+                            <button
+                                onClick={handleClearHistory}
+                                className="p-1 rounded-md hover:bg-white/10 text-muted-foreground hover:text-destructive"
+                                aria-label="Clear chat history"
+                                title="Clear history"
+                                disabled={loading}
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        )}
+                        {typeof onClose === 'function' && (
+                            <button
+                                onClick={onClose}
+                                className="p-1 rounded-md hover:bg-white/10"
+                                aria-label="Close AI Assistant"
+                                title="Close"
+                            >
+                                <X className="w-4 h-4" />
+                            </button>
+                        )}
+                    </div>
+                </div>
+            ) : (
+                activeHistory.length > 0 ? (
+                    <div className="px-3 py-2 border-b border-white/10 flex justify-end">
                         <button
                             onClick={handleClearHistory}
                             className="p-1 rounded-md hover:bg-white/10 text-muted-foreground hover:text-destructive"
@@ -384,28 +440,18 @@ const AgentChat = ({ context, onClose, isSuperuser = false, onHeaderPointerDown,
                         >
                             <Trash2 className="w-4 h-4" />
                         </button>
-                    )}
-                    {typeof onClose === 'function' && (
-                        <button
-                            onClick={onClose}
-                            className="p-1 rounded-md hover:bg-white/10"
-                            aria-label="Close AI Assistant"
-                            title="Close"
-                        >
-                            <X className="w-4 h-4" />
-                        </button>
-                    )}
-                </div>
-            </div>
+                    </div>
+                ) : null
+            )}
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-                {activeHistory.length === 0 && !loading && hasSavedHistory() && (
+                {activeHistory.length === 0 && !loading && hasSavedHistory(historyStorageKey) && (
                     <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
                         <button
                             onClick={handleLoadHistory}
                             className="flex items-center gap-2 px-4 py-2 rounded-md border border-white/10 hover:bg-white/10 transition-colors text-sm"
                         >
                             <History className="w-4 h-4" />
-                            Load previous conversation
+                            {loadHistoryLabel}
                         </button>
                     </div>
                 )}

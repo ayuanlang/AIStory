@@ -8095,7 +8095,7 @@ async def run_script_analysis_ai_diagnosis(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Diagnose script-analysis page state with LLM; optionally email ops."""
+    """Diagnose script-analysis page state with agent-style multi-turn LLM chat; optionally email ops."""
     current_user_snapshot = _snapshot_user_principal(current_user)
     current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
     if payload.project_id:
@@ -8105,15 +8105,24 @@ async def run_script_analysis_ai_diagnosis(
     system_logs = str(payload.system_logs or "")
     workspace_summary = str(payload.workspace_summary or "")
     user_note = str(payload.user_note or "")
+    history_payload = list(payload.history or [])
     existing_advice = str(payload.existing_advice or "").strip()
     email_only = bool(payload.send_to_ops) and bool(existing_advice)
+    has_history = any(
+        str(getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else "") or "").strip()
+        for item in history_payload
+    )
 
-    if not any(part.strip() for part in (manual_text, system_logs, workspace_summary, user_note, existing_advice)):
+    if not any(
+        part.strip()
+        for part in (manual_text, system_logs, workspace_summary, user_note, existing_advice)
+    ) and not has_history:
         raise HTTPException(status_code=400, detail="请至少提供操作手册、系统日志、工作区概况或问题描述中的一项。")
 
     meta = {
         "ops_email": OPS_SUPPORT_EMAIL,
         "email_only": email_only,
+        "agent_mode": True,
     }
     advice = existing_advice
     selected_dropdown_id = None
@@ -8125,6 +8134,7 @@ async def run_script_analysis_ai_diagnosis(
             system_logs=system_logs,
             workspace_summary=workspace_summary,
             user_note=user_note,
+            history=history_payload,
             project_id=payload.project_id,
             episode_id=payload.episode_id,
             episode_label=str(payload.episode_label or ""),
@@ -8260,6 +8270,7 @@ async def run_script_analysis_ai_diagnosis(
                 manual_text=manual_text,
                 system_logs=system_logs,
                 workspace_summary=workspace_summary,
+                history=history_payload,
             )
             _send_email_via_runtime_smtp(OPS_SUPPORT_EMAIL, subject, content, strict=True)
             emailed = True
