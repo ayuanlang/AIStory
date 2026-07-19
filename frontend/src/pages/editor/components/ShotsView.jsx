@@ -11772,7 +11772,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜续写', 'Shot Continuation')}</span>
                                                 </label>
 
-                                                {renderVideoCreditEstimateBadge(true)}
                                                 <button 
                                                     onClick={() => generateAssetWithLang('video')} 
                                                     disabled={currentShotGenerating}

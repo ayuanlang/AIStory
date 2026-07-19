@@ -69,6 +69,80 @@ const DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES = Object.fromEntries(
 // alias used by fill button / legacy references
 const DEFAULT_KIE_SEEDANCE_SECOND_RATES = DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES;
 
+const KIE_OMNI_DURATION_BUCKETS = [4, 6, 8, 10];
+const KIE_OMNI_RESOLUTION_TIERS = ['720p', '1080p', '4k'];
+// Official KIE Gemini Omni Video rates (KIE credits)
+const DEFAULT_KIE_OMNI_DURATION_RATES_KIE = {
+    without_video_input: {
+        '720p': { 4: '63', 6: '84', 8: '105', 10: '126' },
+        '1080p': { 4: '63', 6: '84', 8: '105', 10: '126' },
+        '4k': { 4: '147', 6: '168', 8: '189', 10: '210' },
+    },
+    with_video_input: {
+        '720p': '168',
+        '1080p': '168',
+        '4k': '252',
+    },
+};
+
+const isKieOmniVideoApi = (api) => {
+    const provider = String(api?.provider || '').trim().toLowerCase();
+    const model = String(api?.model || '').trim().toLowerCase();
+    const name = String(api?.name || '').trim().toLowerCase();
+    const identity = `${provider} ${model} ${name}`;
+    return identity.includes('gemini-omni-video')
+        || identity.includes('gemini_omni_video')
+        || (identity.includes('gemini') && identity.includes('omni') && (identity.includes('video') || provider.includes('kie')));
+};
+
+const normalizeOmniDurationRates = (raw) => {
+    const src = (raw && typeof raw === 'object') ? raw : {};
+    const withoutSrc = (src.without_video_input && typeof src.without_video_input === 'object') ? src.without_video_input : {};
+    const withSrc = (src.with_video_input && typeof src.with_video_input === 'object') ? src.with_video_input : {};
+    const out = { without_video_input: {}, with_video_input: {} };
+    KIE_OMNI_RESOLUTION_TIERS.forEach((tier) => {
+        const tierRow = (withoutSrc[tier] && typeof withoutSrc[tier] === 'object') ? withoutSrc[tier] : {};
+        const buckets = {};
+        KIE_OMNI_DURATION_BUCKETS.forEach((bucket) => {
+            const val = tierRow[bucket] ?? tierRow[String(bucket)] ?? '';
+            buckets[bucket] = val === '' || val == null ? '' : String(val);
+        });
+        out.without_video_input[tier] = buckets;
+        const withVal = withSrc[tier];
+        out.with_video_input[tier] = withVal === '' || withVal == null ? '' : String(withVal);
+    });
+    return out;
+};
+
+const omniDurationRatesToPayload = (rates) => {
+    const normalized = normalizeOmniDurationRates(rates);
+    const out = { without_video_input: {}, with_video_input: {} };
+    let hasAny = false;
+    KIE_OMNI_RESOLUTION_TIERS.forEach((tier) => {
+        const buckets = {};
+        KIE_OMNI_DURATION_BUCKETS.forEach((bucket) => {
+            const n = toNullableSupplierPrice(normalized.without_video_input?.[tier]?.[bucket]);
+            if (n != null) {
+                buckets[String(bucket)] = n;
+                hasAny = true;
+            }
+        });
+        if (Object.keys(buckets).length) out.without_video_input[tier] = buckets;
+        const withN = toNullableSupplierPrice(normalized.with_video_input?.[tier]);
+        if (withN != null) {
+            out.with_video_input[tier] = withN;
+            hasAny = true;
+        }
+    });
+    return hasAny ? out : {};
+};
+
+const hasAnyOmniRateValue = (rates) => {
+    const payload = omniDurationRatesToPayload(rates);
+    return Object.keys(payload.without_video_input || {}).length > 0
+        || Object.keys(payload.with_video_input || {}).length > 0;
+};
+
 
 const kieCreditRatesToCnyRates = (raw) => {
     const src = (raw && typeof raw === 'object') ? raw : {};
@@ -243,7 +317,9 @@ const deriveSupplierPriceFromCredits = (credits) => {
 };
 
 const buildDraftFromApi = (api) => ({
-    billing_unit_type: normalizeUnitType(api?.billing_unit_type),
+    billing_unit_type: normalizeUnitType(
+        api?.billing_unit_type || (isKieOmniVideoApi(api) ? 'per_call' : undefined),
+    ),
     supplier_price: toNonNegativeFloatString(
         api?.supplier_price ?? deriveSupplierPriceFromCredits(api?.billing_cost),
         '0',
@@ -272,6 +348,12 @@ const buildDraftFromApi = (api) => ({
         return existingCny;
     })(),
     video_second_min_billable_by_output: api?.video_second_min_billable_by_output || { ...DEFAULT_SPARKVIDEO_MIN_BILLABLE_BY_OUTPUT },
+    video_duration_kie_credit_rates: (() => {
+        const existing = normalizeOmniDurationRates(api?.video_duration_kie_credit_rates);
+        if (hasAnyOmniRateValue(existing)) return existing;
+        if (isKieOmniVideoApi(api)) return normalizeOmniDurationRates(DEFAULT_KIE_OMNI_DURATION_RATES_KIE);
+        return existing;
+    })(),
 });
 
 const computePreview = (draft) => {
@@ -315,6 +397,8 @@ const isDraftDirty = (draft, api) => {
             !== JSON.stringify(resolutionRatesToPayload(baseline.video_second_resolution_rates))
         || JSON.stringify(sparkvideoCnyRatesToPayload(draft.video_second_cny_resolution_rates))
             !== JSON.stringify(sparkvideoCnyRatesToPayload(baseline.video_second_cny_resolution_rates))
+        || JSON.stringify(omniDurationRatesToPayload(draft.video_duration_kie_credit_rates))
+            !== JSON.stringify(omniDurationRatesToPayload(baseline.video_duration_kie_credit_rates))
     );
 };
 
@@ -494,7 +578,14 @@ export default function PricingRulesTab() {
         if (String(api?.category || '').trim() === 'Video' && tokenUnit) {
             payload.video_token_resolution_rates = resolutionRatesToPayload(draft.video_token_resolution_rates);
         }
-        if (String(api?.category || '').trim() === 'Video' && draft.billing_unit_type === 'per_second') {
+        const isOmni = isKieOmniVideoApi(api);
+        if (String(api?.category || '').trim() === 'Video' && isOmni) {
+            payload.billing_unit_type = 'per_call';
+            payload.video_duration_kie_credit_rates = omniDurationRatesToPayload(draft.video_duration_kie_credit_rates);
+            // Omni uses duration matrix, not per-second Seedance rates.
+            payload.video_second_cny_resolution_rates = {};
+            payload.video_second_resolution_rates = {};
+        } else if (String(api?.category || '').trim() === 'Video' && draft.billing_unit_type === 'per_second') {
             const provider = String(api?.provider || '').trim().toLowerCase();
             const model = String(api?.model || '').toLowerCase();
             const isSpark = provider.includes('runninghub') || model.includes('sparkvideo');
@@ -538,6 +629,7 @@ export default function PricingRulesTab() {
                         video_second_resolution_rates: updated?.video_second_resolution_rates ?? payload.video_second_resolution_rates,
                         video_second_cny_resolution_rates: updated?.video_second_cny_resolution_rates ?? payload.video_second_cny_resolution_rates,
                         video_second_min_billable_by_output: updated?.video_second_min_billable_by_output ?? payload.video_second_min_billable_by_output,
+                        video_duration_kie_credit_rates: updated?.video_duration_kie_credit_rates ?? payload.video_duration_kie_credit_rates,
                         charge_multiplier: updated?.charge_multiplier ?? payload.charge_multiplier,
                         billing_cost: updated?.billing_cost ?? row.billing_cost,
                         billing_cost_input: updated?.billing_cost_input ?? row.billing_cost_input,
@@ -548,14 +640,16 @@ export default function PricingRulesTab() {
             setDrafts((prev) => ({
                 ...prev,
                 [String(id)]: buildDraftFromApi({
+                    ...api,
                     billing_unit_type: updated?.billing_unit_type ?? draft.billing_unit_type,
                     supplier_price: updated?.supplier_price ?? payload.supplier_price,
                     supplier_price_input: updated?.supplier_price_input ?? payload.supplier_price_input,
                     supplier_price_output: updated?.supplier_price_output ?? payload.supplier_price_output,
-                        video_token_resolution_rates: updated?.video_token_resolution_rates ?? payload.video_token_resolution_rates,
-                        video_second_resolution_rates: updated?.video_second_resolution_rates ?? payload.video_second_resolution_rates,
-                        video_second_cny_resolution_rates: updated?.video_second_cny_resolution_rates ?? payload.video_second_cny_resolution_rates,
-                        video_second_min_billable_by_output: updated?.video_second_min_billable_by_output ?? payload.video_second_min_billable_by_output,
+                    video_token_resolution_rates: updated?.video_token_resolution_rates ?? payload.video_token_resolution_rates,
+                    video_second_resolution_rates: updated?.video_second_resolution_rates ?? payload.video_second_resolution_rates,
+                    video_second_cny_resolution_rates: updated?.video_second_cny_resolution_rates ?? payload.video_second_cny_resolution_rates,
+                    video_second_min_billable_by_output: updated?.video_second_min_billable_by_output ?? payload.video_second_min_billable_by_output,
+                    video_duration_kie_credit_rates: updated?.video_duration_kie_credit_rates ?? payload.video_duration_kie_credit_rates,
                     charge_multiplier: updated?.charge_multiplier ?? payload.charge_multiplier,
                     billing_cost: updated?.billing_cost,
                     billing_cost_input: updated?.billing_cost_input,
@@ -709,8 +803,8 @@ export default function PricingRulesTab() {
                                 {isVideoCategory ? (
                                     <div className="text-[11px] text-gray-500 mt-0.5">
                                         {t(
-                                                'Token 计费：Seedance 分档（CNY/MTok）；按秒：KIE=CNY/秒（无视频×输出 / 有视频×输入+输出）；SparkVideo=CNY/秒+最低时长',
-                                                'Token: Seedance (CNY/MTok); Per-second: KIE CNY/s (no-video×output / with-video×input+output); SparkVideo CNY/s + min duration',
+                                                'Token：Seedance 分档；按秒：KIE Seedance/SparkVideo；KIE Omni：时长档×分辨率（KIE 积分）',
+                                                'Token: Seedance tiers; Per-second: KIE Seedance/SparkVideo; KIE Omni: duration×resolution (KIE credits)',
                                             )}
                                     </div>
                                 ) : null}
@@ -911,7 +1005,115 @@ export default function PricingRulesTab() {
                                                         </div>
                                                     ) : null}
                                                                 
-                                                                {isVideoCategory && draft.billing_unit_type === 'per_second' ? (
+                                                                {isVideoCategory && isKieOmniVideoApi(api) ? (
+                                                                    <div className="mt-2 space-y-1.5 min-w-[320px]">
+                                                                        <div className="text-[10px] text-violet-200/90 leading-snug">
+                                                                            {t(
+                                                                                'KIE Omni：KIE 积分（无视频=时长档×分辨率；有视频=按次）',
+                                                                                'KIE Omni: KIE credits (no-video=duration×res; with-video=per gen)',
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="text-[10px] text-amber-200/80 leading-snug bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-1">
+                                                                            {t(
+                                                                                '无视频：4/6/8/10s 固定积分；有视频：忽略时长，按分辨率按次计费',
+                                                                                'No video: flat credits by 4/6/8/10s; with video: duration ignored, flat per generation',
+                                                                            )}
+                                                                        </div>
+                                                                        <div className="text-[10px] text-gray-400">{t('无视频输入', 'Without video input')}</div>
+                                                                        <div className="grid grid-cols-[48px_repeat(4,minmax(0,1fr))] gap-1 items-center text-[10px] text-gray-500 px-0.5">
+                                                                            <span>{t('档位', 'Tier')}</span>
+                                                                            {KIE_OMNI_DURATION_BUCKETS.map((bucket) => (
+                                                                                <span key={`${id}-omni-h-${bucket}`}>{bucket}s</span>
+                                                                            ))}
+                                                                        </div>
+                                                                        <div className="grid grid-cols-1 gap-1">
+                                                                            {KIE_OMNI_RESOLUTION_TIERS.map((tier) => {
+                                                                                const row = draft.video_duration_kie_credit_rates?.without_video_input?.[tier] || {};
+                                                                                return (
+                                                                                    <div key={`${id}-${tier}-omni-wo`} className="grid grid-cols-[48px_repeat(4,minmax(0,1fr))] gap-1 items-center">
+                                                                                        <span className="text-[10px] text-violet-200">{tier}</span>
+                                                                                        {KIE_OMNI_DURATION_BUCKETS.map((bucket) => (
+                                                                                            <input
+                                                                                                key={`${id}-${tier}-omni-${bucket}`}
+                                                                                                type="number"
+                                                                                                min="0"
+                                                                                                step="1"
+                                                                                                placeholder={`${bucket}s`}
+                                                                                                value={row[bucket] ?? ''}
+                                                                                                onChange={(e) => {
+                                                                                                    const value = e.target.value;
+                                                                                                    setDrafts((prev) => {
+                                                                                                        const key = String(id);
+                                                                                                        const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                        const rates = normalizeOmniDurationRates(cur.video_duration_kie_credit_rates);
+                                                                                                        rates.without_video_input[tier] = {
+                                                                                                            ...(rates.without_video_input[tier] || {}),
+                                                                                                            [bucket]: value,
+                                                                                                        };
+                                                                                                        return { ...prev, [key]: { ...cur, video_duration_kie_credit_rates: rates } };
+                                                                                                    });
+                                                                                                }}
+                                                                                                className="w-full bg-black/40 border border-violet-800/60 rounded px-1 py-0.5 text-[10px]"
+                                                                                            />
+                                                                                        ))}
+                                                                                    </div>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+                                                                        <div className="text-[10px] text-gray-400 pt-1">{t('有视频输入（按次）', 'With video input (per generation)')}</div>
+                                                                        <div className="grid grid-cols-[48px_1fr] gap-1 items-center text-[10px] text-gray-500 px-0.5">
+                                                                            <span>{t('档位', 'Tier')}</span>
+                                                                            <span>{t('KIE 积分/次', 'KIE credits / gen')}</span>
+                                                                        </div>
+                                                                        <div className="grid grid-cols-1 gap-1">
+                                                                            {KIE_OMNI_RESOLUTION_TIERS.map((tier) => (
+                                                                                <div key={`${id}-${tier}-omni-w`} className="grid grid-cols-[48px_1fr] gap-1 items-center">
+                                                                                    <span className="text-[10px] text-violet-200">{tier}</span>
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        min="0"
+                                                                                        step="1"
+                                                                                        placeholder={t('有视频', 'With')}
+                                                                                        value={draft.video_duration_kie_credit_rates?.with_video_input?.[tier] ?? ''}
+                                                                                        onChange={(e) => {
+                                                                                            const value = e.target.value;
+                                                                                            setDrafts((prev) => {
+                                                                                                const key = String(id);
+                                                                                                const cur = prev[key] || buildDraftFromApi(api);
+                                                                                                const rates = normalizeOmniDurationRates(cur.video_duration_kie_credit_rates);
+                                                                                                rates.with_video_input[tier] = value;
+                                                                                                return { ...prev, [key]: { ...cur, video_duration_kie_credit_rates: rates } };
+                                                                                            });
+                                                                                        }}
+                                                                                        className="w-full bg-black/40 border border-violet-800/60 rounded px-1 py-0.5 text-[10px]"
+                                                                                    />
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                        <button
+                                                                            type="button"
+                                                                            className="text-[10px] text-violet-300 hover:text-violet-200"
+                                                                            onClick={() => {
+                                                                                setDrafts((prev) => {
+                                                                                    const key = String(id);
+                                                                                    const cur = prev[key] || buildDraftFromApi(api);
+                                                                                    return {
+                                                                                        ...prev,
+                                                                                        [key]: {
+                                                                                            ...cur,
+                                                                                            billing_unit_type: 'per_call',
+                                                                                            video_duration_kie_credit_rates: normalizeOmniDurationRates(DEFAULT_KIE_OMNI_DURATION_RATES_KIE),
+                                                                                        },
+                                                                                    };
+                                                                                });
+                                                                            }}
+                                                                        >
+                                                                            {t('填入 KIE Omni 参考价', 'Fill KIE Omni reference rates')}
+                                                                        </button>
+                                                                    </div>
+                                                                ) : null}
+
+                                                                {isVideoCategory && !isKieOmniVideoApi(api) && draft.billing_unit_type === 'per_second' ? (
                                                                     (() => {
                                                                         const provider = String(api?.provider || '').trim().toLowerCase();
                                                                         const model = String(api?.model || '').trim().toLowerCase();

@@ -165,6 +165,7 @@ class SystemAPISettingManageUpdate(SystemAPISettingFeatureFields):
     video_second_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_cny_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_min_billable_by_output: Optional[Dict[str, Any]] = None
+    video_duration_kie_credit_rates: Optional[Dict[str, Any]] = None
     has_granular_billing_rules: Optional[bool] = None
     is_active: Optional[bool] = None
 
@@ -196,6 +197,7 @@ class SystemAPISettingManageCreate(SystemAPISettingFeatureFields):
     video_second_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_cny_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_min_billable_by_output: Optional[Dict[str, Any]] = None
+    video_duration_kie_credit_rates: Optional[Dict[str, Any]] = None
     has_granular_billing_rules: Optional[bool] = False
     is_active: bool = False
 
@@ -251,6 +253,7 @@ class SystemAPISettingOut(BaseModel):
     video_second_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_cny_resolution_rates: Optional[Dict[str, Any]] = None
     video_second_min_billable_by_output: Optional[Dict[str, Any]] = None
+    video_duration_kie_credit_rates: Optional[Dict[str, Any]] = None
     unit_user_cost: Optional[int] = 0
     unit_user_cost_input: Optional[int] = 0
     unit_user_cost_output: Optional[int] = 0

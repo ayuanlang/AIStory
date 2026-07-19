@@ -430,6 +430,25 @@ DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES = {
 DEFAULT_KIE_SEEDANCE_SECOND_RATES = DEFAULT_KIE_SEEDANCE_SECOND_CNY_RATES
 
 
+# Official KIE Gemini Omni Video published rates (KIE credits).
+# Without video: flat by output duration bucket × resolution.
+# With video: flat per generation by resolution (duration ignored by provider).
+KIE_OMNI_DURATION_BUCKETS = (4, 6, 8, 10)
+KIE_OMNI_RESOLUTION_TIERS = ("720p", "1080p", "4k")
+DEFAULT_KIE_OMNI_DURATION_RATES_KIE = {
+    "without_video_input": {
+        "720p": {"4": 63.0, "6": 84.0, "8": 105.0, "10": 126.0},
+        "1080p": {"4": 63.0, "6": 84.0, "8": 105.0, "10": 126.0},
+        "4k": {"4": 147.0, "6": 168.0, "8": 189.0, "10": 210.0},
+    },
+    "with_video_input": {
+        "720p": 168.0,
+        "1080p": 168.0,
+        "4k": 252.0,
+    },
+}
+
+
 # RunningHub SparkVideo 2.0 resolution tiers (API + native variants)
 SPARKVIDEO_RESOLUTION_TIERS = (
     "480p",
@@ -602,6 +621,133 @@ def kie_credits_to_system_credits(value: Any) -> float:
     """Convert KIE credits to system credits (may be fractional before ceil)."""
     return max(0.0, kie_credits_to_cny(value) * 100.0)
 
+
+def resolve_kie_omni_duration_bucket(duration: Any) -> int:
+    """Snap duration seconds to nearest published Omni bucket (4/6/8/10)."""
+    seconds = safe_non_negative_float(duration, 4.0)
+    if seconds <= 0:
+        return 4
+    return min(KIE_OMNI_DURATION_BUCKETS, key=lambda bucket: abs(float(bucket) - seconds))
+
+
+def resolve_kie_omni_resolution_tier(
+    width: Any = None,
+    height: Any = None,
+    resolution: Any = None,
+) -> str:
+    """Map label/pixels to Omni resolution tier; default 720p."""
+    tier = resolve_video_resolution_tier(width, height, resolution)
+    if tier in KIE_OMNI_RESOLUTION_TIERS:
+        return str(tier)
+    text = str(resolution or "").strip().lower().replace(" ", "")
+    if text in {"720", "720p", "p720", "hd"}:
+        return "720p"
+    if text in {"1080", "1080p", "p1080", "fhd"}:
+        return "1080p"
+    if text in {"2160", "2160p", "4k", "uhd", "3840"}:
+        return "4k"
+    return "720p"
+
+
+def normalize_video_duration_kie_credit_rates(raw: Any) -> Dict[str, Any]:
+    """
+    Normalize Omni-style duration matrix:
+      {
+        without_video_input: {tier: {duration: kie_credits}},
+        with_video_input: {tier: kie_credits}  # flat per generation
+      }
+    """
+    src = raw if isinstance(raw, dict) else {}
+    out: Dict[str, Any] = {"without_video_input": {}, "with_video_input": {}}
+
+    without_src = src.get("without_video_input") if isinstance(src.get("without_video_input"), dict) else {}
+    with_src = src.get("with_video_input") if isinstance(src.get("with_video_input"), dict) else {}
+
+    for tier in KIE_OMNI_RESOLUTION_TIERS:
+        tier_row = without_src.get(tier) if isinstance(without_src.get(tier), dict) else {}
+        if not tier_row and isinstance(src.get(tier), dict):
+            nested = src.get(tier) or {}
+            if any(str(k).isdigit() for k in nested.keys()):
+                tier_row = nested
+        bucket_map: Dict[str, float] = {}
+        for bucket in KIE_OMNI_DURATION_BUCKETS:
+            key = str(bucket)
+            val = safe_non_negative_float(
+                tier_row.get(key, tier_row.get(bucket, tier_row.get(f"{bucket}s"))),
+                -1.0,
+            )
+            if val >= 0:
+                bucket_map[key] = float(val)
+        if bucket_map:
+            out["without_video_input"][tier] = bucket_map
+
+        with_val = with_src.get(tier)
+        if with_val is None and isinstance(src.get(tier), dict):
+            with_val = (src.get(tier) or {}).get("with_video_input")
+        parsed_with = safe_non_negative_float(with_val, -1.0)
+        if parsed_with >= 0:
+            out["with_video_input"][tier] = float(parsed_with)
+
+    if not out["without_video_input"] and not out["with_video_input"]:
+        return {}
+    return out
+
+
+def estimate_kie_omni_duration_credits(
+    *,
+    rates: Any = None,
+    resolution_tier: Any = None,
+    has_video_input: bool = False,
+    output_duration: Any = None,
+    width: Any = None,
+    height: Any = None,
+    resolution: Any = None,
+) -> Dict[str, Any]:
+    """Look up Omni KIE credits and convert to system base credits."""
+    rate_map = normalize_video_duration_kie_credit_rates(rates)
+    if not rate_map:
+        rate_map = normalize_video_duration_kie_credit_rates(DEFAULT_KIE_OMNI_DURATION_RATES_KIE)
+
+    tier = resolve_kie_omni_resolution_tier(
+        width,
+        height,
+        resolution_tier or resolution,
+    )
+    duration_bucket = resolve_kie_omni_duration_bucket(output_duration)
+
+    kie_credits = 0.0
+    rate_branch = "without_video_input"
+    if has_video_input:
+        with_map = rate_map.get("with_video_input") if isinstance(rate_map.get("with_video_input"), dict) else {}
+        if tier in with_map:
+            kie_credits = float(with_map[tier])
+            rate_branch = "with_video_input"
+        elif "1080p" in with_map and tier in {"720p", "1080p"}:
+            kie_credits = float(with_map["1080p"])
+            rate_branch = "with_video_input"
+        elif "720p" in with_map and tier in {"720p", "1080p"}:
+            kie_credits = float(with_map["720p"])
+            rate_branch = "with_video_input"
+    if kie_credits <= 0:
+        without_map = rate_map.get("without_video_input") if isinstance(rate_map.get("without_video_input"), dict) else {}
+        tier_buckets = without_map.get(tier) if isinstance(without_map.get(tier), dict) else {}
+        if not tier_buckets and tier in {"720p", "1080p"}:
+            tier_buckets = without_map.get("720p") if isinstance(without_map.get("720p"), dict) else {}
+            if not tier_buckets:
+                tier_buckets = without_map.get("1080p") if isinstance(without_map.get("1080p"), dict) else {}
+        kie_credits = safe_non_negative_float(tier_buckets.get(str(duration_bucket)), 0.0)
+        rate_branch = "without_video_input"
+
+    system_credits = float(kie_credits_to_system_credits(kie_credits))
+    return {
+        "resolution_tier": tier,
+        "duration_bucket": int(duration_bucket),
+        "has_video_input": bool(has_video_input),
+        "rate_branch": rate_branch,
+        "kie_credits": float(kie_credits),
+        "system_credits": float(system_credits),
+        "estimation_method": "video_duration_kie_omni",
+    }
 
 
 def resolve_sparkvideo_resolution_tier(
@@ -1018,6 +1164,26 @@ def estimate_base_amount_by_unit(config: Dict[str, Any], usage: Optional[Dict[st
     kie_credits = resolve_provider_kie_credits(payload)
     if kie_credits > 0:
         return float(kie_credits_to_system_credits(kie_credits))
+
+    # KIE Gemini Omni: duration-bucket × resolution flat KIE credits (or flat with video input).
+    omni_rates = (
+        payload.get("video_duration_kie_credit_rates")
+        or config.get("video_duration_kie_credit_rates")
+    )
+    if omni_rates:
+        has_video_input = bool(payload.get("has_video_input"))
+        if not has_video_input and isinstance(payload.get("video_token_estimate"), dict):
+            has_video_input = bool(payload["video_token_estimate"].get("has_video_input"))
+        omni_est = estimate_kie_omni_duration_credits(
+            rates=omni_rates,
+            resolution_tier=payload.get("resolution_tier") or payload.get("resolution"),
+            has_video_input=has_video_input,
+            output_duration=payload.get("duration_seconds", payload.get("duration", 4)),
+            width=payload.get("width"),
+            height=payload.get("height"),
+            resolution=payload.get("resolution"),
+        )
+        return max(0.0, float(omni_est.get("system_credits") or 0.0))
 
     if unit_type in TOKEN_UNIT_TYPES:
         input_tokens = safe_non_negative_int(payload.get("input_tokens", payload.get("prompt_tokens", 0)), 0)

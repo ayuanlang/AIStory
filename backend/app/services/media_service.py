@@ -14459,6 +14459,19 @@ class MediaGenerationService:
             omni_aspect_ratio = "9:16" if omni_aspect_ratio_raw == "9:16" else "16:9"
             omni_input["aspect_ratio"] = omni_aspect_ratio
 
+            omni_res_raw = str(
+                payload_input.get("resolution")
+                or tool_conf.get("resolution")
+                or tool_conf.get("image_size")
+                or ""
+            ).strip().lower().replace(" ", "")
+            if omni_res_raw in {"4k", "2160", "2160p", "uhd", "3840"}:
+                omni_input["resolution"] = "4k"
+            elif omni_res_raw in {"1080", "1080p", "p1080", "fhd"}:
+                omni_input["resolution"] = "1080p"
+            else:
+                omni_input["resolution"] = "720p"
+
             if isinstance(payload_input.get("image_urls"), list):
                 image_urls = [str(item or "").strip() for item in payload_input.get("image_urls") if str(item or "").strip()]
                 if image_urls:
@@ -14477,7 +14490,10 @@ class MediaGenerationService:
                 omni_duration_num = int(float(omni_duration_raw))
             except Exception:
                 omni_duration_num = 4
-            omni_input["duration"] = str(max(1, omni_duration_num))
+            # Official buckets: 4 | 6 | 8 | 10
+            allowed_omni_durations = (4, 6, 8, 10)
+            omni_duration_num = min(allowed_omni_durations, key=lambda bucket: abs(bucket - max(1, omni_duration_num)))
+            omni_input["duration"] = str(omni_duration_num)
 
             payload = {
                 "model": "gemini-omni-video",
@@ -14595,9 +14611,20 @@ class MediaGenerationService:
                 payload_input_obj["resolution"] = flux2_resolution
                 payload_input_obj.pop("image_size", None)
 
-            # KIE gemini-omni-video does not accept generic runtime resolution enums.
+            # KIE gemini-omni-video accepts resolution: 720p | 1080p | 4k (default 720p).
             if is_gemini_omni_video_model:
-                payload_input_obj.pop("resolution", None)
+                omni_res_raw = str(
+                    payload_input_obj.get("resolution")
+                    or tool_conf.get("resolution")
+                    or tool_conf.get("image_size")
+                    or ""
+                ).strip().lower().replace(" ", "")
+                if omni_res_raw in {"4k", "2160", "2160p", "uhd", "3840"}:
+                    payload_input_obj["resolution"] = "4k"
+                elif omni_res_raw in {"1080", "1080p", "p1080", "fhd"}:
+                    payload_input_obj["resolution"] = "1080p"
+                else:
+                    payload_input_obj["resolution"] = "720p"
                 final_ar = str(payload_input_obj.get("aspect_ratio") or "").strip().lower()
                 if final_ar == "9:16":
                     payload_input_obj["aspect_ratio"] = "9:16"

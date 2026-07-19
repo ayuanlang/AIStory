@@ -2513,6 +2513,11 @@ def _rule_to_billing(rule: Optional[SystemAPIBillingRule]) -> Dict[str, Any]:
             if isinstance(_rule_extra_conditions(rule).get("video_second_min_billable_by_output"), dict)
             else None
         ),
+        "video_duration_kie_credit_rates": (
+            _rule_extra_conditions(rule).get("video_duration_kie_credit_rates")
+            if isinstance(_rule_extra_conditions(rule).get("video_duration_kie_credit_rates"), dict)
+            else None
+        ),
     }
 
 
@@ -3228,6 +3233,7 @@ def _setting_row_to_out_prefetched(
         video_second_resolution_rates=billing.get("video_second_resolution_rates"),
         video_second_cny_resolution_rates=billing.get("video_second_cny_resolution_rates"),
         video_second_min_billable_by_output=billing.get("video_second_min_billable_by_output"),
+        video_duration_kie_credit_rates=billing.get("video_duration_kie_credit_rates"),
         has_granular_billing_rules=row_id in granular_rule_ids,
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=(task_default_id == row_id and row_id > 0),
@@ -3272,6 +3278,7 @@ def _setting_to_out(db: Session, row: SystemAPISetting) -> SystemAPISettingOut:
         video_second_resolution_rates=billing.get("video_second_resolution_rates"),
         video_second_cny_resolution_rates=billing.get("video_second_cny_resolution_rates"),
         video_second_min_billable_by_output=billing.get("video_second_min_billable_by_output"),
+        video_duration_kie_credit_rates=billing.get("video_duration_kie_credit_rates"),
         has_granular_billing_rules=_has_granular_billing_rules(db, int(row.id)),
         deprecated=_is_setting_deprecated(out_cfg, row.deprecated),
         is_active=is_task_default_system_setting(db, int(row.id), row.category),
@@ -4202,9 +4209,10 @@ def _billing_from_payload_or_config(payload, raw_config: dict) -> Dict[str, Any]
     second_rates = getattr(payload, "video_second_resolution_rates", None)
     cny_rates = getattr(payload, "video_second_cny_resolution_rates", None)
     min_billable = getattr(payload, "video_second_min_billable_by_output", None)
+    duration_rates = getattr(payload, "video_duration_kie_credit_rates", None)
     has_explicit = any(
         value is not None
-        for value in (ut, c, ci, co, sp, spi, spo, cm, token_rates, second_rates, cny_rates, min_billable)
+        for value in (ut, c, ci, co, sp, spi, spo, cm, token_rates, second_rates, cny_rates, min_billable, duration_rates)
     )
     if has_explicit:
         out = {
@@ -4228,6 +4236,8 @@ def _billing_from_payload_or_config(payload, raw_config: dict) -> Dict[str, Any]
             extra["video_second_cny_resolution_rates"] = cny_rates
         if isinstance(min_billable, dict) and min_billable:
             extra["video_second_min_billable_by_output"] = min_billable
+        if isinstance(duration_rates, dict) and duration_rates:
+            extra["video_duration_kie_credit_rates"] = duration_rates
         if extra:
             out["extra_conditions"] = _normalize_sync_billing_extra_conditions(extra)
         return out
@@ -7434,6 +7444,10 @@ def update_system_setting_for_manage(
         "supplier_currency",
         "supplier_price_basis",
         "video_token_resolution_rates",
+        "video_second_resolution_rates",
+        "video_second_cny_resolution_rates",
+        "video_second_min_billable_by_output",
+        "video_duration_kie_credit_rates",
         "extra_conditions",
     )
     payload_billing = {k: update_data.pop(k) for k in billing_keys if k in update_data}
@@ -7503,6 +7517,15 @@ def update_system_setting_for_manage(
                 next_extra["video_second_min_billable_by_output"] = {str(k): int(v) for k, v in min_table.items()}
             else:
                 next_extra.pop("video_second_min_billable_by_output", None)
+        if "video_duration_kie_credit_rates" in payload_billing:
+            from app.services.billing_pricing import normalize_video_duration_kie_credit_rates
+            duration_rates = normalize_video_duration_kie_credit_rates(
+                payload_billing.get("video_duration_kie_credit_rates")
+            )
+            if duration_rates:
+                next_extra["video_duration_kie_credit_rates"] = duration_rates
+            else:
+                next_extra.pop("video_duration_kie_credit_rates", None)
         if next_extra:
             update_billing["extra_conditions"] = next_extra
     else:
@@ -8275,6 +8298,7 @@ def _build_provider_bundle_export_payload(db: Session, rows: List[SystemAPISetti
                 "video_second_resolution_rates": billing.get("video_second_resolution_rates"),
                 "video_second_cny_resolution_rates": billing.get("video_second_cny_resolution_rates"),
                 "video_second_min_billable_by_output": billing.get("video_second_min_billable_by_output"),
+                "video_duration_kie_credit_rates": billing.get("video_duration_kie_credit_rates"),
                 "deprecated": bool(row.deprecated),
                 "is_active": is_task_default_system_setting(db, int(row.id), row.category),
             })
@@ -8476,6 +8500,7 @@ def _normalize_sync_billing_extra_conditions(raw_value: Any) -> Dict[str, Any]:
             normalize_video_second_resolution_rates,
             normalize_sparkvideo_second_cny_rates,
             normalize_sparkvideo_min_billable_by_output,
+            normalize_video_duration_kie_credit_rates,
         )
     except Exception:
         return extra
@@ -8507,6 +8532,13 @@ def _normalize_sync_billing_extra_conditions(raw_value: Any) -> Dict[str, Any]:
             extra["video_second_min_billable_by_output"] = {str(k): int(v) for k, v in min_table.items()}
         else:
             extra.pop("video_second_min_billable_by_output", None)
+
+    if "video_duration_kie_credit_rates" in extra:
+        duration_rates = normalize_video_duration_kie_credit_rates(extra.get("video_duration_kie_credit_rates"))
+        if duration_rates:
+            extra["video_duration_kie_credit_rates"] = duration_rates
+        else:
+            extra.pop("video_duration_kie_credit_rates", None)
 
     return extra
 
@@ -10714,6 +10746,68 @@ def _format_pricing_description_from_summary(
     return ""
 
 
+def _normalize_token_rate_to_per_million(rate_value: float, unit_type: str) -> float:
+    """Normalize a token unit rate (CNY or credits) to per-百万-token scale."""
+    unit = _normalize_billing_unit_type(unit_type)
+    amount = float(rate_value or 0.0)
+    if amount <= 0:
+        return 0.0
+    if unit == "per_million_tokens":
+        return amount
+    if unit == "per_1k_tokens":
+        return amount * 1000.0
+    if unit == "per_token":
+        return amount * 1_000_000.0
+    return amount
+
+
+def _format_llm_credit_mtok_pricing_description(
+    *,
+    input_credits_mtok: float = 0.0,
+    output_credits_mtok: float = 0.0,
+    flat_credits_mtok: float = 0.0,
+    round_cost_to_int: bool = False,
+) -> str:
+    """LLM/Vision sync text: 输入/输出 积分/百万 token (already * odds)."""
+    ci = float(input_credits_mtok or 0.0)
+    co = float(output_credits_mtok or 0.0)
+    flat = float(flat_credits_mtok or 0.0)
+    if ci > 0 and co > 0:
+        return (
+            f"输入 {_format_cost_number_for_pricing_desc(ci, round_cost_to_int=round_cost_to_int)} / "
+            f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+        )
+    if co > 0:
+        return f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+    if ci > 0:
+        return f"输入 {_format_cost_number_for_pricing_desc(ci, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+    if flat > 0:
+        return f"{_format_cost_number_for_pricing_desc(flat, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+    return ""
+
+
+def _format_image_per_call_credit_pricing_description(
+    *,
+    min_credits: float = 0.0,
+    max_credits: float = 0.0,
+    avg_credits: float = 0.0,
+    round_cost_to_int: bool = False,
+) -> str:
+    """Image sync text: per_call as 每次X积分 (already * odds)."""
+    lo = float(min_credits or 0.0)
+    hi = float(max_credits or 0.0)
+    avg = float(avg_credits or 0.0)
+    if hi > 0 and lo > 0 and abs(hi - lo) > 1e-9:
+        return (
+            f"每次 {_format_cost_number_for_pricing_desc(lo, round_cost_to_int=round_cost_to_int)}"
+            f"-{_format_cost_number_for_pricing_desc(hi, round_cost_to_int=round_cost_to_int)} 积分"
+        )
+    amount = hi or lo or avg
+    if amount > 0:
+        return f"每次 {_format_cost_number_for_pricing_desc(amount, round_cost_to_int=round_cost_to_int)} 积分"
+    return ""
+
+
 def _build_function_api_pricing_description_map(
     db: Session,
     system_api_ids: List[int],
@@ -10734,6 +10828,7 @@ def _build_function_api_pricing_description_map(
     # fallback to config JSON key when rule table doesn't provide a unit.
     fallback_rows = db.query(
         SystemAPISetting.id,
+        SystemAPISetting.category,
         SystemAPISetting.config,
         SystemAPISetting.price_avg_cost,
         SystemAPISetting.price_min_cost,
@@ -10742,10 +10837,12 @@ def _build_function_api_pricing_description_map(
         SystemAPISetting.id.in_(normalized_ids)
     ).all()
     cached_price_by_id: Dict[int, Dict[str, Any]] = {}
+    category_by_id: Dict[int, str] = {}
     for row in fallback_rows or []:
         sid = _safe_int(getattr(row, "id", 0), 0)
         if sid <= 0:
             continue
+        category_by_id[sid] = str(getattr(row, "category", "") or "").strip().upper()
         if sid not in unit_map:
             cfg = _safe_json_dict(getattr(row, "config", None))
             unit_map[sid] = _normalize_billing_unit_type(cfg.get("billing_unit_type"))
@@ -10796,6 +10893,11 @@ def _build_function_api_pricing_description_map(
             if ci > 0 or co > 0:
                 token_io_by_sid[sid] = {"cost_input": ci, "cost_output": co}
 
+    # User credits for LLM (积分/百万 token * odds) and Image (每次 积分 * odds).
+    llm_credits_by_sid: Dict[int, Dict[str, float]] = {}
+    image_credit_values_by_sid: Dict[int, List[float]] = {}
+    _token_unit_set = {"per_token", "per_1k_tokens", "per_million_tokens"}
+
     # Load base-rule extras (resolution matrices) + charge_multiplier for richer descriptions.
     base_meta_by_sid: Dict[int, Dict[str, Any]] = {}
     if _db_has_table(db, "system_api_billing_rules"):
@@ -10811,6 +10913,90 @@ def _build_function_api_pricing_description_map(
             sid = _safe_int(getattr(row, "system_api_id", 0), 0)
             if sid <= 0:
                 continue
+            unit = _normalize_billing_unit_type(
+                getattr(row, "billing_unit_type", None) or unit_map.get(sid) or "per_call"
+            )
+            odds = _normalize_rule_charge_multiplier(getattr(row, "charge_multiplier", None), default=2.0)
+            category = category_by_id.get(sid, "")
+
+            if category in {"LLM", "VISION"} and unit in _token_unit_set:
+                bucket = llm_credits_by_sid.setdefault(
+                    sid, {"input": 0.0, "output": 0.0, "flat": 0.0}
+                )
+                spi = getattr(row, "supplier_price_input", None)
+                spo = getattr(row, "supplier_price_output", None)
+                sp = getattr(row, "supplier_price", None)
+                if spi is not None and spi != "":
+                    user_in = _cny_rate_to_user_credits(
+                        _normalize_token_rate_to_per_million(float(spi), unit),
+                        odds,
+                        round_cost_to_int=round_cost_to_int,
+                    )
+                    if user_in > bucket["input"]:
+                        bucket["input"] = user_in
+                else:
+                    fallback_in = _normalize_token_rate_to_per_million(
+                        float(
+                            _apply_charge_multiplier_to_credit(
+                                getattr(row, "billing_cost_input", 0), odds
+                            )
+                        ),
+                        unit,
+                    )
+                    if fallback_in > bucket["input"]:
+                        bucket["input"] = fallback_in
+                if spo is not None and spo != "":
+                    user_out = _cny_rate_to_user_credits(
+                        _normalize_token_rate_to_per_million(float(spo), unit),
+                        odds,
+                        round_cost_to_int=round_cost_to_int,
+                    )
+                    if user_out > bucket["output"]:
+                        bucket["output"] = user_out
+                else:
+                    fallback_out = _normalize_token_rate_to_per_million(
+                        float(
+                            _apply_charge_multiplier_to_credit(
+                                getattr(row, "billing_cost_output", 0), odds
+                            )
+                        ),
+                        unit,
+                    )
+                    if fallback_out > bucket["output"]:
+                        bucket["output"] = fallback_out
+                if sp is not None and sp != "":
+                    user_flat = _cny_rate_to_user_credits(
+                        _normalize_token_rate_to_per_million(float(sp), unit),
+                        odds,
+                        round_cost_to_int=round_cost_to_int,
+                    )
+                    if user_flat > bucket["flat"]:
+                        bucket["flat"] = user_flat
+                else:
+                    fallback_flat = _normalize_token_rate_to_per_million(
+                        float(
+                            _apply_charge_multiplier_to_credit(
+                                getattr(row, "billing_cost", 0), odds
+                            )
+                        ),
+                        unit,
+                    )
+                    if fallback_flat > bucket["flat"]:
+                        bucket["flat"] = fallback_flat
+
+            if category == "IMAGE" and unit == "per_call":
+                sp = getattr(row, "supplier_price", None)
+                if sp is not None and sp != "":
+                    user_credits = _cny_rate_to_user_credits(
+                        sp, odds, round_cost_to_int=round_cost_to_int
+                    )
+                else:
+                    user_credits = float(
+                        _apply_charge_multiplier_to_credit(getattr(row, "billing_cost", 0), odds)
+                    )
+                if user_credits > 0:
+                    image_credit_values_by_sid.setdefault(sid, []).append(user_credits)
+
             extra = _rule_extra_conditions(row)
             is_base = _is_base_billing_rule(row)
             has_matrix = any(
@@ -10830,18 +11016,39 @@ def _build_function_api_pricing_description_map(
             if prev and not prev.get("is_base") and not is_base and prev.get("extra"):
                 continue
             base_meta_by_sid[sid] = {
-                "unit_type": _normalize_billing_unit_type(
-                    getattr(row, "billing_unit_type", None) or unit_map.get(sid) or "per_call"
-                ),
-                "charge_multiplier": _normalize_rule_charge_multiplier(
-                    getattr(row, "charge_multiplier", None), default=2.0
-                ),
+                "unit_type": unit,
+                "charge_multiplier": odds,
                 "extra": extra,
                 "is_base": bool(is_base),
             }
 
     result: Dict[int, str] = {}
     for sid in normalized_ids:
+        category = category_by_id.get(sid, "")
+        if category in {"LLM", "VISION"}:
+            llm_bucket = llm_credits_by_sid.get(sid) or {}
+            llm_desc = _format_llm_credit_mtok_pricing_description(
+                input_credits_mtok=float(llm_bucket.get("input") or 0.0),
+                output_credits_mtok=float(llm_bucket.get("output") or 0.0),
+                flat_credits_mtok=float(llm_bucket.get("flat") or 0.0),
+                round_cost_to_int=round_cost_to_int,
+            )
+            if llm_desc:
+                result[sid] = llm_desc
+                continue
+        if category == "IMAGE":
+            values = image_credit_values_by_sid.get(sid) or []
+            if values:
+                image_desc = _format_image_per_call_credit_pricing_description(
+                    min_credits=min(values),
+                    max_credits=max(values),
+                    avg_credits=sum(values) / float(len(values)),
+                    round_cost_to_int=round_cost_to_int,
+                )
+                if image_desc:
+                    result[sid] = image_desc
+                    continue
+
         summary = pricing_map.get(sid) or {}
         if use_cached_price_fallback and (
             _safe_int(summary.get("average_cost"), 0) <= 0
@@ -11015,10 +11222,11 @@ def sync_function_api_pricing_descriptions(
                 if sid > 0:
                     target_ids.append(sid)
 
+    # LLM/Vision -> 积分/百万 token (*赔率); Image -> 每次X积分; Video 等仍走积分/分档文案
     pricing_desc_map = _build_function_api_pricing_description_map(
         db,
         target_ids,
-        force_token_k_unit=True,
+        force_token_k_unit=False,
         use_cached_price_fallback=False,
         round_cost_to_int=True,
     )

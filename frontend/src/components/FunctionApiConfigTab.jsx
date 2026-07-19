@@ -30,6 +30,7 @@ export default function FunctionApiConfigTab() {
     });
     const [savingRouting, setSavingRouting] = useState(false);
     const [syncingPricing, setSyncingPricing] = useState(false);
+    const [functionFilter, setFunctionFilter] = useState('');
     const [categoryFilters, setCategoryFilters] = useState({});
     const [providerFilters, setProviderFilters] = useState({});
 
@@ -272,6 +273,9 @@ export default function FunctionApiConfigTab() {
     };
 
     const functionNames = Object.keys(FUNCTION_LABELS);
+    const visibleFunctionNames = functionFilter
+        ? functionNames.filter((name) => name === functionFilter)
+        : functionNames;
 
     return (
         <div className="space-y-8 pb-10">
@@ -378,8 +382,32 @@ export default function FunctionApiConfigTab() {
 
             </div>
 
+            <div className="flex flex-wrap items-center gap-3 mb-2">
+                <label className="text-sm text-gray-400 shrink-0">按功能筛选</label>
+                <select
+                    value={functionFilter}
+                    onChange={(e) => setFunctionFilter(e.target.value)}
+                    className="min-w-[220px] max-w-full bg-[#111114] border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary/50"
+                >
+                    <option value="">全部功能</option>
+                    {functionNames.map((name) => (
+                        <option key={name} value={name}>
+                            {FUNCTION_LABELS[name]} ({name})
+                        </option>
+                    ))}
+                </select>
+                <span className="text-xs text-gray-500">
+                    当前显示 {visibleFunctionNames.length} / {functionNames.length}
+                </span>
+            </div>
+
             <div className="space-y-6">
-                {functionNames.map(funcName => {
+                {visibleFunctionNames.length === 0 && (
+                    <div className="text-sm text-gray-500 italic py-4 px-1">
+                        没有匹配的功能
+                    </div>
+                )}
+                {visibleFunctionNames.map(funcName => {
                     const items = configs[funcName] || [];
                     // Keep them sorted visually by priority desc
                     const sortedItems = [...items].sort((a, b) => b.priority - a.priority);
@@ -519,7 +547,7 @@ export default function FunctionApiConfigTab() {
                                                         value={item.pricing_description || ''}
                                                         onChange={(e) => handleChangeParams(funcName, originalIndex, 'pricing_description', e.target.value)}
                                                         className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
-                                                        placeholder="定价说明（例：分档有视频/无视频 720p 176/288 积分/秒，可从计费规则同步）"
+                                                        placeholder="定价说明（例：输入 1750 / 输出 12250 积分/百万 token；每次 23 积分；视频分档积分/秒，可从计费规则同步）"
                                                     />
                                                 </div>
                                             </div>

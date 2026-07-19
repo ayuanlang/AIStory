@@ -1426,6 +1426,30 @@ class BillingService:
             import math
             return max(0, int(math.ceil(cost_val))) if cost_val > 0 else 0
 
+        # KIE Omni duration matrix works with per_call (and any unit) via estimator.
+        omni_rates = (
+            payload.get("video_duration_kie_credit_rates")
+            or config.get("video_duration_kie_credit_rates")
+        )
+        if isinstance(omni_rates, dict) and omni_rates:
+            from app.services.billing_pricing import estimate_base_amount_by_unit
+            amount = float(
+                estimate_base_amount_by_unit(
+                    {
+                        "unit_type": unit_type or "per_call",
+                        "cost": base_cost,
+                        "cost_input": cost_input,
+                        "cost_output": cost_output,
+                        "video_duration_kie_credit_rates": omni_rates,
+                    },
+                    payload,
+                )
+            )
+            if return_float:
+                return float(max(0.0, amount))
+            import math
+            return max(0, int(math.ceil(amount))) if amount > 0 else 0
+
         if unit_type in {"per_second", "per_minute"}:
             # Includes KIE Seedance / SparkVideo resolution matrices (CNY/s or KIE/s).
             from app.services.billing_pricing import estimate_base_amount_by_unit
@@ -2459,6 +2483,14 @@ class BillingService:
             rates = extra.get("video_token_resolution_rates")
             if isinstance(rates, dict) and rates:
                 usage_for_cost["video_token_resolution_rates"] = rates
+            omni_rates = extra.get("video_duration_kie_credit_rates")
+            if not (isinstance(omni_rates, dict) and omni_rates):
+                omni_rates = usage_for_cost.get("video_duration_kie_credit_rates")
+            if isinstance(omni_rates, dict) and omni_rates:
+                usage_for_cost["video_duration_kie_credit_rates"] = omni_rates
+                usage_for_cost.pop("video_token_estimate", None)
+                usage_for_cost.pop("video_token_branch", None)
+                usage_for_cost["estimation_method"] = "video_duration_kie_omni"
             second_rates = extra.get("video_second_resolution_rates")
             if not (isinstance(second_rates, dict) and second_rates):
                 second_rates = usage_for_cost.get("video_second_resolution_rates")
@@ -2500,7 +2532,9 @@ class BillingService:
                 min_table = usage_for_cost.get("video_second_min_billable_by_output")
             if isinstance(min_table, dict) and min_table:
                 usage_for_cost["video_second_min_billable_by_output"] = min_table
-            if usage_for_cost.get("video_second_cny_resolution_rates"):
+            if usage_for_cost.get("video_duration_kie_credit_rates"):
+                from app.services.billing_pricing import resolve_kie_omni_resolution_tier as _resolve_tier_cost
+            elif usage_for_cost.get("video_second_cny_resolution_rates"):
                 from app.services.billing_pricing import resolve_sparkvideo_resolution_tier as _resolve_tier_cost
             else:
                 from app.services.billing_pricing import resolve_video_resolution_tier as _resolve_tier_cost
@@ -2831,6 +2865,18 @@ class BillingService:
                 and usage_payload.get("video_second_min_billable_by_output")
             )
         )
+        has_omni_matrix = bool(
+            (
+                isinstance(extra.get("video_duration_kie_credit_rates"), dict)
+                and extra.get("video_duration_kie_credit_rates")
+            )
+            or (
+                isinstance(usage_payload.get("video_duration_kie_credit_rates"), dict)
+                and usage_payload.get("video_duration_kie_credit_rates")
+            )
+            or str(usage_payload.get("estimation_method") or "").startswith("video_duration_kie_omni")
+            or usage_payload.get("kie_omni_default_matrix")
+        )
         has_upscale = bool(
             adj.get("sparkvideo_with_video_base_cny") is not None
             or adj.get("sparkvideo_with_video_addon_cny") is not None
@@ -2843,6 +2889,8 @@ class BillingService:
             or adj.get("video_token_rate_branch")
         )
 
+        if has_omni_matrix:
+            return "video_duration_kie_omni"
         if unit == "per_second" and has_cny_matrix:
             if has_upscale or has_min_table:
                 return "video_second_cny_sparkvideo"
@@ -2901,6 +2949,7 @@ class BillingService:
             "video_second_resolution_rates",
             "video_token_resolution_rates",
             "video_second_min_billable_by_output",
+            "video_duration_kie_credit_rates",
         ):
             if not usage_for_logic.get(key) and isinstance(api_pricing.get(key), dict):
                 usage_for_logic[key] = api_pricing.get(key)
@@ -3068,8 +3117,15 @@ class BillingService:
             if usage.get("is_seedance_video"):
                 usage["seedance_billing_adjustable"] = True
             identity_lower = " ".join(str(p or "") for p in identity_parts).lower()
+            usage["is_gemini_omni_video"] = (
+                "gemini-omni-video" in identity_lower
+                or "gemini_omni_video" in identity_lower.replace("-", "_")
+                or ("omni" in identity_lower and "gemini" in identity_lower)
+            )
             if "sparkvideo" in identity_lower or "runninghub" in str(provider_text or "").lower():
                 from app.services.billing_pricing import resolve_sparkvideo_resolution_tier as _tier_fn_early
+            elif usage.get("is_gemini_omni_video"):
+                from app.services.billing_pricing import resolve_kie_omni_resolution_tier as _tier_fn_early
             else:
                 from app.services.billing_pricing import resolve_video_resolution_tier as _tier_fn_early
             usage["resolution_tier"] = _tier_fn_early(
@@ -3082,9 +3138,12 @@ class BillingService:
             is_kie_provider = BillingService._is_kie_provider(provider_text)
             usage["is_kie_provider"] = bool(is_kie_provider)
             usage["provider"] = provider_text
+            # Inject published KIE Omni duration matrix when rule extras are empty.
+            if is_kie_provider and usage.get("is_gemini_omni_video"):
+                usage = BillingService._ensure_kie_omni_duration_matrix(usage)
             # Inject published KIE Seedance 2 CNY/s matrix when rule extras are empty.
             # Seedance 1.5 keeps dimensional per_call rules; do not force the 2.0 matrix there.
-            if is_kie_provider and (
+            elif is_kie_provider and (
                 usage.get("is_seedance_2")
                 or "seedance-2" in identity_text
                 or "seedance2" in identity_text.replace("-", "").replace("_", "").replace(" ", "")
@@ -3208,13 +3267,19 @@ class BillingService:
                 "video_second_resolution_rates",
                 "video_token_resolution_rates",
                 "video_second_min_billable_by_output",
+                "video_duration_kie_credit_rates",
             ):
                 if isinstance(extra_for_cfg.get(key), dict) and extra_for_cfg.get(key):
                     api_cfg[key] = extra_for_cfg.get(key)
                     usage[key] = extra_for_cfg.get(key)
                 elif isinstance(usage.get(key), dict) and usage.get(key):
-                    # Preserve KIE Seedance injected defaults when rule extras are empty.
+                    # Preserve KIE Seedance/Omni injected defaults when rule extras are empty.
                     api_cfg[key] = usage.get(key)
+            if usage.get("kie_omni_default_matrix") or (
+                isinstance(usage.get("video_duration_kie_credit_rates"), dict)
+                and usage.get("video_duration_kie_credit_rates")
+            ):
+                api_cfg["unit_type"] = api_cfg.get("unit_type") or "per_call"
             api_pricing_source = "system_api_base_rule"
             api_pricing_source_detail = {
                 "base_rule_id": int(getattr(base_rule, "id", 0) or 0),
@@ -3225,15 +3290,24 @@ class BillingService:
             api_cost_fallback = int((base_rule_pricing or {}).get("cost") or 0)
         elif provider_text and model_text:
             api_cfg = dict(BillingService._resolve_api_pricing_config(db, task_type, provider_text, model_text) or {})
-            # No base rule: still apply injected KIE Seedance CNY/s matrix via unit estimator.
+            # No base rule: still apply injected KIE Seedance/Omni matrices via unit estimator.
             for key in (
                 "video_second_cny_resolution_rates",
                 "video_second_resolution_rates",
                 "video_second_min_billable_by_output",
+                "video_duration_kie_credit_rates",
             ):
                 if isinstance(usage.get(key), dict) and usage.get(key):
                     api_cfg[key] = usage.get(key)
             if usage.get("is_kie_provider") and (
+                usage.get("kie_omni_default_matrix")
+                or isinstance(usage.get("video_duration_kie_credit_rates"), dict)
+                and usage.get("video_duration_kie_credit_rates")
+            ):
+                api_cfg["unit_type"] = "per_call"
+                if not api_cfg.get("cost"):
+                    api_cfg["cost"] = 0
+            elif usage.get("is_kie_provider") and (
                 usage.get("kie_seedance_default_matrix")
                 or isinstance(usage.get("video_second_cny_resolution_rates"), dict)
                 and usage.get("video_second_cny_resolution_rates")
@@ -3250,6 +3324,7 @@ class BillingService:
                 "video_second_cny_resolution_rates",
                 "video_second_resolution_rates",
                 "video_second_min_billable_by_output",
+                "video_duration_kie_credit_rates",
             ):
                 if isinstance(usage.get(key), dict) and usage.get(key):
                     api_cfg[key] = usage.get(key)
@@ -3887,6 +3962,40 @@ class BillingService:
         payload["estimation_method"] = "video_second_cny_kie"
         payload["kie_seedance_default_matrix"] = True
         # Never let Ark token formula tags leak into KIE Seedance second billing.
+        payload.pop("video_token_estimate", None)
+        payload.pop("video_token_branch", None)
+        return payload
+
+    @staticmethod
+    def _ensure_kie_omni_duration_matrix(usage: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        KIE Gemini Omni bills by duration-bucket × resolution (KIE credits),
+        or flat per generation when video input is present.
+        Inject published defaults when rule extras are empty.
+        """
+        payload = dict(usage or {})
+        if not payload.get("is_gemini_omni_video"):
+            return payload
+        if not (
+            payload.get("is_kie_provider")
+            or BillingService._is_kie_provider(payload.get("provider") or payload.get("resolved_provider"))
+        ):
+            return payload
+        has_matrix = isinstance(payload.get("video_duration_kie_credit_rates"), dict) and payload.get(
+            "video_duration_kie_credit_rates"
+        )
+        if has_matrix:
+            return payload
+        from app.services.billing_pricing import (
+            DEFAULT_KIE_OMNI_DURATION_RATES_KIE,
+            normalize_video_duration_kie_credit_rates,
+        )
+        injected = normalize_video_duration_kie_credit_rates(DEFAULT_KIE_OMNI_DURATION_RATES_KIE)
+        if not injected:
+            injected = dict(DEFAULT_KIE_OMNI_DURATION_RATES_KIE)
+        payload["video_duration_kie_credit_rates"] = injected
+        payload["estimation_method"] = "video_duration_kie_omni"
+        payload["kie_omni_default_matrix"] = True
         payload.pop("video_token_estimate", None)
         payload.pop("video_token_branch", None)
         return payload
