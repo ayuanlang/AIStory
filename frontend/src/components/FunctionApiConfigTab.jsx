@@ -547,7 +547,7 @@ export default function FunctionApiConfigTab() {
                                                         value={item.pricing_description || ''}
                                                         onChange={(e) => handleChangeParams(funcName, originalIndex, 'pricing_description', e.target.value)}
                                                         className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
-                                                        placeholder="定价说明（例：输入 1750 / 输出 12250 积分/百万 token；每次 23 积分；视频分档积分/秒，可从计费规则同步）"
+                                                        placeholder="定价说明（例：输入 2 / 输出 12 积分/1k token；每次 23 积分；视频分档积分/秒，可从计费规则同步）"
                                                     />
                                                 </div>
                                             </div>

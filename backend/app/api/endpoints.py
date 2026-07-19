@@ -79,6 +79,9 @@ from app.services.episode_script_reference_service import (
     build_episode_script_reference_user_prompt,
     collect_episode_script_reference_snippets,
     extract_episode_block_from_global_framework,
+    extract_story_dna_output_for_validation,
+    normalize_story_dna_markdown_for_persist,
+    wrap_story_dna_input_block,
 )
 from app.services.story_trend_search_service import (
     build_industry_analysis_user_prompt,
@@ -17544,12 +17547,20 @@ def sanitize_llm_markdown_output(text: str) -> str:
     if not lines:
         return ""
 
+    # Keep Story DNA truncatable markers intact for later OUTPUT/THINKING extraction.
+    has_story_dna_markers = bool(
+        re.search(r"\[\s*STORY_DNA_(THINKING|OUTPUT)_START\s*\]", content, flags=re.IGNORECASE)
+    )
+
     reasoning_prefix_re = re.compile(
         r"^\s*(i will|let me|let's|analysis|reasoning|thought process|"
         r"分析|思路|推理|下面|我将|我认为|先来)\b",
         flags=re.IGNORECASE,
     )
-    markdown_start_re = re.compile(r"^\s*(#|\||-\s|\d+\.\s|>\s|\*\s)")
+    markdown_start_re = re.compile(
+        r"^\s*(#|\||-\s|\d+\.\s|>\s|\*\s|\[\s*STORY_DNA_(?:THINKING|OUTPUT)_START\s*\]|\[\s*SCRIPT_TITLE\s*[：:])",
+        flags=re.IGNORECASE,
+    )
 
     # Trim leading blank lines first.
     while lines and not lines[0].strip():
@@ -17560,16 +17571,18 @@ def sanitize_llm_markdown_output(text: str) -> str:
         lines.pop(0)
 
     # If a markdown-looking start exists later and the preface looks like reasoning,
-    # cut to the markdown start.
-    first_md_index = None
-    for idx, line in enumerate(lines):
-        if markdown_start_re.match(line):
-            first_md_index = idx
-            break
-    if first_md_index is not None and first_md_index > 0:
-        preface = "\n".join(lines[:first_md_index]).lower()
-        if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
-            lines = lines[first_md_index:]
+    # cut to the markdown start. Skip when Story DNA markers are present so THINKING/OUTPUT
+    # boundaries are not destroyed.
+    if not has_story_dna_markers:
+        first_md_index = None
+        for idx, line in enumerate(lines):
+            if markdown_start_re.match(line):
+                first_md_index = idx
+                break
+        if first_md_index is not None and first_md_index > 0:
+            preface = "\n".join(lines[:first_md_index]).lower()
+            if any(token in preface for token in ["analysis", "reasoning", "推理", "思路", "我将", "我认为"]):
+                lines = lines[first_md_index:]
 
     return "\n".join(lines).strip()
 
@@ -18776,12 +18789,17 @@ def is_valid_markdown_output(text: str, require_h1: bool = True) -> bool:
     if not lines:
         return False
 
-    if require_h1 and not lines[0].lstrip().startswith("#"):
+    first = lines[0].lstrip()
+    # Story DNA contract: machine title marker may lead the deliverable block.
+    has_script_title_marker = bool(re.match(r"^\[\s*SCRIPT_TITLE\s*[：:]", first, flags=re.IGNORECASE))
+    if require_h1 and not first.startswith("#") and not has_script_title_marker:
         return False
 
     # Basic markdown structure presence
     has_md_structure = any(
         ln.lstrip().startswith(("#", "- ", "* ", "|", ">", "1. ", "2. ", "3. "))
+        or bool(re.match(r"^\[\s*SCRIPT_TITLE\s*[：:]", ln.lstrip(), flags=re.IGNORECASE))
+        or bool(re.match(r"^\[\s*EPISODE_BLOCK_START", ln.lstrip(), flags=re.IGNORECASE))
         for ln in lines
     )
     return has_md_structure
@@ -18911,6 +18929,30 @@ async def generate_markdown_with_retry(
         reason = str((meta or {}).get("finish_reason") or "").strip().lower()
         return reason == "length"
 
+    def _validation_view(content: str, tag: str) -> str:
+        """Prefer STORY_DNA_OUTPUT (truncate THINKING) so reasoning cannot fail validation."""
+        info = extract_story_dna_output_for_validation(content)
+        view = str(info.get("content") or content or "").strip()
+        if info.get("had_output_markers") or info.get("truncated_thinking"):
+            logger.info(
+                "[generate_markdown_with_retry] story_dna_truncate tag=%s "
+                "had_output=%s had_thinking=%s truncated_thinking=%s "
+                "full_len=%s validate_len=%s thinking_len=%s",
+                tag,
+                bool(info.get("had_output_markers")),
+                bool(info.get("had_thinking_markers")),
+                bool(info.get("truncated_thinking")),
+                len(str(info.get("full") or "")),
+                len(view),
+                len(str(info.get("thinking") or "")),
+            )
+        return view
+
+    def _passes_markdown(content: str, tag: str) -> bool:
+        if not content or _looks_like_error_text(content):
+            return False
+        return is_valid_markdown_output(_validation_view(content, tag), require_h1=require_h1)
+
     raw_1, content_1, meta_1 = await _call_once("initial", user_prompt, sys_prompt)
     if _is_prohibited_marker(raw_1) or _is_prohibited_marker(content_1):
         logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on initial attempt")
@@ -18927,27 +18969,31 @@ async def generate_markdown_with_retry(
             return _result_payload(content_1, meta_1)
         raise RuntimeError("LLM returned empty/error content in non-strict mode")
 
-    if content_1 and not _looks_like_error_text(content_1) and is_valid_markdown_output(content_1, require_h1=require_h1) and not _is_truncated(meta_1):
+    if content_1 and _passes_markdown(content_1, "initial") and not _is_truncated(meta_1):
         return _result_payload(content_1, meta_1)
 
     retry_sys_prompt = (
         f"{sys_prompt}\n\n"
         "[FORMAT RETRY - STRICT]\n"
         "Return ONLY final valid Markdown.\n"
-        "Do NOT output reasoning, preface text, or chain-of-thought.\n"
+        "Do NOT output reasoning, preface text, or chain-of-thought outside truncatable markers.\n"
         "Do NOT output code fences.\n"
-        "The first non-empty line must be an H1 markdown header starting with '# '."
+        "If this is Story DNA: wrap Part 1 in [STORY_DNA_THINKING_START]/[STORY_DNA_THINKING_END], "
+        "and wrap §0–§9 (including [SCRIPT_TITLE:…]) in [STORY_DNA_OUTPUT_START]/[STORY_DNA_OUTPUT_END]. "
+        "OUTPUT block first non-empty line must be [SCRIPT_TITLE:…] or a markdown header starting with '# '.\n"
+        "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
     )
     retry_user_prompt = (
         f"{user_prompt}\n\n"
         "[RETRY INSTRUCTION]\n"
-        "Only return corrected final markdown now."
+        "Only return corrected final markdown now. Put any reasoning inside THINKING markers; "
+        "formal deliverable must be inside OUTPUT markers when Story DNA applies."
     )
     raw_2, content_2, meta_2 = await _call_once("strict_retry", retry_user_prompt, retry_sys_prompt)
     if _is_prohibited_marker(raw_2) or _is_prohibited_marker(content_2):
         logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on strict retry")
         raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
-    if content_2 and not _looks_like_error_text(content_2) and is_valid_markdown_output(content_2, require_h1=require_h1) and not _is_truncated(meta_2):
+    if content_2 and _passes_markdown(content_2, "strict_retry") and not _is_truncated(meta_2):
         return _result_payload(content_2, meta_2)
 
     final_retry_sys_prompt = (
@@ -18956,8 +19002,11 @@ async def generate_markdown_with_retry(
         "Return ONLY complete final markdown that fully satisfies the requested structure.\n"
         "Do NOT output a partial draft.\n"
         "Do NOT output placeholder sections.\n"
-        "Do NOT output reasoning, analysis text, or code fences.\n"
-        "The first non-empty line must be an H1 markdown header starting with '# '."
+        "Do NOT output reasoning, analysis text, or code fences outside truncatable markers.\n"
+        "If this is Story DNA: include [STORY_DNA_THINKING_START]/[STORY_DNA_THINKING_END] and "
+        "[STORY_DNA_OUTPUT_START]/[STORY_DNA_OUTPUT_END]; OUTPUT must begin with [SCRIPT_TITLE:…] "
+        "or a markdown header starting with '# '.\n"
+        "Otherwise: the first non-empty line must be an H1 markdown header starting with '# '."
     )
     final_retry_user_prompt = (
         f"{user_prompt}\n\n"
@@ -18968,7 +19017,7 @@ async def generate_markdown_with_retry(
     if _is_prohibited_marker(raw_3) or _is_prohibited_marker(content_3):
         logger.error("[generate_markdown_with_retry] provider returned PROHIBITED_CONTENT on final strict retry")
         raise RuntimeError("LLM content blocked by provider (PROHIBITED_CONTENT)")
-    if content_3 and not _looks_like_error_text(content_3) and is_valid_markdown_output(content_3, require_h1=require_h1) and not _is_truncated(meta_3):
+    if content_3 and _passes_markdown(content_3, "final_strict_retry") and not _is_truncated(meta_3):
         return _result_payload(content_3, meta_3)
 
     diagnostics = {
@@ -19583,12 +19632,15 @@ async def generate_project_story_dna_global(
         "- You MUST create a story-fitting script title based on genre, conflict, and tone.\n"
         "- The final Script Title MUST NOT be identical to the project title or the input hint above.\n"
         "- Avoid generic placeholders like 'Untitled', 'Project Title', or 'Episode N'.\n"
-        "- In §0, output a dedicated machine-parseable line first: [SCRIPT_TITLE:{title}]\n"
+        "- Inside [STORY_DNA_OUTPUT_START]…[STORY_DNA_OUTPUT_END], output a dedicated machine-parseable line: [SCRIPT_TITLE:{title}]\n"
         "- Then also keep the human label: Script Title:{title} · Type:… · Language:…\n"
-        "- Do NOT append production-format words (实拍/真人剧/Live Action/Type labels) to the title.\n\n"
+        "- Do NOT append production-format words (实拍/真人剧/Live Action/Type labels) to the title.\n"
+        "- Truncatable markers (hard): wrap Part 1 in [STORY_DNA_THINKING_START]…[STORY_DNA_THINKING_END]; "
+        "wrap §0–§9 formal Story DNA in [STORY_DNA_OUTPUT_START]…[STORY_DNA_OUTPUT_END]. "
+        "Do not echo the INPUT block into OUTPUT.\n\n"
     )
 
-    user_prompt = (
+    user_prompt = wrap_story_dna_input_block(
         f"Mode: global\n"
         f"Project Title: {project_title}\n"
         f"Note: Project Overview / Basic Information and Character Canon may be empty; do not fail, infer sensible defaults and continue.\n"
@@ -19682,8 +19734,23 @@ async def generate_project_story_dna_global(
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
 
+    dna_view = extract_story_dna_output_for_validation(generated_md)
+    generated_md = normalize_story_dna_markdown_for_persist(generated_md)
+    logger.info(
+        "[generate_project_story_dna_global] story_dna_markers had_output=%s had_thinking=%s "
+        "truncated_thinking=%s persist_len=%s output_len=%s thinking_len=%s",
+        bool(dna_view.get("had_output_markers")),
+        bool(dna_view.get("had_thinking_markers")),
+        bool(dna_view.get("truncated_thinking")),
+        len(generated_md),
+        len(str(dna_view.get("content") or "")),
+        len(str(dna_view.get("thinking") or "")),
+    )
+
     generated_script_title = _strip_stacked_production_title_suffixes(
-        _extract_script_title_from_story_dna_markdown(generated_md)
+        _extract_script_title_from_story_dna_markdown(
+            str(dna_view.get("content") or generated_md)
+        )
     )
     if not generated_script_title:
         generated_script_title = _build_non_literal_script_title(
@@ -23063,7 +23130,7 @@ async def generate_episode_story_dna(
         logger.error("Story generator prompt not found: %s", prompt_filename)
         raise HTTPException(status_code=404, detail=f"Prompt file '{prompt_filename}' not found.")
 
-    user_prompt = (
+    user_prompt_body = (
         f"Mode: {mode}\n"
         f"Episodes Count: {req.episodes_count or ''}\n"
         f"Episode Duration (minutes): {_resolve_episode_duration_minutes(getattr(req, 'episode_duration_minutes', None))}\n"
@@ -23078,6 +23145,15 @@ async def generate_episode_story_dna(
         f"Suspense: {req.suspense or ''}\n"
         f"Extra Notes: {req.extra_notes or ''}\n"
     )
+    if mode == "global" and prompt_filename == "master_story_architect.md":
+        user_prompt_body += (
+            "\nTruncatable markers (hard): wrap Part 1 in [STORY_DNA_THINKING_START]…[STORY_DNA_THINKING_END]; "
+            "wrap §0–§9 (including [SCRIPT_TITLE:…]) in [STORY_DNA_OUTPUT_START]…[STORY_DNA_OUTPUT_END]. "
+            "Do not echo the INPUT block into OUTPUT.\n"
+        )
+        user_prompt = wrap_story_dna_input_block(user_prompt_body)
+    else:
+        user_prompt = user_prompt_body
 
     llm_config = agent_service.get_active_llm_config(current_user.id, function_name=getattr(req, "function_name", None), system_api_id=getattr(req, "system_api_id", None))
     llm_config = _inject_project_creativity_temperature(
@@ -23133,6 +23209,20 @@ async def generate_episode_story_dna(
     generated_md = str((generated_payload or {}).get("content") or "").strip()
     if not generated_md:
         raise HTTPException(status_code=500, detail="LLM returned empty content")
+
+    if mode == "global" and prompt_filename == "master_story_architect.md":
+        dna_view = extract_story_dna_output_for_validation(generated_md)
+        generated_md = normalize_story_dna_markdown_for_persist(generated_md)
+        logger.info(
+            "[generate_episode_story_dna] story_dna_markers mode=global had_output=%s had_thinking=%s "
+            "truncated_thinking=%s persist_len=%s output_len=%s thinking_len=%s",
+            bool(dna_view.get("had_output_markers")),
+            bool(dna_view.get("had_thinking_markers")),
+            bool(dna_view.get("truncated_thinking")),
+            len(generated_md),
+            len(str(dna_view.get("content") or "")),
+            len(str(dna_view.get("thinking") or "")),
+        )
 
     usage = (generated_payload or {}).get("usage") if isinstance(generated_payload, dict) else {}
     if not usage:

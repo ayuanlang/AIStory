@@ -14,12 +14,17 @@ EPISODE_SCRIPT_MAX_QUERIES = 12
 EPISODE_SCRIPT_LIMIT_PER_QUERY = 4
 EPISODE_SCRIPT_MAX_ENRICH = 8
 
+STORY_DNA_INPUT_START = "[STORY_DNA_INPUT_START]"
+STORY_DNA_INPUT_END = "[STORY_DNA_INPUT_END]"
+STORY_DNA_THINKING_START = "[STORY_DNA_THINKING_START]"
+STORY_DNA_THINKING_END = "[STORY_DNA_THINKING_END]"
+STORY_DNA_OUTPUT_START = "[STORY_DNA_OUTPUT_START]"
+STORY_DNA_OUTPUT_END = "[STORY_DNA_OUTPUT_END]"
+
 _EPISODE_HEADING_RE = re.compile(
     r"(?im)^(?:-\s*\*\*)?\s*EP0*(\d+)\b",
 )
 _EPISODE_AUDIT_RE = re.compile(r"(?im)^#{1,3}\s*Episode\s+Coverage\s+Audit\b")
-
-
 def _episode_tag(episode_number: int) -> str:
     return f"EP{int(episode_number):02d}"
 
@@ -30,6 +35,122 @@ def episode_block_start_token(episode_number: int) -> str:
 
 def episode_block_end_token(episode_number: int) -> str:
     return f"[EPISODE_BLOCK_END:{_episode_tag(episode_number)}]"
+
+
+def wrap_story_dna_input_block(text: str) -> str:
+    """Wrap creative/user payload so models and logs can truncate at INPUT markers."""
+    body = str(text or "").strip()
+    if not body:
+        return f"{STORY_DNA_INPUT_START}\n{STORY_DNA_INPUT_END}"
+    if STORY_DNA_INPUT_START in body and STORY_DNA_INPUT_END in body:
+        return body
+    return f"{STORY_DNA_INPUT_START}\n{body}\n{STORY_DNA_INPUT_END}"
+
+
+def extract_story_dna_delimited_block(text: str, kind: str) -> str:
+    """Extract inner content between STORY_DNA_{KIND}_START/END (exclusive of markers)."""
+    source = str(text or "")
+    kind_key = str(kind or "").strip().upper()
+    if kind_key not in {"INPUT", "THINKING", "OUTPUT"}:
+        return ""
+    start_match = re.search(
+        rf"\[\s*STORY_DNA_{kind_key}_START\s*\]",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if not start_match:
+        return ""
+    content_start = start_match.end()
+    end_match = re.search(
+        rf"\[\s*STORY_DNA_{kind_key}_END\s*\]",
+        source[content_start:],
+        flags=re.IGNORECASE,
+    )
+    if not end_match:
+        return source[content_start:].strip()
+    return source[content_start : content_start + end_match.start()].strip()
+
+
+def strip_story_dna_thinking_blocks(text: str) -> str:
+    """Remove THINKING blocks (markers + inner) so reasoning does not affect validation."""
+    source = str(text or "")
+    if not source:
+        return ""
+    pattern = re.compile(
+        r"\[\s*STORY_DNA_THINKING_START\s*\][\s\S]*?\[\s*STORY_DNA_THINKING_END\s*\]",
+        flags=re.IGNORECASE,
+    )
+    cleaned = pattern.sub("", source)
+    # orphan START without END: drop from START to EOF / next OUTPUT start
+    orphan = re.search(r"\[\s*STORY_DNA_THINKING_START\s*\]", cleaned, flags=re.IGNORECASE)
+    if orphan:
+        next_output = re.search(
+            r"\[\s*STORY_DNA_OUTPUT_START\s*\]",
+            cleaned[orphan.start() :],
+            flags=re.IGNORECASE,
+        )
+        if next_output:
+            cut_at = orphan.start() + next_output.start()
+            cleaned = cleaned[: orphan.start()] + cleaned[cut_at:]
+        else:
+            cleaned = cleaned[: orphan.start()]
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def extract_story_dna_output_for_validation(text: str) -> Dict[str, Any]:
+    """Prefer OUTPUT block for checks; fall back to text with THINKING stripped.
+
+    Returns:
+      content: markdown used for validation / preferred deliverable body
+      full: original text
+      thinking: extracted THINKING inner (may be empty)
+      had_output_markers / had_thinking_markers: bool
+      truncated_thinking: bool
+    """
+    full = str(text or "")
+    thinking = extract_story_dna_delimited_block(full, "THINKING")
+    output = extract_story_dna_delimited_block(full, "OUTPUT")
+    had_output = bool(output)
+    had_thinking = bool(thinking) or bool(
+        re.search(r"\[\s*STORY_DNA_THINKING_START\s*\]", full, flags=re.IGNORECASE)
+    )
+    if had_output:
+        content = output
+        truncated_thinking = had_thinking
+    else:
+        stripped = strip_story_dna_thinking_blocks(full)
+        content = stripped or full
+        truncated_thinking = bool(stripped) and stripped != full.strip()
+    return {
+        "content": str(content or "").strip(),
+        "full": full,
+        "thinking": thinking,
+        "had_output_markers": had_output,
+        "had_thinking_markers": had_thinking,
+        "truncated_thinking": truncated_thinking,
+    }
+
+
+def normalize_story_dna_markdown_for_persist(text: str) -> str:
+    """Keep markers for inspection; ensure OUTPUT body is the authoritative slice when present."""
+    info = extract_story_dna_output_for_validation(text)
+    full = str(info.get("full") or "")
+    output = str(info.get("content") or "").strip()
+    thinking = str(info.get("thinking") or "").strip()
+    if info.get("had_output_markers"):
+        parts: List[str] = []
+        if thinking or info.get("had_thinking_markers"):
+            parts.append(STORY_DNA_THINKING_START)
+            parts.append(thinking)
+            parts.append(STORY_DNA_THINKING_END)
+            parts.append("")
+        parts.append(STORY_DNA_OUTPUT_START)
+        parts.append(output)
+        parts.append(STORY_DNA_OUTPUT_END)
+        return "\n".join(parts).strip()
+    if info.get("truncated_thinking"):
+        return output
+    return full.strip()
 
 
 def _extract_episode_block_by_delimiters(md: str, episode_number: int) -> str:
@@ -93,10 +214,13 @@ def _extract_episode_block_by_heading(md: str, episode_number: int) -> str:
 
 def extract_episode_block_from_global_framework(md: str, episode_number: int) -> str:
     """Extract one episode's planning block from the global story framework."""
-    by_delimiters = _extract_episode_block_by_delimiters(md, episode_number)
+    # Prefer formal OUTPUT block so THINKING/reasoning cannot pollute episode slices.
+    output = extract_story_dna_delimited_block(md, "OUTPUT")
+    search_md = output or str(md or "")
+    by_delimiters = _extract_episode_block_by_delimiters(search_md, episode_number)
     if by_delimiters:
         return by_delimiters
-    return _extract_episode_block_by_heading(md, episode_number)
+    return _extract_episode_block_by_heading(search_md, episode_number)
 
 
 def _as_str_list(value: Any, *, limit: int = 6) -> List[str]:

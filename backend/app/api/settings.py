@@ -10766,23 +10766,30 @@ def _format_llm_credit_mtok_pricing_description(
     input_credits_mtok: float = 0.0,
     output_credits_mtok: float = 0.0,
     flat_credits_mtok: float = 0.0,
+    force_token_k_unit: bool = False,
     round_cost_to_int: bool = False,
 ) -> str:
-    """LLM/Vision sync text: 输入/输出 积分/百万 token (already * odds)."""
-    ci = float(input_credits_mtok or 0.0)
-    co = float(output_credits_mtok or 0.0)
-    flat = float(flat_credits_mtok or 0.0)
+    """LLM/Vision sync text: 输入/输出 积分/(百万|1k) token (already * odds).
+
+    Rates are collected on a per-million scale; when force_token_k_unit is True,
+    convert display amounts to per-1k (÷1000) and label as 1k token.
+    """
+    divisor = 1000.0 if force_token_k_unit else 1.0
+    unit_label = "1k token" if force_token_k_unit else "百万 token"
+    ci = float(input_credits_mtok or 0.0) / divisor
+    co = float(output_credits_mtok or 0.0) / divisor
+    flat = float(flat_credits_mtok or 0.0) / divisor
     if ci > 0 and co > 0:
         return (
             f"输入 {_format_cost_number_for_pricing_desc(ci, round_cost_to_int=round_cost_to_int)} / "
-            f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+            f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/{unit_label}"
         )
     if co > 0:
-        return f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+        return f"输出 {_format_cost_number_for_pricing_desc(co, round_cost_to_int=round_cost_to_int)} 积分/{unit_label}"
     if ci > 0:
-        return f"输入 {_format_cost_number_for_pricing_desc(ci, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+        return f"输入 {_format_cost_number_for_pricing_desc(ci, round_cost_to_int=round_cost_to_int)} 积分/{unit_label}"
     if flat > 0:
-        return f"{_format_cost_number_for_pricing_desc(flat, round_cost_to_int=round_cost_to_int)} 积分/百万 token"
+        return f"{_format_cost_number_for_pricing_desc(flat, round_cost_to_int=round_cost_to_int)} 积分/{unit_label}"
     return ""
 
 
@@ -11031,6 +11038,7 @@ def _build_function_api_pricing_description_map(
                 input_credits_mtok=float(llm_bucket.get("input") or 0.0),
                 output_credits_mtok=float(llm_bucket.get("output") or 0.0),
                 flat_credits_mtok=float(llm_bucket.get("flat") or 0.0),
+                force_token_k_unit=force_token_k_unit,
                 round_cost_to_int=round_cost_to_int,
             )
             if llm_desc:
@@ -11158,7 +11166,12 @@ def get_all_function_api_configs(
                 sid = _safe_int(item.get("system_api_id"), 0)
                 if sid > 0:
                     configured_api_ids.append(sid)
-    pricing_desc_map = _build_function_api_pricing_description_map(db, configured_api_ids)
+    # Fallback descriptions for empty pricing_description: LLM shows 积分/1k token.
+    pricing_desc_map = _build_function_api_pricing_description_map(
+        db,
+        configured_api_ids,
+        force_token_k_unit=True,
+    )
 
     result = []
     
@@ -11222,11 +11235,11 @@ def sync_function_api_pricing_descriptions(
                 if sid > 0:
                     target_ids.append(sid)
 
-    # LLM/Vision -> 积分/百万 token (*赔率); Image -> 每次X积分; Video 等仍走积分/分档文案
+    # LLM/Vision -> 积分/1k token (*赔率, 由百万单价÷1000); Image -> 每次X积分; Video 等仍走积分/分档文案
     pricing_desc_map = _build_function_api_pricing_description_map(
         db,
         target_ids,
-        force_token_k_unit=False,
+        force_token_k_unit=True,
         use_cached_price_fallback=False,
         round_cost_to_int=True,
     )
