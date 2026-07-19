@@ -945,9 +945,6 @@ export const SceneCard = ({ scene, entities, shotCount = 0, shotDuration = 0, on
                         </button>
                     </div>
                 </div>
-                <div className="absolute bottom-2 right-2 bg-primary text-black px-2 py-0.5 rounded text-[10px] font-bold z-10">
-                    {scene.equivalent_duration || '0m'}
-                </div>
             </div>
             
             <div className="p-3 space-y-3 flex-1 flex flex-col">
@@ -4080,12 +4077,6 @@ export const SceneManager = ({ activeEpisode, projectId, project, onLog, onImpor
                         <div className="ml-2 flex items-center gap-4 text-[11px] text-muted-foreground flex-wrap">
                             <span>
                                 {t('所有场景数', 'Total Scenes')}: <span className="text-white font-medium">{scenes?.length || 0}</span>
-                            </span>
-                            <span>
-                                {t('预计总时长', 'Est. Total Duration')}: <span className="text-white font-medium">{Math.round((scenes || []).reduce((sum, s) => sum + parseDurationSeconds(s.equivalent_duration), 0) * 10) / 10}s</span>
-                            </span>
-                            <span>
-                                {t('预计总建议成本', 'Est. Total Cost')}: <span className="text-emerald-300 font-medium">¥{((scenes || []).reduce((sum, s) => sum + (Number(sceneCostMap[s?.id]?.suggested_cost) || 0), 0)).toFixed(2)}</span>
                             </span>
                             <span>
                                 {t('所有场景总分镜数', 'Total Shots')}: <span className="text-white font-medium">{Object.values(sceneShotCountMap || {}).reduce((sum, count) => sum + count, 0)}</span>

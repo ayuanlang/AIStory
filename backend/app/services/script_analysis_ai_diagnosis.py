@@ -1,4 +1,4 @@
-"""Build prompts and truncate payloads for script-page AI diagnosis."""
+"""Build prompts and truncate payloads for page AI diagnosis (script analysis / assets)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,16 @@ _MAX_WORKSPACE_CHARS = 36000
 _MAX_NOTE_CHARS = 4000
 _MAX_HISTORY_TURNS = 20
 _MAX_HISTORY_MSG_CHARS = 8000
+
+_PAGE_SCOPE_SCRIPT = "script_analysis"
+_PAGE_SCOPE_ASSETS = "assets"
+
+
+def normalize_page_scope(page_scope: Any = None) -> str:
+    raw = str(page_scope or _PAGE_SCOPE_SCRIPT).strip().lower()
+    if raw in {_PAGE_SCOPE_ASSETS, "asset", "subject", "subjects", "subject_library"}:
+        return _PAGE_SCOPE_ASSETS
+    return _PAGE_SCOPE_SCRIPT
 
 
 def _clip(text: Any, max_chars: int) -> str:
@@ -39,24 +49,35 @@ def _normalize_history(history: Optional[List[Any]]) -> List[Dict[str, str]]:
     return rows
 
 
-def build_diagnosis_messages(
-    *,
-    manual_text: str = "",
-    system_logs: str = "",
-    workspace_summary: str = "",
-    user_note: str = "",
-    history: Optional[List[Any]] = None,
-    project_id: Optional[int] = None,
-    episode_id: Optional[int] = None,
-    episode_label: str = "",
-) -> Tuple[list, Dict[str, Any]]:
-    manual = _clip(manual_text, _MAX_MANUAL_CHARS)
-    logs = _clip(system_logs, _MAX_LOGS_CHARS)
-    workspace = _clip(workspace_summary, _MAX_WORKSPACE_CHARS)
-    note = _clip(user_note, _MAX_NOTE_CHARS)
-    turns = _normalize_history(history)
+def _system_prompt_for_scope(page_scope: str) -> str:
+    if page_scope == _PAGE_SCOPE_ASSETS:
+        return (
+            "你是 AI Story 产品的「资产页」操作诊断 Agent。"
+            "你以多轮对话方式协助用户：先结合上下文诊断，再回答追问、澄清与细化操作步骤。"
+            "用户会提供：资产页操作手册、系统日志、当前资产工作区状态，以及对话历史。"
+            "请用简洁、日常的中文交流，面向非技术人员。"
+            "\n\n首轮或用户明确要求完整诊断时，优先使用以下结构："
+            "\n## 当前状态判断"
+            "\n## 可能卡在哪里"
+            "\n## 建议下一步（按优先级，3～7 条，可执行）"
+            "\n## 需要注意"
+            "\n\n后续追问可直接针对性回答，不必每次重复完整四段结构；仍保持可执行、可核对。"
+            "\n\n规则："
+            "\n- 结合操作手册：先确认清单与类型，再单个试生成，再批量生图；衍生资产先生成依赖源。"
+            "\n- 分集继承：资产按分集存储；新集入库会建本集新卡片并可能挂旧集参考，但不会自动拷贝旧图——"
+            "要长得像旧集需在资产页「复用资产」/素材库选用旧图，或重新生图；「从源实体同步」只同步文字不同步图。"
+            "\n- 缺卡片（名单都没有）→ 回剧本分析进度诊断面板，对「资产设计」做「资产生成重跑」"
+            "（全部/分类/单实体），不要指望资产页「新增资产」代替整类设计；有卡片没图才在资产页生图。"
+            "\n- 生图接口优选：日常优先 gpt-Image-2，候补 banana 系列；"
+            "遇血腥、暴力、儿童等相关合规拦截时改试 Flux、Doubao 等，再对失败项单独重试。"
+            "\n- 强调：批量前确认范围是「当前分集」还是「整个项目」；删除/全量操作前再核对范围。"
+            "\n- 依赖未齐套时会跳过或效果不稳；应先补齐依赖图，再生成衍生角色/环境/道具/海报。"
+            "\n- 不要编造用户没提供的数据；信息不足就明确说还缺什么，并可追问。"
+            "\n- 不要输出内部字段名（如 Subject Index、entity_design JSON、API 路径等），改用业务说法。"
+            "\n- 你只给操作建议，不会也不能直接改用户工作区内容。"
+        )
 
-    system_prompt = (
+    return (
         "你是 AI Story 产品的「剧本分析页」操作诊断 Agent。"
         "你以多轮对话方式协助用户：先结合上下文诊断，再回答追问、澄清与细化操作步骤。"
         "用户会提供：操作手册、系统日志、当前本集工作区状态，以及对话历史。"
@@ -76,31 +97,61 @@ def build_diagnosis_messages(
         "\n- 你只给操作建议，不会也不能直接改用户工作区内容。"
     )
 
+
+def build_diagnosis_messages(
+    *,
+    manual_text: str = "",
+    system_logs: str = "",
+    workspace_summary: str = "",
+    user_note: str = "",
+    history: Optional[List[Any]] = None,
+    project_id: Optional[int] = None,
+    episode_id: Optional[int] = None,
+    episode_label: str = "",
+    page_scope: Any = None,
+) -> Tuple[list, Dict[str, Any]]:
+    scope = normalize_page_scope(page_scope)
+    manual = _clip(manual_text, _MAX_MANUAL_CHARS)
+    logs = _clip(system_logs, _MAX_LOGS_CHARS)
+    workspace = _clip(workspace_summary, _MAX_WORKSPACE_CHARS)
+    note = _clip(user_note, _MAX_NOTE_CHARS)
+    turns = _normalize_history(history)
+
+    manual_heading = "# 操作手册（资产页）" if scope == _PAGE_SCOPE_ASSETS else "# 操作手册（剧本分析）"
+    workspace_heading = "# 资产工作区概况" if scope == _PAGE_SCOPE_ASSETS else "# 本集工作区概况"
+    ready_reply = (
+        "已收到资产页操作手册、系统日志与工作区概况。"
+        "请直接描述你遇到的问题，或继续追问；我会按对话给出可执行建议。"
+        if scope == _PAGE_SCOPE_ASSETS
+        else (
+            "已收到本集操作手册、系统日志与工作区概况。"
+            "请直接描述你遇到的问题，或继续追问；我会按对话给出可执行建议。"
+        )
+    )
+
     context_parts = [
         "# 诊断上下文（本会话固定参考，请始终结合）",
+        f"- 诊断页面：{'资产页' if scope == _PAGE_SCOPE_ASSETS else '剧本分析页'}",
         f"- 项目 ID：{project_id if project_id is not None else '未知'}",
         f"- 分集 ID：{episode_id if episode_id is not None else '未知'}",
         f"- 分集：{episode_label or '未命名'}",
         "",
-        "# 操作手册（剧本分析）",
+        manual_heading,
         manual or "（未提供）",
         "",
         "# 系统日志（最近）",
         logs or "（暂无）",
         "",
-        "# 本集工作区概况",
+        workspace_heading,
         workspace or "（未提供）",
     ]
 
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": _system_prompt_for_scope(scope)},
         {"role": "user", "content": "\n".join(context_parts)},
         {
             "role": "assistant",
-            "content": (
-                "已收到本集操作手册、系统日志与工作区概况。"
-                "请直接描述你遇到的问题，或继续追问；我会按对话给出可执行建议。"
-            ),
+            "content": ready_reply,
         },
     ]
 
@@ -125,6 +176,7 @@ def build_diagnosis_messages(
         "history_turns": len(turns),
         "ops_email": OPS_SUPPORT_EMAIL,
         "agent_mode": True,
+        "page_scope": scope,
     }
     return messages, meta
 
@@ -162,16 +214,19 @@ def build_ops_email_body(
     system_logs: str,
     workspace_summary: str,
     history: Optional[List[Any]] = None,
+    page_scope: Any = None,
 ) -> Tuple[str, str]:
+    scope = normalize_page_scope(page_scope)
+    page_label = "资产页" if scope == _PAGE_SCOPE_ASSETS else "剧本分析页"
     subject = (
-        f"[AI Story 剧本分析诊断] "
+        f"[AI Story {page_label}诊断] "
         f"user={username or 'unknown'} "
         f"project={project_id or '-'} episode={episode_id or '-'}"
     )
     transcript = format_conversation_transcript(history, user_note=user_note, advice=advice)
     content = "\n".join(
         [
-            "AI Story · 剧本分析页 AI 诊断工单（Agent 对话）",
+            f"AI Story · {page_label} AI 诊断工单（Agent 对话）",
             "",
             f"用户：{username or 'unknown'}",
             f"用户邮箱：{user_email or '未填写'}",
@@ -185,7 +240,7 @@ def build_ops_email_body(
             "===== 最近一条 AI 建议 =====",
             _clip(advice, 20000) or "（空）",
             "",
-            "===== 本集工作区概况 =====",
+            "===== 工作区概况 =====",
             _clip(workspace_summary, 12000) or "（空）",
             "",
             "===== 系统日志（节选） =====",

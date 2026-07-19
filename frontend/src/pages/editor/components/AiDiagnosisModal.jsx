@@ -1,16 +1,42 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Mail, Stethoscope, X } from 'lucide-react';
 import scriptAnalysisManual from '../../../../../docs/script_analysis_user_manual.md?raw';
+import assetPageManual from '../../../../../docs/asset_page_user_manual.md?raw';
 import AgentChat from '../../../components/AgentChat';
 import { runScriptAnalysisAiDiagnosis } from '../../../services/api';
 
 const OPS_EMAIL = 'metawave@126.com';
-const DIAGNOSIS_HISTORY_KEY = 'aistory.script_analysis.ai_diagnosis.history';
+
+const PAGE_PRESETS = {
+    script_analysis: {
+        pageScope: 'script_analysis',
+        historyStorageKey: 'aistory.script_analysis.ai_diagnosis.history',
+        manualText: scriptAnalysisManual,
+        titleZh: 'AI 诊断（Agent）',
+        titleEn: 'AI Diagnosis (Agent)',
+        descriptionZh:
+            'Agent 模式：可多轮对话。系统会带上操作手册、日志与本集工作区概况；你可追问细化建议。每轮对话按剧本分析接口计费；仅发送已有对话给运营不计费。',
+        descriptionEn:
+            'Agent mode: multi-turn chat with the manual, logs, and workspace summary. Follow-ups are supported. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
+    },
+    assets: {
+        pageScope: 'assets',
+        historyStorageKey: 'aistory.assets.ai_diagnosis.history',
+        manualText: assetPageManual,
+        titleZh: '资产 AI 诊断（Agent）',
+        titleEn: 'Assets AI Diagnosis (Agent)',
+        descriptionZh:
+            'Agent 模式：可多轮对话。系统会带上资产页操作手册、日志与当前资产工作区概况；你可追问细化建议。每轮对话按剧本分析接口计费；仅发送已有对话给运营不计费。',
+        descriptionEn:
+            'Agent mode: multi-turn chat with the assets manual, logs, and workspace summary. Follow-ups are supported. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
+    },
+};
 
 export default function AiDiagnosisModal({
     open,
     onClose,
     uiLang = 'zh',
+    pageKey = 'script_analysis',
     systemLogs = [],
     workspaceSummary = '',
     projectId = null,
@@ -20,6 +46,7 @@ export default function AiDiagnosisModal({
     onLog = null,
 }) {
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+    const preset = PAGE_PRESETS[pageKey] || PAGE_PRESETS.script_analysis;
     const [sendingOnly, setSendingOnly] = useState(false);
     const [emailNotice, setEmailNotice] = useState('');
     const [emailError, setEmailError] = useState('');
@@ -59,7 +86,8 @@ export default function AiDiagnosisModal({
                     content: String(m.content || ''),
                 }));
             const result = await runScriptAnalysisAiDiagnosis({
-                manual_text: String(scriptAnalysisManual || ''),
+                page_scope: preset.pageScope,
+                manual_text: String(preset.manualText || ''),
                 system_logs: logsText,
                 workspace_summary: String(workspaceSummary || ''),
                 user_note: String(queryText || ''),
@@ -89,6 +117,8 @@ export default function AiDiagnosisModal({
         episodeLabel,
         logsText,
         onLog,
+        preset.manualText,
+        preset.pageScope,
         projectId,
         systemApiId,
         t,
@@ -113,7 +143,8 @@ export default function AiDiagnosisModal({
                 }));
             const lastUser = [...history].reverse().find((m) => m.role === 'user');
             const result = await runScriptAnalysisAiDiagnosis({
-                manual_text: String(scriptAnalysisManual || ''),
+                page_scope: preset.pageScope,
+                manual_text: String(preset.manualText || ''),
                 system_logs: logsText,
                 workspace_summary: String(workspaceSummary || ''),
                 user_note: String(lastUser?.content || ''),
@@ -147,6 +178,8 @@ export default function AiDiagnosisModal({
         episodeLabel,
         logsText,
         onLog,
+        preset.manualText,
+        preset.pageScope,
         projectId,
         systemApiId,
         t,
@@ -172,13 +205,10 @@ export default function AiDiagnosisModal({
                         <div className="min-w-0">
                             <h3 className="text-lg font-bold flex items-center gap-2">
                                 <Stethoscope className="w-5 h-5 text-emerald-300" />
-                                {t('AI 诊断（Agent）', 'AI Diagnosis (Agent)')}
+                                {t(preset.titleZh, preset.titleEn)}
                             </h3>
                             <p className="mt-1 text-xs text-white/55 leading-relaxed">
-                                {t(
-                                    'Agent 模式：可多轮对话。系统会带上操作手册、日志与本集工作区概况；你可追问细化建议。每轮对话按剧本分析接口计费；仅发送已有对话给运营不计费。',
-                                    'Agent mode: multi-turn chat with the manual, logs, and workspace summary. Follow-ups are supported. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.'
-                                )}
+                                {t(preset.descriptionZh, preset.descriptionEn)}
                             </p>
                         </div>
                         <button
@@ -211,7 +241,7 @@ export default function AiDiagnosisModal({
                             'Describe the blocker, or ask a follow-up…'
                         )}
                         loadHistoryLabel={t('加载上次诊断对话', 'Load previous diagnosis chat')}
-                        historyStorageKey={DIAGNOSIS_HISTORY_KEY}
+                        historyStorageKey={preset.historyStorageKey}
                         onSendCustom={handleSendCustom}
                         onHistoryChange={handleHistoryChange}
                     />

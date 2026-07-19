@@ -7928,6 +7928,7 @@ from app.services.script_analysis_ai_diagnosis import (
     OPS_SUPPORT_EMAIL,
     build_diagnosis_messages,
     build_ops_email_body,
+    normalize_page_scope,
 )
 
 def _can_use_system_settings(user: User) -> bool:
@@ -8095,12 +8096,13 @@ async def run_script_analysis_ai_diagnosis(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Diagnose script-analysis page state with agent-style multi-turn LLM chat; optionally email ops."""
+    """Diagnose script-analysis or assets page state with agent-style multi-turn LLM chat; optionally email ops."""
     current_user_snapshot = _snapshot_user_principal(current_user)
     current_user_id = int(getattr(current_user_snapshot, "id", 0) or 0)
     if payload.project_id:
         _require_project_access(db, int(payload.project_id), current_user_snapshot)
 
+    page_scope = normalize_page_scope(getattr(payload, "page_scope", None))
     manual_text = str(payload.manual_text or "")
     system_logs = str(payload.system_logs or "")
     workspace_summary = str(payload.workspace_summary or "")
@@ -8123,6 +8125,7 @@ async def run_script_analysis_ai_diagnosis(
         "ops_email": OPS_SUPPORT_EMAIL,
         "email_only": email_only,
         "agent_mode": True,
+        "page_scope": page_scope,
     }
     advice = existing_advice
     selected_dropdown_id = None
@@ -8138,15 +8141,21 @@ async def run_script_analysis_ai_diagnosis(
             project_id=payload.project_id,
             episode_id=payload.episode_id,
             episode_label=str(payload.episode_label or ""),
+            page_scope=page_scope,
         )
         meta.update(prompt_meta)
 
+        billing_item = (
+            "assets_ai_diagnosis"
+            if page_scope == "assets"
+            else "script_analysis_ai_diagnosis"
+        )
         config, selected_dropdown_id, _, _ = _resolve_script_analysis_dropdown_llm_config(
             db,
             current_user_id,
             payload.function_name or "script_analysis",
             payload.system_api_id,
-            context="script_analysis_ai_diagnosis",
+            context=billing_item,
         )
         if not config or not (config.get("provider") or config.get("api_key") or (config.get("config") or {}).get("api_key")):
             raise HTTPException(status_code=400, detail="未找到可用的剧本分析 AI 接口，请先在设置中配置。")
@@ -8155,7 +8164,6 @@ async def run_script_analysis_ai_diagnosis(
         provider = (config or {}).get("provider")
         model = (config or {}).get("model")
         task_type = "llm_chat"
-        billing_item = "script_analysis_ai_diagnosis"
         reservation_tx = None
         reservation_tx_id = None
 
@@ -8271,6 +8279,7 @@ async def run_script_analysis_ai_diagnosis(
                 system_logs=system_logs,
                 workspace_summary=workspace_summary,
                 history=history_payload,
+                page_scope=page_scope,
             )
             _send_email_via_runtime_smtp(OPS_SUPPORT_EMAIL, subject, content, strict=True)
             emailed = True
@@ -38626,7 +38635,16 @@ def _find_existing_asset_for_registration(
     return None
 
 
-def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[str]:
+def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Auto-pick a prior-episode same-name subject image as source_asset_url.
+
+    Hard rules:
+    - same subject name (exact, case-insensitive trim)
+    - different episode from the asset being registered
+    - asset / episode / linked entity must not be soft-deleted
+
+    Returns provenance dict: url, asset_id, episode_id/title, entity_id/name, subject_type.
+    """
     meta = _asset_meta_dict(meta_info)
     project_id = _asset_optional_int(meta.get("project_id"))
     if not project_id:
@@ -38634,16 +38652,48 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
 
     requested_subject_type = _normalize_entity_type(meta.get("subject_type") or meta.get("entity_type"))
     requested_entity_id = _asset_optional_int(meta.get("entity_id"))
+    current_episode_id = _asset_optional_int(meta.get("episode_id"))
     requested_name = str(meta.get("subject_name") or "").strip().lower()
     requested_entity_name = str(meta.get("entity_name") or "").strip().lower()
     requested_name_tokens = {token for token in (requested_name, requested_entity_name) if token}
 
-    if not requested_entity_id and not requested_name_tokens:
+    # Resolve names / episode / type from the active entity row when meta is incomplete.
+    if requested_entity_id:
+        entity_row = (
+            db.query(Entity)
+            .filter(Entity.id == int(requested_entity_id), _active_entity_clause())
+            .first()
+        )
+        if entity_row:
+            for token in (
+                str(getattr(entity_row, "name", None) or "").strip().lower(),
+                str(getattr(entity_row, "name_en", None) or "").strip().lower(),
+            ):
+                if token:
+                    requested_name_tokens.add(token)
+            if not requested_subject_type:
+                requested_subject_type = _normalize_entity_type(getattr(entity_row, "type", None))
+            if not current_episode_id:
+                current_episode_id = _asset_optional_int(getattr(entity_row, "episode_id", None))
+        else:
+            # Soft-deleted / missing entity cannot drive cross-episode reuse.
+            if not requested_name_tokens:
+                return None
+
+    if not requested_name_tokens:
+        return None
+    # Cross-episode reuse requires knowing the current episode so we can exclude it.
+    if not current_episode_id:
         return None
 
     candidates = (
         db.query(Asset)
-        .filter(Asset.user_id == user_id, Asset.type == "image", Asset.project_id == project_id)
+        .filter(
+            Asset.user_id == user_id,
+            Asset.type == "image",
+            Asset.project_id == project_id,
+            _active_asset_clause(),
+        )
         .order_by(Asset.id.desc())
         .limit(5000)
         .all()
@@ -38652,44 +38702,89 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
         return None
 
     matched: List[Asset] = []
+    matched_entity_ids: Set[int] = set()
+    matched_episode_ids: Set[int] = set()
     for candidate in candidates:
         _sync_asset_denormalized_fields(candidate)
         candidate_meta = _asset_meta_dict(getattr(candidate, "meta_info", None))
         if _asset_optional_int(candidate.project_id or candidate_meta.get("project_id")) != project_id:
             continue
 
-        candidate_subject_type = _normalize_entity_type(candidate_meta.get("subject_type") or candidate_meta.get("entity_type"))
-        # Keep type-consistent dependency reuse except for poster assets.
-        if requested_subject_type and requested_subject_type != "poster" and candidate_subject_type and candidate_subject_type != requested_subject_type:
+        candidate_episode_id = _asset_optional_int(
+            getattr(candidate, "episode_id", None) or candidate_meta.get("episode_id")
+        )
+        # Must belong to another episode (not current, not project-global/null).
+        if not candidate_episode_id or int(candidate_episode_id) == int(current_episode_id):
             continue
 
-        candidate_entity_id = _asset_optional_int(candidate_meta.get("entity_id"))
+        candidate_subject_type = _normalize_entity_type(
+            candidate_meta.get("subject_type") or candidate_meta.get("entity_type")
+        )
+        # Keep type-consistent dependency reuse except for poster assets.
+        if (
+            requested_subject_type
+            and requested_subject_type != "poster"
+            and candidate_subject_type
+            and candidate_subject_type != requested_subject_type
+        ):
+            continue
+
         candidate_subject_name = str(candidate_meta.get("subject_name") or "").strip().lower()
         candidate_entity_name = str(candidate_meta.get("entity_name") or "").strip().lower()
-        candidate_name_tokens = {token for token in (candidate_subject_name, candidate_entity_name) if token}
-
-        id_matched = bool(requested_entity_id and candidate_entity_id and requested_entity_id == candidate_entity_id)
-        name_matched = bool(requested_name_tokens and candidate_name_tokens and requested_name_tokens.intersection(candidate_name_tokens))
-        if not id_matched and not name_matched:
+        candidate_name_tokens = {
+            token for token in (candidate_subject_name, candidate_entity_name) if token
+        }
+        # Same name only — do not reuse by entity_id alone (that hits same-card regenerations).
+        if not candidate_name_tokens or not requested_name_tokens.intersection(candidate_name_tokens):
             continue
 
         matched.append(candidate)
+        candidate_entity_id = _asset_optional_int(candidate_meta.get("entity_id"))
+        if candidate_entity_id:
+            matched_entity_ids.add(int(candidate_entity_id))
+        matched_episode_ids.add(int(candidate_episode_id))
 
     if not matched:
         return None
 
-    episode_ids: Set[int] = set()
-    for row in matched:
-        episode_id = _asset_optional_int(getattr(row, "episode_id", None) or _asset_meta_dict(getattr(row, "meta_info", None)).get("episode_id"))
-        if episode_id:
-            episode_ids.add(int(episode_id))
-
-    episode_title_map: Dict[int, str] = {}
-    if episode_ids:
-        episode_title_map = {
-            int(row_id): str(row_title or "")
-            for row_id, row_title in db.query(Episode.id, Episode.title).filter(Episode.id.in_(episode_ids)).all()
+    # Drop candidates whose episode or linked entity is soft-deleted.
+    active_episode_ids: Set[int] = set()
+    if matched_episode_ids:
+        active_episode_ids = {
+            int(row_id)
+            for (row_id,) in db.query(Episode.id)
+            .filter(Episode.id.in_(matched_episode_ids), _active_episode_clause())
+            .all()
         }
+    active_entity_ids: Set[int] = set()
+    if matched_entity_ids:
+        active_entity_ids = {
+            int(row_id)
+            for (row_id,) in db.query(Entity.id)
+            .filter(Entity.id.in_(matched_entity_ids), _active_entity_clause())
+            .all()
+        }
+
+    filtered_matched: List[Asset] = []
+    for row in matched:
+        row_meta = _asset_meta_dict(getattr(row, "meta_info", None))
+        episode_id = _asset_optional_int(getattr(row, "episode_id", None) or row_meta.get("episode_id"))
+        if not episode_id or int(episode_id) not in active_episode_ids:
+            continue
+        entity_id = _asset_optional_int(row_meta.get("entity_id"))
+        if entity_id and int(entity_id) not in active_entity_ids:
+            continue
+        filtered_matched.append(row)
+
+    if not filtered_matched:
+        return None
+
+    episode_title_map: Dict[int, str] = {
+        int(row_id): str(row_title or "")
+        for row_id, row_title in db.query(Episode.id, Episode.title)
+        .filter(Episode.id.in_(active_episode_ids))
+        .all()
+    }
 
     def _candidate_rank(asset: Asset) -> Tuple[int, int, str, int]:
         candidate_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
@@ -38699,9 +38794,33 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
         created_at = str(getattr(asset, "created_at", "") or "")
         return (is_current, episode_rank, created_at, int(getattr(asset, "id", 0) or 0))
 
-    chosen = max(matched, key=_candidate_rank)
+    chosen = max(filtered_matched, key=_candidate_rank)
     chosen_url = str(getattr(chosen, "url", "") or "").strip()
-    return chosen_url or None
+    if not chosen_url:
+        return None
+
+    chosen_meta = _asset_meta_dict(getattr(chosen, "meta_info", None))
+    chosen_episode_id = _asset_optional_int(
+        getattr(chosen, "episode_id", None) or chosen_meta.get("episode_id")
+    )
+    chosen_entity_id = _asset_optional_int(chosen_meta.get("entity_id"))
+    chosen_entity_name = str(
+        chosen_meta.get("entity_name")
+        or chosen_meta.get("subject_name")
+        or ""
+    ).strip()
+    chosen_subject_type = _normalize_entity_type(
+        chosen_meta.get("subject_type") or chosen_meta.get("entity_type")
+    )
+    return {
+        "url": chosen_url,
+        "asset_id": int(getattr(chosen, "id", 0) or 0) or None,
+        "episode_id": int(chosen_episode_id) if chosen_episode_id else None,
+        "episode_title": str(episode_title_map.get(int(chosen_episode_id or 0), "") or "").strip() or None,
+        "entity_id": int(chosen_entity_id) if chosen_entity_id else None,
+        "entity_name": chosen_entity_name or None,
+        "subject_type": chosen_subject_type or None,
+    }
 
 def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source_metadata: Dict = None):
     # Handle dict or object
@@ -38838,10 +38957,23 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                     meta["subject_type_cn"] = "道具"
 
         if is_subject_generation and not meta.get("source_asset_url"):
-            inferred_source_url = _resolve_subject_dependency_source_asset_url(db, user_id, meta)
+            inferred_source = _resolve_subject_dependency_source_asset_url(db, user_id, meta)
+            inferred_source_url = str((inferred_source or {}).get("url") or "").strip()
             if inferred_source_url and inferred_source_url != str(url or "").strip():
                 meta["source_asset_url"] = inferred_source_url
-                meta["source_asset_auto"] = "same_name_current_or_latest_episode"
+                meta["source_asset_auto"] = "same_name_other_episode_active"
+                if inferred_source.get("asset_id"):
+                    meta["source_asset_id"] = inferred_source["asset_id"]
+                if inferred_source.get("episode_id"):
+                    meta["source_asset_episode_id"] = inferred_source["episode_id"]
+                if inferred_source.get("episode_title"):
+                    meta["source_asset_episode_title"] = inferred_source["episode_title"]
+                if inferred_source.get("entity_id"):
+                    meta["source_asset_entity_id"] = inferred_source["entity_id"]
+                if inferred_source.get("entity_name"):
+                    meta["source_asset_entity_name"] = inferred_source["entity_name"]
+                if inferred_source.get("subject_type"):
+                    meta["source_asset_subject_type"] = inferred_source["subject_type"]
 
         media_kind = "image" if is_image else ("video" if is_video else ("audio" if is_audio else None))
         meta = enrich_asset_meta_info(

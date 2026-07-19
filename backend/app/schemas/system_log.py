@@ -67,6 +67,8 @@ class ScriptAnalysisAiDiagnosisRequest(BaseModel):
     episode_label: str = ""
     system_api_id: Optional[int] = None
     function_name: str = "script_analysis"
+    # Which editor page the diagnosis agent is for: script_analysis | assets
+    page_scope: str = "script_analysis"
     send_to_ops: bool = False
     # When set with send_to_ops=True, skip LLM and only email this advice + materials.
     existing_advice: str = ""

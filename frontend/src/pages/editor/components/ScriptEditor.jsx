@@ -18928,6 +18928,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 open={aiDiagnosisOpen}
                 onClose={() => setAiDiagnosisOpen(false)}
                 uiLang={uiLang}
+                pageKey="script_analysis"
                 systemLogs={systemPanelLogs}
                 workspaceSummary={aiDiagnosisWorkspaceSummary}
                 projectId={projectId}

@@ -1695,6 +1695,12 @@ const Editor = ({
             if (!importEpisodeId || !entityEpisodeId) return false;
             return String(entityEpisodeId) === String(importEpisodeId);
         };
+        const isActiveEntityRow = (entity) => !entity?.is_deleted;
+        const isOtherEpisodeSubject = (entity) => {
+            const entityEpisodeId = normalizeImportEpisodeId(entity?.episode_id);
+            if (!importEpisodeId || !entityEpisodeId) return false;
+            return String(entityEpisodeId) !== String(importEpisodeId);
+        };
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
         addLog(`Starting Import Analysis (${effectiveImportType})...`, "process");
@@ -1916,6 +1922,7 @@ const Editor = ({
             return prev;
         };
         for (const e of (existingEntities || [])) {
+            if (!isActiveEntityRow(e)) continue;
             const t = canonicalSubjectType(e?.type);
             if (!t) continue;
             const name = String(e?.name || '').trim();
@@ -1929,6 +1936,30 @@ const Editor = ({
                 existingEntityMap.set(key, preferCurrentEpisodeEntity(existingEntityMap.get(key), e));
             }
         }
+        // Cross-episode reuse source: exact same name, other episode, not deleted.
+        const pickCrossEpisodeReuseEntity = (type, name, nameEn) => {
+            const keys = new Set(
+                [name, nameEn]
+                    .map((item) => (item ? normalizeEntityKey(type, item) : ''))
+                    .filter(Boolean)
+            );
+            if (!keys.size || !importEpisodeId) return null;
+            const matches = (existingEntities || []).filter((entity) => {
+                if (!isActiveEntityRow(entity) || !isOtherEpisodeSubject(entity)) return false;
+                if (canonicalSubjectType(entity?.type) !== type) return false;
+                const entityKeys = [entity?.name, entity?.name_en]
+                    .map((item) => (item ? normalizeEntityKey(type, item) : ''))
+                    .filter(Boolean);
+                return entityKeys.some((key) => keys.has(key));
+            });
+            if (!matches.length) return null;
+            return matches.sort((a, b) => {
+                const aImg = String(a?.image_url || '').trim() ? 1 : 0;
+                const bImg = String(b?.image_url || '').trim() ? 1 : 0;
+                if (bImg !== aImg) return bImg - aImg;
+                return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+            })[0];
+        };
 
         if (projectVisualBackfill && id) {
             const originalGlobalInfo = (project?.global_info && typeof project.global_info === 'object') ? project.global_info : {};
@@ -2059,15 +2090,15 @@ const Editor = ({
                                 continue;
                             }
                             const existingForName = existingEntityMap.get(normalizeEntityKey('character', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('character', entityNameEn)) : null);
-                            if (existingForName) {
-                                if (isSameEpisodeSubject(existingForName)) {
-                                    logSkippedExistingSubject('character', entityName, entityNameEn);
-                                    continue;
-                                } else {
-                                    char.visual_dependencies = Array.isArray(char.visual_dependencies) ? char.visual_dependencies : (typeof char.visual_dependencies === 'string' ? [char.visual_dependencies] : []);
-                                    // Use format expected by the backend/prompts
-                                    char.visual_dependencies.push(`existing_id:${existingForName.id}`);
-                                }
+                            if (existingForName && isSameEpisodeSubject(existingForName)) {
+                                logSkippedExistingSubject('character', entityName, entityNameEn);
+                                continue;
+                            }
+                            const reuseFromOtherEpisode = pickCrossEpisodeReuseEntity('character', entityName, entityNameEn);
+                            if (reuseFromOtherEpisode?.id) {
+                                char.visual_dependencies = Array.isArray(char.visual_dependencies) ? char.visual_dependencies : (typeof char.visual_dependencies === 'string' ? [char.visual_dependencies] : []);
+                                // Use format expected by the backend/prompts
+                                char.visual_dependencies.push(`existing_id:${reuseFromOtherEpisode.id}`);
                             }
                             const desc = [
                                 `Name (EN): ${entityNameEn || char.name_en || ''}`,
@@ -2145,14 +2176,14 @@ const Editor = ({
                                 continue;
                              }
                              const existingPropForName = existingEntityMap.get(normalizeEntityKey('prop', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('prop', entityNameEn)) : null);
-                             if (existingPropForName) {
-                                if (isSameEpisodeSubject(existingPropForName)) {
+                             if (existingPropForName && isSameEpisodeSubject(existingPropForName)) {
                                     logSkippedExistingSubject('prop', entityName, entityNameEn);
                                     continue;
-                                } else {
+                             }
+                             const reusePropFromOtherEpisode = pickCrossEpisodeReuseEntity('prop', entityName, entityNameEn);
+                             if (reusePropFromOtherEpisode?.id) {
                                     prop.visual_dependencies = Array.isArray(prop.visual_dependencies) ? prop.visual_dependencies : (typeof prop.visual_dependencies === 'string' ? [prop.visual_dependencies] : []);
-                                    prop.visual_dependencies.push(`existing_id:${existingPropForName.id}`);
-                                }
+                                    prop.visual_dependencies.push(`existing_id:${reusePropFromOtherEpisode.id}`);
                              }
                              const desc = [
                                           `Name (EN): ${entityNameEn || prop.name_en || ''}`,
@@ -2221,18 +2252,18 @@ const Editor = ({
                                 continue;
                              }
                              const existingEnvForName = existingEntityMap.get(normalizeEntityKey('environment', entityName)) || (entityNameEn ? existingEntityMap.get(normalizeEntityKey('environment', entityNameEn)) : null);
-                             if (existingEnvForName) {
-                                if (isSameEpisodeSubject(existingEnvForName)) {
+                             if (existingEnvForName && isSameEpisodeSubject(existingEnvForName)) {
                                     logSkippedExistingSubject('environment', entityName, entityNameEn);
                                     continue;
-                                } else {
+                             }
+                             const reuseEnvFromOtherEpisode = pickCrossEpisodeReuseEntity('environment', entityName, entityNameEn);
+                             if (reuseEnvFromOtherEpisode?.id) {
                                     env.visual_dependencies = Array.isArray(env.visual_dependencies) ? env.visual_dependencies : (typeof env.visual_dependencies === 'string' ? [env.visual_dependencies] : []);
-                                    env.visual_dependencies.push(`existing_id:${existingEnvForName.id}`);
+                                    env.visual_dependencies.push(`existing_id:${reuseEnvFromOtherEpisode.id}`);
                                     addLog(
-                                        `Environment '${entityName}' exists outside current episode (existing_episode=${existingEnvForName.episode_id ?? 'null'}, import_episode=${importEpisodeId ?? 'null'}); creating episode-scoped copy.`,
+                                        `Environment '${entityName}' exists outside current episode (existing_episode=${reuseEnvFromOtherEpisode.episode_id ?? 'null'}, import_episode=${importEpisodeId ?? 'null'}); creating episode-scoped copy.`,
                                         'info'
                                     );
-                                }
                              }
                              const desc = [
                                           `Name (EN): ${entityNameEn || env.name_en || ''}`,

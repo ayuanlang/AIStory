@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw } from 'lucide-react';
+import { ImagePlus, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Paintbrush, Cpu, Timer, History, RotateCcw, Stethoscope } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -119,6 +119,7 @@ import VideoStudio from '../../../components/VideoStudio';
 import InputGroup from './InputGroup';
 import MarkdownCell from './MarkdownCell';
 import MarkdownHelpModal from './MarkdownHelpModal';
+import AiDiagnosisModal from './AiDiagnosisModal';
 import {
     PROVIDER_LABELS,
     MODEL_OPTIONS,
@@ -198,7 +199,7 @@ const resolveDependencyEntity = (dependencyToken, entities) => {
     const resolvedEntityId = parseDependencyEntityId(rawToken);
 
     return (Array.isArray(entities) ? entities : []).find((entity) => {
-        if (!entity) return false;
+        if (!entity || entity?.is_deleted) return false;
 
         const entityId = String(entity.id || '').trim();
         const entityName = normalizeEntityToken(entity.name || '');
@@ -311,6 +312,12 @@ const sortEntitiesBySceneThenDependencies = (entities, sceneRankMap, allEntities
         .flatMap((rank) => topoSortEntitiesByVisualDependencies(groups.get(rank) || [], allEntities, nameMap));
 };
 
+/** Scene rank → within-scene dependency topo → global dependency topo (stable on prior order). */
+const sortEntitiesForBatchGeneration = (entities, sceneRankMap, allEntities, nameMap) => {
+    const sceneThenLocal = sortEntitiesBySceneThenDependencies(entities, sceneRankMap, allEntities, nameMap);
+    return topoSortEntitiesByVisualDependencies(sceneThenLocal, allEntities, nameMap);
+};
+
 export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = [], uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
     const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
@@ -326,6 +333,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
     const functionApiConfigs = useFunctionApis();
     const [manualModalOpen, setManualModalOpen] = useState(false);
+    const [aiDiagnosisOpen, setAiDiagnosisOpen] = useState(false);
+    const [aiDiagnosisWorkspaceSummary, setAiDiagnosisWorkspaceSummary] = useState('');
     const createSubjectBatchTaskState = useCallback(() => ({
         running: false,
         progress: null,
@@ -437,8 +446,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         };
     }, [subjectBatchRuntime]);
 
-    const { addLog: onLog } = useLog();
+    const { addLog: onLog, logs: systemPanelLogs } = useLog();
     const t = useCallback((zh, en) => (uiLang === 'zh' ? zh : en), [uiLang]);
+    const selectedScriptAnalysisApiId = useMemo(() => {
+        return Number(localStorage.getItem('func_api_script_analysis') || 0) || null;
+    }, [functionApiConfigs?.script_analysis, aiDiagnosisOpen]);
 
     const subjectBatchScopeKey = String(projectId || '');
     const SUBJECT_BATCH_PARALLEL_LIMIT = userBatchParallelLimit;
@@ -1226,14 +1238,54 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             if (!stableType || !stableName) return '';
             return `${stableType}::${stableName}`;
         };
+        const currentEpisodeId = String(currentEpisode?.id || '').trim();
+        const isActiveEntityRow = (entity) => !entity?.is_deleted;
+        const isSameEpisodeEntity = (entity) => {
+            const entityEpisodeId = String(entity?.episode_id || '').trim();
+            return Boolean(currentEpisodeId && entityEpisodeId && entityEpisodeId === currentEpisodeId);
+        };
+        const isOtherEpisodeEntity = (entity) => {
+            const entityEpisodeId = String(entity?.episode_id || '').trim();
+            return Boolean(currentEpisodeId && entityEpisodeId && entityEpisodeId !== currentEpisodeId);
+        };
+        const pickCrossEpisodeReuseEntity = (entityType, name, nameEn) => {
+            const keys = new Set(
+                [name, nameEn]
+                    .map((item) => normalizeImportEntityKey(entityType, item))
+                    .filter(Boolean)
+            );
+            if (!keys.size || !currentEpisodeId) return null;
+            const matches = (allEntities || []).filter((entity) => {
+                if (!isActiveEntityRow(entity) || !isOtherEpisodeEntity(entity)) return false;
+                if (String(entity?.type || '').trim().toLowerCase() !== entityType) return false;
+                const entityKeys = [entity?.name, entity?.name_en]
+                    .map((item) => normalizeImportEntityKey(entityType, item))
+                    .filter(Boolean);
+                return entityKeys.some((key) => keys.has(key));
+            });
+            if (!matches.length) return null;
+            return matches.sort((a, b) => {
+                const aImg = String(a?.image_url || '').trim() ? 1 : 0;
+                const bImg = String(b?.image_url || '').trim() ? 1 : 0;
+                if (bImg !== aImg) return bImg - aImg;
+                return (Number(b?.id) || 0) - (Number(a?.id) || 0);
+            })[0];
+        };
         const existingEntityMap = new Map();
         for (const entity of (allEntities || [])) {
+            if (!isActiveEntityRow(entity)) continue;
             const stableType = String(entity?.type || '').trim().toLowerCase();
             if (!stableType) continue;
             const keyA = normalizeImportEntityKey(stableType, entity?.name);
             const keyB = normalizeImportEntityKey(stableType, entity?.name_en);
-            if (keyA) existingEntityMap.set(keyA, entity);
-            if (keyB) existingEntityMap.set(keyB, entity);
+            // Prefer current-episode rows for "already exists" skip checks.
+            const preferCurrent = (prev, next) => {
+                if (!prev) return next;
+                if (isSameEpisodeEntity(next) && !isSameEpisodeEntity(prev)) return next;
+                return prev;
+            };
+            if (keyA) existingEntityMap.set(keyA, preferCurrent(existingEntityMap.get(keyA), entity));
+            if (keyB) existingEntityMap.set(keyB, preferCurrent(existingEntityMap.get(keyB), entity));
         }
         const existingNameKeySet = new Set(existingEntityMap.keys());
 
@@ -1250,10 +1302,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 const keyA = normalizeImportEntityKey(entityType, name);
                 const keyB = normalizeImportEntityKey(entityType, nameEn);
                 if ((keyA && existingNameKeySet.has(keyA)) || (keyB && existingNameKeySet.has(keyB))) {
-                    const reusedEntity = (keyA && existingEntityMap.get(keyA)) || (keyB && existingEntityMap.get(keyB)) || null;
-                    // If matched entity belongs to this episode or is project-global without episodes, skip.
-                    // But if it belongs to a previous/different episode, we CLONE it instead of skipping so Sync works!
-                    if (reusedEntity && currentEpisode?.id && String(reusedEntity.episode_id || '').trim() !== String(currentEpisode.id).trim()) {
+                    const existingMatch = (keyA && existingEntityMap.get(keyA)) || (keyB && existingEntityMap.get(keyB)) || null;
+                    // Same episode: skip. Other episode + same name + not deleted: clone for Sync / reuse.
+                    if (isSameEpisodeEntity(existingMatch)) {
+                        skippedSubjectItems.push({
+                            type: entityType,
+                            name: name || nameEn,
+                            reason: 'exists',
+                            reusedEntityId: existingMatch?.id || null,
+                            reusedEntityName: existingMatch?.name || existingMatch?.name_en || null,
+                            reusedImageUrl: existingMatch?.image_url || null,
+                            reusedDependencyPolicy: 'same_name_other_episode_active',
+                        });
+                        continue;
+                    }
+                    const reusedEntity = pickCrossEpisodeReuseEntity(entityType, name, nameEn);
+                    if (reusedEntity) {
                         row.old_id = reusedEntity.id;
                         row.description_cn = row.description_cn || reusedEntity.description_cn || reusedEntity.description || '';
                         row.base_name_en = row.base_name_en || reusedEntity.base_name_en || reusedEntity.name_en || '';
@@ -1271,10 +1335,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             type: entityType,
                             name: name || nameEn,
                             reason: 'exists',
-                            reusedEntityId: reusedEntity?.id || null,
-                            reusedEntityName: reusedEntity?.name || reusedEntity?.name_en || null,
-                            reusedImageUrl: reusedEntity?.image_url || null,
-                            reusedDependencyPolicy: 'current_project_asset_or_latest_episode',
+                            reusedEntityId: existingMatch?.id || null,
+                            reusedEntityName: existingMatch?.name || existingMatch?.name_en || null,
+                            reusedImageUrl: existingMatch?.image_url || null,
+                            reusedDependencyPolicy: 'same_name_other_episode_active',
                         });
                         continue;
                     }
@@ -4986,6 +5050,80 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return t('未标注分集', 'Unassigned Episode');
     }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity, t]);
 
+    const getEntityEpisodeLabel = useCallback((entity) => {
+        const episodeId = String(entity?.episode_id || '').trim();
+        if (!episodeId) return t('未标注分集', 'Unassigned Episode');
+        const episodeList = Array.isArray(episodes) ? episodes : [];
+        const epIndex = episodeList.findIndex((ep) => String(ep?.id || '').trim() === episodeId);
+        const ep = epIndex >= 0 ? episodeList[epIndex] : null;
+        if (ep) {
+            return buildEpisodeDisplayLabel({
+                episodeNumber: ep?.episode_number,
+                title: ep?.title,
+                fallbackNumber: epIndex + 1,
+            });
+        }
+        return `${t('分集', 'Episode')} #${episodeId}`;
+    }, [episodes, t]);
+
+    const getEntityTypeShortLabel = useCallback((entityOrType) => {
+        const type = String(
+            (typeof entityOrType === 'string' ? entityOrType : entityOrType?.type) || ''
+        ).trim().toLowerCase();
+        if (type === 'character') return t('角色', 'Char');
+        if (type === 'prop') return t('道具', 'Prop');
+        if (type === 'environment') return t('环境', 'Env');
+        if (type === 'poster') return t('海报', 'Poster');
+        return type || t('资产', 'Asset');
+    }, [t]);
+
+    /** Caption for auto-matched / dependency reference cards: which episode + which asset. */
+    const getDependencySourceInfo = useCallback((depEntity, hostEntity = null, depToken = '') => {
+        if (!depEntity) return null;
+        const episodeLabel = getEntityEpisodeLabel(depEntity);
+        const typeLabel = getEntityTypeShortLabel(depEntity);
+        const assetName = String(depEntity.name || depEntity.name_en || '').trim() || `#${depEntity.id}`;
+        const hostEp = String(hostEntity?.episode_id || currentEpisode?.id || '').trim();
+        const depEp = String(depEntity.episode_id || '').trim();
+        const isCrossEpisode = Boolean(hostEp && depEp && hostEp !== depEp);
+        const token = String(depToken || '').trim().toLowerCase();
+        const isExistingIdDep = /^(?:existing[_ \s]*id|entity[_ \s]*id|id)\s*[:#=]\s*\d+$/i.test(token) || /^\d+$/.test(token);
+        const isAutoMatched = isCrossEpisode || isExistingIdDep;
+        const summaryLine = `${episodeLabel} · ${typeLabel}`;
+        const fullTitle = `${episodeLabel} · ${typeLabel} · ${assetName}`;
+        return {
+            episodeLabel,
+            typeLabel,
+            assetName,
+            isCrossEpisode,
+            isAutoMatched,
+            summaryLine,
+            fullTitle,
+        };
+    }, [currentEpisode?.id, getEntityEpisodeLabel, getEntityTypeShortLabel]);
+
+    const renderDependencySourceCaption = useCallback((depEntity, hostEntity = null, depToken = '', { excluded = false } = {}) => {
+        const info = getDependencySourceInfo(depEntity, hostEntity, depToken);
+        if (!info) return null;
+        return (
+            <>
+                <div
+                    className={`text-[9px] truncate px-0.5 leading-tight ${excluded ? 'text-white/30' : 'text-sky-200/90'}`}
+                    title={info.fullTitle}
+                >
+                    {info.summaryLine}
+                </div>
+                {info.isAutoMatched ? (
+                    <div className={`text-[8px] px-0.5 leading-tight ${excluded ? 'text-white/25' : 'text-amber-300/85'}`}>
+                        {info.isCrossEpisode
+                            ? t('跨集自动匹配', 'Auto · other ep')
+                            : t('自动匹配', 'Auto-matched')}
+                    </div>
+                ) : null}
+            </>
+        );
+    }, [getDependencySourceInfo, t]);
+
     const normalizeAssetImageType = useCallback((value) => {
         const stable = String(value || '').trim().toLowerCase();
         if (!stable) return '';
@@ -5186,6 +5324,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return '';
     }, [allEntities, getAssetEntityId, getAssetMeta, isExplicitShotAsset, normalizeAssetImageType, pickAssetMetaValue, resolveAssetEntity, resolveAssetEntityByName, resolveAssetImageUrlEntity]);
 
+    const buildRefImageFromLibraryAsset = useCallback((asset) => {
+        if (!asset) return null;
+        const entityId = getAssetEntityId(asset);
+        const linkedEntity = (allEntities || []).find((entity) => String(entity?.id || '').trim() === String(entityId || '').trim()) || null;
+        const imageType = getAssetImageType(asset);
+        return {
+            ...asset,
+            name: getAssetDisplayName(asset),
+            entity_id: entityId || asset?.entity_id,
+            episode_id: getAssetEpisodeId(asset) || linkedEntity?.episode_id,
+            episode_label: getAssetEpisodeLabel(asset),
+            entity_type: linkedEntity?.type || imageType,
+            type_label: getEntityTypeShortLabel(linkedEntity?.type || imageType),
+        };
+    }, [allEntities, getAssetDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetEpisodeLabel, getAssetImageType, getEntityTypeShortLabel]);
+
     const getAssetImageTypeLabel = useCallback((typeName) => {
         const normalized = String(typeName || '').trim().toLowerCase();
         if (normalized === 'character') return t('角色素材', 'Character Assets');
@@ -5212,6 +5366,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         if (selectedId) ids.add(selectedId);
         if (selectedClonedFromId) ids.add(selectedClonedFromId);
         (allEntities || []).forEach((entity) => {
+            if (entity?.is_deleted) return;
             const entityId = String(entity?.id || '').trim();
             if (!entityId) return;
             const entityType = normalizeAssetImageType(entity?.type || entity?.entity_type || entity?.subject_type || '');
@@ -5382,24 +5537,27 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 };
             });
 
-        // Reuse picker: only assets belonging to the currently selected subject.
+        // 「全部素材（兜底）」: skip name/entity matching — any non-deleted image can be
+        // manually associated onto the current subject. Preferred type filters keep name scoping.
+        const isFallbackAllMaterials = assetImageTypeFilter === 'all';
         const hasSelectedEntity = Boolean(String(activeAssetLibraryEntity?.id || '').trim());
-        const entityMatchedAssets = hasSelectedEntity
-            ? nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset))
-            : nonShotAssets;
+        const entityMatchedAssets = (isFallbackAllMaterials || !hasSelectedEntity)
+            ? nonShotAssets.filter((asset) => getAssetImageType(asset) !== 'video')
+            : nonShotAssets.filter((asset) => doesAssetMatchSelectedEntity(asset));
         const episodeMatchedAssets = entityMatchedAssets.filter((asset) => {
             if (assetEpisodeFilter === 'all') return true;
             const episodeId = getAssetEpisodeId(asset);
             const wantedEpisodeId = String(assetEpisodeFilter || '').replace(/^ep:/, '').trim();
             if (episodeId === wantedEpisodeId) return true;
             // Keep subject assets that match the current entity but lack episode meta.
-            if (!episodeId && doesAssetMatchSelectedEntity(asset)) return true;
+            if (!isFallbackAllMaterials && !episodeId && doesAssetMatchSelectedEntity(asset)) return true;
+            if (isFallbackAllMaterials) return false;
             const namedEntity = resolveAssetEntityByName(asset);
             return Boolean(namedEntity && String(namedEntity?.episode_id || '').trim() === wantedEpisodeId);
         });
         const typeMatchedAssets = episodeMatchedAssets.filter((asset) => {
             const imageType = getAssetImageType(asset);
-            if (assetImageTypeFilter === 'all') return true;
+            if (isFallbackAllMaterials) return true;
             if (!imageType && doesAssetMatchSelectedEntity(asset)) return true;
             if (imageType === 'uploaded_asset' && assetImageTypeFilter === preferredAssetImageType && (
                 doesAssetMatchSelectedEntityImageUrl(asset) || doesAssetMatchSelectedEntity(asset)
@@ -6235,8 +6393,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
 
         if (!await confirmUiMessage(
             t(
-                `将为${entityEpisodeScope === 'current' ? '当前分集中' : '整个项目中'} ${toGenerate.length} 个主体批量生图。系统将先按场景顺序、再按依赖顺序排队，依赖资产未生图时会跳过并提示。是否继续？`,
-                `Batch generate images for ${toGenerate.length} subjects in the ${entityEpisodeScope === 'current' ? 'current episode' : 'whole project'}. Items will be queued by scene order, then dependency order. Entries with missing dependency images will be skipped with a notice. Continue?`
+                `将为${entityEpisodeScope === 'current' ? '当前分集中' : '整个项目中'} ${toGenerate.length} 个主体批量生图。系统按场景→场景内依赖→整体依赖排队，并发不超过账号权限 ${SUBJECT_BATCH_PARALLEL_LIMIT}；依赖未就绪会等待重检，并最多进行 5 轮重排重试。是否继续？`,
+                `Batch generate images for ${toGenerate.length} subjects in the ${entityEpisodeScope === 'current' ? 'current episode' : 'whole project'}. Queue: scene → within-scene deps → global deps; concurrency capped at account limit ${SUBJECT_BATCH_PARALLEL_LIMIT}. Dependency waiters are re-checked, with up to 5 re-queue rounds. Continue?`
             )
         )) return;
 
@@ -6280,7 +6438,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         });
 
         const nameMap = buildEntityNameMap(allEntities);
-        const orderedToGenerate = sortEntitiesBySceneThenDependencies(toGenerate, sceneRankMap, allEntities, nameMap);
+        const orderedToGenerate = sortEntitiesForBatchGeneration(toGenerate, sceneRankMap, allEntities, nameMap);
+        const MAX_BATCH_ROUNDS = 5;
 
         subjectBatchGenerateStopRequestedRef.current = false;
         const batchSessionId = `subject-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -6309,19 +6468,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             return next;
         });
 
-        // Current status of images (starts with existing)
-        // We use a mutable URL map to track latest URLs during the batch process
+        // Mutable URL map tracks latest image URLs during the batch (seeded from existing).
         const urlMap = new Map();
         allEntities.forEach(e => {
             if (e.image_url) urlMap.set(e.id, e.image_url);
         });
 
-        let queue = [...orderedToGenerate];
-        let processedCount = 0;
+        const permanentSkipIds = new Set();
         let skippedPromptCount = 0;
         let skippedDepCount = 0;
-        
-        // Helper to check if entity is ready (all its deps have images)
+        let skippedUnresolvedCount = 0;
+        let failedAttemptCount = 0;
+        let completedRounds = 0;
+
         const isReady = (ent) => getMissingVisualDependencyTargets(
             ent,
             allEntities,
@@ -6329,35 +6488,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             nameMap
         ).length === 0;
 
+        const countSettled = () => orderedToGenerate.filter(
+            (entity) => urlMap.has(entity.id) || permanentSkipIds.has(entity.id)
+        ).length;
+
         try {
             const shouldStopBatchGenerate = () => (
                 subjectBatchGenerateSessionRef.current !== batchSessionId
                 || subjectBatchGenerateStopRequestedRef.current
             );
             const workerLimit = Math.max(1, SUBJECT_BATCH_PARALLEL_LIMIT);
-            const activeTasks = new Map();
-
-            const getSceneContextLabel = () => {
-                if (currentSceneRank == null) return '';
-                if (currentSceneRank >= 99999) return t(' (全局/跨场景素材)', ' (Global/Cross-scene assets)');
-                if (scenesToScan.length > 0) {
-                    return t(` (场景 ${currentSceneRank + 1}/${scenesToScan.length})`, ` (Scene ${currentSceneRank + 1}/${scenesToScan.length})`);
-                }
-                return '';
-            };
-
-            const updateGenerateActiveStatus = () => {
-                if (activeTasks.size === 0) return;
-                const activeLabels = Array.from(activeTasks.values())
-                    .map(({ entity }) => entity?.name || entity?.name_en || entity?.id)
-                    .filter(Boolean)
-                    .join(', ');
-                updateGenerateBatchRuntimeState(true, {
-                    current: Math.min(processedCount + 1, orderedToGenerate.length),
-                    total: orderedToGenerate.length,
-                    status: t(`生成中${getSceneContextLabel()}：${activeLabels}`, `Generating${getSceneContextLabel()}: ${activeLabels}`),
-                });
-            };
 
             const runGenerateEntity = async (entity) => {
                 if (shouldStopBatchGenerate()) {
@@ -6390,7 +6530,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 if (missingDependencyTargets.length > 0) {
                     return {
                         entity,
-                        skippedDependency: true,
+                        waitingDependency: true,
                         missingLabels: missingDependencyTargets.map(formatEntityDependencyLabel),
                     };
                 }
@@ -6488,11 +6628,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 }
             };
 
-            let currentSceneRank = null;
-            let currentSceneBatchLimit = workerLimit;
-
             const skipEntityForMissingDependencies = (entity, missingLabels = []) => {
                 skippedDepCount += 1;
+                permanentSkipIds.add(entity.id);
                 clearLocalSubjectImageJobState(entity.id);
                 const labelText = (missingLabels || []).filter(Boolean).join('、');
                 onLog?.(
@@ -6504,134 +6642,343 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 );
             };
 
-            const startNextGenerateTask = () => {
-                const nextEntity = queue.find(e => isReady(e));
-                if (!nextEntity) {
-                    return false;
-                }
-                
-                const topRank = sceneRankMap.has(nextEntity.id) ? sceneRankMap.get(nextEntity.id) : 999999;
-                if (topRank !== currentSceneRank) {
-                    currentSceneRank = topRank;
-                    const sameRankItems = queue.filter(e => isReady(e) && (sceneRankMap.has(e.id) ? sceneRankMap.get(e.id) : 999999) === topRank);
-                    currentSceneBatchLimit = Math.max(workerLimit, sameRankItems.length);
-                }
+            let remainingEntities = [...orderedToGenerate];
 
-                if (shouldStopBatchGenerate() || activeTasks.size >= currentSceneBatchLimit || queue.length === 0) {
-                    return false;
-                }
+            for (let round = 1; round <= MAX_BATCH_ROUNDS && remainingEntities.length > 0; round += 1) {
+                if (shouldStopBatchGenerate()) break;
 
-                queue = queue.filter(item => item.id !== nextEntity.id);
-                const entityId = String(nextEntity?.id || '');
-                // Deps are ready and we are about to submit — still keep startedAt unset until
-                // on_job_created / trackSubjectBatchImageJob records the real backend job.
-                setLocalSubjectImageJobState(entityId, {
-                    status: 'running',
-                    startedAt: 0,
-                    depsReadyAt: Date.now(),
-                    entityName: nextEntity?.name || nextEntity?.name_en || entityId,
-                    ...buildSubjectJobMeta(entityId, 'generate'),
+                completedRounds = round;
+                const activeTasks = new Map();
+                let workQueue = sortEntitiesForBatchGeneration(remainingEntities, sceneRankMap, allEntities, nameMap);
+                let waitingQueue = [];
+                let currentSceneRank = null;
+                let imagesGeneratedThisRound = 0;
+                let attemptsThisRound = 0;
+
+                const roundQueuedAt = Date.now();
+                updateSubjectImageJobsAndStorage(prev => {
+                    const next = { ...(prev || {}) };
+                    workQueue.forEach((entity) => {
+                        const stableEntityId = String(entity?.id || '').trim();
+                        if (!stableEntityId || urlMap.has(entity.id) || permanentSkipIds.has(entity.id)) return;
+                        next[stableEntityId] = {
+                            ...(next[stableEntityId] || {}),
+                            status: 'queued',
+                            queuedAt: roundQueuedAt,
+                            startedAt: 0,
+                            jobId: '',
+                            entityName: entity?.name || entity?.name_en || stableEntityId,
+                            ...buildSubjectJobMeta(stableEntityId, 'generate', next[stableEntityId]),
+                        };
+                    });
+                    return next;
                 });
-                const wrappedPromise = runGenerateEntity(nextEntity)
-                    .then((value) => ({ entityId, entity: nextEntity, status: 'fulfilled', value }))
-                    .catch((reason) => ({ entityId, entity: nextEntity, status: 'rejected', reason }));
-                activeTasks.set(entityId, { entity: nextEntity, promise: wrappedPromise });
-                updateGenerateActiveStatus();
-                return true;
-            };
 
-            while (queue.length > 0 || activeTasks.size > 0) {
-                while (!shouldStopBatchGenerate() && startNextGenerateTask()) {
-                    // Fill available concurrency slots immediately.
+                onLog?.(
+                    t(
+                        `批量生图第 ${round}/${MAX_BATCH_ROUNDS} 轮：排队 ${workQueue.length} 项（场景→场景内依赖→整体依赖）`,
+                        `Batch image generation round ${round}/${MAX_BATCH_ROUNDS}: queued ${workQueue.length} item(s) (scene → within-scene deps → global deps)`
+                    ),
+                    'process'
+                );
+
+                const getSceneContextLabel = () => {
+                    const roundLabel = t(` [第${round}轮]`, ` [Round ${round}]`);
+                    if (currentSceneRank == null) return roundLabel;
+                    if (currentSceneRank >= 99999) {
+                        return `${roundLabel}${t(' (全局/跨场景素材)', ' (Global/Cross-scene assets)')}`;
+                    }
+                    if (scenesToScan.length > 0) {
+                        return `${roundLabel}${t(` (场景 ${currentSceneRank + 1}/${scenesToScan.length})`, ` (Scene ${currentSceneRank + 1}/${scenesToScan.length})`)}`;
+                    }
+                    return roundLabel;
+                };
+
+                const updateGenerateActiveStatus = () => {
+                    const settled = countSettled();
+                    if (activeTasks.size === 0) {
+                        updateGenerateBatchRuntimeState(true, {
+                            current: settled,
+                            total: orderedToGenerate.length,
+                            status: t(
+                                `等待依赖重检${getSceneContextLabel()}：待处理 ${workQueue.length + waitingQueue.length}`,
+                                `Waiting to re-check dependencies${getSceneContextLabel()}: ${workQueue.length + waitingQueue.length} pending`
+                            ),
+                        });
+                        return;
+                    }
+                    const activeLabels = Array.from(activeTasks.values())
+                        .map(({ entity }) => entity?.name || entity?.name_en || entity?.id)
+                        .filter(Boolean)
+                        .join(', ');
+                    updateGenerateBatchRuntimeState(true, {
+                        current: Math.min(settled + 1, orderedToGenerate.length),
+                        total: orderedToGenerate.length,
+                        status: t(`生成中${getSceneContextLabel()}：${activeLabels}`, `Generating${getSceneContextLabel()}: ${activeLabels}`),
+                    });
+                };
+
+                const promoteReadyFromWaiting = () => {
+                    if (waitingQueue.length === 0) return;
+                    const stillWaiting = [];
+                    const newlyReady = [];
+                    waitingQueue.forEach((entity) => {
+                        if (urlMap.has(entity.id) || permanentSkipIds.has(entity.id)) return;
+                        if (isReady(entity)) newlyReady.push(entity);
+                        else stillWaiting.push(entity);
+                    });
+                    waitingQueue = stillWaiting;
+                    if (newlyReady.length > 0) {
+                        workQueue = [...newlyReady, ...workQueue];
+                        onLog?.(
+                            t(
+                                `依赖就绪重检：${newlyReady.length} 项重新进入生图队列`,
+                                `Dependency re-check: ${newlyReady.length} item(s) re-queued for generation`
+                            ),
+                            'process'
+                        );
+                    }
+                };
+
+                const parkUnreadyFromWorkQueue = () => {
+                    if (workQueue.length === 0) return;
+                    const ready = [];
+                    workQueue.forEach((entity) => {
+                        if (urlMap.has(entity.id) || permanentSkipIds.has(entity.id)) return;
+                        if (isReady(entity)) ready.push(entity);
+                        else waitingQueue.push(entity);
+                    });
+                    workQueue = ready;
+                };
+
+                const startNextGenerateTask = () => {
+                    promoteReadyFromWaiting();
+                    parkUnreadyFromWorkQueue();
+
+                    // Hard cap by user is_active → userBatchParallelLimit; never fan out a whole scene.
+                    if (shouldStopBatchGenerate() || activeTasks.size >= workerLimit) {
+                        return false;
+                    }
+
+                    const nextEntity = workQueue.find((e) => isReady(e));
+                    if (!nextEntity) return false;
+
+                    const topRank = sceneRankMap.has(nextEntity.id) ? sceneRankMap.get(nextEntity.id) : 999999;
+                    if (topRank !== currentSceneRank) {
+                        currentSceneRank = topRank;
+                    }
+
+                    workQueue = workQueue.filter((item) => item.id !== nextEntity.id);
+                    const entityId = String(nextEntity?.id || '');
+                    setLocalSubjectImageJobState(entityId, {
+                        status: 'running',
+                        startedAt: 0,
+                        depsReadyAt: Date.now(),
+                        entityName: nextEntity?.name || nextEntity?.name_en || entityId,
+                        ...buildSubjectJobMeta(entityId, 'generate'),
+                    });
+                    const wrappedPromise = runGenerateEntity(nextEntity)
+                        .then((value) => ({ entityId, entity: nextEntity, status: 'fulfilled', value }))
+                        .catch((reason) => ({ entityId, entity: nextEntity, status: 'rejected', reason }));
+                    activeTasks.set(entityId, { entity: nextEntity, promise: wrappedPromise });
+                    updateGenerateActiveStatus();
+                    return true;
+                };
+
+                while (!shouldStopBatchGenerate() && (workQueue.length > 0 || activeTasks.size > 0 || waitingQueue.length > 0)) {
+                    while (!shouldStopBatchGenerate() && startNextGenerateTask()) {
+                        // Fill available concurrency slots; ready waiters are promoted first.
+                    }
+
+                    if (activeTasks.size === 0) {
+                        // Nothing runnable this round — keep waiters for the next re-queue round.
+                        if (waitingQueue.length > 0 || workQueue.length > 0) {
+                            onLog?.(
+                                t(
+                                    `第 ${round} 轮暂无更多可启动项（等待依赖 ${waitingQueue.length + workQueue.length}），结束本轮。`,
+                                    `Round ${round}: no more runnable items (${waitingQueue.length + workQueue.length} waiting on deps); ending round.`
+                                ),
+                                'process'
+                            );
+                        }
+                        break;
+                    }
+
+                    const settledTask = await Promise.race(Array.from(activeTasks.values()).map((item) => item.promise));
+                    activeTasks.delete(settledTask.entityId);
+
+                    const entity = settledTask.entity;
+
+                    if (settledTask.status === 'fulfilled') {
+                        if (settledTask.value?.stopped) {
+                            clearLocalSubjectImageJobState(entity.id);
+                        } else if (settledTask.value?.skippedPrompt) {
+                            skippedPromptCount += 1;
+                            permanentSkipIds.add(entity.id);
+                            clearLocalSubjectImageJobState(entity.id);
+                            onLog?.(
+                                t(
+                                    `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
+                                    `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
+                                ),
+                                'warning'
+                            );
+                        } else if (settledTask.value?.waitingDependency) {
+                            // Race: deps vanished after dequeue — park and re-check later (do not permanent-skip).
+                            waitingQueue.push(entity);
+                            setLocalSubjectImageJobState(String(entity.id || ''), {
+                                status: 'queued',
+                                startedAt: 0,
+                                entityName: entity?.name || entity?.name_en || entity?.id,
+                                ...buildSubjectJobMeta(String(entity.id || ''), 'generate'),
+                            });
+                            onLog?.(
+                                t(
+                                    `批量生图暂缓：${entity?.name || entity?.name_en || entity?.id} 依赖尚未就绪，等待重检` +
+                                        `${(settledTask.value?.missingLabels || []).length ? `（${settledTask.value.missingLabels.join('、')}）` : ''}`,
+                                    `Batch generation deferred: ${entity?.name || entity?.name_en || entity?.id} waiting on dependencies` +
+                                        `${(settledTask.value?.missingLabels || []).length ? ` (${settledTask.value.missingLabels.join(', ')})` : ''}; will re-check`
+                                ),
+                                'process'
+                            );
+                        } else if (settledTask.value?.imageUrl) {
+                            urlMap.set(entity.id, settledTask.value.imageUrl);
+                            applySubjectEntityImageLocally(entity.id, settledTask.value.imageUrl);
+                            clearLocalSubjectImageJobState(entity.id);
+                            imagesGeneratedThisRound += 1;
+                            attemptsThisRound += 1;
+                            // Other tasks finishing unlocks dependents — promote immediately.
+                            promoteReadyFromWaiting();
+                        }
+                    } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
+                        attemptsThisRound += 1;
+                        failedAttemptCount += 1;
+                        console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
+                        onLog?.(
+                            t(
+                                `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
+                                `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                            ),
+                            'error'
+                        );
+                        updateSubjectImageJobsAndStorage(prev => {
+                            const stableEntityId = String(entity?.id || '').trim();
+                            const existing = prev?.[stableEntityId];
+                            if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
+                                return prev;
+                            }
+                            const next = { ...(prev || {}) };
+                            delete next[stableEntityId];
+                            return next;
+                        });
+                        // Keep in remaining for a later round retry.
+                        setLocalSubjectImageJobState(String(entity.id || ''), {
+                            status: 'queued',
+                            startedAt: 0,
+                            entityName: entity?.name || entity?.name_en || entity?.id,
+                            ...buildSubjectJobMeta(String(entity.id || ''), 'generate'),
+                        });
+                    }
+
+                    updateGenerateBatchRuntimeState(true, {
+                        current: countSettled(),
+                        total: orderedToGenerate.length,
+                        status: t(
+                            `已处理 ${countSettled()}/${orderedToGenerate.length}${getSceneContextLabel()}`,
+                            `Processed ${countSettled()}/${orderedToGenerate.length}${getSceneContextLabel()}`
+                        ),
+                    });
+                    updateGenerateActiveStatus();
                 }
 
-                if (activeTasks.size === 0) {
-                    if (queue.length > 0 && !shouldStopBatchGenerate()) {
-                        queue.forEach((entity) => {
-                            const missingDependencyTargets = getMissingVisualDependencyTargets(
-                                entity,
-                                allEntities,
-                                (target) => urlMap.get(target.id),
-                                nameMap
-                            );
-                            skipEntityForMissingDependencies(
-                                entity,
-                                missingDependencyTargets.map(formatEntityDependencyLabel)
-                            );
-                            processedCount += 1;
-                        });
-                        queue = [];
-                    }
+                remainingEntities = remainingEntities.filter(
+                    (entity) => !urlMap.has(entity.id) && !permanentSkipIds.has(entity.id)
+                );
+
+                if (shouldStopBatchGenerate()) break;
+                if (remainingEntities.length === 0) break;
+
+                // No runnable work and no new images → further rounds cannot unlock external/circular deps.
+                if (imagesGeneratedThisRound === 0 && attemptsThisRound === 0) {
+                    onLog?.(
+                        t(
+                            `第 ${round} 轮无进展（均被依赖阻塞），停止后续重排。`,
+                            `Round ${round} made no progress (all blocked by dependencies); stopping further re-queues.`
+                        ),
+                        'warning'
+                    );
                     break;
                 }
 
-                const settledTask = await Promise.race(Array.from(activeTasks.values()).map(item => item.promise));
-                activeTasks.delete(settledTask.entityId);
-
-                const entity = settledTask.entity;
-                processedCount += 1;
-
-                if (settledTask.status === 'fulfilled') {
-                    if (settledTask.value?.stopped) {
-                        // stop requested; ignore and let outer loop exit cleanly
-                        clearLocalSubjectImageJobState(entity.id);
-                    } else if (settledTask.value?.skippedPrompt) {
-                        skippedPromptCount += 1;
-                        clearLocalSubjectImageJobState(entity.id);
-                        onLog?.(
-                            t(
-                                `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 的提示词少于 ${MIN_BATCH_IMAGE_PROMPT_CHARS} 字符。`,
-                                `Batch image generation skipped: prompt for ${entity?.name || entity?.name_en || entity?.id} is shorter than ${MIN_BATCH_IMAGE_PROMPT_CHARS} chars.`
-                            ),
-                            'warning'
-                        );
-                    } else if (settledTask.value?.skippedDependency) {
-                        skipEntityForMissingDependencies(entity, settledTask.value?.missingLabels || []);
-                    } else if (settledTask.value?.imageUrl) {
-                        urlMap.set(entity.id, settledTask.value.imageUrl);
-                        applySubjectEntityImageLocally(entity.id, settledTask.value.imageUrl);
-                        clearLocalSubjectImageJobState(entity.id);
-                    }
-                } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
-                    console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
+                if (round < MAX_BATCH_ROUNDS && remainingEntities.length > 0) {
                     onLog?.(
                         t(
-                            `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
-                            `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
+                            `第 ${round} 轮完成：本轮成功 ${imagesGeneratedThisRound}，仍有 ${remainingEntities.length} 项未生成，启动第 ${round + 1} 轮重排。`,
+                            `Round ${round} done: ${imagesGeneratedThisRound} succeeded, ${remainingEntities.length} still missing images; starting round ${round + 1} re-queue.`
                         ),
-                        'error'
+                        'process'
                     );
-                    updateSubjectImageJobsAndStorage(prev => {
-                        const stableEntityId = String(entity?.id || '').trim();
-                        const existing = prev?.[stableEntityId];
-                        if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
-                            return prev;
-                        }
-                        const next = { ...(prev || {}) };
-                        delete next[stableEntityId];
-                        return next;
-                    });
                 }
-
-                updateGenerateBatchRuntimeState(true, {
-                    current: processedCount,
-                    total: orderedToGenerate.length,
-                    status: t(`已处理 ${processedCount}/${orderedToGenerate.length}${getSceneContextLabel()}`, `Processed ${processedCount}/${orderedToGenerate.length}${getSceneContextLabel()}`),
-                });
-                updateGenerateActiveStatus();
             }
+
+            // Final pass: permanently skip anything still without an image.
+            if (!shouldStopBatchGenerate()) {
+                remainingEntities.forEach((entity) => {
+                    if (urlMap.has(entity.id) || permanentSkipIds.has(entity.id)) return;
+                    const missingDependencyTargets = getMissingVisualDependencyTargets(
+                        entity,
+                        allEntities,
+                        (target) => urlMap.get(target.id),
+                        nameMap
+                    );
+                    if (missingDependencyTargets.length > 0) {
+                        skipEntityForMissingDependencies(
+                            entity,
+                            missingDependencyTargets.map(formatEntityDependencyLabel)
+                        );
+                        return;
+                    }
+                    // Ready but still no image after all rounds (typically repeated generation failures).
+                    skippedUnresolvedCount += 1;
+                    permanentSkipIds.add(entity.id);
+                    clearLocalSubjectImageJobState(entity.id);
+                    onLog?.(
+                        t(
+                            `批量生图跳过：${entity?.name || entity?.name_en || entity?.id} 经 ${completedRounds} 轮重排后仍未生成图片`,
+                            `Batch image generation skipped: ${entity?.name || entity?.name_en || entity?.id} still has no image after ${completedRounds} re-queue round(s)`
+                        ),
+                        'warning'
+                    );
+                });
+            }
+
             if (subjectBatchGenerateSessionRef.current !== batchSessionId || subjectBatchGenerateStopRequestedRef.current) {
                 alert(t('批量生图已停止。', 'Batch image generation stopped.'));
-            } else if (skippedDepCount > 0 || skippedPromptCount > 0) {
+            } else if (skippedDepCount > 0 || skippedPromptCount > 0 || skippedUnresolvedCount > 0 || failedAttemptCount > 0) {
                 const summaryParts = [];
+                if (completedRounds > 1) {
+                    summaryParts.push(
+                        t(`共 ${completedRounds} 轮重排`, `${completedRounds} re-queue round(s)`)
+                    );
+                }
                 if (skippedDepCount > 0) {
                     summaryParts.push(
                         t(`跳过 ${skippedDepCount} 个依赖未就绪项`, `skipped ${skippedDepCount} item(s) with missing dependency images`)
                     );
                 }
+                if (skippedUnresolvedCount > 0) {
+                    summaryParts.push(
+                        t(`跳过 ${skippedUnresolvedCount} 个多轮仍未完成项`, `skipped ${skippedUnresolvedCount} item(s) still unfinished after re-queue rounds`)
+                    );
+                }
                 if (skippedPromptCount > 0) {
                     summaryParts.push(
                         t(`跳过 ${skippedPromptCount} 个提示词过短项`, `skipped ${skippedPromptCount} item(s) with short prompts`)
+                    );
+                }
+                if (failedAttemptCount > 0) {
+                    summaryParts.push(
+                        t(`失败尝试 ${failedAttemptCount} 次`, `${failedAttemptCount} failed attempt(s)`)
                     );
                 }
                 alert(
@@ -6641,7 +6988,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     )
                 );
             } else {
-                alert(t('批量生图完成。', 'Batch generation complete.'));
+                alert(
+                    completedRounds > 1
+                        ? t(`批量生图完成（共 ${completedRounds} 轮重排）。`, `Batch generation complete (${completedRounds} re-queue rounds).`)
+                        : t('批量生图完成。', 'Batch generation complete.')
+                );
             }
         } catch (e) {
             console.error(e);
@@ -6720,6 +7071,87 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     };
 
     const hasRunningSubjectBatchTask = isBatchGeneratingEntities || isBatchAnalyzingEntities || isBatchReconstructingEntities;
+
+    const openAiDiagnosisModal = useCallback(() => {
+        const episodeLabel = buildEpisodeDisplayLabel({
+            episodeNumber: currentEpisode?.episode_number,
+            title: currentEpisode?.title,
+        });
+        const stats = subjectCategoryStats || {};
+        const typeLine = (key, label) => {
+            const row = stats[key] || { total: 0, generated: 0 };
+            return `${label}=已生图${row.generated || 0}/合计${row.total || 0}`;
+        };
+        const missingImages = (scopedEntities || [])
+            .filter((entity) => !String(entity?.image_url || '').trim())
+            .slice(0, 20)
+            .map((entity) => `${entity?.type || '-'}:${entity?.name || entity?.id || '-'}`)
+            .join('；');
+        const missingDeps = (scopedEntities || [])
+            .map((entity) => {
+                const deps = parseVisualDependencies(entity?.visual_dependencies || entity?.visualDependencies || '');
+                if (!deps.length) return null;
+                const unresolved = deps.filter((depName) => {
+                    const key = normalizeSubjectKey(depName);
+                    if (!key) return false;
+                    const match = (allEntities || []).find((candidate) => (
+                        normalizeSubjectKey(candidate?.name) === key
+                        || normalizeSubjectKey(candidate?.name_en) === key
+                    ));
+                    return !match || !String(match?.image_url || '').trim();
+                });
+                if (!unresolved.length) return null;
+                return `${entity?.name || entity?.id || '-'}: 缺依赖图 ${unresolved.join('、')}`;
+            })
+            .filter(Boolean)
+            .slice(0, 15)
+            .join('；');
+        const batchParts = [];
+        if (isBatchGeneratingEntities) {
+            batchParts.push(
+                `批量生图中 ${batchEntityProgress ? `${batchEntityProgress.current}/${batchEntityProgress.total}` : ''} ${batchEntityProgress?.status || ''}`.trim()
+            );
+        }
+        if (isBatchAnalyzingEntities) {
+            batchParts.push(
+                `批量反推中 ${batchAnalyzeProgress ? `${batchAnalyzeProgress.current}/${batchAnalyzeProgress.total}` : ''}`.trim()
+            );
+        }
+        if (isBatchReconstructingEntities) {
+            batchParts.push(
+                `批量参考生图中 ${batchReconstructProgress ? `${batchReconstructProgress.current}/${batchReconstructProgress.total}` : ''}`.trim()
+            );
+        }
+        const summary = [
+            `项目：${project?.title || projectId || '-'}`,
+            `分集：${episodeLabel || '-'} (id=${currentEpisode?.id || '-'})`,
+            `查看范围：${entityEpisodeScope === 'current' ? '当前分集' : '整个项目'}`,
+            `当前页签：${subTab || '-'}`,
+            `资产统计：合计已生图${(scopedEntities || []).filter((e) => e?.image_url).length}/${(scopedEntities || []).length}；${typeLine('character', '角色')}；${typeLine('environment', '环境')}；${typeLine('prop', '道具')}；${typeLine('poster', '海报')}`,
+            `批量任务：${batchParts.length ? batchParts.join(' | ') : '无'}`,
+            `未生图资产（最多20）：${missingImages || '（无）'}`,
+            `依赖未齐套（最多15）：${missingDeps || '（无）'}`,
+        ].join('\n');
+        setAiDiagnosisWorkspaceSummary(summary);
+        setAiDiagnosisOpen(true);
+    }, [
+        allEntities,
+        batchAnalyzeProgress,
+        batchEntityProgress,
+        batchReconstructProgress,
+        currentEpisode?.episode_number,
+        currentEpisode?.id,
+        currentEpisode?.title,
+        entityEpisodeScope,
+        isBatchAnalyzingEntities,
+        isBatchGeneratingEntities,
+        isBatchReconstructingEntities,
+        project?.title,
+        projectId,
+        scopedEntities,
+        subTab,
+        subjectCategoryStats,
+    ]);
 
     useEffect(() => {
         const recentUrlSet = new Set(
@@ -6824,6 +7256,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 onClose={() => setManualModalOpen(false)}
                 uiLang={uiLang}
             />
+            <AiDiagnosisModal
+                open={aiDiagnosisOpen}
+                onClose={() => setAiDiagnosisOpen(false)}
+                uiLang={uiLang}
+                pageKey="assets"
+                systemLogs={systemPanelLogs}
+                workspaceSummary={aiDiagnosisWorkspaceSummary}
+                projectId={projectId}
+                episodeId={currentEpisode?.id}
+                episodeLabel={buildEpisodeDisplayLabel({
+                    episodeNumber: currentEpisode?.episode_number,
+                    title: currentEpisode?.title,
+                })}
+                systemApiId={selectedScriptAnalysisApiId}
+                onLog={onLog}
+            />
             {subjectNotification && (
                 <div className={`absolute top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-md ${subjectNotification.type === 'error' ? 'bg-red-500/90 border-red-300/40 text-white' : subjectNotification.type === 'warning' ? 'bg-amber-500/90 border-amber-300/40 text-black' : subjectNotification.type === 'info' ? 'bg-sky-500/90 border-sky-300/40 text-white' : 'bg-emerald-500/90 border-emerald-300/40 text-white'}`}>
                     {subjectNotification.message}
@@ -6871,11 +7319,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             <button
                                 type="button"
                                 onClick={() => setManualModalOpen(true)}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 transition-colors whitespace-nowrap flex items-center gap-1.5"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
                                 title={t('查看资产页面操作手册', 'View assets manual')}
+                                aria-label={t('资产页面操作手册', 'Assets Manual')}
                             >
-                                <Info size={14} />
-                                <span>{t('操作手册', 'Manual')}</span>
+                                <Info className="w-4 h-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={openAiDiagnosisModal}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 hover:text-emerald-100"
+                                title={t('AI 诊断（Agent）：多轮对话，结合手册、日志与资产工作区给出建议', 'AI Diagnosis (Agent): multi-turn chat with manual, logs, and assets workspace')}
+                                aria-label={t('AI 诊断', 'AI Diagnosis')}
+                            >
+                                <Stethoscope className="w-4 h-4" />
                             </button>
                              <button 
                                 onClick={handleBatchGenerateEntities}
@@ -6883,11 +7340,11 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none hover:border-primary/50 disabled:opacity-50 transition-colors whitespace-nowrap"
                                 title={t(
                                     entityEpisodeScope === 'current'
-                                        ? '批量生成当前分集实体（遵循依赖）'
-                                        : '批量生成整个项目实体（遵循依赖）',
+                                        ? '批量生成当前分集实体（场景/依赖排队，最多5轮重排）'
+                                        : '批量生成整个项目实体（场景/依赖排队，最多5轮重排）',
                                     entityEpisodeScope === 'current'
-                                        ? 'Batch Generate Current Episode Entities (Respects Dependencies)'
-                                        : 'Batch Generate Whole Project Entities (Respects Dependencies)'
+                                        ? 'Batch generate current-episode entities (scene/dependency queue, up to 5 re-queue rounds)'
+                                        : 'Batch generate whole-project entities (scene/dependency queue, up to 5 re-queue rounds)'
                                 )}
                             >
                                  {isBatchGeneratingEntities ? (
@@ -7236,7 +7693,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                     return (hasDependencies || isDependedOn) ? (
                                         <div className="flex items-center gap-1.5 shrink-0 overflow-hidden flex-wrap justify-end max-w-[65%]">
                                             {hasDependencies && (
-                                                <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`} title={dependencies.join(', ')}>
+                                                <span
+                                                    className={`shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${isCharacter ? 'border-amber-300/40 text-amber-200 bg-amber-500/20' : 'border-sky-300/40 text-sky-200 bg-sky-500/20'}`}
+                                                    title={dependencies.map((depToken) => {
+                                                        const depEntity = resolveDependencyEntity(depToken, allEntities);
+                                                        const info = getDependencySourceInfo(depEntity, entity, depToken);
+                                                        return info?.fullTitle || depToken;
+                                                    }).join('\n')}
+                                                >
                                                     <LinkIcon size={10} />
                                                     {isCharacter ? t('角色依赖', 'Role Dependency') : t('有依赖', 'Has Dependency')}
                                                 </span>
@@ -8110,15 +8574,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                         {parseVisualDependencies(viewingEntity.visual_dependencies).map((dep, idx) => {
                                                             const depEntity = resolveDependencyEntity(dep, allEntities);
                                                             const depExcluded = isVisualDepExcluded(dep);
+                                                            const depSourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
 
                                                             return (
                                                                 <div
                                                                     key={idx}
                                                                     tabIndex={0}
-                                                                    className={`flex-shrink-0 w-24 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-1 relative isolate group outline-none focus:border-primary/50 ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
+                                                                    className={`flex-shrink-0 w-28 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-0.5 relative isolate group outline-none focus:border-primary/50 ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
                                                                     title={depExcluded
                                                                         ? t('已取消本次参考，点击恢复', 'Cancelled for this generation; click to restore')
-                                                                        : (depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined)}
+                                                                        : (depSourceInfo?.fullTitle
+                                                                            || (depEntity?.image_url ? t('单击/双击图片可显示复用或仅参考选项', 'Click or double-click the image to show reuse / reference-only options') : undefined))}
                                                                 >
                                                                     <button
                                                                         type="button"
@@ -8181,7 +8647,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                              e.preventDefault();
                                                                                              e.stopPropagation();
                                                                                              setExcludedVisualDepKeys((prev) => prev.filter((item) => item !== getVisualDepKey(dep)));
-                                                                                             setRefImage({ url: depEntity.image_url, entity_id: depEntity.id, original_name: depEntity.name, name: depEntity.name });
+                                                                                             const sourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
+                                                                                             setRefImage({
+                                                                                                 url: depEntity.image_url,
+                                                                                                 entity_id: depEntity.id,
+                                                                                                 original_name: depEntity.name,
+                                                                                                 name: depEntity.name,
+                                                                                                 episode_id: depEntity.episode_id,
+                                                                                                 episode_label: sourceInfo?.episodeLabel,
+                                                                                                 entity_type: depEntity.type,
+                                                                                                 type_label: sourceInfo?.typeLabel,
+                                                                                                 auto_matched: sourceInfo?.isAutoMatched,
+                                                                                                 cross_episode: sourceInfo?.isCrossEpisode,
+                                                                                             });
                                                                                          }}
                                                                                          className="relative z-10 w-full text-[10px] py-1 bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border rounded font-bold disabled:opacity-50"
                                                                                      >
@@ -8221,9 +8699,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                          </div>
                                                                          )}
                                                                     </div>
-                                                                    <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={dep}>
+                                                                    <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={depSourceInfo?.fullTitle || dep}>
                                                                         {depEntity ? depEntity.name : dep}
                                                                     </div>
+                                                                    {renderDependencySourceCaption(depEntity, viewingEntity, dep, { excluded: depExcluded })}
                                                                     {depExcluded ? (
                                                                         <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>
                                                                     ) : !depEntity ? (
@@ -8285,7 +8764,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                              </div>
                                                              <div className="flex-1 overflow-hidden">
                                                                  <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
-                                                                 <div className="text-[10px] text-muted-foreground flex gap-2">
+                                                                 <div className="text-[10px] text-sky-200/90 truncate" title={[refImage.episode_label, refImage.type_label, refImage.name].filter(Boolean).join(' · ')}>
+                                                                     {[
+                                                                         refImage.episode_label || (refImage.episode_id ? getAssetEpisodeLabel(refImage) : ''),
+                                                                         refImage.type_label || getEntityTypeShortLabel(refImage.entity_type || refImage.type),
+                                                                     ].filter(Boolean).join(' · ') || t('已选参考图', 'Selected reference')}
+                                                                 </div>
+                                                                 <div className="text-[10px] text-muted-foreground flex gap-2 flex-wrap">
+                                                                     {refImage.auto_matched || refImage.cross_episode ? (
+                                                                         <span className="text-amber-300/85">
+                                                                             {refImage.cross_episode
+                                                                                 ? t('跨集自动匹配', 'Auto · other ep')
+                                                                                 : t('自动匹配', 'Auto-matched')}
+                                                                         </span>
+                                                                     ) : null}
                                                                      <span>{refImage.dimensions || 'Unknown Size'}</span>
                                                                      {refImage.type && <span className="uppercase">{refImage.type}</span>}
                                                                  </div>
@@ -8388,7 +8880,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                      disabled={assetReuseBusy}
                                                                                      title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
                                                                                      onClick={() => {
-                                                                                         setRefImage(selectedLibraryAsset);
+                                                                                         setRefImage(buildRefImageFromLibraryAsset(selectedLibraryAsset));
                                                                                          setRefSelectionMode(null);
                                                                                      }}
                                                                                      className="px-2 py-1 rounded text-[10px] font-bold bg-secondary hover:bg-secondary/80 text-secondary-foreground border border-border disabled:opacity-50"
@@ -8771,7 +9263,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     <button
                                                         type="button"
                                                         onClick={() => {
-                                                            setRefImage(selectedLibraryAsset);
+                                                            setRefImage(buildRefImageFromLibraryAsset(selectedLibraryAsset));
                                                             setRefSelectionMode(null);
                                                             setImageModalTab('generate');
                                                         }}
@@ -8971,12 +9463,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                     {parseVisualDependencies(selectedEntity.visual_dependencies).map((dep, idx) => {
                                                         const depEntity = resolveDependencyEntity(dep, allEntities);
                                                         const depExcluded = isVisualDepExcluded(dep);
+                                                        const depSourceInfo = getDependencySourceInfo(depEntity, selectedEntity, dep);
                                                         
                                                         return (
                                                             <div
                                                                 key={idx}
-                                                                className={`flex-shrink-0 w-24 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-1 relative group ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
-                                                                title={depExcluded ? t('已取消本次参考，点击右上角恢复', 'Cancelled for this generation; click corner to restore') : undefined}
+                                                                className={`flex-shrink-0 w-28 bg-black/40 border rounded-lg p-1.5 flex flex-col gap-0.5 relative group ${depExcluded ? 'border-white/5 opacity-55' : 'border-white/10'}`}
+                                                                title={depExcluded
+                                                                    ? t('已取消本次参考，点击右上角恢复', 'Cancelled for this generation; click corner to restore')
+                                                                    : (depSourceInfo?.fullTitle || undefined)}
                                                             >
                                                                 <button
                                                                     type="button"
@@ -9004,9 +9499,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                          </div>
                                                                      )}
                                                                 </div>
-                                                                <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={dep}>
+                                                                <div className={`text-[10px] truncate font-bold px-0.5 ${depExcluded ? 'text-white/40 line-through' : 'text-white'}`} title={depSourceInfo?.fullTitle || dep}>
                                                                     {depEntity ? depEntity.name : dep}
                                                                 </div>
+                                                                {renderDependencySourceCaption(depEntity, selectedEntity, dep, { excluded: depExcluded })}
                                                                 {depExcluded ? (
                                                                     <div className="text-[8px] text-amber-300/80 px-0.5">{t('本次不引用', 'Skipped now')}</div>
                                                                 ) : !depEntity ? (
@@ -9071,7 +9567,20 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                          </div>
                                                          <div className="flex-1 overflow-hidden">
                                                              <div className="text-xs font-bold text-white truncate">{refImage.name || 'Reference Image'}</div>
-                                                             <div className="text-[10px] text-muted-foreground flex gap-2">
+                                                             <div className="text-[10px] text-sky-200/90 truncate" title={[refImage.episode_label, refImage.type_label, refImage.name].filter(Boolean).join(' · ')}>
+                                                                 {[
+                                                                     refImage.episode_label || (refImage.episode_id ? getAssetEpisodeLabel(refImage) : ''),
+                                                                     refImage.type_label || getEntityTypeShortLabel(refImage.entity_type || refImage.type),
+                                                                 ].filter(Boolean).join(' · ') || t('已选参考图', 'Selected reference')}
+                                                             </div>
+                                                             <div className="text-[10px] text-muted-foreground flex gap-2 flex-wrap">
+                                                                 {refImage.auto_matched || refImage.cross_episode ? (
+                                                                     <span className="text-amber-300/85">
+                                                                         {refImage.cross_episode
+                                                                             ? t('跨集自动匹配', 'Auto · other ep')
+                                                                             : t('自动匹配', 'Auto-matched')}
+                                                                     </span>
+                                                                 ) : null}
                                                                  <span>{refImage.dimensions || 'Unknown Size'}</span>
                                                                  {refImage.type && <span className="uppercase">{refImage.type}</span>}
                                                              </div>
@@ -9144,7 +9653,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                          <div className="text-[10px] text-muted-foreground">{t('类型：', 'Type: ')}{getAssetImageTypeLabel(getAssetImageType(selectedLibraryAsset) || '')}</div>
                                                                          <button
                                                                              onClick={() => {
-                                                                                 setRefImage(selectedLibraryAsset);
+                                                                                 setRefImage(buildRefImageFromLibraryAsset(selectedLibraryAsset));
                                                                                  setRefSelectionMode(null);
                                                                              }}
                                                                              className="mt-1 px-2.5 py-1 rounded text-xs font-bold bg-primary/80 hover:bg-primary text-white"
