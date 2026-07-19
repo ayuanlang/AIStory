@@ -1696,10 +1696,24 @@ const Editor = ({
             return String(entityEpisodeId) === String(importEpisodeId);
         };
         const isActiveEntityRow = (entity) => !entity?.is_deleted;
-        const isOtherEpisodeSubject = (entity) => {
+        const episodeById = new Map(
+            (Array.isArray(episodes) ? episodes : [])
+                .filter((ep) => ep && !ep?.is_deleted && normalizeImportEpisodeId(ep?.id))
+                .map((ep) => [String(normalizeImportEpisodeId(ep.id)), ep])
+        );
+        const currentImportEpisode = episodeById.get(String(importEpisodeId || '')) || null;
+        const currentImportEpisodeNumber = currentImportEpisode
+            ? resolveEpisodeOrderNumber(currentImportEpisode)
+            : 0;
+        const isPriorEpisodeSubject = (entity) => {
             const entityEpisodeId = normalizeImportEpisodeId(entity?.episode_id);
             if (!importEpisodeId || !entityEpisodeId) return false;
-            return String(entityEpisodeId) !== String(importEpisodeId);
+            if (String(entityEpisodeId) === String(importEpisodeId)) return false;
+            const sourceEpisode = episodeById.get(String(entityEpisodeId));
+            if (!sourceEpisode || sourceEpisode?.is_deleted) return false;
+            if (!currentImportEpisodeNumber) return false;
+            const sourceNumber = resolveEpisodeOrderNumber(sourceEpisode);
+            return Boolean(sourceNumber && sourceNumber < currentImportEpisodeNumber);
         };
         // Allow modal loading state to paint before heavy parsing/import logic starts.
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -1936,16 +1950,16 @@ const Editor = ({
                 existingEntityMap.set(key, preferCurrentEpisodeEntity(existingEntityMap.get(key), e));
             }
         }
-        // Cross-episode reuse source: exact same name, other episode, not deleted.
+        // Cross-episode reuse: same name, prior non-deleted episode (episode number < current).
         const pickCrossEpisodeReuseEntity = (type, name, nameEn) => {
             const keys = new Set(
                 [name, nameEn]
                     .map((item) => (item ? normalizeEntityKey(type, item) : ''))
                     .filter(Boolean)
             );
-            if (!keys.size || !importEpisodeId) return null;
+            if (!keys.size || !importEpisodeId || !currentImportEpisodeNumber) return null;
             const matches = (existingEntities || []).filter((entity) => {
-                if (!isActiveEntityRow(entity) || !isOtherEpisodeSubject(entity)) return false;
+                if (!isActiveEntityRow(entity) || !isPriorEpisodeSubject(entity)) return false;
                 if (canonicalSubjectType(entity?.type) !== type) return false;
                 const entityKeys = [entity?.name, entity?.name_en]
                     .map((item) => (item ? normalizeEntityKey(type, item) : ''))
@@ -1954,6 +1968,11 @@ const Editor = ({
             });
             if (!matches.length) return null;
             return matches.sort((a, b) => {
+                const aEp = episodeById.get(String(normalizeImportEpisodeId(a?.episode_id) || ''));
+                const bEp = episodeById.get(String(normalizeImportEpisodeId(b?.episode_id) || ''));
+                const aNum = aEp ? resolveEpisodeOrderNumber(aEp) : 0;
+                const bNum = bEp ? resolveEpisodeOrderNumber(bEp) : 0;
+                if (bNum !== aNum) return bNum - aNum; // nearest prior episode first
                 const aImg = String(a?.image_url || '').trim() ? 1 : 0;
                 const bImg = String(b?.image_url || '').trim() ? 1 : 0;
                 if (bImg !== aImg) return bImg - aImg;

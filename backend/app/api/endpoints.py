@@ -38640,8 +38640,9 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
 
     Hard rules:
     - same subject name (exact, case-insensitive trim)
-    - different episode from the asset being registered
-    - asset / episode / linked entity must not be soft-deleted
+    - source episode is not soft-deleted
+    - source episode number must be strictly smaller than the current episode
+    - asset / linked entity must not be soft-deleted
 
     Returns provenance dict: url, asset_id, episode_id/title, entity_id/name, subject_type.
     """
@@ -38682,8 +38683,45 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
 
     if not requested_name_tokens:
         return None
-    # Cross-episode reuse requires knowing the current episode so we can exclude it.
+    # Cross-episode reuse requires knowing the current episode so we can compare episode numbers.
     if not current_episode_id:
+        return None
+
+    current_episode_row = (
+        db.query(Episode)
+        .filter(
+            Episode.id == int(current_episode_id),
+            Episode.project_id == int(project_id),
+            _active_episode_clause(),
+        )
+        .first()
+    )
+    if not current_episode_row:
+        return None
+    current_episode_number = _resolve_episode_sort_number(current_episode_row)
+    if not current_episode_number:
+        return None
+
+    # Eligible source episodes: active, same project, episode number < current.
+    prior_episode_rows = (
+        db.query(Episode)
+        .filter(
+            Episode.project_id == int(project_id),
+            _active_episode_clause(),
+            Episode.id != int(current_episode_id),
+        )
+        .all()
+    )
+    prior_episode_number_map: Dict[int, int] = {}
+    for ep_row in prior_episode_rows or []:
+        ep_id = _asset_optional_int(getattr(ep_row, "id", None))
+        if not ep_id:
+            continue
+        ep_number = _resolve_episode_sort_number(ep_row)
+        if not ep_number or int(ep_number) >= int(current_episode_number):
+            continue
+        prior_episode_number_map[int(ep_id)] = int(ep_number)
+    if not prior_episode_number_map:
         return None
 
     candidates = (
@@ -38703,7 +38741,6 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
 
     matched: List[Asset] = []
     matched_entity_ids: Set[int] = set()
-    matched_episode_ids: Set[int] = set()
     for candidate in candidates:
         _sync_asset_denormalized_fields(candidate)
         candidate_meta = _asset_meta_dict(getattr(candidate, "meta_info", None))
@@ -38713,8 +38750,8 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
         candidate_episode_id = _asset_optional_int(
             getattr(candidate, "episode_id", None) or candidate_meta.get("episode_id")
         )
-        # Must belong to another episode (not current, not project-global/null).
-        if not candidate_episode_id or int(candidate_episode_id) == int(current_episode_id):
+        # Must belong to a prior non-deleted episode with a smaller episode number.
+        if not candidate_episode_id or int(candidate_episode_id) not in prior_episode_number_map:
             continue
 
         candidate_subject_type = _normalize_entity_type(
@@ -38742,20 +38779,10 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
         candidate_entity_id = _asset_optional_int(candidate_meta.get("entity_id"))
         if candidate_entity_id:
             matched_entity_ids.add(int(candidate_entity_id))
-        matched_episode_ids.add(int(candidate_episode_id))
 
     if not matched:
         return None
 
-    # Drop candidates whose episode or linked entity is soft-deleted.
-    active_episode_ids: Set[int] = set()
-    if matched_episode_ids:
-        active_episode_ids = {
-            int(row_id)
-            for (row_id,) in db.query(Episode.id)
-            .filter(Episode.id.in_(matched_episode_ids), _active_episode_clause())
-            .all()
-        }
     active_entity_ids: Set[int] = set()
     if matched_entity_ids:
         active_entity_ids = {
@@ -38769,7 +38796,7 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
     for row in matched:
         row_meta = _asset_meta_dict(getattr(row, "meta_info", None))
         episode_id = _asset_optional_int(getattr(row, "episode_id", None) or row_meta.get("episode_id"))
-        if not episode_id or int(episode_id) not in active_episode_ids:
+        if not episode_id or int(episode_id) not in prior_episode_number_map:
             continue
         entity_id = _asset_optional_int(row_meta.get("entity_id"))
         if entity_id and int(entity_id) not in active_entity_ids:
@@ -38782,17 +38809,18 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
     episode_title_map: Dict[int, str] = {
         int(row_id): str(row_title or "")
         for row_id, row_title in db.query(Episode.id, Episode.title)
-        .filter(Episode.id.in_(active_episode_ids))
+        .filter(Episode.id.in_(list(prior_episode_number_map.keys())))
         .all()
     }
 
     def _candidate_rank(asset: Asset) -> Tuple[int, int, str, int]:
         candidate_meta = _asset_meta_dict(getattr(asset, "meta_info", None))
         episode_id = _asset_optional_int(getattr(asset, "episode_id", None) or candidate_meta.get("episode_id"))
-        episode_rank = _parse_episode_sort_rank(episode_title_map.get(int(episode_id or 0)), episode_id)
+        # Prefer the nearest prior episode (largest episode number still < current).
+        episode_rank = int(prior_episode_number_map.get(int(episode_id or 0), 0) or 0)
         is_current = 1 if bool(getattr(asset, "is_current_project_asset", False)) else 0
         created_at = str(getattr(asset, "created_at", "") or "")
-        return (is_current, episode_rank, created_at, int(getattr(asset, "id", 0) or 0))
+        return (episode_rank, is_current, created_at, int(getattr(asset, "id", 0) or 0))
 
     chosen = max(filtered_matched, key=_candidate_rank)
     chosen_url = str(getattr(chosen, "url", "") or "").strip()
@@ -38812,11 +38840,34 @@ def _resolve_subject_dependency_source_asset_url(db: Session, user_id: int, meta
     chosen_subject_type = _normalize_entity_type(
         chosen_meta.get("subject_type") or chosen_meta.get("entity_type")
     )
+    # Prefer script_title (分集名) over bare Episode.title ("Episode 1").
+    chosen_episode_title = str(episode_title_map.get(int(chosen_episode_id or 0), "") or "").strip()
+    if chosen_episode_id:
+        try:
+            ep_row = (
+                db.query(Episode)
+                .filter(Episode.id == int(chosen_episode_id), _active_episode_clause())
+                .first()
+            )
+            ep_info = getattr(ep_row, "episode_info", None) if ep_row else None
+            if isinstance(ep_info, dict):
+                script_title = str(
+                    ep_info.get("script_title")
+                    or ep_info.get("episode_title")
+                    or ep_info.get("episode_name")
+                    or ""
+                ).strip()
+                if script_title:
+                    chosen_episode_title = script_title
+                elif not chosen_episode_title:
+                    chosen_episode_title = str(getattr(ep_row, "title", "") or "").strip()
+        except Exception:
+            pass
     return {
         "url": chosen_url,
         "asset_id": int(getattr(chosen, "id", 0) or 0) or None,
         "episode_id": int(chosen_episode_id) if chosen_episode_id else None,
-        "episode_title": str(episode_title_map.get(int(chosen_episode_id or 0), "") or "").strip() or None,
+        "episode_title": chosen_episode_title or None,
         "entity_id": int(chosen_entity_id) if chosen_entity_id else None,
         "entity_name": chosen_entity_name or None,
         "subject_type": chosen_subject_type or None,
@@ -49952,6 +50003,283 @@ async def analyze_entity_image(
     background_tasks.add_task(bg_task, current_user.id)
     return entity
 
+
+def _entity_analysis_parse_jsonish(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, (dict, list)) else {}
+    except Exception:
+        return {}
+
+
+def _entity_analysis_category(entity_type: Any) -> str:
+    raw = str(entity_type or "character").strip().lower()
+    if "prop" in raw or "item" in raw or "物件" in raw or "道具" in raw:
+        return "prop"
+    if "poster" in raw or "cover" in raw or "海报" in raw or "封面" in raw:
+        return "poster"
+    if "env" in raw or "scene" in raw or "场景" in raw or "环境" in raw:
+        return "environment"
+    return "character"
+
+
+def _entity_analysis_is_main_environment(entity: Any) -> bool:
+    """Detect Stage-3 main/baseline environment (四向拼图 / 2x2), vs derivative ENV."""
+    dep_raw = _entity_analysis_parse_jsonish(getattr(entity, "dependency_strategy", None))
+    dep = dep_raw if isinstance(dep_raw, dict) else {}
+    dep_type = str(dep.get("type") or "").strip()
+    if dep_type == "BaselineDefinition":
+        return True
+
+    name = str(getattr(entity, "name", "") or "").strip()
+    prompt_cn = str(getattr(entity, "generation_prompt_cn", "") or "")
+    desc_cn = str(getattr(entity, "description", "") or getattr(entity, "description_cn", "") or "")
+    joined = f"{prompt_cn}\n{desc_cn}"
+
+    # Angle / state derivatives are never main baseline.
+    if re.match(r"^\d+\s*度", name) or re.search(r"(^|[_\s])\d+\s*度", name):
+        return False
+    if any(marker in joined for marker in ("§A", "§B", "§C", "参考图为", "本镜头 Delta", "本镜 Delta")):
+        return False
+    if any(
+        marker in joined
+        for marker in (
+            "四向拼图",
+            "2×2",
+            "2x2",
+            "四宫格",
+            "[0度格",
+            "左上=0度",
+            "左上＝0度",
+            "BaselineDefinition",
+        )
+    ):
+        return True
+
+    deps_raw = _entity_analysis_parse_jsonish(getattr(entity, "visual_dependencies", None))
+    deps = deps_raw if isinstance(deps_raw, list) else []
+    has_env_dep = any(
+        str(item or "").strip().upper().startswith("ENV:")
+        or str(item or "").strip().startswith("ENV：[")
+        or str(item or "").strip().startswith("ENV:[")
+        for item in deps
+    )
+    if has_env_dep:
+        return False
+    # No ENV dependency and no derivative markers → treat as main/baseline.
+    return dep_type in ("", "Original", "BaselineDefinition")
+
+
+def _build_entity_analysis_format_contract(entity: Any, category: str) -> str:
+    """Output format contract for vision reverse-prompting (env keeps Stage-3; char/prop = image-only)."""
+    existing_cn = str(getattr(entity, "generation_prompt_cn", "") or "").strip()
+    name_lock = (
+        "- 保留 name / name_en 与 CURRENT 完全一致（逐字符，禁止改名）。\n"
+        "- 完整生图提示词只写入 generation_prompt_cn（自然中文短段）。\n"
+        "- generation_prompt_en 必须固定为空字符串 \"\"。\n"
+        "- negative_prompt_en 用简短英文；anchor_description 用 3-5 个英文短语。\n"
+    )
+
+    # Character / prop: analyze the uploaded/bound image as-is; do not force Stage-3 sheet rebuild.
+    if category == "character":
+        return (
+            "角色分析硬约束（只按原图分析）：\n"
+            f"{name_lock}"
+            "- 以提供的图片为唯一视觉权威：appearance_cn / clothing / generation_prompt_cn 必须忠实描述图中可见内容。\n"
+            "- 不要为了凑「四宫格/四视图」而臆造图中不存在的视角、面板或构图；图是什么构图就按什么写。\n"
+            "- CURRENT 文本仅用于保留身份名与少量非冲突背景；与图片冲突时一律以图片为准。\n"
+            "- generation_prompt_cn 写成可直接生图的中文描述（相貌、衣着、材质、姿态、光线、背景以图为准）。"
+        )
+    if category == "prop":
+        return (
+            "道具分析硬约束（只按原图分析）：\n"
+            f"{name_lock}"
+            "- 以提供的图片为唯一视觉权威：description_cn / generation_prompt_cn 必须忠实描述图中可见物体。\n"
+            "- 不要为了凑「四宫格/四视图」而臆造图中不存在的视角或面板；图是什么构图就按什么写。\n"
+            "- 优先写结构、材质、工艺、磨损、比例与可见细节；无手/无人物除非图中确实出现。\n"
+            "- CURRENT 文本仅用于保留名称；与图片冲突时一律以图片为准。"
+        )
+
+    preserve_note = (
+        "若 CURRENT 已有 generation_prompt_cn：必须保留其原有章节/标签/排版骨架与字段写法，"
+        "仅按图片可见证据改写具体视觉内容；禁止改成单视角描述或其它资产类型格式。\n"
+        if existing_cn
+        else "CURRENT 无既有 generation_prompt_cn 时，严格按下列 Stage 3 原格式新建。\n"
+    )
+    common = (
+        "通用硬约束（资产设计 Stage 3 原格式）：\n"
+        f"{name_lock}"
+        "- Clean Plate：只写画面可见物理实体；环境禁具名角色/人称。\n"
+        f"{preserve_note}"
+    )
+
+    if category == "poster":
+        return (
+            common
+            + "海报/封面 generation_prompt_cn 格式（强制）：\n"
+            "- 固定 4:3 poster canvas；premium theatrical one-sheet 单张主视觉（非四宫格分镜）。\n"
+            "- 写清前中后景、标题安全区与移动端 UI 净空；光学与风格服从图片证据。"
+        )
+
+    # environment
+    if _entity_analysis_is_main_environment(entity):
+        return (
+            common
+            + "主环境 generation_prompt_cn 格式（强制，四向拼图 2×2 四宫格）：\n"
+            "- 首句声明：生成四向拼图基准参考图；16:9 横幅；2×2 四宫格；禁止拉成 1:1；禁止俯拍/鸟瞰。\n"
+            "- 格位固定：左上=0度、右上=90度、左下=180度、右下=270度；各格眼高约 50mm；四格共享材质/光源；Clean Plate。\n"
+            "- 成稿逐格写 [0度格-左上]/[90度格-右上]/[180度格-左下]/[270度格-右下]，每格按「背景→中景→前景/邻向斜切→天花地面→光照」。\n"
+            "- description_cn 写俯视 360 + 0 度轴与固定实体清单；dependency_strategy.type 必须为 BaselineDefinition；visual_dependencies=[]。\n"
+            "- 若图片本身已是四宫格，按四格可见内容回写；若图片是单视角，仍须输出完整四向拼图格式（其余格据空间一致性合理补齐，并在 logic 标明推断格）。\n"
+            "- 严禁改成单镜头可拍空镜、§A/§B/§C 衍生三段式、或角色/道具白底四视图。"
+        )
+    return (
+        common
+        + "衍生环境 generation_prompt_cn 格式（强制，§A/§B/§C 单镜）：\n"
+        "- §A：参考主环境四向拼图指定格/半空间（或上一状态空镜）。\n"
+        "- §B：与参考图一致的具象清单（地面/家具/门窗/色谱/锚点；前景/中景/背景 + 上中下）。\n"
+        "- §C：本镜 Delta（机位、左右重组、背景半空间）；Clean Plate；禁人物。\n"
+        "- description_cn 须含本衍生独立四向自然语言；保留既有 visual_dependencies / dependency_strategy 语义。"
+    )
+
+
+def _build_entity_analysis_schema_instruction(entity: Any, category: str) -> str:
+    format_contract = _build_entity_analysis_format_contract(entity, category)
+    name_lock = str(getattr(entity, "name", "") or "Current Name")
+    name_en_lock = str(getattr(entity, "name_en", "") or "")
+
+    if category == "character":
+        return f"""
+{format_contract}
+
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "characters": [
+    {{
+      "name": "{name_lock}",
+      "name_en": "{name_en_lock or "English Name"}",
+      "gender": "M/F",
+      "role": "Role",
+      "archetype": "Archetype",
+      "appearance_cn": "Detailed Chinese Description (Must include height & head-to-body ratio)",
+      "clothing": "Detailed Description of clothing (Must include layers, materials, colors, wear)",
+      "action_characteristics": "Inferred action traits",
+      "generation_prompt_cn": "只按原图可见内容写的中文生图提示词（不强迫四宫格）",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "short English negatives",
+      "anchor_description": "3-5 English anchor phrases",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Original",
+        "logic": "Base Design"
+      }}
+    }}
+  ]
+}}
+"""
+    if category == "prop":
+        return f"""
+{format_contract}
+
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "props": [
+    {{
+      "name": "{name_lock}",
+      "name_en": "{name_en_lock or "English Name"}",
+      "type": "held/static",
+      "description_cn": "Chinese Description (Mobility & Mutable States)",
+      "generation_prompt_cn": "只按原图可见内容写的中文生图提示词（不强迫四宫格）",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "short English negatives",
+      "anchor_description": "3-5 English anchor phrases",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Original",
+        "logic": "Base Design"
+      }}
+    }}
+  ]
+}}
+"""
+    if category == "poster":
+        return f"""
+{format_contract}
+
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "posters": [
+    {{
+      "name": "{name_lock}",
+      "name_en": "{name_en_lock or "English Name"}",
+      "atmosphere": "Atmosphere",
+      "visual_params": "Poster/Cover/4:3",
+      "description_cn": "Chinese Description",
+      "generation_prompt_cn": "按上方海报 4:3 原格式写满的中文生图提示词",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "short English negatives",
+      "anchor_description": "3-5 English anchor phrases",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "Type A",
+        "logic": "Cover poster"
+      }}
+    }}
+  ]
+}}
+"""
+
+    is_main_env = _entity_analysis_is_main_environment(entity)
+    dep_type = "BaselineDefinition" if is_main_env else "Type A"
+    dep_logic = (
+        "Main environment four-direction reference grid; sole reference for derivative ENV."
+        if is_main_env
+        else "Derivative environment single-shot prompt with A/B/C sections."
+    )
+    prompt_placeholder = (
+        "按上方主环境四向拼图 2×2 四宫格原格式写满的中文生图提示词"
+        if is_main_env
+        else "按上方衍生环境 §A/§B/§C 原格式写满的中文生图提示词"
+    )
+    deps_rule = (
+        "visual_dependencies must be []."
+        if is_main_env
+        else "visual_dependencies must preserve CURRENT.visual_dependencies (do not clear ENV references)."
+    )
+    return f"""
+{format_contract}
+
+{deps_rule}
+
+Output MUST be a valid JSON object matching this structure EXACTLY:
+{{
+  "environments": [
+    {{
+      "name": "{name_lock}",
+      "name_en": "{name_en_lock or "English Name"}",
+      "atmosphere": "Atmosphere",
+      "visual_params": "{"Baseline/Interior/Day" if is_main_env else "Wide/Interior/Day"}",
+      "description_cn": "Chinese Description",
+      "generation_prompt_cn": "{prompt_placeholder}",
+      "generation_prompt_en": "",
+      "negative_prompt_en": "short English negatives",
+      "anchor_description": "3-5 English anchor phrases",
+      "visual_dependencies": [],
+      "dependency_strategy": {{
+        "type": "{dep_type}",
+        "logic": "{dep_logic}"
+      }}
+    }}
+  ]
+}}
+"""
+
+
 async def _execute_analyze_entity_image(
     entity_id: int,
     system_api_id: Optional[int] = Query(None),
@@ -50038,109 +50366,40 @@ async def _execute_analyze_entity_image(
             payload["finish_reason"] = finish_reason
         return payload
 
-    # 3. Construct System Prompt based on Entity Type
+    # 3. Construct System Prompt based on Entity Type (Stage-3 original prompt formats)
     entity_type = (entity.type or "character").lower()
+    analysis_category = _entity_analysis_category(entity_type)
+    is_main_env = analysis_category == "environment" and _entity_analysis_is_main_environment(entity)
 
-    
-    base_instruction = "You are an expert visual analyst and script breakdown specialist. Your task is to analyze the provided image of a project subject and UPDATE the existing subject information to match the visual details in the image. You must merge the visual evidence with the existing data."
-    
-    # Import Templates from shared module
-    # Make sure to create app/core/prompts/__init__.py if needed or import directly if in python path
-    try:
-        from app.core.prompts.templates import (
-            CHARACTER_PROMPT_TEMPLATE as char_prompt_template, 
-            PROP_PROMPT_TEMPLATE as prop_prompt_template, 
-            ENVIRONMENT_PROMPT_TEMPLATE as env_prompt_template
+    if analysis_category in {"character", "prop"}:
+        base_instruction = (
+            "You are an expert visual analyst. "
+            "Analyze the provided subject image and UPDATE fields from what is visibly present in the image. "
+            "For character/prop: image-only reverse prompting — do NOT force Stage-3 four-panel sheet reconstruction; "
+            "describe the actual image composition and visible details. Keep name/name_en unchanged; generation_prompt_en=\"\"."
         )
-    except ImportError:
-        logger.error("Could not import prompt templates. Using fallbacks.")
-        # Fallback empty strings or error out - for robustness we'll define minimal fallbacks here if import fails,
-        # but in dev environment it should work.
-        char_prompt_template = "[Global Style] 6-view character sheet..."
-        prop_prompt_template = "[Global Style] Prop object..."
-        env_prompt_template = "[Global Style] Environment background..."
-
-    schema_instruction = ""
-    if "char" in entity_type:
-        schema_instruction = f"""
-Output MUST be a valid JSON object matching this structure EXACTLY:
-{{
-  "characters": [
-    {{
-      "name": "Current Name",
-      "name_en": "English Name",
-      "gender": "M/F",
-      "role": "Role",
-      "archetype": "Archetype",
-      "appearance_cn": "Detailed Chinese Description (Must include height & head-to-body ratio)",
-      "clothing": "Detailed Description of clothing (Must include layers, materials, colors, wear)",
-      "action_characteristics": "Inferred action traits (e.g. poised, controlled movements)",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
-      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{char_prompt_template}",
-      "anchor_description": "Distinct Visual Feature (e.g., 'Red Scarf', 'Scar on Cheek'). MAX 20 words. Must be obvious for AI recognition.",
-      "visual_dependencies": [],
-      "dependency_strategy": {{
-        "type": "Original",
-        "logic": "Base Design"
-      }}
-    }}
-  ]
-}}
-"""
-    elif "prop" in entity_type:
-        schema_instruction = f"""
-Output MUST be a valid JSON object matching this structure EXACTLY:
-{{
-  "props": [
-    {{
-      "name": "Current Name",
-      "name_en": "English Name",
-      "type": "held/static",
-      "description_cn": "Chinese Description (Must define Mobility & Mutable States)",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
-      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{prop_prompt_template}",
-      "anchor_description": "Distinct Visual Marker (e.g., 'Golden Dragon Handle'). MAX 20 words. Must be obvious for AI recognition.",
-      "visual_dependencies": [],
-      "dependency_strategy": {{
-        "type": "Original",
-        "logic": "Base Design"
-      }}
-    }}
-  ]
-}}
-"""
-    elif "env" in entity_type or "scene" in entity_type:
-        schema_instruction = f"""
-Output MUST be a valid JSON object matching this structure EXACTLY:
-{{
-  "environments": [
-    {{
-      "name": "Current Name",
-      "name_en": "English Name",
-      "atmosphere": "Atmosphere",
-      "visual_params": "Wide/Interior/Day",
-      "description_cn": "Chinese Description",
-    "generation_prompt_cn": "中文生图提示词（内容语义与英文提示词一致，可自然中文表达）",
-      "generation_prompt_en": "STRICTLY FOLLOW THIS TEMPLATE, replacing placeholders with visual details from image:\\n{env_prompt_template}",
-      "anchor_description": "Distinct Visual Landmark (e.g., 'Giant Red Statue'). MAX 20 words. Must be obvious for AI recognition.",
-      "visual_dependencies": [],
-      "dependency_strategy": {{
-        "type": "Original",
-        "logic": "Base Design"
-      }}
-    }}
-  ]
-}}
-"""
     else:
-         # Fallback generic
-         schema_instruction = "Return a JSON object with keys: name_en, description_cn, generation_prompt_cn, generation_prompt_en."
+        base_instruction = (
+            "You are an expert visual analyst and Stage-3 asset design specialist. "
+            "Analyze the provided subject image and UPDATE the existing subject fields to match visible evidence. "
+            "Rewrite generation_prompt_cn in the ORIGINAL Stage-3 asset-design prompt format for this subject type "
+            "(main environment 2x2 four-direction grid; derivative ENV A/B/C; poster 4:3). "
+            "Do NOT invent a new free-form prompt style."
+        )
+    schema_instruction = _build_entity_analysis_schema_instruction(entity, analysis_category)
 
     system_prompt = (
         f"{base_instruction}\n\n{schema_instruction}\n\n"
         "Constraint: Return ONLY the raw JSON object. "
         "The first non-whitespace character of your output MUST be '{' and the last character MUST be '}'. "
         "Do not include markdown formatting (like ```json), no <think> tags, no reasoning process, and no conversational text."
+    )
+    logger.info(
+        "Entity analysis format contract | entity_id=%s type=%s category=%s main_env=%s",
+        entity_id,
+        entity_type,
+        analysis_category,
+        is_main_env,
     )
 
     # 4. Construct Image URL & Current Info
@@ -50154,17 +50413,34 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
              "Tone": project.global_info.get("tone")
          }
 
+    required_prompt_format = (
+        "main_environment_2x2_quad"
+        if is_main_env
+        else {
+            "environment": "derivative_environment_abc",
+            "character": "image_only_from_source",
+            "prop": "image_only_from_source",
+            "poster": "poster_4x3",
+        }.get(analysis_category, "stage3_original")
+    )
     current_info = {
         "name": entity.name,
         "name_en": entity.name_en,
         "type": entity.type,
+        "analysis_category": analysis_category,
+        "is_main_environment": bool(is_main_env),
+        "required_prompt_format": required_prompt_format,
         "description": entity.description,
         "appearance_cn": entity.appearance_cn,
         "clothing": entity.clothing,
         "role": entity.role,
+        "atmosphere": getattr(entity, "atmosphere", None),
+        "visual_params": getattr(entity, "visual_params", None),
         "generation_prompt_cn": entity.generation_prompt_cn,
-        "generation_prompt_en": entity.generation_prompt_en,
-        "project_context": project_context
+        "generation_prompt_en": "",
+        "visual_dependencies": getattr(entity, "visual_dependencies", None) or [],
+        "dependency_strategy": getattr(entity, "dependency_strategy", None) or {},
+        "project_context": project_context,
     }
     
     current_info_str = json.dumps(current_info, ensure_ascii=False)
@@ -50226,21 +50502,51 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         # Continue with original URL
         pass
 
+    format_focus = {
+        "character": "只按原图可见内容分析（不强迫四宫格）",
+        "prop": "只按原图可见内容分析（不强迫四宫格）",
+        "poster": "海报 4:3 单张主视觉",
+        "environment": (
+            "主环境四向拼图 2×2 四宫格（左上0/右上90/左下180/右下270）"
+            if is_main_env
+            else "衍生环境 §A/§B/§C 单镜格式"
+        ),
+    }.get(analysis_category, "Stage 3 原提示词格式")
+
+    if analysis_category in {"character", "prop"}:
+        user_analysis_text = (
+            f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\n"
+            "Please analyze the image.\n"
+            "IMPORTANT:\n"
+            f"1) {format_focus} — generation_prompt_cn / appearance / clothing / description must follow the image as authority.\n"
+            "2) Do NOT invent missing four-panel views or Stage-3 sheet structure that is not in the image.\n"
+            "3) CURRENT text is only for name lock and non-conflicting identity; image wins on conflicts.\n"
+            "4) generation_prompt_en MUST be an empty string \"\".\n"
+            "5) Keep name/name_en unchanged.\n"
+            "Output contract: reply with JSON only, begin immediately with '{', and do not output any explanation or thinking text."
+        )
+    else:
+        user_analysis_text = (
+            f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\n"
+            "Please analyze the image. Fuse the visual details from the image with the current information.\n"
+            "IMPORTANT:\n"
+            f"1) Rewrite generation_prompt_cn in the ORIGINAL Stage-3 format for this subject: {format_focus}.\n"
+            "2) If CURRENT.generation_prompt_cn already exists, preserve its section/tag/layout skeleton and only refresh visual facts from the image.\n"
+            "3) generation_prompt_en MUST be an empty string \"\".\n"
+            "4) Keep name/name_en unchanged.\n"
+            "Output contract: reply with JSON only, begin immediately with '{', and do not output any explanation or thinking text."
+        )
+
     messages = [
         {"role": "system", "content": system_prompt},
         {
-            "role": "user", 
+            "role": "user",
             "content": [
-                {"type": "text", "text": f"Here is the CURRENT information for subject '{entity.name}':\n{current_info_str}\n\nPlease analyze the image. Fuse the visual details from the image with the current information. \nIMPORTANT: Rewrite both 'generation_prompt_cn' and 'generation_prompt_en' so they stay semantically aligned to each other and match the visual evidence from the image. 'generation_prompt_en' should keep the original format style."},
-                {"type": "image_url", "image_url": {"url": image_url_final}}
-            ]
-        }
+                {"type": "text", "text": user_analysis_text},
+                {"type": "image_url", "image_url": {"url": image_url_final}},
+            ],
+        },
     ]
-
-    messages[1]["content"][0]["text"] = (
-        f"{messages[1]['content'][0]['text']}\n\n"
-        "Output contract: reply with JSON only, begin immediately with '{', and do not output any explanation or thinking text."
-    )
     
     try:
         logger.info("Sending request to LLM...")
@@ -50479,8 +50785,21 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             updated_info = data["props"][0]
         elif "environments" in data and isinstance(data["environments"], list) and len(data["environments"]) > 0:
             updated_info = data["environments"][0]
+        elif "posters" in data and isinstance(data["posters"], list) and len(data["posters"]) > 0:
+            updated_info = data["posters"][0]
         else:
             updated_info = data # Fallback if direct object
+
+        if isinstance(updated_info, dict):
+            # Stage-3 contract: full prompt lives in CN; EN field stays empty.
+            updated_info["generation_prompt_en"] = ""
+            # Name lock: never let reverse-prompt rename the subject.
+            locked_name = str(getattr(entity, "name", "") or "").strip()
+            locked_name_en = str(getattr(entity, "name_en", "") or "").strip()
+            if locked_name:
+                updated_info["name"] = locked_name
+            if locked_name_en:
+                updated_info["name_en"] = locked_name_en
             
         logger.info(f"Parsed Updated Info for Entity {entity_id}: {json.dumps(updated_info, ensure_ascii=False)[:300]}...")
 
@@ -50494,7 +50813,6 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
             raise HTTPException(status_code=404, detail="Entity not found")
 
         # Update Entity Fields
-        if "name_en" in updated_info: entity.name_en = updated_info["name_en"]
         if "base_name_en" in updated_info: entity.base_name_en = updated_info["base_name_en"]
         if "description_cn" in updated_info: entity.description = updated_info["description_cn"] # Map description_cn to description
         if "appearance_cn" in updated_info: entity.appearance_cn = updated_info["appearance_cn"]
@@ -50508,13 +50826,42 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         if "visual_params" in updated_info: entity.visual_params = updated_info["visual_params"]
         
         if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
-        if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
+        entity.generation_prompt_en = ""
+        if "negative_prompt_en" in updated_info and hasattr(entity, "negative_prompt_en"):
+            entity.negative_prompt_en = updated_info["negative_prompt_en"]
         if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
         
-        if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list): 
-             entity.visual_dependencies = updated_info["visual_dependencies"]
+        if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list):
+            incoming_deps = updated_info["visual_dependencies"]
+            # Derivative ENV reverse-prompt must not wipe existing ENV reference chain.
+            if (
+                analysis_category == "environment"
+                and not is_main_env
+                and not incoming_deps
+                and getattr(entity, "visual_dependencies", None)
+            ):
+                updated_info["visual_dependencies"] = entity.visual_dependencies
+            else:
+                entity.visual_dependencies = incoming_deps
+                updated_info["visual_dependencies"] = incoming_deps
         if "dependency_strategy" in updated_info and isinstance(updated_info["dependency_strategy"], dict):
-             entity.dependency_strategy = updated_info["dependency_strategy"]
+            incoming_dep = updated_info["dependency_strategy"]
+            if is_main_env:
+                incoming_dep = {
+                    **incoming_dep,
+                    "type": "BaselineDefinition",
+                }
+            entity.dependency_strategy = incoming_dep
+        elif is_main_env:
+            existing_dep = _entity_analysis_parse_jsonish(getattr(entity, "dependency_strategy", None))
+            if not isinstance(existing_dep, dict):
+                existing_dep = {}
+            entity.dependency_strategy = {
+                **existing_dep,
+                "type": "BaselineDefinition",
+                "logic": existing_dep.get("logic")
+                or "Main environment four-direction reference grid; sole reference for derivative ENV.",
+            }
 
         # Update Custom Attributes with Analysis Result (Save latest)
         custom_attrs = entity.custom_attributes or {}
@@ -50531,7 +50878,10 @@ Output MUST be a valid JSON object matching this structure EXACTLY:
         entity.custom_attributes = dict(custom_attrs)
 
 
-        logger.info(f"Entity Updated. New Prompt Length: {len(entity.generation_prompt_en) if entity.generation_prompt_en else 0}")
+        logger.info(
+            "Entity Updated. New Prompt CN Length: %s",
+            len(entity.generation_prompt_cn) if entity.generation_prompt_cn else 0,
+        )
 
         # Billing finalize (after successful parse/update)
         billing_details = _build_standard_billing_details(

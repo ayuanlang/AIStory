@@ -1244,9 +1244,53 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const entityEpisodeId = String(entity?.episode_id || '').trim();
             return Boolean(currentEpisodeId && entityEpisodeId && entityEpisodeId === currentEpisodeId);
         };
-        const isOtherEpisodeEntity = (entity) => {
+        const resolveImportEpisodeNumber = (episode, epIndex = -1) => {
+            if (!episode || episode?.is_deleted) return 0;
+            const info = episode?.episode_info && typeof episode.episode_info === 'object'
+                ? episode.episode_info
+                : {};
+            const nestedGlobal = info?.e_global_info && typeof info.e_global_info === 'object'
+                ? info.e_global_info
+                : {};
+            const candidates = [
+                episode?.episode_number,
+                info?.episode_number,
+                info?.episode_script_episode_number,
+                info?.story_dna_episode_number,
+                info?.index,
+                nestedGlobal?.episode_script_episode_number,
+                nestedGlobal?.story_dna_episode_number,
+                parseEpisodeNumberFromText(episode?.title),
+                parseEpisodeNumberFromText(info?.script_title),
+                epIndex >= 0 ? epIndex + 1 : null,
+            ];
+            for (const candidate of candidates) {
+                const parsed = Number(candidate);
+                if (Number.isFinite(parsed) && parsed > 0) return parsed;
+            }
+            return 0;
+        };
+        const episodeList = Array.isArray(episodes) ? episodes : [];
+        const episodeById = new Map(
+            episodeList
+                .filter((ep) => ep && !ep?.is_deleted && String(ep?.id || '').trim())
+                .map((ep) => [String(ep.id).trim(), ep])
+        );
+        const currentEpisodeNumber = (() => {
+            const ep = episodeById.get(currentEpisodeId) || currentEpisode;
+            if (!ep || ep?.is_deleted) return 0;
+            const epIndex = episodeList.findIndex((item) => String(item?.id || '').trim() === currentEpisodeId);
+            return resolveImportEpisodeNumber(ep, epIndex);
+        })();
+        const isPriorEpisodeEntity = (entity) => {
             const entityEpisodeId = String(entity?.episode_id || '').trim();
-            return Boolean(currentEpisodeId && entityEpisodeId && entityEpisodeId !== currentEpisodeId);
+            if (!currentEpisodeId || !entityEpisodeId || entityEpisodeId === currentEpisodeId) return false;
+            const sourceEpisode = episodeById.get(entityEpisodeId);
+            if (!sourceEpisode || sourceEpisode?.is_deleted) return false;
+            if (!currentEpisodeNumber) return false;
+            const sourceIndex = episodeList.findIndex((item) => String(item?.id || '').trim() === entityEpisodeId);
+            const sourceNumber = resolveImportEpisodeNumber(sourceEpisode, sourceIndex);
+            return Boolean(sourceNumber && sourceNumber < currentEpisodeNumber);
         };
         const pickCrossEpisodeReuseEntity = (entityType, name, nameEn) => {
             const keys = new Set(
@@ -1254,9 +1298,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     .map((item) => normalizeImportEntityKey(entityType, item))
                     .filter(Boolean)
             );
-            if (!keys.size || !currentEpisodeId) return null;
+            if (!keys.size || !currentEpisodeId || !currentEpisodeNumber) return null;
             const matches = (allEntities || []).filter((entity) => {
-                if (!isActiveEntityRow(entity) || !isOtherEpisodeEntity(entity)) return false;
+                if (!isActiveEntityRow(entity) || !isPriorEpisodeEntity(entity)) return false;
                 if (String(entity?.type || '').trim().toLowerCase() !== entityType) return false;
                 const entityKeys = [entity?.name, entity?.name_en]
                     .map((item) => normalizeImportEntityKey(entityType, item))
@@ -1265,6 +1309,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             });
             if (!matches.length) return null;
             return matches.sort((a, b) => {
+                const aEpId = String(a?.episode_id || '').trim();
+                const bEpId = String(b?.episode_id || '').trim();
+                const aEp = episodeById.get(aEpId);
+                const bEp = episodeById.get(bEpId);
+                const aNum = aEp ? resolveImportEpisodeNumber(aEp) : 0;
+                const bNum = bEp ? resolveImportEpisodeNumber(bEp) : 0;
+                if (bNum !== aNum) return bNum - aNum; // nearest prior episode first
                 const aImg = String(a?.image_url || '').trim() ? 1 : 0;
                 const bImg = String(b?.image_url || '').trim() ? 1 : 0;
                 if (bImg !== aImg) return bImg - aImg;
@@ -1375,7 +1426,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
 
         return { importedSubjectCounts, createdSubjectItems, skippedSubjectItems };
-    }, [allEntities, currentEpisode?.id, projectId]);
+    }, [allEntities, currentEpisode, episodes, projectId]);
 
     const formatAiEntityCreateReport = useCallback((importReport) => {
         const imported = importReport?.importedSubjectCounts || {};
@@ -5039,32 +5090,103 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return String(episodeId || '').trim();
     }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity]);
 
+    const resolveEpisodeName = useCallback((episode, metaTitle = '') => {
+        const info = episode?.episode_info && typeof episode.episode_info === 'object'
+            ? episode.episode_info
+            : {};
+        const nestedGlobal = info?.e_global_info && typeof info.e_global_info === 'object'
+            ? info.e_global_info
+            : {};
+        const candidates = [
+            info?.script_title,
+            info?.episode_title,
+            info?.episode_name,
+            info?.title,
+            nestedGlobal?.script_title,
+            episode?.title,
+            metaTitle,
+        ];
+        for (const candidate of candidates) {
+            const raw = String(candidate || '').trim();
+            if (!raw) continue;
+            const normalized = normalizeEpisodeTitleForDisplay(raw);
+            // Prefer a real name (not only "Episode 1" / "第1集").
+            if (normalized) return normalized;
+        }
+        // Fall back to the first non-empty raw title (may be "Episode 1").
+        for (const candidate of candidates) {
+            const raw = String(candidate || '').trim();
+            if (raw) return raw;
+        }
+        return '';
+    }, []);
+
+    const resolveEpisodeNumber = useCallback((episode, epIndex = -1) => {
+        const info = episode?.episode_info && typeof episode.episode_info === 'object'
+            ? episode.episode_info
+            : {};
+        const nestedGlobal = info?.e_global_info && typeof info.e_global_info === 'object'
+            ? info.e_global_info
+            : {};
+        const candidates = [
+            episode?.episode_number,
+            info?.episode_number,
+            info?.episode_script_episode_number,
+            info?.story_dna_episode_number,
+            info?.index,
+            nestedGlobal?.episode_script_episode_number,
+            nestedGlobal?.story_dna_episode_number,
+            parseEpisodeNumberFromText(episode?.title),
+            parseEpisodeNumberFromText(info?.script_title),
+            epIndex >= 0 ? epIndex + 1 : null,
+        ];
+        for (const candidate of candidates) {
+            const parsed = Number(candidate);
+            if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+        return null;
+    }, []);
+
+    /** Always prefer「分集号 + 分集名」, never bare episode id. */
+    const resolveEpisodeDisplayLabelById = useCallback((episodeId, metaTitle = '') => {
+        const id = String(episodeId || '').trim();
+        const episodeList = Array.isArray(episodes) ? episodes : [];
+        const epIndex = id
+            ? episodeList.findIndex((ep) => String(ep?.id || '').trim() === id)
+            : -1;
+        const ep = epIndex >= 0 ? episodeList[epIndex] : null;
+        const episodeName = resolveEpisodeName(ep, metaTitle);
+        const episodeNumber = resolveEpisodeNumber(ep, epIndex);
+
+        if (episodeNumber && episodeName) {
+            return t(`第${episodeNumber}集 · ${episodeName}`, `Ep ${episodeNumber} · ${episodeName}`);
+        }
+        if (episodeName) {
+            return episodeName;
+        }
+        if (episodeNumber) {
+            return t(`第${episodeNumber}集`, `Episode ${episodeNumber}`);
+        }
+        if (id) return `${t('分集', 'Episode')} #${id}`;
+        return t('未标注分集', 'Unassigned Episode');
+    }, [episodes, resolveEpisodeName, resolveEpisodeNumber, t]);
+
     const getAssetEpisodeLabel = useCallback((asset) => {
         const meta = getAssetMeta(asset);
         const entityRecord = resolveAssetEntity(asset) || resolveAssetImageUrlEntity(asset);
         const episodeId = String(pickAssetMetaValue(meta, ['episode_id', 'episodeId', 'owner_episode_id', 'ownerEpisodeId']) || asset?.episode_id || entityRecord?.episode_id || '').trim();
-        const episodeTitle = String(pickAssetMetaValue(meta, ['episode_title', 'episodeTitle', 'owner_episode_title', 'ownerEpisodeTitle']) || '').trim();
-        if (episodeTitle && episodeId) return `${episodeTitle} (#${episodeId})`;
-        if (episodeTitle) return episodeTitle;
-        if (episodeId) return `${t('分集', 'Episode')} #${episodeId}`;
-        return t('未标注分集', 'Unassigned Episode');
-    }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity, t]);
+        const episodeTitle = String(pickAssetMetaValue(meta, [
+            'episode_title', 'episodeTitle', 'owner_episode_title', 'ownerEpisodeTitle',
+            'script_title', 'scriptTitle', 'episode_name', 'episodeName',
+            'source_asset_episode_title',
+        ]) || '').trim();
+        return resolveEpisodeDisplayLabelById(episodeId, episodeTitle);
+    }, [getAssetMeta, pickAssetMetaValue, resolveAssetEntity, resolveAssetImageUrlEntity, resolveEpisodeDisplayLabelById]);
 
     const getEntityEpisodeLabel = useCallback((entity) => {
         const episodeId = String(entity?.episode_id || '').trim();
-        if (!episodeId) return t('未标注分集', 'Unassigned Episode');
-        const episodeList = Array.isArray(episodes) ? episodes : [];
-        const epIndex = episodeList.findIndex((ep) => String(ep?.id || '').trim() === episodeId);
-        const ep = epIndex >= 0 ? episodeList[epIndex] : null;
-        if (ep) {
-            return buildEpisodeDisplayLabel({
-                episodeNumber: ep?.episode_number,
-                title: ep?.title,
-                fallbackNumber: epIndex + 1,
-            });
-        }
-        return `${t('分集', 'Episode')} #${episodeId}`;
-    }, [episodes, t]);
+        return resolveEpisodeDisplayLabelById(episodeId, '');
+    }, [resolveEpisodeDisplayLabelById]);
 
     const getEntityTypeShortLabel = useCallback((entityOrType) => {
         const type = String(
@@ -5324,8 +5446,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         return '';
     }, [allEntities, getAssetEntityId, getAssetMeta, isExplicitShotAsset, normalizeAssetImageType, pickAssetMetaValue, resolveAssetEntity, resolveAssetEntityByName, resolveAssetImageUrlEntity]);
 
+    const isSelfEntityAsset = useCallback((asset) => {
+        const selfEntityId = String(activeAssetLibraryEntity?.id || viewingEntity?.id || selectedEntity?.id || '').trim();
+        if (!selfEntityId || selfEntityId === 'new') return false;
+        const assetEntityId = String(getAssetEntityId(asset) || asset?.entity_id || '').trim();
+        return Boolean(assetEntityId && assetEntityId === selfEntityId);
+    }, [activeAssetLibraryEntity?.id, getAssetEntityId, selectedEntity?.id, viewingEntity?.id]);
+
     const buildRefImageFromLibraryAsset = useCallback((asset) => {
         if (!asset) return null;
+        if (isSelfEntityAsset(asset)) {
+            showSubjectNotification(t('不能选择当前主体自身作为参考图。', 'Cannot select the current subject itself as a reference image.'), 'warning');
+            return null;
+        }
         const entityId = getAssetEntityId(asset);
         const linkedEntity = (allEntities || []).find((entity) => String(entity?.id || '').trim() === String(entityId || '').trim()) || null;
         const imageType = getAssetImageType(asset);
@@ -5338,7 +5471,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             entity_type: linkedEntity?.type || imageType,
             type_label: getEntityTypeShortLabel(linkedEntity?.type || imageType),
         };
-    }, [allEntities, getAssetDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetEpisodeLabel, getAssetImageType, getEntityTypeShortLabel]);
+    }, [allEntities, getAssetDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetEpisodeLabel, getAssetImageType, getEntityTypeShortLabel, isSelfEntityAsset, showSubjectNotification, t]);
 
     const getAssetImageTypeLabel = useCallback((typeName) => {
         const normalized = String(typeName || '').trim().toLowerCase();
@@ -5503,7 +5636,9 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const sourceAssets = Array.isArray(assets) ? assets : [];
         // Soft-deleted rows should never appear in reuse pickers (defense in depth).
         const activeAssets = sourceAssets.filter((asset) => !asset?.is_deleted);
-        const nonShotAssets = activeAssets.filter((asset) => !isExplicitShotAsset(asset));
+        // Manual dependency / reuse picker: never offer the current entity's own record.
+        const nonSelfAssets = activeAssets.filter((asset) => !isSelfEntityAsset(asset));
+        const nonShotAssets = nonSelfAssets.filter((asset) => !isExplicitShotAsset(asset));
         const selectedNameKeys = [activeAssetLibraryEntity?.name, activeAssetLibraryEntity?.name_en]
             .map(normalizeEntityLookupKey)
             .filter(Boolean);
@@ -5584,6 +5719,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 counts: {
                     source: sourceAssets.length,
                     active: activeAssets.length,
+                    nonSelf: nonSelfAssets.length,
                     nonShot: nonShotAssets.length,
                     entityMatched: entityMatchedAssets.length,
                     episodeMatched: episodeMatchedAssets.length,
@@ -5616,6 +5752,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     counts: {
                         source: sourceAssets.length,
                         active: activeAssets.length,
+                        nonSelf: nonSelfAssets.length,
                         nonShot: nonShotAssets.length,
                         entityMatched: entityMatchedAssets.length,
                         episodeMatched: episodeMatchedAssets.length,
@@ -5634,7 +5771,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
 
         return typeMatchedAssets;
-    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, resolveAssetEntityByName, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
+    }, [activeAssetLibraryEntity, assets, assetEpisodeFilter, assetImageTypeFilter, doesAssetMatchSelectedEntity, doesAssetMatchSelectedEntityImageUrl, getAssetEntityDisplayName, getAssetEntityId, getAssetEpisodeId, getAssetImageType, getAssetMeta, isExplicitShotAsset, isSelfEntityAsset, normalizeEntityLookupKey, pickAssetMetaValue, preferredAssetImageType, resolveAssetEntityByName, selectedEntityAliasIds, selectedEntityAliasImageTokens]);
 
     const assetNameOptions = useMemo(() => {
         return libraryFilteredAssets
@@ -5676,6 +5813,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const keyword = String(assetKeyword || '').trim().toLowerCase();
         return (assets || []).filter((asset) => {
             if (asset?.is_deleted) return false;
+            if (isSelfEntityAsset(asset)) return false;
             const projectId = getAssetProjectId(asset);
             if (assetProjectFilter !== 'all' && projectId !== assetProjectFilter) return false;
 
@@ -5715,7 +5853,35 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         getAssetImageType,
         getAssetEntityDisplayName,
         getAssetMeta,
+        isSelfEntityAsset,
     ]);
+
+    const canAddVisualDependencyToken = useCallback((rawToken, hostEntity = null) => {
+        const token = String(rawToken || '').trim();
+        if (!token) return { ok: false, reason: 'empty' };
+        const host = hostEntity || viewingEntity || selectedEntity || activeAssetLibraryEntity;
+        const hostId = String(host?.id || '').trim();
+        if (!hostId || hostId === 'new') return { ok: true };
+
+        const resolved = resolveDependencyEntity(token, allEntities);
+        if (resolved && String(resolved.id || '').trim() === hostId) {
+            return { ok: false, reason: 'self' };
+        }
+
+        const hostNameKeys = new Set(
+            [host?.name, host?.name_en]
+                .map((item) => normalizeEntityToken(item))
+                .filter(Boolean)
+        );
+        const tokenKey = normalizeEntityToken(token);
+        if (tokenKey && hostNameKeys.has(tokenKey)) {
+            // Same name alone is ok only if it resolves to a different-episode entity.
+            if (!resolved || String(resolved.id || '').trim() === hostId) {
+                return { ok: false, reason: 'self' };
+            }
+        }
+        return { ok: true };
+    }, [activeAssetLibraryEntity, allEntities, selectedEntity, viewingEntity]);
 
     useEffect(() => {
         const pickerOpen = (showImageModal && imageModalTab === 'library') || refSelectionMode === 'assets';
@@ -5898,6 +6064,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         const selectedUrl = String(asset?.url || '').trim();
         if (!selectedUrl) {
             showSubjectNotification(t('该素材没有可用图片地址。', 'This asset has no usable image URL.'), 'warning');
+            return null;
+        }
+        if (isSelfEntityAsset(asset)) {
+            showSubjectNotification(t('不能选择当前主体自身作为依赖/复用源。', 'Cannot select the current subject itself as a dependency or reuse source.'), 'warning');
             return null;
         }
         if (assetReuseBusy) return null;
@@ -8244,6 +8414,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                          if (e.key === 'Enter') {
                                                              const val = e.currentTarget.value.trim();
                                                              if(val) {
+                                                                const check = canAddVisualDependencyToken(val, viewingEntity);
+                                                                if (!check.ok) {
+                                                                    if (check.reason === 'self') {
+                                                                        showSubjectNotification(t('不能将当前主体自身添加为依赖。', 'Cannot add the current subject itself as a dependency.'), 'warning');
+                                                                    }
+                                                                    return;
+                                                                }
                                                                 const current = parseVisualDependencies(viewingEntity.visual_dependencies);
                                                                 if(!current.includes(val)) {
                                                                      handleFieldUpdate('visual_dependencies', [...current, val]);
@@ -8258,6 +8435,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                      if (!input) return;
                                                      const val = input.value.trim();
                                                      if (val) {
+                                                         const check = canAddVisualDependencyToken(val, viewingEntity);
+                                                         if (!check.ok) {
+                                                             if (check.reason === 'self') {
+                                                                 showSubjectNotification(t('不能将当前主体自身添加为依赖。', 'Cannot add the current subject itself as a dependency.'), 'warning');
+                                                             }
+                                                             return;
+                                                         }
                                                          const current = parseVisualDependencies(viewingEntity.visual_dependencies);
                                                          if(!current.includes(val)) {
                                                              handleFieldUpdate('visual_dependencies', [...current, val]);
@@ -8617,11 +8801,15 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                      <button
                                                                                          type="button"
                                                                                          title={t('同时更新图片与锚点并退出', 'Reuse asset and exit')}
-                                                                                         disabled={assetReuseBusy || viewingEntityImageLocked}
+                                                                                         disabled={assetReuseBusy || viewingEntityImageLocked || String(depEntity?.id || '') === String(viewingEntity?.id || '')}
                                                                                          onClick={async (e) => {
                                                                                              e.preventDefault();
                                                                                              e.stopPropagation();
                                                                                              if (!depEntity?.image_url || assetReuseBusy) return;
+                                                                                             if (String(depEntity?.id || '') === String(viewingEntity?.id || '')) {
+                                                                                                 showSubjectNotification(t('不能选择当前主体自身作为依赖/复用源。', 'Cannot select the current subject itself as a dependency or reuse source.'), 'warning');
+                                                                                                 return;
+                                                                                             }
                                                                                              setAssetReuseBusy(true);
                                                                                              try {
                                                                                                  const updated = await updateEntityImage(depEntity.image_url, false, viewingEntity, {
@@ -8642,10 +8830,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                                                      <button
                                                                                          type="button"
                                                                                          title={t('仅作为生图参考图，不覆盖当前图片与锚点', 'Use as generation reference only; do not overwrite image or anchor')}
-                                                                                         disabled={assetReuseBusy}
+                                                                                         disabled={assetReuseBusy || String(depEntity?.id || '') === String(viewingEntity?.id || '')}
                                                                                          onClick={(e) => {
                                                                                              e.preventDefault();
                                                                                              e.stopPropagation();
+                                                                                             if (String(depEntity?.id || '') === String(viewingEntity?.id || '')) {
+                                                                                                 showSubjectNotification(t('不能选择当前主体自身作为参考图。', 'Cannot select the current subject itself as a reference image.'), 'warning');
+                                                                                                 return;
+                                                                                             }
                                                                                              setExcludedVisualDepKeys((prev) => prev.filter((item) => item !== getVisualDepKey(dep)));
                                                                                              const sourceInfo = getDependencySourceInfo(depEntity, viewingEntity, dep);
                                                                                              setRefImage({
