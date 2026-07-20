@@ -145,6 +145,8 @@ from app.services.script_analysis_flow import (
     wrap_scene_unit_as_script_block,
     extract_scene_name_value_from_scene_text,
     SceneBeatsTooShortError,
+    SceneMissingBeat1Error,
+    scene_text_has_beat_1,
     build_assets_extraction_script_from_adapted,
 )
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
@@ -9475,15 +9477,17 @@ def _replace_adapted_script_in_beats_user_input(user_text: str, adapted_script_t
 
 
 def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
-    if isinstance(exc, SceneBeatsTooShortError):
+    if isinstance(exc, (SceneBeatsTooShortError, SceneMissingBeat1Error)):
         return False
     if isinstance(exc, (OperationalError, SQLAlchemyTimeoutError)):
         return True
     if isinstance(exc, HTTPException):
         status = int(getattr(exc, "status_code", 500) or 500)
         detail = str(getattr(exc, "detail", "") or "")
-        # Beats-too-short is a Stage 1 data quality error; do not retry.
+        # Stage 1 data quality errors; do not retry.
         if detail.startswith("SCENE_MARKDOWN_BEATS_TOO_SHORT"):
+            return False
+        if detail.startswith("SCENE_MARKDOWN_MISSING_BEAT_1"):
             return False
         if status in (408, 429, 500, 502, 503, 504):
             return True
@@ -9510,7 +9514,7 @@ def _is_retryable_scene_orchestration_error(exc: Exception) -> bool:
 
 
 def _scene_orchestration_error_code(exc: Exception, scene_id: str) -> str:
-    if isinstance(exc, SceneBeatsTooShortError):
+    if isinstance(exc, (SceneBeatsTooShortError, SceneMissingBeat1Error)):
         return exc.detail
     if isinstance(exc, HTTPException):
         detail = str(getattr(exc, "detail", "") or "")
@@ -9622,6 +9626,12 @@ async def _run_scene_markdown_node_per_scene(
         unit = scene_units[0]
         try:
             single_scene_block = wrap_scene_unit_as_script_block(unit)
+        except SceneMissingBeat1Error as missing_exc:
+            logger.error(
+                "[scene_markdown] missing Beat 1 | scene_id=%s — skip orchestration (invalid scene)",
+                missing_exc.scene_id,
+            )
+            raise HTTPException(status_code=422, detail=missing_exc.detail) from missing_exc
         except SceneBeatsTooShortError as beats_exc:
             logger.error(
                 "[scene_markdown] beats too short | scene_id=%s chars=%s min=%s",
@@ -9774,6 +9784,12 @@ async def _run_scene_markdown_node_per_scene(
 
                         try:
                             single_scene_block = wrap_scene_unit_as_script_block(unit)
+                        except SceneMissingBeat1Error as missing_exc:
+                            logger.error(
+                                "[scene_markdown] missing Beat 1 | scene_id=%s — skip orchestration (invalid scene)",
+                                missing_exc.scene_id,
+                            )
+                            raise HTTPException(status_code=422, detail=missing_exc.detail) from missing_exc
                         except SceneBeatsTooShortError as beats_exc:
                             logger.error(
                                 "[scene_markdown] beats too short | scene_id=%s chars=%s min=%s",
@@ -10045,13 +10061,74 @@ async def _run_scene_markdown_node_per_scene(
     indexed_scene_units = list(enumerate(scene_units, start=1))
     success_by_index: Dict[int, Tuple[int, str, str, Any, int]] = {}
     scene_failure_codes: Dict[str, str] = {}
-    pending_units = indexed_scene_units
+    pending_units: List[Tuple[int, Any]] = []
+
+    # Preflight: no "Beat 1" / [BEAT_START:1] → skip LLM, mark scene invalid (do not batch-retry).
+    for index, unit in indexed_scene_units:
+        scene_source = (
+            str(getattr(unit, "scene_text", "") or "").strip()
+            or str(getattr(unit, "scene_markdown", "") or "").strip()
+        )
+        if scene_text_has_beat_1(scene_source):
+            pending_units.append((index, unit))
+            continue
+        failure_code = f"SCENE_MARKDOWN_MISSING_BEAT_1:{unit.scene_id}"
+        scene_failure_codes[str(unit.scene_id)] = failure_code
+        logger.error(
+            "[scene_markdown] missing Beat 1 | scene_id=%s scene_order=%s/%s — skip orchestration (invalid scene)",
+            unit.scene_id,
+            index,
+            total_scenes,
+        )
+        if node_project_id > 0 and node_episode_id > 0:
+            try:
+                update_scene_unit_orchestration_status(
+                    db,
+                    project_id=node_project_id,
+                    episode_id=node_episode_id,
+                    scene_id=unit.scene_id,
+                    import_status="failed",
+                    parse_status="failed",
+                    parse_error_code=failure_code,
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+
+    if not pending_units:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SCENE_MARKDOWN_MISSING_BEAT_1",
+                "failed_count": len(indexed_scene_units),
+                "total_count": total_scenes,
+                "failed_scenes": [
+                    {
+                        "scene_id": str(unit.scene_id),
+                        "scene_order": int(index),
+                        "error_code": "SCENE_MARKDOWN_MISSING_BEAT_1",
+                    }
+                    for index, unit in indexed_scene_units
+                ],
+                "succeeded_count": 0,
+            },
+        )
 
     for batch_round in range(SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS + 1):
         if not pending_units:
             break
         batch_concurrency = max_concurrency if batch_round == 0 else 1
         if batch_round > 0:
+            # Do not re-queue Stage 1 quality failures (missing Beat 1 / beats too short).
+            pending_units = [
+                (index, unit)
+                for index, unit in pending_units
+                if not str(scene_failure_codes.get(str(unit.scene_id)) or "").startswith(
+                    ("SCENE_MARKDOWN_MISSING_BEAT_1", "SCENE_MARKDOWN_BEATS_TOO_SHORT")
+                )
+            ]
+            if not pending_units:
+                break
             logger.warning(
                 "[scene_markdown] batch retry round %s for %s failed scenes | project_id=%s episode_id=%s scene_ids=%s",
                 batch_round,
@@ -10068,7 +10145,6 @@ async def _run_scene_markdown_node_per_scene(
         next_pending: List[Tuple[int, Any]] = []
         for (index, unit), outcome in zip(pending_units, round_outcomes):
             if isinstance(outcome, Exception):
-                next_pending.append((index, unit))
                 failure_code = _scene_orchestration_error_code(outcome, unit.scene_id)
                 scene_failure_codes[str(unit.scene_id)] = failure_code
                 logger.error(
@@ -10079,25 +10155,34 @@ async def _run_scene_markdown_node_per_scene(
                     node_episode_id,
                     str(getattr(outcome, "detail", "") or outcome),
                 )
+                if _is_retryable_scene_orchestration_error(outcome):
+                    next_pending.append((index, unit))
                 continue
             success_by_index[int(outcome[0])] = outcome
         pending_units = next_pending
 
     failed_scene_reports: List[Dict[str, Any]] = []
+    skipped_missing_beat1_reports: List[Dict[str, Any]] = []
     for index, unit in indexed_scene_units:
-        if index not in success_by_index:
-            raw_failure_code = str(
-                scene_failure_codes.get(str(unit.scene_id))
-                or "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
-            ).strip()
-            error_code = raw_failure_code.split(":", 1)[0] if raw_failure_code else "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
-            failed_scene_reports.append(
-                {
-                    "scene_id": str(unit.scene_id),
-                    "scene_order": int(index),
-                    "error_code": error_code,
-                }
-            )
+        if index in success_by_index:
+            continue
+        raw_failure_code = str(
+            scene_failure_codes.get(str(unit.scene_id))
+            or "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
+        ).strip()
+        error_code = raw_failure_code.split(":", 1)[0] if raw_failure_code else "SCENE_MARKDOWN_ORCHESTRATION_FAILED"
+        report = {
+            "scene_id": str(unit.scene_id),
+            "scene_order": int(index),
+            "error_code": error_code,
+        }
+        # Missing Beat 1 = invalid scene skipped (not an LLM orchestration failure).
+        if error_code == "SCENE_MARKDOWN_MISSING_BEAT_1" or raw_failure_code.startswith(
+            "SCENE_MARKDOWN_MISSING_BEAT_1"
+        ):
+            skipped_missing_beat1_reports.append(report)
+            continue
+        failed_scene_reports.append(report)
 
     if failed_scene_reports:
         if node_project_id > 0 and node_episode_id > 0:
@@ -10152,6 +10237,8 @@ async def _run_scene_markdown_node_per_scene(
         "per_scene_retried_scene_ids": sorted(retried_scene_ids),
         "per_scene_retry_attempts_max": SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
         "per_scene_batch_retry_rounds": SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+        "skipped_missing_beat1_scenes": skipped_missing_beat1_reports,
+        "skipped_missing_beat1_count": len(skipped_missing_beat1_reports),
     }
 
     if isinstance(last_result, dict):

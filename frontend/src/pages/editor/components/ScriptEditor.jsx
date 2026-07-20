@@ -178,6 +178,12 @@ const buildSceneOrchestrationPhaseMessage = (sceneId, phase, { sceneOrder, total
             );
         case 'failed': {
             let detail = String(errorCode || '').trim();
+            if (detail.startsWith('SCENE_MARKDOWN_MISSING_BEAT_1')) {
+                return t(
+                    `[场景编排] ${sceneId}${orderLabel} 跳过：输入无 Beat 1，场景不对`,
+                    `[Scene beats] ${sceneId}${orderLabel} skipped: no Beat 1 in input (invalid scene)`
+                );
+            }
             if (detail.startsWith('SCENE_MARKDOWN_SCENE_ID_MISMATCH')) {
                 const expectedMatch = detail.match(/expected=([^,]+)/i);
                 const gotMatch = detail.match(/got=([^,]+)/i);
@@ -943,6 +949,11 @@ const extractBeatBlocksFromSceneText = (sceneText) => {
 
 const MIN_SCENE_BEATS_CHARS = 20;
 
+/** Literal "Beat 1" or structured [BEAT_START:1] — required for Stage 2.2 orchestration input. */
+const sceneTextHasBeat1 = (text) => (
+    /(?:\[\s*BEAT_START\s*:\s*1\s*\])|(?:\bBeat\s+1\b)/i.test(String(text || ''))
+);
+
 /** Strip BEAT_START/END markers so length reflects Beat body content. */
 const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
     .replace(/`?\[BEAT_START(?::[^\]]+)?\]`?/gi, '')
@@ -957,6 +968,9 @@ const stripBeatBoundaryMarkers = (beatsText) => String(beatsText || '')
 const resolveSceneBeatsBodyForStage22 = (sceneText, sceneId = '') => {
     const source = String(sceneText || '').trim();
     const id = String(sceneId || 'unknown').trim() || 'unknown';
+    if (!sceneTextHasBeat1(source)) {
+        throw new Error(`SCENE_MARKDOWN_MISSING_BEAT_1:${id}`);
+    }
     const beatsOnly = extractBeatBlocksFromSceneText(source).trim();
     const extractedChars = stripBeatBoundaryMarkers(beatsOnly).length;
     if (beatsOnly && extractedChars >= MIN_SCENE_BEATS_CHARS) {
@@ -3619,6 +3633,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (_) {
                 // fall through to generic handling
             }
+        }
+        if (
+            normalized.includes('scene_markdown_missing_beat_1')
+            || normalized.includes('missing_beat_1')
+        ) {
+            return t(
+                '场景编排跳过：输入无 Beat 1，场景不对。请检查 Stage 1 成稿是否包含 Beat 1 / [BEAT_START:1]。',
+                'Scene orchestration skipped: no Beat 1 in input (invalid scene). Ensure Stage 1 output contains Beat 1 / [BEAT_START:1].'
+            );
         }
         if (
             normalized.includes('scene_markdown_partial_failure')
@@ -7249,12 +7272,67 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
+        const tableText = String(importCheck.tableText || normalizedText).trim();
+        const parsedTable = parseMarkdownTable(tableText);
+        const headers = Array.isArray(parsedTable?.headers) ? parsedTable.headers : [];
+        const rows = Array.isArray(parsedTable?.rows) ? parsedTable.rows : [];
+        const normalizeHeaderKey = (value) => String(value || '').toLowerCase().replace(/[\s_\-./()]/g, '');
+        const envIdx = headers.findIndex((header) => {
+            const key = normalizeHeaderKey(header);
+            return key === 'environmentname'
+                || key === '环境名'
+                || key === '环境名称'
+                || key === '环境';
+        });
+        const sceneIdIdx = headers.findIndex((header) => {
+            const key = normalizeHeaderKey(header);
+            return key === 'sceneid' || key === '场景id';
+        });
+        const isBlankOrNoneEnvironment = (value) => {
+            const text = String(value || '').replace(/<br\s*\/?>/gi, ' ').replace(/\*/g, '').trim();
+            if (!text) return true;
+            const normalized = text.toLowerCase().replace(/[\s_*`'"]+/g, '');
+            return ['none', 'null', 'nil', 'n/a', 'na', '-', '—', '－', '无', '空'].includes(normalized);
+        };
+        if (envIdx < 0) {
+            return {
+                ok: false,
+                normalizedText: tableText,
+                reason: t(
+                    `${contextLabel} 场景表缺少 Environment Name 列。`,
+                    `${contextLabel} Scenes Table is missing the Environment Name column.`
+                ),
+            };
+        }
+        const failedEnvScenes = [];
+        for (const row of rows) {
+            const envValue = Array.isArray(row) ? row[envIdx] : '';
+            if (!isBlankOrNoneEnvironment(envValue)) continue;
+            const sceneHint = (sceneIdIdx >= 0 && Array.isArray(row) ? String(row[sceneIdIdx] || '').trim() : '')
+                || t('未知场次', 'unknown scene');
+            failedEnvScenes.push(sceneHint);
+        }
+        if (failedEnvScenes.length > 0) {
+            const sample = failedEnvScenes.slice(0, 5).join('、');
+            const more = failedEnvScenes.length > 5
+                ? t(` 等 ${failedEnvScenes.length} 场`, ` and ${failedEnvScenes.length} scenes`)
+                : '';
+            return {
+                ok: false,
+                normalizedText: tableText,
+                reason: t(
+                    `${contextLabel} Environment Name 为空或 None，判定不通过：${sample}${more}。`,
+                    `${contextLabel} Environment Name is empty or None; rejected: ${sample}${more}.`
+                ),
+            };
+        }
+
         return {
             ok: true,
-            normalizedText: String(importCheck.tableText || normalizedText).trim(),
+            normalizedText: tableText,
             warning: importCheck.warning || '',
         };
-    }, [normalizeLlmMarkdownTable, validateAutoSceneTableImport, t]);
+    }, [normalizeLlmMarkdownTable, parseMarkdownTable, validateAutoSceneTableImport, t]);
 
     const logStage2_2Diagnostics = useCallback(({
         phase = 'stage2_2',
@@ -10333,11 +10411,24 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
-        // Preflight: resolve Beats (extract → full-scene fallback); error only if final body still too short.
+        // Preflight: no "Beat 1" → skip scene (invalid); then resolve Beats length.
+        const missingBeat1Units = [];
         const beatsTooShortErrors = [];
+        const unitsAfterBeat1Gate = [];
         for (const unit of unitsToProcess) {
             const sceneId = String(unit?.sceneId || '').trim() || 'unknown';
             const sceneText = stripBlockLevelMarkersFromSceneText(unit?.sceneText || unit?.sceneMarkdown || '');
+            if (!sceneTextHasBeat1(sceneText)) {
+                missingBeat1Units.push(unit);
+                onLog?.(
+                    t(
+                        `[${label}] 场景 ${sceneId} 输入无 Beat 1，跳过场景编排（场景不对）`,
+                        `[${label}] Scene ${sceneId} has no Beat 1 in input; skipping orchestration (invalid scene)`
+                    ),
+                    'error'
+                );
+                continue;
+            }
             try {
                 const resolved = resolveSceneBeatsBodyForStage22(sceneText, sceneId);
                 if (resolved.usedSceneFallback) {
@@ -10349,8 +10440,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         'warning'
                     );
                 }
+                unitsAfterBeat1Gate.push(unit);
             } catch (beatsErr) {
                 const msg = String(beatsErr?.message || beatsErr || '');
+                if (msg.startsWith('SCENE_MARKDOWN_MISSING_BEAT_1')) {
+                    missingBeat1Units.push(unit);
+                    onLog?.(
+                        t(
+                            `[${label}] 场景 ${sceneId} 输入无 Beat 1，跳过场景编排（场景不对）`,
+                            `[${label}] Scene ${sceneId} has no Beat 1 in input; skipping orchestration (invalid scene)`
+                        ),
+                        'error'
+                    );
+                    continue;
+                }
                 beatsTooShortErrors.push(msg);
                 onLog?.(
                     t(
@@ -10360,6 +10463,37 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'error'
                 );
             }
+        }
+        unitsToProcess = unitsAfterBeat1Gate;
+        orchestrationCanonicalSceneIdsRef.current = new Set(
+            (unitsToProcess || [])
+                .map((unit) => String(unit?.sceneId || '').trim())
+                .filter(Boolean)
+        );
+        const publishMissingBeat1Failures = (totalScenes) => {
+            if (!missingBeat1Units.length) return;
+            const totalForPanel = Math.max(Number(totalScenes) || 0, missingBeat1Units.length, 1);
+            for (const unit of missingBeat1Units) {
+                const sceneId = String(unit?.sceneId || '').trim();
+                if (!sceneId) continue;
+                publishSceneOrchestrationPanelStatus({
+                    sceneId,
+                    phase: 'failed',
+                    sceneOrder: unit?.sceneOrder,
+                    totalScenes: totalForPanel,
+                    errorCode: `SCENE_MARKDOWN_MISSING_BEAT_1:${sceneId}`,
+                });
+            }
+        };
+        if (missingBeat1Units.length > 0 && unitsToProcess.length <= 0) {
+            beginSceneOrchestrationPanelTracking(missingBeat1Units.length);
+            publishMissingBeat1Failures(missingBeat1Units.length);
+            throw new Error(
+                t(
+                    `场景编排跳过：全部 ${missingBeat1Units.length} 场输入均无 Beat 1，场景不对。`,
+                    `Scene orchestration skipped: all ${missingBeat1Units.length} scene(s) lack Beat 1 (invalid scene).`
+                )
+            );
         }
         if (beatsTooShortErrors.length > 0) {
             throw new Error(
@@ -10372,7 +10506,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const isSingleExplicitScene = explicitSceneUnits.length === 1;
         const orchestrationSceneCount = isSingleExplicitScene
             ? 1
-            : Math.max(unitsToProcess.length, sceneUnits.length, 0);
+            : Math.max(
+                unitsToProcess.length + missingBeat1Units.length,
+                sceneUnits.length,
+                0
+            );
         const useBackendSceneOrchestration = !isSingleExplicitScene && orchestrationSceneCount > 1;
         const shouldDisableEpisodeRecovery = Boolean(
             sceneAnalysisModePayload === 'scene_beats_only'
@@ -10480,6 +10618,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             }
             beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
+            publishMissingBeat1Failures(orchestrationSceneCount);
             setAnalysisFlowStatus({
                 phase: 'scene_beats',
                 message: t(

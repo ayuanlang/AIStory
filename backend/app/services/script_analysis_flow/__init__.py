@@ -122,6 +122,34 @@ class SceneBeatsTooShortError(ValueError):
         )
 
 
+class SceneMissingBeat1Error(ValueError):
+    """Raised when Stage 2.2 input has no Beat 1 marker — scene is not valid for orchestration."""
+
+    def __init__(self, scene_id: str):
+        self.scene_id = str(scene_id or "unknown").strip() or "unknown"
+        super().__init__(f"SCENE_MARKDOWN_MISSING_BEAT_1:{self.scene_id}")
+
+    @property
+    def code(self) -> str:
+        return "SCENE_MARKDOWN_MISSING_BEAT_1"
+
+    @property
+    def detail(self) -> str:
+        return f"SCENE_MARKDOWN_MISSING_BEAT_1:{self.scene_id}"
+
+
+# Literal "Beat 1" or structured [BEAT_START:1] — either marks a valid Stage 1 scene body.
+_BEAT_1_KEYWORD_RE = re.compile(
+    r"(?:\[\s*BEAT_START\s*:\s*1\s*\])|(?:\bBeat\s+1\b)",
+    re.IGNORECASE,
+)
+
+
+def scene_text_has_beat_1(text: str) -> bool:
+    """Return True when scene orchestration input contains a Beat 1 keyword."""
+    return bool(_BEAT_1_KEYWORD_RE.search(str(text or "")))
+
+
 @dataclass
 class ParsedSceneUnit:
     scene_id: str
@@ -1122,6 +1150,27 @@ def _scene_table_cell_value(cells: List[str], idx: int) -> str:
     return str(cells[idx] or "").strip()
 
 
+def _is_blank_or_none_environment_name(value: Any) -> bool:
+    """True when Environment Name is empty / None / placeholder — scene must fail validation."""
+    text = re.sub(r"<br\s*/?>", " ", str(value or ""), flags=re.IGNORECASE)
+    text = text.replace("*", "").strip()
+    if not text:
+        return True
+    normalized = re.sub(r"[\s_*`'\"“”‘’]+", "", text).lower()
+    return normalized in {
+        "none",
+        "null",
+        "nil",
+        "n/a",
+        "na",
+        "-",
+        "—",
+        "－",
+        "无",
+        "空",
+    }
+
+
 def _scene_id_has_letter_suffix(scene_id: str) -> bool:
     return bool(re.match(r"^EP\d+_SC\d+[A-Za-z]+$", str(scene_id or "").strip(), re.I))
 
@@ -1267,6 +1316,18 @@ def parse_scene_units_from_scenes_table(script_text: str) -> List[ParsedSceneUni
             if scene_id in seen_scene_ids:
                 raise SceneMarkerParseError("SCENES_TABLE_DUPLICATE_SCENE_ID", f"duplicate scene_id: {scene_id}")
             seen_scene_ids.add(scene_id)
+
+            if environment_idx < 0:
+                raise SceneMarkerParseError(
+                    "SCENES_TABLE_EMPTY_ENVIRONMENT_NAME",
+                    f"missing Environment Name column for scene_id={scene_id}",
+                )
+            env_name = _scene_table_cell_value(cells, environment_idx)
+            if _is_blank_or_none_environment_name(env_name):
+                raise SceneMarkerParseError(
+                    "SCENES_TABLE_EMPTY_ENVIRONMENT_NAME",
+                    f"empty or None Environment Name for scene_id={scene_id}",
+                )
 
             scene_text = _build_scene_text_from_table_row(
                 cells,
@@ -1572,6 +1633,7 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
     """
     Wrap one scene for Stage 2.2 LLM input: Scene markers + 【场景名称】 + Beat blocks.
     Prefer extracted Beats; on split failure / too-short Beats, fall back to full scene body.
+    Raises SceneMissingBeat1Error when input has no Beat 1 keyword (invalid scene).
     Raises SceneBeatsTooShortError only when the final body is still shorter than MIN_SCENE_BEATS_CHARS.
     """
     scene_text = _strip_block_level_markers_from_scene_text(getattr(unit, "scene_text", "") or "")
@@ -1590,6 +1652,8 @@ def wrap_scene_unit_as_script_block(unit: ParsedSceneUnit) -> str:
         scene_markdown = str(getattr(unit, "scene_markdown", "") or "").strip()
         if scene_markdown:
             scene_text = scene_markdown
+    if not scene_text_has_beat_1(scene_text):
+        raise SceneMissingBeat1Error(scene_id or "unknown")
     body_text, used_fallback = resolve_scene_beats_body_for_stage_2_2(scene_text, scene_id)
     # Inject Stage 1 scene header only for beats-only body; full-scene fallback already contains it.
     scene_name_header = (
@@ -2255,6 +2319,8 @@ def validate_single_scene_markdown_for_orchestration(
         code = str(getattr(exc, "code", "") or "SCENE_MARKDOWN_PARSE_FAILED")
         if code == "SCENES_TABLE_INCOMPLETE_ROW":
             return f"SCENE_MARKDOWN_INCOMPLETE_TABLE:{exc}"
+        if code == "SCENES_TABLE_EMPTY_ENVIRONMENT_NAME":
+            return f"SCENE_MARKDOWN_EMPTY_ENVIRONMENT_NAME:{exc}"
         if code.startswith("SCENES_TABLE_"):
             return f"SCENE_MARKDOWN_PARSE_FAILED:{code}"
         return code
@@ -2420,8 +2486,10 @@ __all__ = [
     "STAGE_SCRIPT_OPTIMIZATION",
     "SceneMarkerParseError",
     "SceneBeatsTooShortError",
+    "SceneMissingBeat1Error",
     "MIN_SCENE_BEATS_CHARS",
     "measure_scene_beats_char_count",
+    "scene_text_has_beat_1",
     "resolve_scene_beats_body_for_stage_2_2",
     "validate_scene_beats_min_length",
     "build_script_analysis_flow_plan",
