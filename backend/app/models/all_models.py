@@ -355,6 +355,9 @@ class Scene(Base):
 
 class Shot(Base):
     __tablename__ = "shots"
+    # Active-row uniqueness is enforced in init_db as partial unique index
+    # uq_shots_proj_ep_shot_id_active on (project_id, episode_id, upper(trim(shot_id)))
+    # WHERE coalesce(is_deleted,false)=false — soft-deleted rows may reuse the same Shot ID.
     id = Column(Integer, primary_key=True, index=True)
     scene_id = Column(Integer, ForeignKey("scenes.id"))
     
@@ -362,7 +365,7 @@ class Shot(Base):
     project_id = Column(Integer, index=True, nullable=True) 
     episode_id = Column(Integer, index=True, nullable=True)
 
-    # Header Mapping
+    # Header Mapping — business key EP##_SC##_SH## (unique per project+episode when active)
     shot_id = Column(String)           # Mapped to 'Shot ID'
     shot_name = Column(String, nullable=True) # Mapped to 'Shot Name'
     # 'Scene ID' from header helps map to scene_id, but we store it for reference if needed, 

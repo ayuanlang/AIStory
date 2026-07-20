@@ -370,6 +370,46 @@ def _ensure_core_performance_indexes() -> None:
                 logger.warning("Index DDL failed (non-fatal): %s | err=%s", ddl, exc)
 
 
+def _ensure_shots_project_episode_shot_id_unique_index(*, is_postgres: bool) -> None:
+    """Enforce active Shot uniqueness: project + episode + shot_id (business EP##_SC##_SH##)."""
+    if not is_postgres and engine.dialect.name != "sqlite":
+        logger.info("Skip shots scoped unique index migration for dialect=%s", engine.dialect.name)
+        return
+
+    # Soft-delete older duplicates so the partial unique index can be created.
+    # Keep the highest id per (project_id, episode_id, upper(trim(shot_id))).
+    dedup_sql = (
+        "UPDATE shots SET is_deleted = true, deleted_at = CURRENT_TIMESTAMP "
+        "WHERE coalesce(is_deleted, false) = false "
+        "AND id NOT IN ("
+        "  SELECT max(id) FROM shots "
+        "  WHERE coalesce(is_deleted, false) = false "
+        "    AND shot_id IS NOT NULL AND trim(shot_id) <> '' "
+        "  GROUP BY project_id, coalesce(episode_id, -1), upper(trim(shot_id))"
+        ") "
+        "AND shot_id IS NOT NULL AND trim(shot_id) <> ''"
+    )
+
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(dedup_sql))
+        except Exception as exc:
+            logger.warning("Shot deduplication before unique index failed (non-fatal): %s", exc)
+
+    ddl = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_shots_proj_ep_shot_id_active "
+        "ON shots (project_id, COALESCE(episode_id, -1), upper(trim(shot_id))) "
+        "WHERE shot_id IS NOT NULL AND trim(shot_id) <> '' "
+        "AND coalesce(is_deleted, false) = false"
+    )
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(ddl))
+            logger.info("Ensured shots project/episode/shot_id unique index")
+        except Exception as exc:
+            logger.warning("Shot unique index DDL failed (non-fatal): %s | err=%s", ddl, exc)
+
+
 def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None:
     """Enforce entity uniqueness for project+episode+type+normalized-name at DB level."""
     # Expression/partial unique indexes are supported by PostgreSQL and SQLite.
@@ -1133,6 +1173,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             _ensure_entities_episode_scoped_unique_indexes(is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure entity scoped unique indexes: {e}")
+
+        try:
+            _ensure_shots_project_episode_shot_id_unique_index(is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure shots project/episode/shot_id unique index: {e}")
 
         try:
             _ensure_assets_normalized_url_unique_index(is_postgres=is_postgres)

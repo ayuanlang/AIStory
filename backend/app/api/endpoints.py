@@ -18438,23 +18438,39 @@ def _soft_delete_duplicate_active_shots_in_db(
     *,
     scene_id: Optional[int] = None,
     episode_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    scope: str = "scene",
 ) -> int:
+    """Soft-delete duplicate active shots.
+
+    scope=scene: key = scene_id::shot_id (legacy per-scene dedupe)
+    scope=episode: key = project_id::episode_id::shot_id (matches unique index)
+    """
     filters = [_active_shot_clause()]
     if scene_id is not None:
         filters.append(Shot.scene_id == int(scene_id))
     if episode_id is not None:
         filters.append(Shot.episode_id == int(episode_id))
+    if project_id is not None:
+        filters.append(Shot.project_id == int(project_id))
 
     shots = db.query(Shot).filter(*filters).order_by(Shot.id.asc()).all()
     if not shots:
         return 0
 
+    use_episode_scope = str(scope or "scene").strip().lower() == "episode"
     grouped: Dict[str, List[Shot]] = {}
     for shot in shots:
         business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
         if not business_id:
             continue
-        key = f"{int(getattr(shot, 'scene_id', 0) or 0)}::{business_id}"
+        if use_episode_scope:
+            key = (
+                f"{int(getattr(shot, 'project_id', 0) or 0)}::"
+                f"{int(getattr(shot, 'episode_id', 0) or 0)}::{business_id}"
+            )
+        else:
+            key = f"{int(getattr(shot, 'scene_id', 0) or 0)}::{business_id}"
         grouped.setdefault(key, []).append(shot)
 
     duplicate_ids: List[int] = []
@@ -18473,12 +18489,42 @@ def _soft_delete_duplicate_active_shots_in_db(
         synchronize_session=False,
     )
     logger.info(
-        "[shot_import.dedup] soft_deleted duplicate active shots count=%s scene_id=%s episode_id=%s",
+        "[shot_import.dedup] soft_deleted duplicate active shots count=%s scene_id=%s episode_id=%s project_id=%s scope=%s",
         len(duplicate_ids),
         scene_id,
         episode_id,
+        project_id,
+        "episode" if use_episode_scope else "scene",
     )
     return len(duplicate_ids)
+
+
+def _find_active_shot_by_business_id(
+    db: Session,
+    *,
+    project_id: int,
+    episode_id: int,
+    shot_id: Any,
+    exclude_scene_id: Optional[int] = None,
+) -> Optional[Shot]:
+    business_id = _normalize_shot_business_id(shot_id)
+    if not business_id:
+        return None
+    rows = (
+        db.query(Shot)
+        .filter(
+            Shot.project_id == int(project_id),
+            Shot.episode_id == int(episode_id),
+            _active_shot_clause(),
+        )
+        .all()
+    )
+    for row in rows:
+        if exclude_scene_id is not None and int(getattr(row, "scene_id", 0) or 0) == int(exclude_scene_id):
+            continue
+        if _normalize_shot_business_id(getattr(row, "shot_id", "")) == business_id:
+            return row
+    return None
 
 
 def _escape_shot_markdown_cell(value: Any) -> str:
@@ -29867,6 +29913,51 @@ def _import_scene_shot_rows_to_db(
         skipped_row_errors.append(f"dedupe: {warning}")
     shots_data = deduped_shots_data
 
+    # Episode-scoped uniqueness: project + episode + Shot ID (active rows only).
+    # Blocks duplicate-scene imports from writing the same EP##_SC##_SH## twice.
+    conflicting: List[str] = []
+    for idx, row in enumerate(shots_data or [], start=1):
+        raw_shot_id = _pick_shot_cell(row, ["Shot ID", "shot_id", "镜头ID"], "")
+        business_id = _normalize_shot_business_id(raw_shot_id)
+        if not business_id:
+            continue
+        if isinstance(row, dict):
+            # Persist normalized business id so unique index compares consistently.
+            for key in ("Shot ID", "shot_id", "镜头ID"):
+                if key in row:
+                    row[key] = business_id
+                    break
+            else:
+                row["Shot ID"] = business_id
+        # When replacing, this scene's actives will be soft-deleted first — only other scenes conflict.
+        dup = _find_active_shot_by_business_id(
+            db,
+            project_id=int(project.id),
+            episode_id=int(episode.id),
+            shot_id=business_id,
+            exclude_scene_id=int(scene_id) if replace_existing else None,
+        )
+        if dup is not None:
+            conflicting.append(
+                f"{business_id} (existing scene_id={getattr(dup, 'scene_id', None)} db_id={getattr(dup, 'id', None)})"
+            )
+    if conflicting:
+        sample = "; ".join(conflicting[:5])
+        more = f"; and {len(conflicting) - 5} more" if len(conflicting) > 5 else ""
+        logger.info(
+            "[apply_scene_ai_result] abandon_import episode-unique Shot ID conflict | scene_id=%s episode_id=%s conflicts=%s",
+            scene_id,
+            getattr(episode, "id", None),
+            len(conflicting),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Shot ID already exists in this project/episode; import abandoned. "
+                f"Conflicts: {sample}{more}"
+            ),
+        )
+
     # 1) Extract and normalize associated entities text only (no auto-create).
     try:
         if shots_data:
@@ -30040,7 +30131,8 @@ def _import_scene_shot_rows_to_db(
         if extra_columns:
             technical_notes_payload["shot_extra_columns"] = extra_columns
 
-        old_shot = old_shot_map.get(str(shot_id_text).strip())
+        normalized_shot_id = _normalize_shot_business_id(shot_id_text) or str(shot_id_text or "").strip()
+        old_shot = old_shot_map.get(normalized_shot_id) or old_shot_map.get(str(shot_id_text).strip())
         preserved_image_url = None
         preserved_video_url = None
         if old_shot:
@@ -30059,7 +30151,7 @@ def _import_scene_shot_rows_to_db(
             scene_id=scene_id,
             project_id=project.id,
             episode_id=episode.id,
-            shot_id=shot_id_text,
+            shot_id=normalized_shot_id,
             shot_name=shot_name_text,
             scene_code=scene_code_text,
             start_frame=start_frame_text,
@@ -30076,8 +30168,28 @@ def _import_scene_shot_rows_to_db(
         )
         db.add(shot)
 
-    db.commit()
-    _soft_delete_duplicate_active_shots_in_db(db, scene_id=scene_id)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning(
+            "[shot_import.apply] unique constraint conflict scene_id=%s episode_id=%s err=%s",
+            scene_id,
+            getattr(episode, "id", None),
+            exc,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Shot ID already exists for this project/episode (unique index); import abandoned."
+            ),
+        ) from exc
+    _soft_delete_duplicate_active_shots_in_db(
+        db,
+        episode_id=int(episode.id),
+        project_id=int(project.id),
+        scope="episode",
+    )
     db.commit()
 
     applied_shots = db.query(Shot).filter(Shot.scene_id == scene_id, _active_shot_clause()).all()
@@ -30251,32 +30363,33 @@ def create_shot(
 
         business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
         if business_id:
-            dup = (
-                db.query(Shot)
-                .filter(
-                    Shot.scene_id == scene_id,
-                    _active_shot_clause(),
-                )
-                .all()
+            existing = _find_active_shot_by_business_id(
+                db,
+                project_id=int(project.id),
+                episode_id=int(episode.id),
+                shot_id=business_id,
             )
-            for existing in dup:
-                if _normalize_shot_business_id(getattr(existing, "shot_id", "")) == business_id:
-                    logger.warning(
-                        "[create_shot] abandon duplicate Shot ID | scene_id=%s shot_id=%s existing_db_id=%s",
-                        scene_id,
-                        business_id,
-                        existing.id,
-                    )
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Shot ID '{shot.shot_id}' already exists in this scene; import abandoned.",
-                    )
+            if existing is not None:
+                logger.warning(
+                    "[create_shot] abandon duplicate Shot ID | scene_id=%s episode_id=%s shot_id=%s existing_db_id=%s existing_scene_id=%s",
+                    scene_id,
+                    episode.id,
+                    business_id,
+                    existing.id,
+                    getattr(existing, "scene_id", None),
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Shot ID '{shot.shot_id}' already exists in this project/episode; import abandoned."
+                    ),
+                )
 
         db_shot = Shot(
             scene_id=scene_id,
             project_id=project.id,
             episode_id=episode.id,
-            shot_id=shot.shot_id,
+            shot_id=business_id or shot.shot_id,
             shot_name=shot.shot_name,
             start_frame=shot.start_frame,
             end_frame=shot.end_frame,
@@ -30397,13 +30510,31 @@ def batch_create_shots(
             continue
         business_id = _normalize_shot_business_id(getattr(shot, "shot_id", ""))
         if business_id:
-            dedup_key = f"{scene_id}::{business_id}"
+            # Episode-scoped unique key: project + episode + Shot ID
+            dedup_key = f"{int(project.id)}::{int(episode.id)}::{business_id}"
             if dedup_key in seen_shot_keys:
                 skipped += 1
                 logger.warning(
-                    "[ShotImportAPI] batch_create skip duplicate Shot ID | scene_id=%s shot_id=%s",
+                    "[ShotImportAPI] batch_create skip duplicate Shot ID | scene_id=%s episode_id=%s shot_id=%s",
+                    scene_id,
+                    episode.id,
+                    business_id,
+                )
+                continue
+            existing = _find_active_shot_by_business_id(
+                db,
+                project_id=int(project.id),
+                episode_id=int(episode.id),
+                shot_id=business_id,
+                exclude_scene_id=scene_id if scene_id in clearable_scene_ids else None,
+            )
+            if existing is not None:
+                skipped += 1
+                logger.warning(
+                    "[ShotImportAPI] batch_create skip Shot ID already in episode | scene_id=%s shot_id=%s existing_scene_id=%s",
                     scene_id,
                     business_id,
+                    getattr(existing, "scene_id", None),
                 )
                 continue
             seen_shot_keys.add(dedup_key)
@@ -30414,7 +30545,7 @@ def batch_create_shots(
             scene_id=scene_id,
             project_id=project.id,
             episode_id=episode.id,
-            shot_id=shot.shot_id,
+            shot_id=business_id or shot.shot_id,
             shot_name=shot.shot_name,
             start_frame=shot.start_frame,
             end_frame=shot.end_frame,
@@ -30438,6 +30569,25 @@ def batch_create_shots(
         except Exception as cost_exc:
             logger.warning("batch_create_shots cost recompute skipped | project_id=%s err=%s", project.id, cost_exc)
 
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning(
+            "[ShotImportAPI] batch_create unique conflict | episode_id=%s err=%s",
+            episode_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Shot ID already exists for this project/episode; batch import abandoned.",
+        ) from exc
+    _soft_delete_duplicate_active_shots_in_db(
+        db,
+        episode_id=int(episode.id),
+        project_id=int(project.id),
+        scope="episode",
+    )
     db.commit()
     elapsed_ms = int((time.perf_counter() - started_perf) * 1000)
     logger.info(

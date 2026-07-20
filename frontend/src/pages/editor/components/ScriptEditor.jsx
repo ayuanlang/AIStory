@@ -404,18 +404,13 @@ const findDbSceneByPatchSceneId = (dbScenes, patchSceneId) => {
     const patchToken = normalizeSceneIdToken(patchSceneId);
     if (!patchToken) return null;
     const rows = Array.isArray(dbScenes) ? dbScenes : [];
-    const exact = rows.find((row) => (
+    // Exact Scene ID match only — never fall back to order, or leftover scenes
+    // from a previous run can steal storyboard kickoff for orchestration IDs.
+    return rows.find((row) => (
         [row?.scene_no, row?.scene_id, row?.scene_code]
             .map(normalizeSceneIdToken)
             .some((token) => token && token === patchToken)
-    ));
-    if (exact) return exact;
-    const expectedOrder = deriveSceneOrderFromSceneId(patchSceneId);
-    if (!Number.isFinite(expectedOrder) || sceneIdHasLetterSuffix(patchSceneId)) return null;
-    return rows.find((row) => {
-        const rowOrder = deriveSceneOrderFromSceneId(row?.scene_no) ?? Number(String(row?.scene_no || '').trim());
-        return Number.isFinite(rowOrder) && Number(rowOrder) === Number(expectedOrder);
-    }) || null;
+    )) || null;
 };
 
 const dbSceneMatchesPatchSceneId = (dbScenes, patchSceneId) => (
@@ -428,21 +423,35 @@ const resolveImportedDbSceneIdFromReport = (importReport, markerSceneId) => {
         ...(Array.isArray(importReport?.scenes) ? importReport.scenes : []),
     ];
     const markerToken = normalizeSceneIdToken(markerSceneId);
-    if (markerToken) {
-        for (const row of rows) {
-            const id = Number(row?.id || 0);
-            if (!Number.isFinite(id) || id <= 0) continue;
-            const tokens = [row?.scene_no, row?.scene_id, row?.scene_code]
-                .map(normalizeSceneIdToken)
-                .filter(Boolean);
-            if (tokens.some((token) => token === markerToken)) return id;
-        }
+    if (!markerToken) return null;
+    for (const row of rows) {
+        const id = Number(row?.id || 0);
+        if (!Number.isFinite(id) || id <= 0) continue;
+        const tokens = [row?.scene_no, row?.scene_id, row?.scene_code]
+            .map(normalizeSceneIdToken)
+            .filter(Boolean);
+        if (tokens.some((token) => token === markerToken)) return id;
     }
-    const withIds = rows
-        .map((row) => Number(row?.id || 0))
-        .filter((id) => Number.isFinite(id) && id > 0);
-    if (withIds.length === 1) return withIds[0];
+    // No single-row fallback: a leftover importReport must not bind the wrong scene.
     return null;
+};
+
+const filterDbScenesByCanonicalMarkers = (dbScenes, canonicalMarkers) => {
+    const rows = Array.isArray(dbScenes) ? dbScenes : [];
+    const markers = Array.isArray(canonicalMarkers)
+        ? canonicalMarkers
+        : (canonicalMarkers instanceof Set ? [...canonicalMarkers] : []);
+    const allowed = new Set(
+        markers
+            .map((item) => normalizeSceneIdToken(item))
+            .filter(Boolean)
+    );
+    if (!allowed.size) return rows;
+    return rows.filter((row) => (
+        [row?.scene_no, row?.scene_id, row?.scene_code]
+            .map(normalizeSceneIdToken)
+            .some((token) => token && allowed.has(token))
+    ));
 };
 
 const EMPTY_STORYBOARD_TASK_PROGRESS = {
@@ -1585,6 +1594,7 @@ const resolveEpisodeStoryboardCoverage = async ({
     fetchScenesFn,
     fetchEpisodeShotsFn,
     episodeId,
+    allowedSceneMarkers = null,
 }) => {
     const id = Number(episodeId || 0);
     if (!id || typeof fetchScenesFn !== 'function' || typeof fetchEpisodeShotsFn !== 'function') {
@@ -1600,7 +1610,7 @@ const resolveEpisodeStoryboardCoverage = async ({
         fetchScenesFn(id).catch(() => []),
         fetchEpisodeShotsFn(id, { compact: true }).catch(() => []),
     ]);
-    const sceneList = Array.isArray(scenes) ? scenes : [];
+    const sceneList = filterDbScenesByCanonicalMarkers(scenes, allowedSceneMarkers);
     const shotList = Array.isArray(shots) ? shots : [];
     const sceneIds = sceneList
         .map((scene) => Number(scene?.id || 0))
@@ -1621,7 +1631,7 @@ const waitForEpisodeStoryboardCoverage = async (
     fetchScenesFn,
     fetchEpisodeShotsFn,
     episodeId,
-    { retries = 8, delayMs = 500 } = {},
+    { retries = 8, delayMs = 500, allowedSceneMarkers = null } = {},
 ) => {
     let last = {
         sceneCount: 0,
@@ -1635,6 +1645,7 @@ const waitForEpisodeStoryboardCoverage = async (
             fetchScenesFn,
             fetchEpisodeShotsFn,
             episodeId,
+            allowedSceneMarkers,
         });
         if (last.ok || last.sceneCount <= 0) return last;
         if (attempt < retries - 1) {
@@ -1658,6 +1669,7 @@ const runAnalysisPipelineIntegrityGate = async ({
     subjectIndexText,
     checkStoryboards = false,
     skipNonStoryboardChecks = false,
+    allowedSceneMarkers = null,
 }) => {
     const failures = [];
     let dbSceneCount = 0;
@@ -1759,6 +1771,7 @@ const runAnalysisPipelineIntegrityGate = async ({
             fetchScenesFn,
             fetchEpisodeShotsFn,
             episodeId,
+            { allowedSceneMarkers },
         );
         if (storyboardCoverage.sceneCount > 0 && !storyboardCoverage.ok) {
             const missing = Math.max(
@@ -6455,6 +6468,25 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const stableMarker = String(markerSceneId || '').trim();
         if (!stableMarker) return false;
 
+        // Reject kickoffs outside this run's scene-orchestration Scene ID set.
+        const canonical = orchestrationCanonicalSceneIdsRef.current;
+        if (!force && canonical instanceof Set && canonical.size > 0) {
+            const token = normalizeSceneIdToken(stableMarker);
+            const allowed = token
+                ? [...canonical].some((id) => normalizeSceneIdToken(id) === token)
+                : canonical.has(stableMarker);
+            if (!allowed) {
+                onLog?.(
+                    t(
+                        `[分镜生成] ${stableMarker} 不在场景编排场次列表中，跳过`,
+                        `[Storyboard] ${stableMarker} is not in the scene-orchestration list; skipped`
+                    ),
+                    'warning'
+                );
+                return false;
+            }
+        }
+
         const priorItem = storyboardTaskProgressRef.current?.items?.[stableMarker];
         const priorStatus = String(priorItem?.status || '').trim().toLowerCase();
         if (!force && ['starting', 'generating', 'importing'].includes(priorStatus)) {
@@ -6787,9 +6819,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const pending = [];
         const seenMarkers = new Set();
+        const canonical = orchestrationCanonicalSceneIdsRef.current instanceof Set
+            ? orchestrationCanonicalSceneIdsRef.current
+            : new Set();
         const enqueue = (markerSceneId, dbSceneIdHint = null) => {
             const marker = String(markerSceneId || '').trim();
             if (!marker || seenMarkers.has(marker)) return;
+            // Storyboard may only target scenes present in this run's scene orchestration.
+            if (canonical.size > 0) {
+                const token = normalizeSceneIdToken(marker);
+                const allowed = token
+                    ? [...canonical].some((id) => normalizeSceneIdToken(id) === token)
+                    : canonical.has(marker);
+                if (!allowed) return;
+            }
             // Marker is claimed at kickoff entry (including waiting_env), so residual
             // skips scenes already owned by live import / flush — same claim-before-await
             // pattern as orchestration poller readyScenes.
@@ -6801,24 +6844,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return;
             }
             seenMarkers.add(marker);
-            pending.push({ markerSceneId: marker, dbSceneIdHint, importReport });
+            // Resolve db id only by exact marker match; never invent #dbId kickoffs.
+            const resolvedDbId = Number(dbSceneIdHint || 0) > 0
+                ? Number(dbSceneIdHint)
+                : Number(resolveImportedDbSceneIdFromReport(importReport, marker) || 0);
+            pending.push({
+                markerSceneId: marker,
+                dbSceneIdHint: Number.isFinite(resolvedDbId) && resolvedDbId > 0 ? resolvedDbId : null,
+                importReport,
+            });
         };
 
+        // Source of truth = orchestration-imported scene IDs (not fat importReport / leftover DB rows).
         for (const marker of orchestrationLiveImportedScenesRef.current || []) {
             enqueue(marker);
-        }
-        const rows = [
-            ...(Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : []),
-            ...(Array.isArray(importReport?.scenes) ? importReport.scenes : []),
-        ];
-        for (const row of rows) {
-            const marker = String(row?.scene_no || row?.scene_id || row?.scene_code || '').trim();
-            const dbId = Number(row?.id || 0);
-            if (marker) {
-                enqueue(marker, Number.isFinite(dbId) && dbId > 0 ? dbId : null);
-            } else if (Number.isFinite(dbId) && dbId > 0 && !storyboardKickoffByDbIdRef.current.has(dbId)) {
-                enqueue(`#${dbId}`, dbId);
-            }
         }
 
         let started = 0;
@@ -8632,6 +8671,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const resolveScriptOptBeatsContent = useCallback(() => {
+        // Editor/import should show the full Stage 1 adapted script per scene
+        // (场景头、主/衍生环境、观察视角与空间建置、Beats 等)，not the Stage 2.1
+        // slim ENV+Beats extraction used only as assets_extraction LLM input.
         const adapted = String(
             currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content
             || adaptationText
@@ -8639,8 +8681,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim();
         if (!adapted) return '';
-        const slimBeats = String(buildAssetsExtractionScriptFromAdapted(adapted) || '').trim();
-        if (slimBeats) return slimBeats;
         const body = String(extractStage1AdaptedScriptBody(adapted) || '').trim();
         return body || adapted;
     }, [
@@ -8653,7 +8693,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const persistAdaptedScriptEdit = useCallback(async (newVal) => {
         const normalizedValue = String(newVal || '').trim();
         if (!normalizedValue) {
-            throw new Error(t('优化后剧本（Beats 分割部分）不能为空。', 'Optimized script (beats portion) cannot be empty.'));
+            throw new Error(t('优化后剧本不能为空。', 'Optimized script cannot be empty.'));
         }
         if (!activeEpisode?.id || !onUpdateEpisodeInfo) return;
 
@@ -8898,16 +8938,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (stableKind === 'script_opt') {
             const content = resolveScriptOptBeatsContent();
             if (!content) {
-                notifyUiMessage(t('暂无剧本统筹的节拍内容可查看。', 'No script-coordination beat content available yet.'), 'warning');
+                notifyUiMessage(t('暂无剧本统筹内容可查看。', 'No script-coordination content available yet.'), 'warning');
                 return;
             }
             setStageArtifactEditModal({
                 open: true,
                 kind: 'script_opt',
-                titleZh: '剧本统筹 · 节拍内容',
-                titleEn: 'Script Coordination · Beat Content',
-                hintZh: '仅展示/编辑优化后剧本中用于下游的环境与节拍部分（不含修改说明与全局风格信息）。',
-                hintEn: 'View/edit only the environment and beat portion used downstream (excludes revision notes and global-style info).',
+                titleZh: '剧本统筹 · 完整剧本',
+                titleEn: 'Script Coordination · Full Script',
+                hintZh: '展示/编辑优化后剧本的完整内容：各场场景头、主/衍生环境、观察视角与空间建置、Beats 等（不含修改说明与全局风格信息）。',
+                hintEn: 'View/edit the full optimized script: per-scene headers, main/derived environments, spatial setup, beats, etc. (excludes revision notes and global-style info).',
                 content,
                 editing: false,
                 saving: false,
@@ -9178,6 +9218,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const phase2GenerationInFlightRef = useRef(false);
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const orchestrationLiveImportedScenesRef = useRef(new Set());
+    /** Canonical Scene IDs from this run's scene orchestration (unitsToProcess). */
+    const orchestrationCanonicalSceneIdsRef = useRef(new Set());
     const orchestrationPersistedSceneMarkdownRef = useRef({});
     const storyboardKickoffByMarkerRef = useRef(new Set());
     const storyboardKickoffByDbIdRef = useRef(new Set());
@@ -10080,6 +10122,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             )
             : [];
         const unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
+        // Single source of truth for storyboard kickoff: orchestration unit Scene IDs only.
+        orchestrationCanonicalSceneIdsRef.current = new Set(
+            (unitsToProcess || [])
+                .map((unit) => String(unit?.sceneId || '').trim())
+                .filter(Boolean)
+        );
         if (explicitSceneUnits.length > 0 && explicitSceneUnits.length !== sceneUnits.length) {
             onLog?.(
                 t(
@@ -10199,6 +10247,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             ).trim();
             const orchestrationSceneIds = collectOrchestrationResetSceneIds(unitsToProcess, episodePrefix);
             orchestrationLiveImportedScenesRef.current = new Set();
+            orchestrationCanonicalSceneIdsRef.current = new Set(
+                (orchestrationSceneIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+            );
             orchestrationPersistedSceneMarkdownRef.current = {};
             resetStoryboardKickoffTracking();
             onLog?.(`[${label}] backend scene orchestration enabled: ${orchestrationSceneCount} scene(s).`, 'info');
@@ -13396,6 +13447,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             lastAutoSubjectsImportRef.current = { signature: '', result: null };
             if (!preserveProgressUi) {
                 orchestrationLiveImportedScenesRef.current = new Set();
+                orchestrationCanonicalSceneIdsRef.current = new Set();
                 orchestrationPersistedSceneMarkdownRef.current = {};
                 endSceneOrchestrationPanelTracking();
                 resetStoryboardKickoffTracking();
@@ -15358,6 +15410,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     episodeId: activeEpisode?.id,
                     checkStoryboards: true,
                     skipNonStoryboardChecks: true,
+                    allowedSceneMarkers: [
+                        ...(orchestrationCanonicalSceneIdsRef.current || []),
+                        ...(orchestrationLiveImportedScenesRef.current || []),
+                    ],
                 });
                 const coverage = storyboardGateResult?.storyboardCoverage;
                 if (coverage) {
@@ -16090,6 +16146,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 unitsForRerun,
                 episodePrefix
             );
+            orchestrationCanonicalSceneIdsRef.current = new Set(
+                (rerunSceneIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+            );
             if (projectId && activeEpisode?.id && rerunSceneIds.length > 0) {
                 try {
                     await resetSceneOrchestrationProgress({
@@ -16564,11 +16623,30 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!episodeId || typeof fetchScenes !== 'function') return [];
         const dbScenes = await fetchScenes(episodeId).catch(() => []);
         const progressItems = storyboardTaskProgressRef.current?.items || {};
-        return (Array.isArray(dbScenes) ? dbScenes : [])
+        const canonicalMarkers = [
+            ...(orchestrationCanonicalSceneIdsRef.current || []),
+            ...(orchestrationLiveImportedScenesRef.current || []),
+        ];
+        // Prefer orchestration Scene IDs; fall back to scene_markdown_by_scene keys.
+        let allowedMarkers = canonicalMarkers;
+        if (!allowedMarkers.length) {
+            try {
+                const rawJson = String(
+                    parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '')
+                        ?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
+                ).trim();
+                const byScene = parseSceneMarkdownBySceneMap(rawJson);
+                allowedMarkers = Object.keys(byScene || {});
+            } catch (_) {
+                allowedMarkers = [];
+            }
+        }
+        const scopedScenes = filterDbScenesByCanonicalMarkers(dbScenes, allowedMarkers);
+        return scopedScenes
             .filter((scene) => Number(scene?.id || 0) > 0)
             .map((scene, index) => {
-                const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
-                    || `#${scene.id}`;
+                const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim();
+                if (!marker) return null;
                 const progress = progressItems[marker] || {};
                 const sceneOrder = Number(
                     progress?.sceneOrder
@@ -16584,13 +16662,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     error: String(progress?.error || '').trim(),
                 };
             })
+            .filter(Boolean)
             .sort((left, right) => {
                 if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
                     return (left.sceneOrder || 0) - (right.sceneOrder || 0);
                 }
                 return String(left.sceneId).localeCompare(String(right.sceneId));
             });
-    }, [activeEpisode?.id]);
+    }, [activeEpisode?.ai_stage_outputs, activeEpisode?.id, parseSceneMarkdownBySceneMap, parseStageOutputsObject]);
 
     const executeStoryboardRerun = useCallback(async ({
         mode = 'all',
@@ -18435,10 +18514,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             {
                 key: 'stage1-adapted-script',
                 eyebrow: t('第一阶段', 'Stage 1'),
-                title: t('优化后剧本（Beats 分割）', 'Optimized Script (Beats)'),
+                title: t('优化后剧本（完整内容）', 'Optimized Script (Full)'),
                 status: beatsPortion ? 'completed' : (String(llmRawResultContent || '').trim() ? 'warning' : 'idle'),
                 badge: beatsPortion ? t('可回填', 'Re-importable') : t('待输出', 'Pending'),
-                summary: t('仅展示用于下游的环境块与 Beat 分割部分；可 Markdown 编辑后保存。', 'Shows only the ENV + Beat portion used downstream; editable Markdown with save.'),
+                summary: t('展示各场完整正文（环境、空间建置、Beats 等）；可 Markdown 编辑后保存。', 'Shows full per-scene body (environments, spatial setup, beats, etc.); editable Markdown with save.'),
                 content: beatsPortion,
                 onSave: persistAdaptedScriptEdit,
                 actions: [
@@ -19317,7 +19396,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                             disabled={!canEditScriptOpt}
                                             className={diagnosticBtnClass}
                                             title={canEditScriptOpt
-                                                ? t('编辑剧本统筹节拍内容', 'Edit script-coordination beat content')
+                                                ? t('编辑剧本统筹完整内容', 'Edit full script-coordination content')
                                                 : t('暂无可编辑内容', 'No editable content yet')}
                                         >
                                             {t('编辑', 'Edit')}
