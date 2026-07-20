@@ -149,6 +149,11 @@ from app.services.script_analysis_flow import (
     scene_text_has_beat_1,
     build_assets_extraction_script_from_adapted,
 )
+from app.services.script_analysis_flow.subject_index_name_align import (
+    align_scene_markdown_names_with_subject_index,
+    align_subjects_json_names_with_subject_index,
+    apply_text_name_replacements,
+)
 from app.db.init_db import check_and_migrate_tables  # EMERGENCY FIX IMPORT
 from app.core.time_utils import BEIJING_TZ, now_bj_iso
 import os
@@ -7735,13 +7740,68 @@ def _attach_provider_alias_deep(payload: Any, alias_map: Dict[str, str]) -> Any:
     return payload
 
 
+_TERMINAL_GENERATION_JOB_STATUSES = frozenset({"succeeded", "failed", "canceled", "cancelled", "error"})
+
+
+def _is_terminal_generation_job_status(status: Any) -> bool:
+    return str(status or "").strip().lower() in _TERMINAL_GENERATION_JOB_STATUSES
+
+
+def _unlink_job_snapshot_file(path_func, job_id: str) -> None:
+    try:
+        path = path_func(job_id)
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def _drop_image_job_locked(job_id: str, *, unlink_file: bool = True) -> None:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return
+    job = IMAGE_JOB_STORE.pop(stable_job_id, None) or {}
+    IMAGE_JOB_TASKS.pop(stable_job_id, None)
+    task_scope = str(job.get("task_scope") or "").strip()
+    if task_scope and IMAGE_ACTIVE_SCOPE_STORE.get(task_scope) == stable_job_id:
+        IMAGE_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+    stale_idempotency_keys = [
+        key
+        for key, value in IMAGE_SUBMIT_IDEMPOTENCY_STORE.items()
+        if str((value or {}).get("job_id") or "") == stable_job_id
+    ]
+    for key in stale_idempotency_keys:
+        IMAGE_SUBMIT_IDEMPOTENCY_STORE.pop(key, None)
+    if unlink_file:
+        _unlink_job_snapshot_file(_image_job_file_path, stable_job_id)
+
+
+def _drop_video_job_locked(job_id: str, *, unlink_file: bool = True) -> None:
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        return
+    job = VIDEO_JOB_STORE.pop(stable_job_id, None) or {}
+    VIDEO_JOB_TASKS.pop(stable_job_id, None)
+    task_scope = str(job.get("task_scope") or "").strip()
+    if task_scope and VIDEO_ACTIVE_SCOPE_STORE.get(task_scope) == stable_job_id:
+        VIDEO_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+    stale_idempotency_keys = [
+        key
+        for key, value in VIDEO_SUBMIT_IDEMPOTENCY_STORE.items()
+        if str((value or {}).get("job_id") or "") == stable_job_id
+    ]
+    for key in stale_idempotency_keys:
+        VIDEO_SUBMIT_IDEMPOTENCY_STORE.pop(key, None)
+    if unlink_file:
+        _unlink_job_snapshot_file(_video_job_file_path, stable_job_id)
+
+
 def _prune_image_jobs_locked() -> None:
     now = datetime.utcnow()
     expired_ids = []
 
     for job_id, job in IMAGE_JOB_STORE.items():
-        status = str(job.get("status") or "").lower()
-        if status not in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+        if not _is_terminal_generation_job_status(job.get("status")):
             continue
 
         finished_at = _parse_iso_datetime(job.get("finished_at")) or _job_sort_key(job)
@@ -7750,15 +7810,27 @@ def _prune_image_jobs_locked() -> None:
             expired_ids.append(job_id)
 
     for job_id in expired_ids:
-        IMAGE_JOB_STORE.pop(job_id, None)
+        _drop_image_job_locked(job_id)
 
-    if len(IMAGE_JOB_STORE) <= IMAGE_JOB_MAX_ITEMS:
-        return
-
-    ordered = sorted(IMAGE_JOB_STORE.items(), key=lambda pair: _job_sort_key(pair[1]))
-    overflow_count = len(IMAGE_JOB_STORE) - IMAGE_JOB_MAX_ITEMS
-    for job_id, _ in ordered[:overflow_count]:
-        IMAGE_JOB_STORE.pop(job_id, None)
+    if len(IMAGE_JOB_STORE) > IMAGE_JOB_MAX_ITEMS:
+        # Overflow must never evict non-terminal jobs; clients may still be polling them.
+        terminal_ordered = sorted(
+            (
+                (job_id, job)
+                for job_id, job in IMAGE_JOB_STORE.items()
+                if _is_terminal_generation_job_status((job or {}).get("status"))
+            ),
+            key=lambda pair: _job_sort_key(pair[1]),
+        )
+        overflow_count = len(IMAGE_JOB_STORE) - IMAGE_JOB_MAX_ITEMS
+        for job_id, _ in terminal_ordered[:overflow_count]:
+            _drop_image_job_locked(job_id)
+        if len(IMAGE_JOB_STORE) > IMAGE_JOB_MAX_ITEMS:
+            logger.warning(
+                "image job store over capacity with active jobs retained | size=%s max=%s",
+                len(IMAGE_JOB_STORE),
+                IMAGE_JOB_MAX_ITEMS,
+            )
 
     _prune_image_submit_idempotency_locked(now)
 
@@ -7768,8 +7840,7 @@ def _prune_video_jobs_locked() -> None:
     expired_ids = []
 
     for job_id, job in VIDEO_JOB_STORE.items():
-        status = str(job.get("status") or "").lower()
-        if status not in {"succeeded", "failed", "canceled", "cancelled", "error"}:
+        if not _is_terminal_generation_job_status(job.get("status")):
             continue
 
         finished_at = _parse_iso_datetime(job.get("finished_at")) or _job_sort_key(job)
@@ -7778,15 +7849,27 @@ def _prune_video_jobs_locked() -> None:
             expired_ids.append(job_id)
 
     for job_id in expired_ids:
-        VIDEO_JOB_STORE.pop(job_id, None)
+        _drop_video_job_locked(job_id)
 
-    if len(VIDEO_JOB_STORE) <= VIDEO_JOB_MAX_ITEMS:
-        return
-
-    ordered = sorted(VIDEO_JOB_STORE.items(), key=lambda pair: _job_sort_key(pair[1]))
-    overflow_count = len(VIDEO_JOB_STORE) - VIDEO_JOB_MAX_ITEMS
-    for job_id, _ in ordered[:overflow_count]:
-        VIDEO_JOB_STORE.pop(job_id, None)
+    if len(VIDEO_JOB_STORE) > VIDEO_JOB_MAX_ITEMS:
+        # Overflow must never evict non-terminal jobs; clients may still be polling them.
+        terminal_ordered = sorted(
+            (
+                (job_id, job)
+                for job_id, job in VIDEO_JOB_STORE.items()
+                if _is_terminal_generation_job_status((job or {}).get("status"))
+            ),
+            key=lambda pair: _job_sort_key(pair[1]),
+        )
+        overflow_count = len(VIDEO_JOB_STORE) - VIDEO_JOB_MAX_ITEMS
+        for job_id, _ in terminal_ordered[:overflow_count]:
+            _drop_video_job_locked(job_id)
+        if len(VIDEO_JOB_STORE) > VIDEO_JOB_MAX_ITEMS:
+            logger.warning(
+                "video job store over capacity with active jobs retained | size=%s max=%s",
+                len(VIDEO_JOB_STORE),
+                VIDEO_JOB_MAX_ITEMS,
+            )
 
     _prune_video_submit_idempotency_locked(now)
 
@@ -13675,7 +13758,14 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "[Saved Subject Index Injection - Authoritative]\n"
                 "The following Subject Index is loaded from persisted sanitized episode data.\n"
                 "For this stage, treat this block as the ONLY authoritative Subject Index source.\n"
-                "Ignore any Subject Index-like prose or reasoning fragments that may appear elsewhere in the input.\n\n"
+                "Ignore any Subject Index-like prose or reasoning fragments that may appear elsewhere in the input.\n"
+                "NAME LOCK (hard fail): every CHAR:/ENV:/PROP: bracket name and every output "
+                "name/name_en/visual_dependencies entity name MUST be character-identical to a "
+                "subject_name_zh (or subject_name_en when that column is required) cell in THIS "
+                "Subject Index. Copy-paste the cell text; do not retype from memory; do not use "
+                "Stage-1 aliases/nicknames/job titles inside brackets; do not invent names absent "
+                "from this Index. If a Beat entity has no Index row, keep Stage-1 natural language "
+                "and do NOT wrap it with any TYPE:[...] prefix.\n\n"
                 f"{wrap_injection_section('Subject Index', persisted_subject_index_for_prompt)}"
             )
             # In downstream Subject-Index consumer stages, use persisted sanitized
@@ -14642,6 +14732,51 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             )
             raise HTTPException(status_code=400, detail=detail)
 
+        # Subject Index name lock repair (scene orchestration): if Environment Name /
+        # Linked Characters / Key Props / CHAR|ENV|PROP tokens in Beats are not in the
+        # Index whitelist, one LLM remap.
+        subject_index_name_align_meta: Dict[str, Any] = {
+            "scene_markdown": None,
+            "subjects_json": None,
+        }
+        if (
+            is_scene_beats_stage
+            and str(result_content or "").strip()
+            and _subject_index_has_usable_content(persisted_subject_index_for_prompt)
+        ):
+            scene_table_candidate = (
+                extract_scenes_table_markdown_block(result_content)
+                or sanitize_scene_markdown_llm_output(result_content)
+                or str(result_content or "")
+            )
+            try:
+                scene_name_align = await align_scene_markdown_names_with_subject_index(
+                    scene_markdown=scene_table_candidate,
+                    subject_index_text=persisted_subject_index_for_prompt,
+                    llm_config=config,
+                )
+                subject_index_name_align_meta["scene_markdown"] = {
+                    "mismatch_count": scene_name_align.get("mismatch_count") or 0,
+                    "applied_count": scene_name_align.get("applied_count") or 0,
+                    "remaining_count": len(scene_name_align.get("remaining_mismatches") or []),
+                    "replacements": scene_name_align.get("replacements") or [],
+                }
+                if scene_name_align.get("changed") and str(scene_name_align.get("text") or "").strip():
+                    result_content = str(scene_name_align.get("text") or "")
+                    logger.info(
+                        "[analyze_scene] subject_index_name_align scene_markdown applied=%s mismatches=%s episode_id=%s",
+                        scene_name_align.get("applied_count") or 0,
+                        scene_name_align.get("mismatch_count") or 0,
+                        getattr(request, "episode_id", None),
+                    )
+            except Exception as scene_name_align_exc:
+                logger.warning(
+                    "[analyze_scene] subject_index_name_align scene_markdown failed episode_id=%s err=%s",
+                    getattr(request, "episode_id", None),
+                    scene_name_align_exc,
+                    exc_info=scene_name_align_exc,
+                )
+
         # Step 3: persist staging fields only (no scenes/entities/shots import).
         saved_to_episode = False
         persisted_field_name = None
@@ -14803,6 +14938,22 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 "posters": 0,
             }
             debug_meta["subject_post_process_skipped"] = True
+            debug_meta["subject_index_name_align"] = subject_index_name_align_meta
+            scene_align_meta = subject_index_name_align_meta.get("scene_markdown") or {}
+            if int(scene_align_meta.get("applied_count") or 0) > 0:
+                response_payload["warnings"] = [
+                    *list(response_payload.get("warnings") or []),
+                    (
+                        "Subject Index name alignment via LLM applied: "
+                        f"remapped {int(scene_align_meta.get('applied_count') or 0)} "
+                        f"of {int(scene_align_meta.get('mismatch_count') or 0)} off-index "
+                        "names (table columns and/or CHAR/ENV/PROP tokens in Beats)."
+                    ),
+                ]
+                response_payload["warning_codes"] = [
+                    *list(response_payload.get("warning_codes") or []),
+                    "ANALYSIS_SUBJECT_INDEX_NAME_LLM_ALIGNED",
+                ]
         else:
             subjects_json = _extract_subjects_json_from_text(result_content)
             if not any(len(subjects_json.get(k) or []) > 0 for k in ("characters", "props", "environments", "covers", "posters")):
@@ -14820,6 +14971,95 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             subject_index_reconcile_warning_codes = subject_index_reconcile_result.get("warning_codes") or []
             subject_index_reconcile_warnings = subject_index_reconcile_result.get("warnings") or []
 
+            # Subject Index name lock repair (asset design): if name/name_en are not in
+            # the Index whitelist, one LLM remap, then re-reconcile.
+            align_index_text = (
+                persisted_subject_index_for_prompt
+                if _subject_index_has_usable_content(persisted_subject_index_for_prompt)
+                else source_subject_index_text
+            )
+            if is_entity_design_phase and _subject_index_has_usable_content(align_index_text):
+                try:
+                    subjects_name_align = await align_subjects_json_names_with_subject_index(
+                        subjects_json=subjects_json,
+                        subject_index_text=align_index_text,
+                        llm_config=config,
+                    )
+                    subject_index_name_align_meta["subjects_json"] = {
+                        "mismatch_count": subjects_name_align.get("mismatch_count") or 0,
+                        "applied_count": subjects_name_align.get("applied_count") or 0,
+                        "remaining_count": len(subjects_name_align.get("remaining_mismatches") or []),
+                        "replacements": subjects_name_align.get("replacements") or [],
+                    }
+                    if subjects_name_align.get("changed"):
+                        subjects_json = subjects_name_align.get("subjects_json") or subjects_json
+                        # Re-run deterministic reconcile so subject_no/name/name_en stay canonical.
+                        subject_index_reconcile_result = _reconcile_subjects_json_with_subject_index(
+                            align_index_text,
+                            subjects_json,
+                        )
+                        subjects_json = subject_index_reconcile_result.get("subjects_json") or subjects_json
+                        subject_index_reconcile_meta = subject_index_reconcile_result.get("meta") or subject_index_reconcile_meta
+                        for code in (subject_index_reconcile_result.get("warning_codes") or []):
+                            if code not in subject_index_reconcile_warning_codes:
+                                subject_index_reconcile_warning_codes.append(code)
+                        for warn in (subject_index_reconcile_result.get("warnings") or []):
+                            if warn not in subject_index_reconcile_warnings:
+                                subject_index_reconcile_warnings.append(warn)
+
+                        replacements = subjects_name_align.get("replacements") or []
+                        if replacements:
+                            patched_result = apply_text_name_replacements(result_content, replacements)
+                            if patched_result != str(result_content or ""):
+                                result_content = patched_result
+                                response_payload["result"] = result_content
+                                if saved_to_episode and getattr(request, "episode_id", None):
+                                    try:
+                                        episode_for_realign = (
+                                            db.query(Episode)
+                                            .filter(Episode.id == int(request.episode_id))
+                                            .first()
+                                        )
+                                        if episode_for_realign is not None:
+                                            persist_analyze_scene_stage_result(
+                                                db=db,
+                                                episode=episode_for_realign,
+                                                result_content=result_content,
+                                                stage_ctx=stage_ctx,
+                                            )
+                                    except Exception as realign_persist_exc:
+                                        db.rollback()
+                                        logger.warning(
+                                            "[analyze_scene] subject_index_name_align re-persist failed episode_id=%s err=%s",
+                                            getattr(request, "episode_id", None),
+                                            realign_persist_exc,
+                                        )
+                        logger.info(
+                            "[analyze_scene] subject_index_name_align subjects_json applied=%s mismatches=%s episode_id=%s",
+                            subjects_name_align.get("applied_count") or 0,
+                            subjects_name_align.get("mismatch_count") or 0,
+                            getattr(request, "episode_id", None),
+                        )
+                        subject_index_reconcile_warning_codes = [
+                            *list(subject_index_reconcile_warning_codes),
+                            "ANALYSIS_SUBJECT_INDEX_NAME_LLM_ALIGNED",
+                        ]
+                        subject_index_reconcile_warnings = [
+                            *list(subject_index_reconcile_warnings),
+                            (
+                                "Subject Index name alignment via LLM applied: "
+                                f"remapped {int(subjects_name_align.get('applied_count') or 0)} "
+                                f"of {int(subjects_name_align.get('mismatch_count') or 0)} off-index name/name_en values."
+                            ),
+                        ]
+                except Exception as subjects_name_align_exc:
+                    logger.warning(
+                        "[analyze_scene] subject_index_name_align subjects_json failed episode_id=%s err=%s",
+                        getattr(request, "episode_id", None),
+                        subjects_name_align_exc,
+                        exc_info=subjects_name_align_exc,
+                    )
+
             response_payload["subjects_json"] = subjects_json
             response_payload["subjects_json_count"] = {
                 "characters": len(subjects_json.get("characters") or []),
@@ -14835,6 +15075,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             subject_index_coverage_meta = _detect_subject_index_coverage_warnings(source_subject_index_text, subjects_json)
             debug_meta["subject_index_coverage"] = subject_index_coverage_meta
             debug_meta["subject_index_reconciliation"] = subject_index_reconcile_meta
+            debug_meta["subject_index_name_align"] = subject_index_name_align_meta
 
             subject_consistency_meta = _detect_subject_consistency_warnings(result_content, subjects_json)
             debug_meta["subject_consistency"] = subject_consistency_meta

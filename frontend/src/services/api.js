@@ -2134,6 +2134,23 @@ const buildGenerationCallbackUrl = (ticket) => {
     return `${base}/generate/callback/${encodeURIComponent(stableTicket)}`;
 };
 
+const resolvePollTimeoutMs = (timeoutMs, fallbackMs) => {
+    const parsed = Number(timeoutMs);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    const fallback = Number(fallbackMs);
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 10 * 60 * 1000;
+};
+
+const throwIfPollTimedOut = (start, timeoutMs, message, cancelledRef) => {
+    if (Date.now() - start <= timeoutMs) return;
+    if (cancelledRef && typeof cancelledRef === 'object') {
+        cancelledRef.current = true;
+    }
+    throw new Error(message);
+};
+
+const isPollTimeoutError = (error) => /timed out/i.test(String(error?.message || ''));
+
 const pollGenerationCallbackUntilDone = async (
     ticket,
     { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, kind = 'generation', cancelledRef } = {}
@@ -2142,10 +2159,13 @@ const pollGenerationCallbackUntilDone = async (
     if (!stableTicket) throw new Error('Missing callback ticket');
 
     const start = Date.now();
+    const effectiveTimeoutMs = resolvePollTimeoutMs(timeoutMs, 10 * 60 * 1000);
     const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
+    const timeoutMessage = `${kind} generation timed out while waiting callback result`;
 
     while (true) {
         if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
+        throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
         try {
             const response = await api.get(
                 `/generate/callback/${encodeURIComponent(stableTicket)}`,
@@ -2170,17 +2190,18 @@ const pollGenerationCallbackUntilDone = async (
                 }
             }
 
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         } catch (error) {
+            if (isPollTimeoutError(error)) throw error;
             if (cancelledRef?.current) throw new Error(`${kind} callback polling cancelled`);
             if (!isTransientPollingError(error)) {
                 throw error;
             }
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         }
     }
-
-    throw new Error(`${kind} generation timed out while waiting callback result`);
 };
 
 const pollImageJobUntilDone = async (
@@ -2188,9 +2209,12 @@ const pollImageJobUntilDone = async (
     { timeoutMs = 10 * 60 * 1000, pollIntervalMs = 2000, cancelledRef, baseURL } = {}
 ) => {
     const start = Date.now();
+    const effectiveTimeoutMs = resolvePollTimeoutMs(timeoutMs, 10 * 60 * 1000);
     const intervalMs = Math.max(1500, Number(pollIntervalMs || 2000));
+    const timeoutMessage = 'Image generation timed out while polling job status';
     while (true) {
         if (cancelledRef?.current) throw new Error('Image job polling cancelled');
+        throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
         try {
             const data = await fetchImageJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
@@ -2206,17 +2230,18 @@ const pollImageJobUntilDone = async (
                 throw new Error(buildGenerationFailureMessage(data, 'Image generation job failed'));
             }
 
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         } catch (error) {
+            if (isPollTimeoutError(error)) throw error;
             if (cancelledRef?.current) throw new Error('Image job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         }
     }
-
-    throw new Error('Image generation timed out while polling job status');
 };
 
 const pollVideoJobUntilDone = async (
@@ -2224,9 +2249,12 @@ const pollVideoJobUntilDone = async (
     { timeoutMs = VIDEO_JOB_TIMEOUT_MS_DEFAULT, pollIntervalMs = 2500, cancelledRef, baseURL, on_status } = {}
 ) => {
     const start = Date.now();
+    const effectiveTimeoutMs = resolvePollTimeoutMs(timeoutMs, VIDEO_JOB_TIMEOUT_MS_DEFAULT);
     const intervalMs = Math.max(2000, Number(pollIntervalMs || 2500));
+    const timeoutMessage = 'Video generation timed out while polling job status';
     while (true) {
         if (cancelledRef?.current) throw new Error('Video job polling cancelled');
+        throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
         try {
             const data = await fetchVideoJobStatusLimited(jobId, { baseURL });
             const status = String(data.status || '').toLowerCase();
@@ -2243,17 +2271,18 @@ const pollVideoJobUntilDone = async (
                 throw new Error(buildGenerationFailureMessage(data, 'Video generation job failed'));
             }
 
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         } catch (error) {
+            if (isPollTimeoutError(error)) throw error;
             if (cancelledRef?.current) throw new Error('Video job polling cancelled');
             if (!isTransientPollingError(error)) {
                 throw error;
             }
+            throwIfPollTimedOut(start, effectiveTimeoutMs, timeoutMessage, cancelledRef);
             await sleep(intervalMs);
         }
     }
-
-    throw new Error('Video generation timed out while polling job status');
 };
 
 export const getVideoGenerationJobStatus = async (jobId, options = {}) => {

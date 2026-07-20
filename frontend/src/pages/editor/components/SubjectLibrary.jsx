@@ -320,14 +320,15 @@ const sortEntitiesForBatchGeneration = (entities, sceneRankMap, allEntities, nam
 
 export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = [], uiLang = 'zh', userBatchParallelLimit = 3, onImportText = null, tabMediaRefreshSignal = 0, isTabActive = true, onMediaRefreshRequest = null }) => {
     const SUBJECT_BATCH_RUNTIME_STORAGE_KEY = 'aistory.subjectBatchRuntime.v1';
-    const IMAGE_JOB_CACHE_PURGE_VERSION = '20260324';
+    // Bump to one-shot clear stale local subject/shot job caches (ghost "persisting" loops).
+    const IMAGE_JOB_CACHE_PURGE_VERSION = '20260720';
     const IMAGE_JOB_CACHE_PURGE_MARKER_KEY = `aistory.imageJobCachePurge.${IMAGE_JOB_CACHE_PURGE_VERSION}`;
     const SUBJECT_BATCH_RUNTIME_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_BATCH_RUNTIME_STALE_MS = 1000 * 60 * 5;
     const SUBJECT_BATCH_WATCHDOG_INTERVAL_MS = 1000 * 5;
     const SUBJECT_IMAGE_JOB_OWNER_PAGE = 'subject-library';
     const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES = 8;
-    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING = 30;
+    const SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING = 8;
     const SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS = 1000 * 60 * 2;
     const SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS = 1000 * 60 * 4;
     const SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS = 1000 * 15;
@@ -2958,11 +2959,17 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         if (!getCurrentJobEntry(entityId)) {
                             continue;
                         }
-                        const localStatus = String(job?.status || '').trim().toLowerCase();
-                        if (localStatus === 'queued' || localStatus === 'running' || localStatus === 'persisting') {
-                            continue;
+                        // Orphan local markers (no backend job id) must not poll forever.
+                        clearLocalSubjectImageJobState(entityId);
+                        if (isActivePoll() && onLog) {
+                            onLog(
+                                t(
+                                    `已清理无效主体任务标记（缺少任务 ID）：${job?.entityName || entityId}`,
+                                    `Cleared invalid subject job marker (missing job id): ${job?.entityName || entityId}`
+                                ),
+                                'warning'
+                            );
                         }
-                        completed.push(entityId);
                         continue;
                     }
 
@@ -2993,7 +3000,23 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             continue;
                         }
 
-                        if (nextFailureCount >= maxStatusFailures && localStatus !== 'persisting') {
+                        // Backend job is gone (reload / already deleted) — drop ghost local state.
+                        // Do not keep "persisting" forever when there is no server task.
+                        if (isNotFoundError) {
+                            clearLocalSubjectImageJobState(entityId);
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'missing') && onLog) {
+                                onLog(
+                                    t(
+                                        `服务端已无该主体任务，已清理本地状态：${job?.entityName || entityId}`,
+                                        `Backend subject job no longer exists; cleared local state: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                            continue;
+                        }
+
+                        if (nextFailureCount >= maxStatusFailures) {
                             await forceClearSubjectImageJob(
                                 entityId,
                                 job,
@@ -3062,6 +3085,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
                         const persistWaitElapsed = now - persistWaitStartedAt;
 
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'persist_timeout') && onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务已完成，但在等待稳定图片超时后仍未拿到可持久化地址：${job?.entityName || entityId}`,
+                                        `Subject job finished, but no durable image URL was available before the persistence wait timed out: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                            continue;
+                        }
+
                         if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                             onLog(
                                 t(
@@ -3072,17 +3111,6 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             );
                         }
 
-                        const nextPersistLogAt = (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt;
-                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog && nextPersistLogAt === now) {
-                            onLog(
-                                t(
-                                    `主体任务等待落库时间较长，继续等待稳定图片地址：${job?.entityName || entityId}`,
-                                    `Subject job is still waiting for durable image persistence; continuing to wait: ${job?.entityName || entityId}`
-                                ),
-                                'warning'
-                            );
-                        }
-
                         statusUpdates[String(entityId)] = {
                             status: 'persisting',
                             previewApplied: true,
@@ -3090,7 +3118,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             statusFailureCount: 0,
                             lastStatusError: '',
                             persistWaitStartedAt,
-                            lastPersistWaitLogAt: nextPersistLogAt,
+                            lastPersistWaitLogAt: (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt,
                         };
                         continue;
                     }
@@ -3147,6 +3175,22 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         const lastPersistWaitLogAt = Number(job?.lastPersistWaitLogAt || 0) || 0;
                         const persistWaitElapsed = now - persistWaitStartedAt;
 
+                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS) {
+                            if (getCurrentJobEntry(entityId, jobId)) {
+                                clearLocalSubjectImageJobState(entityId);
+                            }
+                            if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'persist_timeout') && onLog) {
+                                onLog(
+                                    t(
+                                        `主体任务状态为完成，但等待稳定图片超时：${job?.entityName || entityId}`,
+                                        `Subject job reported completed, but timed out waiting for a durable image URL: ${job?.entityName || entityId}`
+                                    ),
+                                    'warning'
+                                );
+                            }
+                            continue;
+                        }
+
                         if ((now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog) {
                             onLog(
                                 t(
@@ -3157,24 +3201,13 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             );
                         }
 
-                        const nextPersistLogAt = (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt;
-                        if (persistWaitElapsed >= SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS && isActivePoll() && getCurrentJobEntry(entityId, jobId) && onLog && nextPersistLogAt === now) {
-                            onLog(
-                                t(
-                                    `主体任务已完成但仍未落库，继续等待稳定图片地址：${job?.entityName || entityId}`,
-                                    `Subject job reported completed but durable image persistence is still pending; continuing to wait: ${job?.entityName || entityId}`
-                                ),
-                                'warning'
-                            );
-                        }
-
                         statusUpdates[String(entityId)] = {
                             status: 'persisting',
                             lastPolledAt: now,
                             statusFailureCount: 0,
                             lastStatusError: '',
                             persistWaitStartedAt,
-                            lastPersistWaitLogAt: nextPersistLogAt,
+                            lastPersistWaitLogAt: (now - lastPersistWaitLogAt) >= SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS ? now : lastPersistWaitLogAt,
                         };
                         continue;
                     }
@@ -3244,7 +3277,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         };
         // Depend on job identity (entityId:jobId), not every status patch — otherwise each poll
         // tears down and recreates the interval and can skip ticks under the polling lock.
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, subjectImageJobWatchKey, t]);
+    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, shouldLogSubjectJobTerminal, subjectImageJobWatchKey, t]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });
