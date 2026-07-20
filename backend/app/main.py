@@ -1289,12 +1289,31 @@ class _SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_security_headers)
 
 
+class _HttpMethodContextMiddleware:
+    """Bind request HTTP method into a ContextVar for project ACL read/write checks."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        from app.api.deps import reset_current_http_method, set_current_http_method
+        token = set_current_http_method(scope.get("method") or "GET")
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reset_current_http_method(token)
+
+
 if _MAINTENANCE_INTERCEPT_ENABLED:
     app.add_middleware(_MaintenanceModeMiddleware)
 else:
     logger.warning("MAINTENANCE_INTERCEPT_ENABLED is disabled; skipping maintenance interception")
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_CorsPreflightMiddleware)
+app.add_middleware(_HttpMethodContextMiddleware)
 
 import os
 from fastapi.responses import FileResponse, HTMLResponse

@@ -208,6 +208,7 @@ const Editor = ({
     initialEpisodeId = null,
     initialEditingShotId = null,
     initialEditingShotSceneId = null,
+    readOnly = false,
 }) => {
     const functionApiConfigs = useFunctionApis();
     const params = useParams();
@@ -263,6 +264,11 @@ const Editor = ({
         return navLang.toLowerCase().startsWith('zh') ? 'zh' : 'en';
     });
     const t = (zh, en) => (uiLang === 'zh' ? zh : en);
+    const isReadOnlyView = Boolean(
+        readOnly
+        || initialProject?.is_temp_view
+        || project?.is_temp_view
+    );
 
     // Global Logging Context
     const { addLog } = useLog();
@@ -3643,6 +3649,25 @@ const Editor = ({
 
     return (
         <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative text-foreground">
+            {isReadOnlyView && (
+                <div className="shrink-0 z-50 px-3 py-2 bg-violet-600/20 border-b border-violet-400/30 text-violet-100 text-xs sm:text-sm flex items-center justify-between gap-3">
+                    <span>
+                        {t(
+                            `临时查看模式（只读）· 项目号 #${id} · 不可修改项目内容`,
+                            `Temporary view (read-only) · Project #${id} · Editing is disabled`
+                        )}
+                    </span>
+                    {onClose && (
+                        <button
+                            type="button"
+                            onClick={() => onClose()}
+                            className="shrink-0 px-2.5 py-1 rounded-md bg-violet-500/25 hover:bg-violet-500/40 border border-violet-300/30 transition-colors"
+                        >
+                            {t('返回列表', 'Back to list')}
+                        </button>
+                    )}
+                </div>
+            )}
             {/* Top Navigation Bar - Compact */}
             <div className="px-3 py-3 md:h-12 md:px-4 md:py-0 border-b border-white/10 bg-[#09090b] flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0 z-40 relative">
                 {/* Left: Project Info & Episode Selector */}
@@ -3656,6 +3681,11 @@ const Editor = ({
                      <div className="flex items-center gap-3 md:gap-4 min-w-0 w-full md:w-auto">
                         <h1 className="font-bold text-sm tracking-wide text-white flex items-center gap-2 min-w-0">
                             <span className="text-primary hover:underline cursor-pointer truncate">{project ? project.title : `Project #${id}`}</span>
+                            {isReadOnlyView && (
+                                <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/25 text-violet-100 border border-violet-300/35">
+                                    {t('只读', 'Read-only')}
+                                </span>
+                            )}
                         </h1>
                         
                         {/* Episode Dropdown */}
@@ -3685,14 +3715,17 @@ const Editor = ({
                                             <span className="truncate flex-1 pr-2" title={getEpisodeDropdownLabel(ep, index)}>
                                                 {getEpisodeDropdownLabel(ep, index)}
                                             </span>
+                                            {!isReadOnlyView && (
                                             <button 
                                                 onClick={(e) => handleDeleteEpisode(e, ep.id)}
                                                 className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 hover:text-red-500 rounded"
                                             >
                                                 <Trash2 className="w-3 h-3" />
                                             </button>
+                                            )}
                                         </div>
                                     ))}
+                                    {!isReadOnlyView && (
                                     <div className="border-t border-white/10 mt-1 pt-1 px-1">
                                          <button 
                                             onClick={() => trackMenuAction('editor.episode.create', t('新建分集', 'New Episode'), handleCreateEpisode)}
@@ -3701,6 +3734,7 @@ const Editor = ({
                                             <Plus className="w-3 h-3" /> {t('新建分集', 'New Episode')}
                                         </button>
                                     </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -3747,6 +3781,7 @@ const Editor = ({
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-2 md:gap-3 flex-wrap md:flex-nowrap justify-end w-full md:w-auto">
+                    {!isReadOnlyView && (
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.generator', t('生成器', 'Generator'), () => setActiveTab('generator'));
@@ -3758,6 +3793,7 @@ const Editor = ({
                         <span className="text-xs font-medium hidden sm:block">{t('剧本生成', 'Scripts Gen')}</span>
                         
                     </button>
+                    )}
                     <button
                         onClick={() => trackMenuAction('editor.ui_language.toggle', t('切换界面语言', 'Toggle UI Language'), () => setUiLang(prev => prev === 'zh' ? 'en' : 'zh'))}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1.5"
@@ -3784,6 +3820,7 @@ const Editor = ({
                         <span className="text-xs font-medium hidden sm:block">{t('返回项目', 'Back to Projects')}</span>
                     </button>
                     
+                    {!isReadOnlyView && (
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.project_backup_export', t('导出备份', 'Export Backup'), handleExport);
@@ -3795,7 +3832,9 @@ const Editor = ({
                     >
                         {isProjectBackupExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     </button>
+                    )}
 
+                    {!isReadOnlyView && (
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.project_backup_import', t('导入备份', 'Import Backup'), handleImportBackupClick);
@@ -3807,7 +3846,9 @@ const Editor = ({
                     >
                         {isProjectBackupImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                     </button>
+                    )}
 
+                    {!isReadOnlyView && (
                     <button
                         onClick={() => setTrashModalOpen(true)}
                         className="p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center justify-center"
@@ -3816,6 +3857,7 @@ const Editor = ({
                     >
                         <RotateCcw className="w-4 h-4" />
                     </button>
+                    )}
                     <button
                         onClick={() => {
                             trackMenuAction('editor.action.settings', t('设置', 'Settings'), () => {

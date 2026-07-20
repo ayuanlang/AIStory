@@ -5,12 +5,39 @@ import logging
 import os
 import time
 import threading
+from contextvars import ContextVar
 from types import SimpleNamespace
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.all_models import User
 
 logger = logging.getLogger(__name__)
+
+# Bound per HTTP request (see main.py middleware). Used by project ACL to
+# allow superuser temporary peek as read-only (GET/HEAD/OPTIONS only).
+_current_http_method: ContextVar[str] = ContextVar("current_http_method", default="GET")
+
+
+def set_current_http_method(method: str):
+    return _current_http_method.set(str(method or "GET").upper())
+
+
+def reset_current_http_method(token) -> None:
+    try:
+        _current_http_method.reset(token)
+    except Exception:
+        pass
+
+
+def get_current_http_method() -> str:
+    try:
+        return str(_current_http_method.get() or "GET").upper()
+    except Exception:
+        return "GET"
+
+
+def is_current_http_mutating() -> bool:
+    return get_current_http_method() not in {"GET", "HEAD", "OPTIONS"}
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 

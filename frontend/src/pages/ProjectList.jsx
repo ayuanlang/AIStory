@@ -32,6 +32,7 @@ import {
     getProjectCreateOptionsCatalog,
     fetchMe as fetchMeApi,
     importProjectBackup,
+    peekProjectAsSuperuser,
 } from '../services/api';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../config';
 import Editor from './Editor';
@@ -74,6 +75,8 @@ import {
     ChevronDown,
     Layers,
     TrendingUp,
+    Eye,
+    EyeOff,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -121,6 +124,41 @@ const cinematicImages = [
 ];
 
 const MARKET_RESEARCH_PROJECT_KEY = 'aistory.market_research.project_id';
+const SUPERUSER_TEMP_VIEW_IDS_KEY = 'aistory.superuser.temp_view_project_ids';
+
+const readTempViewProjectIds = () => {
+    try {
+        const raw = sessionStorage.getItem(SUPERUSER_TEMP_VIEW_IDS_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return [...new Set(
+            parsed
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id) && id > 0)
+        )];
+    } catch {
+        return [];
+    }
+};
+
+const writeTempViewProjectIds = (ids) => {
+    try {
+        const normalized = [...new Set(
+            (Array.isArray(ids) ? ids : [])
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id) && id > 0)
+        )];
+        if (normalized.length === 0) {
+            sessionStorage.removeItem(SUPERUSER_TEMP_VIEW_IDS_KEY);
+        } else {
+            sessionStorage.setItem(SUPERUSER_TEMP_VIEW_IDS_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    } catch {
+        return [];
+    }
+};
 
 const normalizeExternalMediaUrl = (url) => {
     const stable = String(url || '').trim();
@@ -673,6 +711,9 @@ const ProjectList = ({ initialTab = 'projects' }) => {
     const [deletionBatches, setDeletionBatches] = useState([]);
     const [loadingTrash, setLoadingTrash] = useState(false);
     const [restoringBatchId, setRestoringBatchId] = useState(null);
+    const [tempViewProjectIds, setTempViewProjectIds] = useState(() => readTempViewProjectIds());
+    const [tempViewInput, setTempViewInput] = useState('');
+    const [isTempViewLoading, setIsTempViewLoading] = useState(false);
 
     useEffect(() => {
         try {
@@ -858,11 +899,69 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             if (isLoadMore) {
                 setProjectPage(currentObjPage);
                 setProjects(prev => {
-                    allProjects = [...prev, ...sorted];
+                    const tempViews = prev.filter((item) => item?.is_temp_view);
+                    const nonTempPrev = prev.filter((item) => !item?.is_temp_view);
+                    const incomingIds = new Set(sorted.map((item) => Number(item?.id)));
+                    const mergedMembership = [
+                        ...nonTempPrev.filter((item) => !incomingIds.has(Number(item?.id))),
+                        ...sorted,
+                    ];
+                    const membershipIds = new Set(mergedMembership.map((item) => Number(item?.id)));
+                    const retainedTemp = tempViews.filter((item) => !membershipIds.has(Number(item?.id)));
+                    allProjects = [...retainedTemp, ...mergedMembership];
                     return allProjects;
                 });
             } else {
-                setProjects(sorted);
+                const membershipIds = new Set(
+                    sorted.map((item) => Number(item?.id)).filter((id) => Number.isFinite(id) && id > 0)
+                );
+                // Drop temp-view ids that the user already owns or has shared access to.
+                let storedTempIds = readTempViewProjectIds().filter((id) => !membershipIds.has(id));
+                let merged = sorted;
+                // Only superusers may restore temporary peek cards.
+                const canRestoreTempViews = Boolean(currentUser?.is_superuser);
+                if (!canRestoreTempViews) {
+                    if (storedTempIds.length > 0) {
+                        writeTempViewProjectIds([]);
+                        setTempViewProjectIds([]);
+                    }
+                    storedTempIds = [];
+                } else {
+                    writeTempViewProjectIds(storedTempIds);
+                    setTempViewProjectIds(storedTempIds);
+                }
+
+                if (storedTempIds.length > 0) {
+                    const peeked = await Promise.all(
+                        storedTempIds.map(async (pid) => {
+                            try {
+                                const row = await peekProjectAsSuperuser(pid);
+                                return row ? { ...row, is_temp_view: true, can_edit: false, is_owner: false } : null;
+                            } catch (e) {
+                                console.warn(`Failed to restore temp view project #${pid}`, e);
+                                return null;
+                            }
+                        })
+                    );
+                    const validPeeked = peeked.filter(Boolean);
+                    const validIds = validPeeked.map((item) => Number(item.id));
+                    if (validIds.length !== storedTempIds.length) {
+                        writeTempViewProjectIds(validIds);
+                        setTempViewProjectIds(validIds);
+                    }
+                    const seen = new Set(membershipIds);
+                    merged = [
+                        ...validPeeked.filter((item) => {
+                            const id = Number(item.id);
+                            if (seen.has(id)) return false;
+                            seen.add(id);
+                            return true;
+                        }),
+                        ...sorted,
+                    ];
+                }
+                allProjects = merged;
+                setProjects(merged);
             }
 
             // Turn off loading immediately to render the project list without delay
@@ -930,7 +1029,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             setIsLoadMoreProjects(false);
             setHasLoadedProjectsOnce(true);
         }
-    }, [projectPage, PROJECT_LIMIT]);
+    }, [projectPage, PROJECT_LIMIT, currentUser?.is_superuser]);
 
     useEffect(() => {
         if (activeTab === 'projects' || activeTab === 'market_research') {
@@ -1310,13 +1409,90 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
 
     const isProjectOwner = (project) => {
         if (!project) return false;
+        if (project.is_temp_view) return false;
         if (typeof project.is_owner === 'boolean') return project.is_owner;
         return Number(project.owner_id) === Number(currentUser?.id);
     };
 
+    const isTempViewProject = (project) => Boolean(project?.is_temp_view);
+
+    const handleAddTempViewProject = async () => {
+        if (!currentUser?.is_superuser) return;
+        const projectId = Number(String(tempViewInput || '').trim());
+        if (!Number.isFinite(projectId) || projectId <= 0) {
+            setToast({ type: 'error', message: t('请输入有效的项目号', 'Enter a valid project number') });
+            setTimeout(() => setToast(null), 2500);
+            return;
+        }
+        if (projects.some((item) => Number(item?.id) === projectId && !item?.is_temp_view)) {
+            setToast({ type: 'success', message: t('该项目已在你的项目列表中', 'This project is already in your list') });
+            setTimeout(() => setToast(null), 2500);
+            setTempViewInput('');
+            return;
+        }
+        if (projects.some((item) => Number(item?.id) === projectId && item?.is_temp_view)) {
+            setToast({ type: 'success', message: t('已在临时查看列表中', 'Already in temporary view list') });
+            setTimeout(() => setToast(null), 2500);
+            setTempViewInput('');
+            return;
+        }
+
+        setIsTempViewLoading(true);
+        try {
+            const row = await peekProjectAsSuperuser(projectId);
+            if (!row?.id) {
+                throw new Error(t('未找到项目', 'Project not found'));
+            }
+            // If peek returns a normal membership project, just ensure it is visible.
+            if (!row.is_temp_view && (row.is_owner || row.can_edit)) {
+                setProjects((prev) => {
+                    if (prev.some((item) => Number(item?.id) === Number(row.id))) return prev;
+                    return [{ ...row, is_temp_view: false }, ...prev];
+                });
+                setTempViewInput('');
+                setToast({ type: 'success', message: t('已打开你有权限的项目', 'Opened a project you already can access') });
+                setTimeout(() => setToast(null), 2500);
+                return;
+            }
+            const tempProject = { ...row, is_temp_view: true, can_edit: false, is_owner: false };
+            const nextIds = writeTempViewProjectIds([...tempViewProjectIds, Number(row.id)]);
+            setTempViewProjectIds(nextIds);
+            setProjects((prev) => [tempProject, ...prev.filter((item) => Number(item?.id) !== Number(row.id))]);
+            setTempViewInput('');
+            setToast({ type: 'success', message: t(`已临时查看项目 #${row.id}`, `Temporarily viewing project #${row.id}`) });
+            setTimeout(() => setToast(null), 2500);
+        } catch (error) {
+            console.error('Failed to peek project', error);
+            const detail = error?.response?.data?.detail || error?.message || t('查看失败', 'Failed to view project');
+            setToast({ type: 'error', message: String(detail) });
+            setTimeout(() => setToast(null), 3000);
+        } finally {
+            setIsTempViewLoading(false);
+        }
+    };
+
+    const handleCancelTempViewProject = (e, projectId) => {
+        e?.stopPropagation?.();
+        const id = Number(projectId);
+        if (!Number.isFinite(id) || id <= 0) return;
+        const nextIds = writeTempViewProjectIds(tempViewProjectIds.filter((item) => Number(item) !== id));
+        setTempViewProjectIds(nextIds);
+        setProjects((prev) => prev.filter((item) => !(item?.is_temp_view && Number(item?.id) === id)));
+        if (Number(selectedProjectId) === id) {
+            setSelectedProjectId(null);
+            setSelectedProject(null);
+        }
+        setToast({ type: 'success', message: t('已取消临时查看（项目未删除）', 'Temporary view cancelled (project not deleted)') });
+        setTimeout(() => setToast(null), 2500);
+    };
+
     const getProjectShareCountText = (project) => {
-        if (!project || !isProjectOwner(project)) return t('共享给你', 'Shared with you');
-        const count = Number(projectShareCounts?.[project.id] || 0);
+        if (!project) return '';
+        if (isTempViewProject(project)) {
+            return t(`临时只读查看 · 项目号 #${project.id}`, `Temporary read-only view · Project #${project.id}`);
+        }
+        if (!isProjectOwner(project)) return t('共享给你', 'Shared with you');
+        const count = Number(projectShareCounts?.[project.id] || project.share_count || 0);
         return t(`已共享给 ${count} 人`, `Shared with ${count} user${count === 1 ? '' : 's'}`);
     };
 
@@ -1808,6 +1984,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
             <Editor
                 projectId={selectedProjectId}
                 initialProject={selectedProject}
+                readOnly={isTempViewProject(selectedProject)}
                 onClose={(snapshot = null) => {
                     setSelectedProject(null);
                     setSelectedProjectId(null);
@@ -2080,6 +2257,36 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                 className="pl-9 pr-4 py-2 bg-secondary/50 border-none rounded-full text-sm focus:ring-1 focus:ring-primary w-64"
                                             />
                                         </div>
+                                        {currentUser?.is_superuser && (
+                                            <div className="flex items-center gap-1.5 rounded-full bg-violet-500/10 border border-violet-400/30 pl-3 pr-1 py-1">
+                                                <Eye className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    inputMode="numeric"
+                                                    value={tempViewInput}
+                                                    onChange={(e) => setTempViewInput(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            handleAddTempViewProject();
+                                                        }
+                                                    }}
+                                                    placeholder={t('项目号', 'Project #')}
+                                                    className="w-20 sm:w-24 bg-transparent border-none outline-none text-sm text-violet-100 placeholder:text-violet-300/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                    title={t('输入项目号临时查看（只读）', 'Enter project number for temporary read-only view')}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={handleAddTempViewProject}
+                                                    disabled={isTempViewLoading}
+                                                    className="px-3 py-1.5 rounded-full bg-violet-500/30 hover:bg-violet-500/45 text-violet-50 text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                                                >
+                                                    {isTempViewLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                                                    {t('临时查看', 'Temp View')}
+                                                </button>
+                                            </div>
+                                        )}
                                         <button 
                                             onClick={() => {
                                                 resetCreateProjectForm();
@@ -2149,7 +2356,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                     animate={{ opacity: 1, y: 0 }}
                                     className="h-full flex-1"
                                 >
-                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} onClose={(snapshot = null) => { setSelectedProjectId(null); setSelectedProject(null); setRestoredEditorState(snapshot || null); }} />
+                                    <Editor projectId={selectedProjectId} initialProject={selectedProject} readOnly={isTempViewProject(selectedProject)} onClose={(snapshot = null) => { setSelectedProjectId(null); setSelectedProject(null); setRestoredEditorState(snapshot || null); }} />
                                 </motion.div>
                             ) : (
                             <>
@@ -2427,11 +2634,24 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                        <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent opacity-90 z-10" />
 
                                                        {/* Top Badge */}
-                                                    <div className="absolute left-4 top-4 z-20">
-                                                        <div className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border backdrop-blur-md ${isProjectOwner(p) ? 'bg-blue-500/20 text-blue-100 border-blue-300/35' : 'bg-amber-500/20 text-amber-100 border-amber-300/35'}`}>
-                                                            {isProjectOwner(p) && <Shield className="w-3 h-3" />}
-                                                            {isProjectOwner(p) ? t('主理人', 'Owner') : t('共享', 'Shared')}
+                                                    <div className="absolute left-4 top-4 z-20 flex items-center gap-2">
+                                                        <div className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border backdrop-blur-md ${
+                                                            isTempViewProject(p)
+                                                                ? 'bg-violet-500/25 text-violet-100 border-violet-300/40'
+                                                                : isProjectOwner(p)
+                                                                    ? 'bg-blue-500/20 text-blue-100 border-blue-300/35'
+                                                                    : 'bg-amber-500/20 text-amber-100 border-amber-300/35'
+                                                        }`}>
+                                                            {isTempViewProject(p) ? <Eye className="w-3 h-3" /> : (isProjectOwner(p) && <Shield className="w-3 h-3" />)}
+                                                            {isTempViewProject(p)
+                                                                ? t('临时查看', 'Temp View')
+                                                                : (isProjectOwner(p) ? t('主理人', 'Owner') : t('共享', 'Shared'))}
                                                         </div>
+                                                        {isTempViewProject(p) && (
+                                                            <div className="inline-flex items-center text-[10px] font-medium px-2 py-1 rounded-full border backdrop-blur-md bg-black/40 text-white/70 border-white/15">
+                                                                #{p.id}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     </div>
 
@@ -2440,12 +2660,21 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                         <div className="flex justify-between items-center">
                                                             <h3 className="text-lg font-semibold text-white group-hover:text-primary transition-colors truncate flex-1 mr-2">{p.title}</h3>
                                                             <div className="flex items-center gap-1">
-                                                                {getProjectUnreadReviewCount(p) > 0 && (
+                                                                {!isTempViewProject(p) && getProjectUnreadReviewCount(p) > 0 && (
                                                                     <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-black">
                                                                         {t('审核', 'Review')} {getProjectUnreadReviewCount(p)}
                                                                     </span>
                                                                 )}
-                                                                {isProjectOwner(p) && (
+                                                                {isTempViewProject(p) && (
+                                                                    <button
+                                                                        onClick={(e) => handleCancelTempViewProject(e, p.id)}
+                                                                        className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-violet-300 hover:bg-white/10 rounded-lg transition-all"
+                                                                        title={t('取消查看（不删除项目）', 'Cancel view (does not delete project)')}
+                                                                    >
+                                                                        <EyeOff className="w-4 h-4" />
+                                                                    </button>
+                                                                )}
+                                                                {isProjectOwner(p) && !isTempViewProject(p) && (
                                                                     <button
                                                                         onClick={(e) => handleOpenShareModal(e, p)}
                                                                         className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-blue-400 hover:bg-white/10 rounded-lg transition-all"
@@ -2454,7 +2683,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                                         <Share2 className="w-4 h-4" />
                                                                     </button>
                                                                 )}
-                                                                {isProjectOwner(p) && (
+                                                                {isProjectOwner(p) && !isTempViewProject(p) && (
                                                                     <button 
                                                                         onClick={(e) => handleDeleteProject(e, p.id)}
                                                                         className="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground hover:text-red-500 hover:bg-white/10 rounded-lg transition-all"
@@ -2474,7 +2703,7 @@ const loadProjects = useCallback(async (isLoadMore = false) => {
                                                             <p className="text-[11px] text-muted-foreground/80 mt-2 mb-4">
                                                                 {getProjectShareCountText(p)}
                                                             </p>
-                                                            {getProjectUnreadReviewCount(p) > 0 && (
+                                                            {!isTempViewProject(p) && getProjectUnreadReviewCount(p) > 0 && (
                                                                 <p className="text-[11px] text-amber-300 mb-4">
                                                                     {t(`有 ${getProjectUnreadReviewCount(p)} 条未读审核线程`, `${getProjectUnreadReviewCount(p)} unread review thread${getProjectUnreadReviewCount(p) === 1 ? '' : 's'}`)}
                                                                 </p>

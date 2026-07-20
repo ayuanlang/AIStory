@@ -1121,6 +1121,12 @@ export const fetchProject = async (id) => {
     return response.data;
 }
 
+/** Superuser-only: load a project by id for temporary read-only viewing on project cards. */
+export const peekProjectAsSuperuser = async (id) => {
+    const response = await api.get(`/projects/${id}/superuser-peek`);
+    return response.data;
+}
+
 export const updateProject = async (id, data) => {
     const response = await api.put(`/projects/${id}`, data);
     return response.data;

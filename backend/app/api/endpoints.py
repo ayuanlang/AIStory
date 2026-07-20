@@ -16085,6 +16085,9 @@ class ProjectOut(BaseModel):
     # Per-episode cover poster URLs (ordered by episode_id) for project-card rotation.
     cover_images: Optional[List[str]] = None
     is_owner: Optional[bool] = True
+    # Superuser temporary peek (not owner / not shared): view-only card in project list.
+    is_temp_view: Optional[bool] = False
+    can_edit: Optional[bool] = True
     generation_seed: Optional[int] = None
     seed_initialized: Optional[bool] = False
     missing_basic_fields: Optional[List[str]] = None
@@ -17507,6 +17510,8 @@ def _require_project_access(
     current_user: User,
     owner_only: bool = False,
 ) -> Project:
+    from app.api.deps import is_current_http_mutating
+
     project = db.query(Project).filter(Project.id == project_id, _active_project_clause()).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -17515,10 +17520,12 @@ def _require_project_access(
     if is_owner:
         return project
 
+    is_superuser = bool(getattr(current_user, "is_superuser", False))
     is_root_super_system_user = (
-        bool(getattr(current_user, "is_superuser", False))
+        is_superuser
         and str(getattr(current_user, "username", "")).strip().lower() == "ylsystem"
     )
+    # Root system account keeps full admin access (including mutations).
     if is_root_super_system_user:
         return project
 
@@ -17528,11 +17535,37 @@ def _require_project_access(
     if _is_project_shared_with_user(db, project.id, current_user.id):
         return project
 
+    # Any other superuser may temporarily peek any project (read-only).
+    if is_superuser:
+        if is_current_http_mutating():
+            raise HTTPException(
+                status_code=403,
+                detail="Superuser temporary project view is read-only",
+            )
+        return project
+
     raise HTTPException(status_code=403, detail="Not authorized")
 
 
-def _attach_project_flags(project: Project, current_user: User) -> Project:
-    project.is_owner = (project.owner_id == current_user.id)
+def _attach_project_flags(project: Project, current_user: User, db: Session = None) -> Project:
+    is_owner = project.owner_id == current_user.id
+    project.is_owner = is_owner
+    is_shared = False
+    if not is_owner and db is not None:
+        try:
+            is_shared = bool(_is_project_shared_with_user(db, int(project.id), int(current_user.id)))
+        except Exception:
+            is_shared = False
+    is_superuser = bool(getattr(current_user, "is_superuser", False))
+    is_root_super_system_user = (
+        is_superuser
+        and str(getattr(current_user, "username", "")).strip().lower() == "ylsystem"
+    )
+    # Non-root superuser without ownership/share → temporary view-only.
+    # Root system account is not marked temp-view unless the peek endpoint forces it.
+    is_temp_view = bool(is_superuser and not is_owner and not is_shared and not is_root_super_system_user)
+    project.is_temp_view = is_temp_view
+    project.can_edit = bool(is_owner or is_shared or is_root_super_system_user)
     return project
 
 def get_project_cover_image(db: Session, project_id: int) -> Optional[str]:
@@ -21832,7 +21865,7 @@ def read_projects(
                 
             p.cover_image = cover_image
             p.cover_images = cover_images
-            _attach_project_flags(p, current_user)
+            _attach_project_flags(p, current_user, session)
             if p.global_info:
                 p.aspectRatio = p.global_info.get('aspectRatio')
             p.description = (p.global_info or {}).get("notes")
@@ -21933,7 +21966,51 @@ def read_project(
     project.seed_initialized = seed_initialized
     project.missing_basic_fields = missing_basic_fields
     project.has_missing_basic_info = bool(missing_basic_fields)
-    _attach_project_flags(project, current_user)
+    _attach_project_flags(project, current_user, db)
+    return project
+
+
+@router.get("/projects/{project_id}/superuser-peek", response_model=ProjectOut)
+def superuser_peek_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Superuser-only: load a project by id for temporary read-only viewing on the project cards page."""
+    if not bool(getattr(current_user, "is_superuser", False)):
+        raise HTTPException(status_code=403, detail="Only superuser can peek projects")
+
+    project = db.query(Project).filter(Project.id == project_id, _active_project_clause()).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Owners / existing shares should open via normal membership, not temp peek.
+    is_owner = project.owner_id == current_user.id
+    is_shared = (not is_owner) and _is_project_shared_with_user(db, project.id, current_user.id)
+    if is_owner or is_shared:
+        project.cover_image = get_project_cover_image(db, project.id)
+        if project.global_info:
+            project.aspectRatio = (project.global_info or {}).get("aspectRatio")
+        project.description = (project.global_info or {}).get("notes")
+        _attach_project_flags(project, current_user, db)
+        return project
+
+    project.cover_image = get_project_cover_image(db, project.id)
+    cover_images = []
+    if project.cover_image:
+        cover_images.append(project.cover_image)
+    project.cover_images = cover_images
+    if project.global_info:
+        project.aspectRatio = (project.global_info or {}).get("aspectRatio")
+    project.description = (project.global_info or {}).get("notes")
+    project.share_count = int(
+        db.query(func.count(ProjectShare.id)).filter(ProjectShare.project_id == project.id).scalar() or 0
+    )
+    _attach_project_flags(project, current_user, db)
+    # Force temp-view markers for peek entry even if flags change later.
+    project.is_temp_view = True
+    project.can_edit = False
+    project.is_owner = False
     return project
 
 
@@ -22003,7 +22080,7 @@ def update_project(
     if project.global_info:
         project.aspectRatio = project.global_info.get('aspectRatio')
     project.description = (project.global_info or {}).get("notes")
-    _attach_project_flags(project, current_user)
+    _attach_project_flags(project, current_user, db)
     return project
 
 
