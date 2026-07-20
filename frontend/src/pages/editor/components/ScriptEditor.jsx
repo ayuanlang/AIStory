@@ -990,7 +990,7 @@ const assertSceneBeatsMinLength = (sceneText, sceneId = '') => (
     resolveSceneBeatsBodyForStage22(sceneText, sceneId).bodyText
 );
 
-/** Legacy 【主环境】…【衍生环境】 when ENV_BLOCK markers are absent. */
+/** Legacy 【主环境】…【未落环境实体清单】…【衍生环境】 when ENV_BLOCK markers are absent. */
 const extractLegacyEnvBlockFromSceneText = (sceneText) => {
     const text = String(sceneText || '');
     const mainIdx = text.search(/【主环境】/);
@@ -1003,7 +1003,7 @@ const extractLegacyEnvBlockFromSceneText = (sceneText) => {
     return `[ENV_BLOCK_START]\n${body}\n[ENV_BLOCK_END]`;
 };
 
-/** Extract `[ENV_BLOCK_START]…[ENV_BLOCK_END]` (主环境+衍生环境). */
+/** Extract `[ENV_BLOCK_START]…[ENV_BLOCK_END]` (主环境+未落环境实体清单+衍生环境). */
 const extractEnvBlockFromSceneText = (sceneText) => {
     const text = String(sceneText || '');
     if (!text.trim()) return '';
@@ -2968,7 +2968,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const slimScriptText = buildAssetsExtractionScriptFromAdapted(adaptedScriptText) || adaptedScriptText;
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -8854,7 +8854,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const resolveScriptOptBeatsContent = useCallback(() => {
         // Editor/import should show the full Stage 1 adapted script per scene
-        // (场景头、主/衍生环境、观察视角与空间建置、Beats 等)，not the Stage 2.1
+        // (场景头、主环境/未落环境实体清单/衍生环境、观察视角与空间建置、Beats 等)，not the Stage 2.1
         // slim ENV+Beats extraction used only as assets_extraction LLM input.
         const adapted = String(
             currentStageOutputs?.stages?.stage1?.outputs?.adapted_script?.content
@@ -9128,7 +9128,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 kind: 'script_opt',
                 titleZh: '剧本统筹 · 完整剧本',
                 titleEn: 'Script Coordination · Full Script',
-                hintZh: '展示/编辑优化后剧本的完整内容：各场场景头、主/衍生环境、观察视角与空间建置、Beats 等（不含修改说明与全局风格信息）。',
+                hintZh: '展示/编辑优化后剧本的完整内容：各场场景头、主环境/未落环境实体清单/衍生环境、观察视角与空间建置、Beats 等（不含修改说明与全局风格信息）。',
                 hintEn: 'View/edit the full optimized script: per-scene headers, main/derived environments, spatial setup, beats, etc. (excludes revision notes and global-style info).',
                 content,
                 editing: false,
