@@ -1507,6 +1507,33 @@ const isSuccessfulSceneImportReport = (importReport) => (
     && resolveSceneImportAppliedCount(importReport) > 0
 );
 
+/**
+ * Resolve which orchestration Scene IDs already exist as workspace Scene rows.
+ * Used by full-pipeline prechecks so existing scenes are not re-orchestrated.
+ */
+const resolveExistingWorkspaceSceneIds = async ({
+    fetchScenesFn,
+    episodeId,
+    sceneIds = [],
+}) => {
+    const wanted = (Array.isArray(sceneIds) ? sceneIds : [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean);
+    const existing = new Set();
+    const stableEpisodeId = Number(episodeId || 0);
+    if (!wanted.length || !stableEpisodeId || typeof fetchScenesFn !== 'function') {
+        return existing;
+    }
+    const dbScenes = await fetchScenesFn(stableEpisodeId).catch(() => []);
+    const rows = Array.isArray(dbScenes) ? dbScenes : [];
+    for (const sceneId of wanted) {
+        if (findDbSceneByPatchSceneId(rows, sceneId)) {
+            existing.add(sceneId);
+        }
+    }
+    return existing;
+};
+
 const canSkipBatchSceneImport = async ({
     fetchScenesFn,
     episodeId,
@@ -2665,6 +2692,82 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return { isSubjectRow: false, type: '' };
     }, [normalizeSubjectIndexTypeForAssetTask]);
 
+    const extractSubjectIndexRowNames = useCallback((line) => {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return [];
+        const names = [];
+        const pushName = (raw) => {
+            const token = normalizeEntityToken(raw);
+            if (token) names.push(token);
+        };
+        const kvPatterns = [
+            /\bsubject_name_zh\s*=\s*([^|`\n]+)/i,
+            /\bsubject_name_exact\s*=\s*([^|`\n]+)/i,
+            /\bsubject_name_en\s*=\s*([^|`\n]+)/i,
+            /\bsubject_name\s*=\s*([^|`\n]+)/i,
+        ];
+        for (const pattern of kvPatterns) {
+            const match = trimmed.match(pattern);
+            if (match?.[1]) pushName(match[1]);
+        }
+        const normalizedPipeLine = trimmed.replace(/^\s*>\s*/, '').replace(/^[-*+]\s+/, '').trim();
+        if (normalizedPipeLine.includes('|')) {
+            const cells = normalizedPipeLine.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+            // subject_no | subject_type | subject_name_zh | subject_name_en | ...
+            if (cells.length >= 3) pushName(cells[2]);
+            if (cells.length >= 4) pushName(cells[3]);
+        }
+        return Array.from(new Set(names));
+    }, []);
+
+    const buildExistingEntityNameSet = useCallback((entities = []) => {
+        const names = new Set();
+        (Array.isArray(entities) ? entities : []).forEach((entity) => {
+            [
+                entity?.name,
+                entity?.name_en,
+                entity?.subject_name_zh,
+                entity?.subject_name_en,
+                entity?.subject_name_exact,
+                entity?.subject_name,
+            ].forEach((raw) => {
+                const token = normalizeEntityToken(raw);
+                if (token) names.add(token);
+            });
+        });
+        return names;
+    }, []);
+
+    const filterSubjectIndexExcludingExistingEntities = useCallback((subjectIndexSourceText, existingNameSet) => {
+        const source = String(subjectIndexSourceText || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
+        const existing = existingNameSet instanceof Set ? existingNameSet : new Set();
+        if (!source || !existing.size) {
+            return { text: source, totalRows: 0, keptRows: 0, skippedRows: 0 };
+        }
+        let totalRows = 0;
+        let keptRows = 0;
+        let skippedRows = 0;
+        const filteredLines = source.split('\n').filter((line) => {
+            const detected = detectSubjectIndexLineType(line);
+            if (!detected.isSubjectRow) return true;
+            totalRows += 1;
+            const rowNames = extractSubjectIndexRowNames(line);
+            const alreadyExists = rowNames.some((name) => existing.has(name));
+            if (alreadyExists) {
+                skippedRows += 1;
+                return false;
+            }
+            keptRows += 1;
+            return true;
+        });
+        return {
+            text: filteredLines.join('\n').trim(),
+            totalRows,
+            keptRows,
+            skippedRows,
+        };
+    }, [detectSubjectIndexLineType, extractSubjectIndexRowNames]);
+
     const filterSubjectIndexTextForAssetTask = useCallback((subjectIndexSourceText, assetTaskKey, targetEntityTypes = null) => {
         const source = String(subjectIndexSourceText || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
         let allowedTypes = getSubjectIndexTypesForAssetTask(assetTaskKey);
@@ -3077,6 +3180,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         open: false,
         mode: 'all',
         sceneId: '',
+        dbSceneId: null,
         candidates: [],
         loading: false,
     });
@@ -9977,6 +10081,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         functionName = 'script_analysis',
         sceneAnalysisModePayload = null,
         targetSceneUnits = null,
+        // Full pipeline: skip LLM for scenes already present in workspace.
+        // Manual scene-beats rerun must pass false.
+        skipExistingScenes = true,
         onTaskCreated,
     }) => {
         const stage2_2PromptRes = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_2_2_beats_generation.md');
@@ -10121,7 +10228,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 episodePrefix
             )
             : [];
-        const unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
+        let unitsToProcess = explicitSceneUnits.length > 0 ? explicitSceneUnits : sceneUnits;
         // Single source of truth for storyboard kickoff: orchestration unit Scene IDs only.
         orchestrationCanonicalSceneIdsRef.current = new Set(
             (unitsToProcess || [])
@@ -10137,6 +10244,95 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 'info'
             );
         }
+
+        // Full-pipeline precheck: do not re-orchestrate scenes already in the workspace DB.
+        const shouldSkipExistingScenes = Boolean(skipExistingScenes)
+            && String(sceneAnalysisModePayload || '').trim().toLowerCase() !== 'scene_beats_only';
+        const skippedExistingSceneUnits = [];
+        if (shouldSkipExistingScenes && activeEpisode?.id && unitsToProcess.length > 0) {
+            const existingIds = await resolveExistingWorkspaceSceneIds({
+                fetchScenesFn: fetchScenes,
+                episodeId: activeEpisode.id,
+                sceneIds: unitsToProcess.map((unit) => unit?.sceneId),
+            });
+            if (existingIds.size > 0) {
+                const pending = [];
+                for (const unit of unitsToProcess) {
+                    const sceneId = String(unit?.sceneId || '').trim();
+                    if (sceneId && existingIds.has(sceneId)) {
+                        skippedExistingSceneUnits.push(unit);
+                    } else {
+                        pending.push(unit);
+                    }
+                }
+                if (skippedExistingSceneUnits.length > 0) {
+                    const skippedLabels = skippedExistingSceneUnits
+                        .map((unit) => String(unit?.sceneId || '').trim())
+                        .filter(Boolean);
+                    onLog?.(
+                        t(
+                            `[${label}] 预查工作区：${skippedExistingSceneUnits.length} 场已入库，跳过场景编排 LLM（${skippedLabels.join('、')}）`,
+                            `[${label}] Workspace precheck: skip orchestration LLM for ${skippedExistingSceneUnits.length} existing scene(s) (${skippedLabels.join(', ')})`
+                        ),
+                        'info'
+                    );
+                    beginSceneOrchestrationPanelTracking(
+                        Math.max(unitsToProcess.length, skippedExistingSceneUnits.length + pending.length)
+                    );
+                    for (const unit of skippedExistingSceneUnits) {
+                        const sceneId = String(unit?.sceneId || '').trim();
+                        if (!sceneId) continue;
+                        orchestrationLiveImportedScenesRef.current.add(sceneId);
+                        publishSceneOrchestrationPanelStatus({
+                            sceneId,
+                            phase: 'imported',
+                            sceneOrder: unit?.sceneOrder,
+                            totalScenes: Math.max(unitsToProcess.length, skippedExistingSceneUnits.length + pending.length),
+                        });
+                        // Storyboard kickoff has its own per-scene shots precheck (!force).
+                        void kickoffStoryboardForImportedScene({
+                            markerSceneId: sceneId,
+                            sceneOrder: unit?.sceneOrder,
+                            force: false,
+                        });
+                    }
+                }
+                unitsToProcess = pending;
+            }
+        }
+
+        if (shouldSkipExistingScenes && skippedExistingSceneUnits.length > 0 && unitsToProcess.length <= 0) {
+            onLog?.(
+                t(
+                    `[${label}] 全部场次已在工作区存在，跳过场景编排。`,
+                    `[${label}] All scenes already exist in workspace; skipping scene orchestration.`
+                ),
+                'success'
+            );
+            let sceneMarkdownPatchMap = {};
+            try {
+                const rawJson = String(
+                    parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '')
+                        ?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
+                ).trim();
+                sceneMarkdownPatchMap = parseSceneMarkdownBySceneMap(rawJson) || {};
+            } catch (_) {
+                sceneMarkdownPatchMap = {};
+            }
+            return {
+                perSceneParallel: true,
+                sceneMarkdownPatchMap,
+                stage2_2Text: mergeStage2_2SceneTableOutputs(
+                    Object.values(sceneMarkdownPatchMap)
+                        .map((entry) => String(entry?.markdown || '').trim())
+                        .filter(Boolean)
+                ),
+                stage2_2Result: null,
+                stage2_2Check: { ok: true, normalizedText: '' },
+                skippedExistingSceneCount: skippedExistingSceneUnits.length,
+            };
+        }
+
         // Preflight: resolve Beats (extract → full-scene fallback); error only if final body still too short.
         const beatsTooShortErrors = [];
         for (const unit of unitsToProcess) {
@@ -10596,6 +10792,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         throw new Error(lastError || `${label} failed after ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} automatic retries.`);
     }, [
+        activeEpisode?.ai_stage_outputs,
         activeEpisode?.id,
         analysisAttentionNotes,
         awaitAnalyzeSceneWithRecovery,
@@ -10609,13 +10806,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         extractPerSceneOutputsFromResult,
         extractStage1AdaptedScriptBody,
         fetchPrompt,
+        fetchScenes,
         getEpisodeProgressSnapshot,
         hasSubjectIndexStructure,
         importSingleSceneDuringOrchestration,
+        kickoffStoryboardForImportedScene,
         logStage2_2Diagnostics,
         mergeStage2_2SceneTableOutputs,
         onLog,
+        parseSceneMarkdownBySceneMap,
         parseSceneUnitsFromScriptMarkers,
+        parseStageOutputsObject,
         projectId,
         publishSceneOrchestrationPanelStatus,
         resetSceneOrchestrationProgress,
@@ -10745,6 +10946,56 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 '缺少资产清单（Subject Index），无法继续资产生成。请先完成第二阶段资产提取后再重试。',
                 'Missing Subject Index asset inventory. Complete Stage 2.1 asset extraction before asset generation.'
             ));
+        }
+
+        // Full pipeline: drop Subject Index rows whose entities already exist in DB.
+        // Manual single/category asset rerun (isRetryPhase2) must not use this gate.
+        const skipExistingAssets = options?.skipExistingAssets !== false && !options?.isRetryPhase2;
+        let subjectIndexTextForDesign = subjectIndexText;
+        if (skipExistingAssets && projectId && activeEpisode?.id && typeof fetchEntities === 'function') {
+            try {
+                const existingEntities = await fetchEntities(projectId, {
+                    episode_id: Number(activeEpisode.id) || undefined,
+                }).catch(() => []);
+                const existingNames = buildExistingEntityNameSet(existingEntities);
+                const filteredExisting = filterSubjectIndexExcludingExistingEntities(
+                    subjectIndexTextForDesign,
+                    existingNames
+                );
+                if (filteredExisting.skippedRows > 0) {
+                    onLog?.(
+                        t(
+                            `[Stage 3 Asset Design] 预查实体表：已跳过 ${filteredExisting.skippedRows}/${filteredExisting.totalRows} 条已存在资产，保留 ${filteredExisting.keptRows} 条待设计`,
+                            `[Stage 3 Asset Design] Entity precheck: skipped ${filteredExisting.skippedRows}/${filteredExisting.totalRows} existing asset row(s); ${filteredExisting.keptRows} remain for design`
+                        ),
+                        'info'
+                    );
+                    subjectIndexTextForDesign = filteredExisting.text;
+                }
+                if (filteredExisting.totalRows > 0 && filteredExisting.keptRows <= 0) {
+                    onLog?.(
+                        t(
+                            '[Stage 3 Asset Design] 本集资产均已存在于实体表，跳过资产设计 LLM。',
+                            '[Stage 3 Asset Design] All episode assets already exist in entities table; skipping asset-design LLM.'
+                        ),
+                        'success'
+                    );
+                    markEnvironmentAssetDesignReady('assets-all-existing');
+                    return {
+                        ...emptyReport,
+                        skippedExistingAssets: true,
+                        skippedExistingAssetRows: filteredExisting.skippedRows,
+                    };
+                }
+            } catch (precheckErr) {
+                onLog?.(
+                    t(
+                        `[Stage 3 Asset Design] 实体预查失败，继续完整资产设计：${precheckErr?.message || precheckErr}`,
+                        `[Stage 3 Asset Design] Entity precheck failed; continuing full asset design: ${precheckErr?.message || precheckErr}`
+                    ),
+                    'warning'
+                );
+            }
         }
 
         phase2GenerationInFlightRef.current = true;
@@ -10891,7 +11142,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }))
             );
 
-            const pureSubjectIndexText = extractPureSubjectIndexText(subjectIndexText);
+            const pureSubjectIndexText = extractPureSubjectIndexText(subjectIndexTextForDesign);
             
             const designProjectContextSection = buildStage1ProjectContextSection()
                 .replace('Project Context (prepend and treat as high-priority constraints):', 'Project Context (prepend and treat as high-priority constraints for generating design assets):')
@@ -10988,6 +11239,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     specificSubjectIndexText = filteredSubjectIndex.text;
                     if (filteredSubjectIndex.totalRows > 0) {
                         onLog?.(`[Stage 3 Asset Design] Subject Index filtered key=${pData.key || `slot${index + 1}`} kept=${filteredSubjectIndex.keptRows}/${filteredSubjectIndex.totalRows}`, 'info');
+                    }
+                    // Full pipeline: category has no remaining rows after existing-entity filter → skip LLM.
+                    if (skipExistingAssets && filteredSubjectIndex.keptRows <= 0) {
+                        onLog?.(
+                            t(
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 无需生成（索引无待设计行或均已存在），跳过 LLM`,
+                                `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} has no pending rows; skipping LLM`
+                            ),
+                            'info'
+                        );
+                        assetsGenCompletedCount += 1;
+                        if (pData.key && !assetsGenCompletedKeys.includes(pData.key)) {
+                            assetsGenCompletedKeys.push(pData.key);
+                        }
+                        if (pData.key === 'environments') {
+                            markEnvironmentAssetDesignReady(`env-skip-existing:${subtaskTraceId}`);
+                        }
+                        return {
+                            key: pData.key,
+                            traceId: subtaskTraceId,
+                            importSessionId: subtaskImportSessionId,
+                            result: null,
+                            analysisText: '',
+                            subjectsJson: null,
+                            hasImportableSubjects: false,
+                            subtaskImportReport: null,
+                            subtaskImportError: '',
+                            skippedExisting: true,
+                        };
                     }
                     const subtaskRequestedTargets = Array.isArray(requestedTargetFilters) && requestedTargetFilters.length > 0
                         ? requestedTargetFilters
@@ -11346,6 +11626,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         analysisAttentionNotes, selectedReuseSubjectAssets, extractAnalysisTextFromResult, doImportText,
         isSuperuser, setSystemPrompt, setUserPrompt, setShowAnalysisModal, functionApiConfigs,
         project, extractPureSubjectIndexText, extractAnalysisSections, filterSubjectIndexTextForAssetTask,
+        filterSubjectIndexExcludingExistingEntities, buildExistingEntityNameSet, fetchEntities,
         hasSubjectIndexStructure, hasPersistedEnvironmentAssetDesign, markEnvironmentAssetDesignReady,
         throwIfAnalysisStopped, registerActiveAnalysisTask, isTaskCanceledError, createAnalysisCanceledError,
         buildStage2_2UserInputFromStage1, clearAnalysisTaskMarker, finalizeAnalysisFlowHistoryForPhase,
@@ -13466,6 +13747,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     open: false,
                     mode: 'all',
                     sceneId: '',
+                    dbSceneId: null,
                     candidates: [],
                     loading: false,
                 });
@@ -13806,6 +14088,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return runPostImportSceneSubjectPipeline(mockImportReport, dummyAnalyzedText, {
                     explicitSubjectIndexText: resolvedSubjectIndexText,
                     parallelWithScenes: needsSceneOrchestration,
+                    skipExistingAssets: true,
                 });
             };
 
@@ -13826,6 +14109,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     stage1SourceText,
                     startedAt,
                     baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
+                    skipExistingScenes: true,
                     onTaskCreated: (taskId) => {
                         setActiveAnalysisTaskId(String(taskId || '').trim());
                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
@@ -15019,6 +15303,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         stage1SourceText: stage1PhaseRawText,
                         startedAt: phaseMarks.llmReturnedAt || startedAt,
                         baselineText: baselineAnalysisText,
+                        // Force regenerate bypasses workspace precheck; normal full pipeline skips existing scenes.
+                        skipExistingScenes: !forceRegenerate,
                         onTaskCreated: (taskId) => {
                             const stableTaskId = String(taskId || '').trim();
                             setActiveAnalysisTaskId(stableTaskId);
@@ -15129,6 +15415,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     {
                         explicitSubjectIndexText: stage2SubjectIndexForAssets,
                         parallelWithScenes: true,
+                        skipExistingAssets: !forceRegenerate,
                     }
                 );
 
@@ -15723,6 +16010,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     stage1SourceText,
                     startedAt,
                     baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
+                    // Explicit Stage 2 restart: regenerate even if leftover rows remain.
+                    skipExistingScenes: false,
                     onTaskCreated: (taskId) => {
                         setActiveAnalysisTaskId(String(taskId || '').trim());
                         saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
@@ -15881,6 +16170,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 {
                     explicitSubjectIndexText: globalStage2_1Text || stage2_1SubjectIndexText,
                     parallelWithScenes: true,
+                    skipExistingAssets: false,
                 }
             );
 
@@ -16183,6 +16473,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 startedAt,
                 baselineText: String(activeEpisode?.ai_scene_analysis_result || '').trim(),
                 sceneAnalysisModePayload: 'scene_beats_only',
+                // Manual beats rerun must regenerate even when workspace scenes already exist.
+                skipExistingScenes: false,
                 onTaskCreated: (taskId) => {
                     setActiveAnalysisTaskId(String(taskId || '').trim());
                     saveAnalysisTaskMarker(activeEpisode?.id, { taskId, startedAt, phase: 'scene_beats' });
@@ -16623,64 +16915,101 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!episodeId || typeof fetchScenes !== 'function') return [];
         const dbScenes = await fetchScenes(episodeId).catch(() => []);
         const progressItems = storyboardTaskProgressRef.current?.items || {};
-        const canonicalMarkers = [
+
+        // Rerun UI source of truth = workspace Scene rows (same as 齐套 panel).
+        // Live orchestration refs are cleared after analysis; markdown keys may not
+        // match DB scene_no — never let a mismatched allowlist hide real DB scenes.
+        const liveMarkers = [
             ...(orchestrationCanonicalSceneIdsRef.current || []),
             ...(orchestrationLiveImportedScenesRef.current || []),
         ];
-        // Prefer orchestration Scene IDs; fall back to scene_markdown_by_scene keys.
-        let allowedMarkers = canonicalMarkers;
-        if (!allowedMarkers.length) {
+        let preferredMarkers = liveMarkers;
+        if (!preferredMarkers.length) {
             try {
                 const rawJson = String(
                     parseStageOutputsObject(activeEpisode?.ai_stage_outputs || '')
                         ?.stages?.stage2?.outputs?.scene_markdown_by_scene?.content || ''
                 ).trim();
                 const byScene = parseSceneMarkdownBySceneMap(rawJson);
-                allowedMarkers = Object.keys(byScene || {});
+                preferredMarkers = Object.keys(byScene || {});
             } catch (_) {
-                allowedMarkers = [];
+                preferredMarkers = [];
             }
         }
-        const scopedScenes = filterDbScenesByCanonicalMarkers(dbScenes, allowedMarkers);
-        return scopedScenes
-            .filter((scene) => Number(scene?.id || 0) > 0)
-            .map((scene, index) => {
-                const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim();
-                if (!marker) return null;
-                const progress = progressItems[marker] || {};
-                const sceneOrder = Number(
-                    progress?.sceneOrder
-                    || deriveSceneOrderFromSceneId(marker)
-                    || index + 1
-                ) || (index + 1);
-                return {
+
+        let scopedScenes = filterDbScenesByCanonicalMarkers(dbScenes, preferredMarkers);
+        // If allowlist matched nothing but DB has scenes, fall back to all workspace scenes.
+        if ((!Array.isArray(scopedScenes) || scopedScenes.length <= 0)
+            && Array.isArray(dbScenes)
+            && dbScenes.length > 0) {
+            scopedScenes = dbScenes;
+        }
+
+        // Dedupe by normalized Scene ID (legacy double-import); newest db id wins.
+        const bestByMarker = new Map();
+        for (const scene of (Array.isArray(scopedScenes) ? scopedScenes : [])) {
+            const dbId = Number(scene?.id || 0);
+            if (!Number.isFinite(dbId) || dbId <= 0) continue;
+            const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
+                || `#${dbId}`;
+            const token = normalizeSceneIdToken(marker) || marker;
+            const prev = bestByMarker.get(token);
+            if (!prev || dbId > Number(prev.dbSceneId || 0)) {
+                bestByMarker.set(token, {
                     sceneId: marker,
-                    dbSceneId: Number(scene.id),
-                    sceneOrder,
+                    dbSceneId: dbId,
+                    sceneOrder: Number(
+                        progressItems[marker]?.sceneOrder
+                        || deriveSceneOrderFromSceneId(marker)
+                        || 0
+                    ) || 0,
                     displayLabel: String(scene?.scene_name || marker).trim() || marker,
-                    status: String(progress?.status || '').trim().toLowerCase(),
-                    error: String(progress?.error || '').trim(),
-                };
-            })
-            .filter(Boolean)
+                    status: String(progressItems[marker]?.status || '').trim().toLowerCase(),
+                    error: String(progressItems[marker]?.error || '').trim(),
+                });
+            }
+        }
+        const candidates = [...bestByMarker.values()]
+            .map((item, index) => ({
+                ...item,
+                sceneOrder: Number(item.sceneOrder) || (index + 1),
+            }))
             .sort((left, right) => {
                 if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
                     return (left.sceneOrder || 0) - (right.sceneOrder || 0);
                 }
                 return String(left.sceneId).localeCompare(String(right.sceneId));
             });
+
+        // Seed canonical set so force/non-force kickoffs stay aligned with workspace scenes.
+        if (candidates.length > 0) {
+            const nextCanonical = new Set(
+                candidates.map((item) => String(item?.sceneId || '').trim()).filter(Boolean)
+            );
+            if (nextCanonical.size > 0) {
+                orchestrationCanonicalSceneIdsRef.current = nextCanonical;
+            }
+        }
+        return candidates;
     }, [activeEpisode?.ai_stage_outputs, activeEpisode?.id, parseSceneMarkdownBySceneMap, parseStageOutputsObject]);
 
     const executeStoryboardRerun = useCallback(async ({
         mode = 'all',
         sceneId = '',
+        dbSceneId = null,
         candidates = [],
     } = {}) => {
         const list = Array.isArray(candidates) ? candidates : [];
         const rerunMode = String(mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
         const targetSceneId = String(sceneId || '').trim();
+        const targetDbId = Number(dbSceneId || 0);
         const targets = rerunMode === 'single'
-            ? list.filter((item) => String(item?.sceneId || '').trim() === targetSceneId)
+            ? list.filter((item) => {
+                if (Number.isFinite(targetDbId) && targetDbId > 0) {
+                    return Number(item?.dbSceneId || 0) === targetDbId;
+                }
+                return String(item?.sceneId || '').trim() === targetSceneId;
+            })
             : list;
         if (!targets.length) {
             alert(t('没有可重跑的分镜生成场景。', 'No storyboard scenes available to rerun.'));
@@ -16736,6 +17065,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             open: true,
             mode: 'all',
             sceneId: '',
+            dbSceneId: null,
             candidates: [],
             loading: true,
         });
@@ -16750,6 +17080,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 open: true,
                 mode: candidates.length === 1 ? 'single' : 'all',
                 sceneId: candidates[0]?.sceneId || '',
+                dbSceneId: Number(candidates[0]?.dbSceneId || 0) || null,
                 candidates,
                 loading: false,
             });
@@ -16765,16 +17096,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const confirmStoryboardRerunSelection = useCallback(async () => {
         const mode = String(storyboardRerunModal.mode || 'all').trim().toLowerCase() === 'single' ? 'single' : 'all';
         const sceneId = String(storyboardRerunModal.sceneId || '').trim();
+        const dbSceneId = Number(storyboardRerunModal.dbSceneId || 0) || null;
         const candidates = Array.isArray(storyboardRerunModal.candidates) ? storyboardRerunModal.candidates : [];
-        if (mode === 'single' && !sceneId) {
+        if (mode === 'single' && !sceneId && !dbSceneId) {
             alert(t('请先选择要重跑镜头的场景。', 'Select a scene to rerun storyboard first.'));
             return;
         }
         setStoryboardRerunModal((prev) => ({ ...prev, open: false }));
-        await executeStoryboardRerun({ mode, sceneId, candidates });
+        await executeStoryboardRerun({ mode, sceneId, dbSceneId, candidates });
     }, [
         executeStoryboardRerun,
         storyboardRerunModal.candidates,
+        storyboardRerunModal.dbSceneId,
         storyboardRerunModal.mode,
         storyboardRerunModal.sceneId,
         t,
@@ -20291,7 +20624,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                 {t('加载中...', 'Loading...')}
                                             </div>
                                         ) : storyboardRerunModal.candidates.length > 0 ? storyboardRerunModal.candidates.map((item) => {
-                                            const active = storyboardRerunModal.sceneId === item.sceneId;
+                                            const active = Number(storyboardRerunModal.dbSceneId || 0) > 0
+                                                ? Number(storyboardRerunModal.dbSceneId) === Number(item.dbSceneId)
+                                                : storyboardRerunModal.sceneId === item.sceneId;
                                             const statusLabel = item.status === 'completed'
                                                 ? t('已完成', 'Done')
                                                 : item.status === 'failed'
@@ -20301,9 +20636,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                         : t('未启动', 'Idle');
                                             return (
                                                 <button
-                                                    key={`${item.dbSceneId}-${item.sceneId}`}
+                                                    key={`sb-rerun-${item.dbSceneId}`}
                                                     type="button"
-                                                    onClick={() => setStoryboardRerunModal((prev) => ({ ...prev, sceneId: item.sceneId }))}
+                                                    onClick={() => setStoryboardRerunModal((prev) => ({
+                                                        ...prev,
+                                                        sceneId: item.sceneId,
+                                                        dbSceneId: Number(item.dbSceneId || 0) || null,
+                                                    }))}
                                                     className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${active ? 'border-sky-300/60 bg-sky-500/20 text-sky-50' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/80'}`}
                                                 >
                                                     <div className="text-sm font-semibold">{item.displayLabel || item.sceneId}</div>
