@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.time_utils import now_bj_iso
 from app.db.session import SessionLocal
 from app.models.all_models import Entity, Project, User
 from app.schemas.generation import GenerationRequest

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict, Optional
 
+from app.core.time_utils import now_bj_iso
 from app.services.generation_runtime.job_store import (
     IMAGE_JOB_LOCK,
     IMAGE_JOB_STORE,
