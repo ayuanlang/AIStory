@@ -388,8 +388,14 @@ def _run_callback_compensation_once() -> None:
         if not callback_ticket:
             continue
 
-        if _job_is_callback_waiting(job):
-            mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
+        # Defense in depth: even if pure_callback_mode is mis-detected, never treat
+        # provider-poll jobs (status submit/running, no callback_pending) as callback-loss.
+        # Those stay in-process on _submit_and_poll_*; requeueing them aborts the poll
+        # and false-exhausts with inflated ages (~28800s).
+        if not _job_is_callback_waiting(job):
+            continue
+
+        mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
 
         if not retry_enabled:
             continue
@@ -536,9 +542,15 @@ def _run_callback_compensation_once() -> None:
 
 
 def _callback_compensation_thread_main() -> None:
+    import sys
+
     while True:
         try:
-            _run_callback_compensation_once()
+            # Prefer the live module attribute so a process that importlib-reloads
+            # this module picks up compensation fixes without a stuck old closure.
+            mod = sys.modules.get(__name__)
+            run_once = getattr(mod, "_run_callback_compensation_once", _run_callback_compensation_once)
+            run_once()
         except Exception:
             logger.exception("[CallbackCompensation] worker loop failed")
         interval_seconds = _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600)
@@ -548,6 +560,10 @@ def _callback_compensation_thread_main() -> None:
 def _start_callback_compensation_worker() -> None:
     global _CALLBACK_COMPENSATION_STARTED
     if _CALLBACK_COMPENSATION_STARTED:
+        logger.info(
+            "[CallbackCompensation] worker already running | pure_callback_mode=%s",
+            _is_pure_callback_mode_enabled(),
+        )
         return
     with _CALLBACK_COMPENSATION_LOCK:
         if _CALLBACK_COMPENSATION_STARTED:
@@ -559,7 +575,10 @@ def _start_callback_compensation_worker() -> None:
         )
         thread.start()
         _CALLBACK_COMPENSATION_STARTED = True
-        logger.info("[CallbackCompensation] worker started")
+        logger.info(
+            "[CallbackCompensation] worker started | pure_callback_mode=%s",
+            _is_pure_callback_mode_enabled(),
+        )
 
 
 

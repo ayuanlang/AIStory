@@ -2,6 +2,7 @@
 """Analyze-scene async dedup table helpers."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,18 @@ _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS = max(15, int(os.getenv("ANALYZE_SCENE_DEDUP
 _ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS = max(
     30,
     int(os.getenv("ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS", "120") or 120),
+)
+_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS = max(
+    30,
+    int(os.getenv("ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS", "300") or 300),
+)
+_ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP = max(
+    2,
+    min(32, int(os.getenv("ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP", "12") or 12)),
+)
+_ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP = max(
+    20000,
+    int(os.getenv("ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP", "120000") or 120000),
 )
 _ANALYZE_SCENE_DEDUP_TABLE_READY = False
 _ANALYZE_SCENE_DEDUP_TABLE_LOCK = threading.Lock()

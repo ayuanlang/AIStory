@@ -261,12 +261,15 @@ from app.services import video_submit_dedup as _vsd
 globals().update({k:v for k,v in vars(_vsd).items() if not k.startswith('__')})
 
 from app.services.analyze_scene_dedup import (  # noqa: E402,F401
+    _ANALYZE_SCENE_CONTINUATION_SEGMENT_HARD_CAP,
     _ANALYZE_SCENE_DEDUP_LAST_PRUNE_TS,
     _ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS,
     _ANALYZE_SCENE_DEDUP_PRUNE_LOCK,
     _ANALYZE_SCENE_DEDUP_TABLE_LOCK,
     _ANALYZE_SCENE_DEDUP_TABLE_READY,
     _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS,
+    _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
+    _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
 )
 
 
