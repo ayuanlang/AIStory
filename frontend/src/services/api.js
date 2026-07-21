@@ -2322,25 +2322,68 @@ export const stopAllGenerationJobs = async (kind = 'all', { force = false } = {}
     return response?.data || {};
 };
 
+const isMediaParallelLimitError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    if (status !== 429) return false;
+    const detail = String(error?.response?.data?.detail || error?.message || '');
+    // Backend parallel-cap detail, plus generic 429 / vendor throttle.
+    return /并行|parallel|上限|is_active|Too Many|rate.?limit|RESOURCE_EXHAUSTED|请等待进行中的任务完成/i.test(detail)
+        || status === 429;
+};
+
+const waitWithCancel = async (totalMs, shouldCancel = null, sliceMs = 5000) => {
+    const deadline = Date.now() + Math.max(0, Number(totalMs) || 0);
+    const step = Math.max(200, Number(sliceMs) || 5000);
+    while (Date.now() < deadline) {
+        if (typeof shouldCancel === 'function' && shouldCancel()) {
+            return false;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await delay(Math.min(step, remaining));
+    }
+    return !(typeof shouldCancel === 'function' && shouldCancel());
+};
+
+/**
+ * Submit image/video jobs; on account parallel-cap 429, poll-wait for free slots
+ * (default 1 minute) then resubmit instead of failing out immediately.
+ */
 const postMediaGenerationSubmitWithParallelLimitRetry = async (path, payload, config = {}, options = {}) => {
-    const maxAttempts = Math.max(1, Number(options.maxAttempts || 6));
-    const baseDelayMs = Math.max(200, Number(options.baseDelayMs || 1500));
+    // Keep retrying while slots are full: image jobs often take minutes to finish.
+    const maxAttempts = Math.max(1, Number(options.maxAttempts || 120));
+    const pollIntervalMs = Math.max(
+        1000,
+        Number(
+            options.pollIntervalMs
+            ?? options.baseDelayMs
+            ?? 60_000
+        )
+    );
+    const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (shouldCancel?.()) {
+            const cancelError = new Error('Media generation submit cancelled while waiting for parallel slot');
+            cancelError.code = 'PARALLEL_LIMIT_WAIT_CANCELLED';
+            cancelError.cause = lastError;
+            throw cancelError;
+        }
         try {
             return await api.post(path, payload, config);
         } catch (error) {
             lastError = error;
-            const status = Number(error?.response?.status || 0);
-            if (status !== 429 || attempt >= maxAttempts) {
+            if (!isMediaParallelLimitError(error) || attempt >= maxAttempts) {
                 throw error;
             }
-            const detail = String(error?.response?.data?.detail || error?.message || '');
-            const isParallelLimit = /并行|parallel|上限|is_active/i.test(detail) || status === 429;
-            if (!isParallelLimit) {
-                throw error;
+            // Wait for in-flight image/video jobs to complete and free a slot, then resubmit.
+            const keptWaiting = await waitWithCancel(pollIntervalMs, shouldCancel);
+            if (!keptWaiting) {
+                const cancelError = new Error('Media generation submit cancelled while waiting for parallel slot');
+                cancelError.code = 'PARALLEL_LIMIT_WAIT_CANCELLED';
+                cancelError.cause = error;
+                throw cancelError;
             }
-            await delay(baseDelayMs * attempt);
         }
     }
     throw lastError || new Error('Media generation submit failed');
@@ -2351,6 +2394,9 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
         job_timeout_ms,
         job_poll_interval_ms,
         on_job_created,
+        shouldCancel,
+        parallel_limit_max_attempts,
+        parallel_limit_poll_ms,
         ...requestOptions
     } = options || {};
 
@@ -2408,6 +2454,14 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
             headers: {
                 'X-Idempotency-Key': idempotencyKey,
             },
+        }, {
+            shouldCancel,
+            ...(Number.isFinite(Number(parallel_limit_max_attempts))
+                ? { maxAttempts: Number(parallel_limit_max_attempts) }
+                : {}),
+            ...(Number.isFinite(Number(parallel_limit_poll_ms))
+                ? { pollIntervalMs: Number(parallel_limit_poll_ms) }
+                : {}),
         });
     } catch (error) {
         const status = Number(error?.response?.status || 0);
@@ -2490,7 +2544,13 @@ export const generateImage = async (prompt, provider = null, ref_image_url = nul
 }
 
 export const submitImageGenerationJob = async (prompt, provider = null, ref_image_url = null, options = {}, negative_prompt = null) => {
-    const effectiveOptions = { ...(options || {}) };
+    const {
+        shouldCancel,
+        parallel_limit_max_attempts,
+        parallel_limit_poll_ms,
+        ...restOptions
+    } = options || {};
+    const effectiveOptions = { ...restOptions };
     if (effectiveOptions.function_name) { 
         effectiveOptions.system_api_id = Number(localStorage.getItem('func_api_' + effectiveOptions.function_name)) || null; 
     }
@@ -2508,7 +2568,15 @@ export const submitImageGenerationJob = async (prompt, provider = null, ref_imag
         ...(callbackUrl ? { callback_url: callbackUrl } : {}),
         ...(effectiveNegativePrompt ? { negative_prompt: effectiveNegativePrompt } : {}),
     };
-    const response = await postMediaGenerationSubmitWithParallelLimitRetry('/generate/image/submit', payload);
+    const response = await postMediaGenerationSubmitWithParallelLimitRetry('/generate/image/submit', payload, {}, {
+        shouldCancel,
+        ...(Number.isFinite(Number(parallel_limit_max_attempts))
+            ? { maxAttempts: Number(parallel_limit_max_attempts) }
+            : {}),
+        ...(Number.isFinite(Number(parallel_limit_poll_ms))
+            ? { pollIntervalMs: Number(parallel_limit_poll_ms) }
+            : {}),
+    });
     return response.data;
 };
 
@@ -2523,10 +2591,13 @@ export const generateVideo = async (prompt, provider = null, ref_image_url = nul
         job_timeout_ms,
         job_poll_interval_ms,
         on_job_created,
+        shouldCancel,
+        parallel_limit_max_attempts,
+        parallel_limit_poll_ms,
         ...restOptions
     } = options || {};
 
-const requestOptions = { ...(restOptions || {}) };
+    const requestOptions = { ...(restOptions || {}) };
     let derivedFnName = requestOptions.function_name || 'generate_videos';
     requestOptions.function_name = derivedFnName;
     if (!Object.prototype.hasOwnProperty.call(restOptions || {}, 'system_api_id')) {
@@ -2558,6 +2629,14 @@ const requestOptions = { ...(restOptions || {}) };
             headers: {
                 'X-Idempotency-Key': idempotencyKey,
             },
+        }, {
+            shouldCancel,
+            ...(Number.isFinite(Number(parallel_limit_max_attempts))
+                ? { maxAttempts: Number(parallel_limit_max_attempts) }
+                : {}),
+            ...(Number.isFinite(Number(parallel_limit_poll_ms))
+                ? { pollIntervalMs: Number(parallel_limit_poll_ms) }
+                : {}),
         });
     } catch (error) {
         const status = Number(error?.response?.status || 0);

@@ -6777,6 +6777,10 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                         asset_type: 'subject',
                         ...(preferredImageSize ? { image_size: preferredImageSize } : {}),
                         negative_prompt: entityNegativePrompt,
+                        // When account parallel slots are full, poll-wait (1 min) and resubmit;
+                        // cancel promptly if the batch is stopped.
+                        shouldCancel: shouldStopBatchGenerate,
+                        parallel_limit_poll_ms: 60_000,
                         on_job_created: (jobId) => {
                             const stableJobId = String(jobId || '').trim();
                             if (!stableJobId) return;
@@ -7054,33 +7058,74 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             promoteReadyFromWaiting();
                         }
                     } else if (subjectBatchGenerateSessionRef.current === batchSessionId) {
-                        attemptsThisRound += 1;
-                        failedAttemptCount += 1;
-                        console.error(`Batch Gen Error for ${entity.name}`, settledTask.reason);
-                        onLog?.(
-                            t(
-                                `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`,
-                                `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${settledTask.reason?.response?.data?.detail || settledTask.reason?.message || 'Unknown error'}`
-                            ),
-                            'error'
+                        const failReason = settledTask.reason;
+                        const failDetail = String(
+                            failReason?.response?.data?.detail || failReason?.message || ''
                         );
-                        updateSubjectImageJobsAndStorage(prev => {
-                            const stableEntityId = String(entity?.id || '').trim();
-                            const existing = prev?.[stableEntityId];
-                            if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
-                                return prev;
+                        const failStatus = Number(failReason?.response?.status || 0);
+                        const isParallelLimitWaitCancel = failReason?.code === 'PARALLEL_LIMIT_WAIT_CANCELLED'
+                            || /cancelled while waiting for parallel slot/i.test(failDetail);
+                        const isParallelLimitError = failStatus === 429
+                            && /并行|parallel|上限|is_active|请等待进行中的任务完成/i.test(failDetail);
+
+                        if (isParallelLimitWaitCancel || shouldStopBatchGenerate()) {
+                            clearLocalSubjectImageJobState(entity.id);
+                        } else if (isParallelLimitError) {
+                            // Safety net if submit-level wait exhausted: re-queue and wait for a free slot.
+                            workQueue.unshift(entity);
+                            setLocalSubjectImageJobState(String(entity.id || ''), {
+                                status: 'queued',
+                                startedAt: 0,
+                                entityName: entity?.name || entity?.name_en || entity?.id,
+                                ...buildSubjectJobMeta(String(entity.id || ''), 'generate'),
+                            });
+                            onLog?.(
+                                t(
+                                    `并发已满，等待进行中的图片完成腾出空缺后再提交：${entity?.name || entity?.name_en || entity?.id}`,
+                                    `Parallel limit reached; waiting for in-flight images to free a slot before resubmitting: ${entity?.name || entity?.name_en || entity?.id}`
+                                ),
+                                'process'
+                            );
+                            if (activeTasks.size === 0) {
+                                updateGenerateBatchRuntimeState(true, {
+                                    current: countSettled(),
+                                    total: orderedToGenerate.length,
+                                    status: t(
+                                        `等待并发空缺中${getSceneContextLabel()}（约 1 分钟后重试）`,
+                                        `Waiting for a free parallel slot${getSceneContextLabel()} (retry in ~1 min)`
+                                    ),
+                                });
+                                await new Promise((resolve) => setTimeout(resolve, 60_000));
                             }
-                            const next = { ...(prev || {}) };
-                            delete next[stableEntityId];
-                            return next;
-                        });
-                        // Keep in remaining for a later round retry.
-                        setLocalSubjectImageJobState(String(entity.id || ''), {
-                            status: 'queued',
-                            startedAt: 0,
-                            entityName: entity?.name || entity?.name_en || entity?.id,
-                            ...buildSubjectJobMeta(String(entity.id || ''), 'generate'),
-                        });
+                        } else {
+                            attemptsThisRound += 1;
+                            failedAttemptCount += 1;
+                            console.error(`Batch Gen Error for ${entity.name}`, failReason);
+                            onLog?.(
+                                t(
+                                    `批量生图失败：${entity?.name || entity?.name_en || entity?.id} - ${failDetail || 'Unknown error'}`,
+                                    `Batch image generation failed: ${entity?.name || entity?.name_en || entity?.id} - ${failDetail || 'Unknown error'}`
+                                ),
+                                'error'
+                            );
+                            updateSubjectImageJobsAndStorage(prev => {
+                                const stableEntityId = String(entity?.id || '').trim();
+                                const existing = prev?.[stableEntityId];
+                                if (!stableEntityId || !existing || String(existing?.jobId || '').trim()) {
+                                    return prev;
+                                }
+                                const next = { ...(prev || {}) };
+                                delete next[stableEntityId];
+                                return next;
+                            });
+                            // Keep in remaining for a later round retry.
+                            setLocalSubjectImageJobState(String(entity.id || ''), {
+                                status: 'queued',
+                                startedAt: 0,
+                                entityName: entity?.name || entity?.name_en || entity?.id,
+                                ...buildSubjectJobMeta(String(entity.id || ''), 'generate'),
+                            });
+                        }
                     }
 
                     updateGenerateBatchRuntimeState(true, {

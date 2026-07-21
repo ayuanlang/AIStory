@@ -2310,6 +2310,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const analysisDetailLogsRef = useRef([]);
     const [analysisDetailLogs, setAnalysisDetailLogs] = useState([]);
     const analysisProgressDismissedRef = useRef(false);
+    const analysisProgressLogRef = useRef(null);
+    const analysisProgressLogStickToBottomRef = useRef(true);
     const latestIsAnalyzingRef = useRef(false);
     const latestAnalysisProgressUiRef = useRef({
         flowStatus: { phase: 'idle', message: '' },
@@ -3346,9 +3348,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     useEffect(() => {
-        if (!isAnalyzing) {
+        if (!isAnalyzing && !isRetryingPhase2) {
             setAnalysisHeartbeatTick(0);
-            analysisTimerStartedAtRef.current = 0;
             return;
         }
 
@@ -3357,18 +3358,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [isAnalyzing]);
+    }, [isAnalyzing, isRetryingPhase2]);
+
+    const analysisProgressStartedAt = useMemo(() => {
+        const candidates = [
+            analysisTimerStartedAtRef.current,
+            analysisUiReport?.startedAt,
+        ].map((value) => Number(value || 0));
+        const startedAt = candidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+        return startedAt;
+    }, [analysisUiReport?.startedAt, analysisHeartbeatTick, isAnalyzing, isRetryingPhase2]);
 
     const analysisHeartbeatElapsedMs = useMemo(() => {
-        if (!isAnalyzing) return 0;
-        const startedAt = Number(
-            analysisTimerStartedAtRef.current
-            || analysisUiReport?.startedAt
-            || 0
-        );
-        if (!Number.isFinite(startedAt) || startedAt <= 0) return 0;
+        const startedAt = Number(analysisProgressStartedAt || 0);
+        if (!Number.isFinite(startedAt) || startedAt <= 0) {
+            return Number(analysisUiReport?.durationMs || 0) || 0;
+        }
+        if (isAnalyzing || isRetryingPhase2) {
+            return Math.max(0, Date.now() - startedAt);
+        }
+        const reported = Number(analysisUiReport?.durationMs || 0);
+        if (Number.isFinite(reported) && reported > 0) return reported;
         return Math.max(0, Date.now() - startedAt);
-    }, [isAnalyzing, analysisUiReport?.startedAt, analysisHeartbeatTick]);
+    }, [
+        analysisProgressStartedAt,
+        analysisUiReport?.durationMs,
+        isAnalyzing,
+        isRetryingPhase2,
+        analysisHeartbeatTick,
+    ]);
+
+    useEffect(() => {
+        const el = analysisProgressLogRef.current;
+        if (!el || !analysisProgressLogStickToBottomRef.current) return;
+        el.scrollTop = el.scrollHeight;
+    }, [analysisFlowStatusHistory, analysisDetailLogs, analysisFlowStatus?.highlightHint]);
 
     const showAnalysisWarningStatus = useCallback((warnings = []) => {
         const uniqueWarnings = [...new Set((warnings || []).map(w => String(w || '').trim()).filter(Boolean))];
@@ -9886,12 +9910,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (prevPhase && prevPhase !== 'idle') return prev;
             return {
                 phase: resolvedPhase,
-                message: t('后台分析任务进行中，正在恢复连接...', 'Background analysis task in progress, reconnecting...'),
+                message: t('后台分析任务进行中，正在恢复进度监控...', 'Background analysis task in progress; restoring progress monitoring...'),
             };
         });
         setAnalysisUiReport((prev) => {
             if (prev?.status === 'running') {
-                return { ...prev, durationMs: elapsedMs };
+                return { ...prev, durationMs: elapsedMs, warning: '', error: '' };
             }
             return {
                 status: 'running',
@@ -11773,9 +11797,33 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         saveAnalysisTaskMarker, updateEpisodeAnalysisRun, resolveSelectedScriptAnalysisApiId,
     ]);
 
-    
-
-    
+    const applyBackgroundTaskMonitoringUi = useCallback((phase, startedAt = Date.now(), options = {}) => {
+        const resolvedPhase = String(phase || 'script_opt').trim() || 'script_opt';
+        const started = Number(startedAt || Date.now());
+        const elapsedMs = Math.max(0, Date.now() - (Number.isFinite(started) && started > 0 ? started : Date.now()));
+        const forAssets = resolvedPhase === 'assets_gen' || Number(options?.phaseNum) === 2;
+        beginAnalysisTimer(started);
+        if (forAssets) {
+            setIsAnalyzing(false);
+            setIsRetryingPhase2(true);
+        } else {
+            setIsAnalyzing(true);
+            setIsRetryingPhase2(false);
+        }
+        setAnalysisFlowStatus({
+            phase: resolvedPhase,
+            message: String(options?.message || '').trim()
+                || t('后台分析任务进行中，正在恢复进度监控...', 'Background analysis task in progress; restoring progress monitoring...'),
+        });
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt: Number(prev?.startedAt || started) || started,
+            durationMs: elapsedMs,
+            warning: '',
+            error: '',
+        }));
+    }, [beginAnalysisTimer, t]);
 
     const resumeAnalysisFromTaskMarker = useCallback(async (marker) => {
         if (!activeEpisode?.id || !marker?.taskId) return;
@@ -11820,6 +11868,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'assets_gen',
                 message: t("✨ 发现有个未完成的第三阶段任务，正在继续执行资产设计...", "Resuming Stage 3 asset design..."),
             });
+            let keepPhase2Monitoring = false;
             try {
                 const result = await awaitAnalyzeSceneWithRecovery(
                     () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
@@ -11905,16 +11954,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     mounted: scriptEditorMountedRef.current,
                 });
                 if (scriptEditorMountedRef.current) {
-                    setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第三阶段资产设计任务失败：${friendlyRecoveryError}`, `Failed to resume Stage 3 asset design task: ${friendlyRecoveryError}`) });
-                    setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
+                    if (canceled) {
+                        setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                        setAnalysisUiReport((prev) => ({ ...(prev || {}), status: 'warning', error: '', warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.') }));
+                    } else if (retainMarker) {
+                        // Background task still alive — restore monitoring only, no failure/retry prompt.
+                        keepPhase2Monitoring = true;
+                        applyBackgroundTaskMonitoringUi('assets_gen', startedAt, { phaseNum: 2 });
+                    } else {
+                        setAnalysisFlowStatus({ phase: 'failed', message: t(`恢复第三阶段资产设计任务失败：${friendlyRecoveryError}`, `Failed to resume Stage 3 asset design task: ${friendlyRecoveryError}`) });
+                        setAnalysisUiReport(prev => ({ ...prev, status: 'error', error: friendlyRecoveryError }));
+                    }
                 }
                 if (!retainMarker) {
                     clearAnalysisTaskMarker(activeEpisode.id);
                 }
             } finally {
                 analysisResumeInFlightRef.current = false;
-                setIsRetryingPhase2(false);
-                setActiveAnalysisTaskId('');
+                if (!keepPhase2Monitoring) {
+                    setIsRetryingPhase2(false);
+                    setActiveAnalysisTaskId('');
+                }
             }
             return;
         }
@@ -11937,6 +11997,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 phase: 'scene_beats',
                 message: t('🔄 发现未完成的场景编排任务，正在继续接收 Stage 2.2 输出...', 'Detected an unfinished scene beats task, resuming Stage 2.2 output...'),
             });
+            let keepSceneBeatsMonitoring = false;
             try {
                 const result = await awaitAnalyzeSceneWithRecovery(
                     () => waitForAsyncTask(marker.taskId, { interval: 2500, timeout: remainingTimeoutMs }),
@@ -12014,19 +12075,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     mounted: scriptEditorMountedRef.current,
                 });
                 if (scriptEditorMountedRef.current) {
-                    setAnalysisFlowStatus({
-                        phase: 'failed',
-                        message: t(`恢复场景编排任务失败：${friendlyRecoveryError}`, `Failed to resume scene beats task: ${friendlyRecoveryError}`),
-                    });
-                    setAnalysisUiReport(prev => ({ ...(prev || {}), status: 'error', error: friendlyRecoveryError }));
+                    if (canceled) {
+                        setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                        setAnalysisUiReport((prev) => ({ ...(prev || {}), status: 'warning', error: '', warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.') }));
+                    } else if (retainMarker) {
+                        keepSceneBeatsMonitoring = true;
+                        applyBackgroundTaskMonitoringUi('scene_beats', startedAt);
+                    } else {
+                        setAnalysisFlowStatus({
+                            phase: 'failed',
+                            message: t(`恢复场景编排任务失败：${friendlyRecoveryError}`, `Failed to resume scene beats task: ${friendlyRecoveryError}`),
+                        });
+                        setAnalysisUiReport(prev => ({ ...(prev || {}), status: 'error', error: friendlyRecoveryError }));
+                    }
                 }
                 if (!retainMarker) {
                     clearAnalysisTaskMarker(activeEpisode.id);
                 }
             } finally {
                 analysisResumeInFlightRef.current = false;
-                setIsAnalyzing(false);
-                setActiveAnalysisTaskId('');
+                if (!keepSceneBeatsMonitoring) {
+                    setIsAnalyzing(false);
+                    setActiveAnalysisTaskId('');
+                }
             }
             return;
         }
@@ -12250,34 +12321,48 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 mounted: scriptEditorMountedRef.current,
             });
             if (scriptEditorMountedRef.current) {
-                setAnalysisFlowStatus(
-                    canceled
-                        ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                        : retainMarker
-                            ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
-                            : { phase: 'failed', message: t(`恢复分析任务失败：${e?.message || e}`, `Failed to resume analysis task: ${e?.message || e}`) }
-                );
-                setAnalysisUiReport({
-                    status: canceled ? 'warning' : retainMarker ? 'warning' : 'failed',
-                    startedAt,
-                    durationMs: Date.now() - startedAt,
-                    phaseTimings,
-                    importReport,
-                    runtimeMeta,
-                    warning: canceled
-                        ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
-                        : retainMarker
-                            ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
-                            : '',
-                    error: canceled || retainMarker ? '' : (e?.message || String(e || '')),
-                });
+                if (canceled) {
+                    setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                    setAnalysisUiReport({
+                        status: 'warning',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings,
+                        importReport,
+                        runtimeMeta,
+                        warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
+                        error: '',
+                    });
+                } else if (retainMarker) {
+                    // Keep UI monitoring only — no failure/retry prompt while backend task lives.
+                    applyBackgroundTaskMonitoringUi(
+                        String(marker?.phase || '').trim() === 'scene_beats' ? 'scene_beats' : 'script_opt',
+                        startedAt,
+                    );
+                } else {
+                    setAnalysisFlowStatus({
+                        phase: 'failed',
+                        message: t(`恢复分析任务失败：${e?.message || e}`, `Failed to resume analysis task: ${e?.message || e}`),
+                    });
+                    setAnalysisUiReport({
+                        status: 'failed',
+                        startedAt,
+                        durationMs: Date.now() - startedAt,
+                        phaseTimings,
+                        importReport,
+                        runtimeMeta,
+                        warning: '',
+                        error: e?.message || String(e || ''),
+                    });
+                }
             }
             if (!retainMarker) {
                 clearAnalysisTaskMarker(activeEpisode.id);
             }
         } finally {
             analysisResumeInFlightRef.current = false;
-            if (!analysisRunInFlightRef.current && scriptEditorMountedRef.current) {
+            const markerStillLive = Boolean(loadAnalysisTaskMarker(activeEpisode?.id)?.taskId);
+            if (!analysisRunInFlightRef.current && scriptEditorMountedRef.current && !markerStillLive) {
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
                 analysisStopRequestedRef.current = false;
@@ -12286,6 +12371,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, [
         activeEpisode?.id,
         ANALYSIS_TASK_MAX_AGE_MS,
+        applyBackgroundTaskMonitoringUi,
         beginAnalysisTimer,
         buildSubjectConsistencyReport,
         clearAnalysisTaskMarker,
@@ -12328,6 +12414,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             phase2GenerationInFlight: phase2GenerationInFlightRef.current,
         });
         if (marker?.taskId || stillLive) return;
+
+        // Keep restored progress logs for review; only tear down a bootstrap "running" shell.
+        const ui = latestAnalysisProgressUiRef.current || {};
+        const phase = String(ui?.flowStatus?.phase || '').trim().toLowerCase();
+        const reportStatus = String(ui?.uiReport?.status || '').trim().toLowerCase();
+        const history = Array.isArray(ui?.flowHistory) ? ui.flowHistory : [];
+        if (['completed', 'warning', 'failed'].includes(phase)) return;
+        if (['completed', 'warning', 'failed', 'error'].includes(reportStatus)) return;
+        if (history.length > 0 && reportStatus !== 'running') return;
+        if (reportStatus !== 'running' && (!phase || phase === 'idle')) return;
+
         clearAnalysisProgressUiState(episodeId);
     }, [activeEpisode?.id, clearAnalysisProgressUiState, loadAnalysisTaskMarker]);
 
@@ -12396,10 +12493,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (canceled) {
                 setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
             } else if (retainMarker) {
-                setAnalysisFlowStatus({
-                    phase: 'warning',
-                    message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.'),
-                });
+                applyBackgroundTaskMonitoringUi(
+                    entry.phase === 2 ? 'assets_gen' : (entry.phase === 'scene_beats' ? 'scene_beats' : 'script_opt'),
+                    startedAt,
+                    { phaseNum: entry.phase === 2 ? 2 : undefined },
+                );
             } else {
                 setAnalysisFlowStatus({
                     phase: 'failed',
@@ -12413,7 +12511,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         } finally {
             analysisResumeInFlightRef.current = false;
-            if (!getEpisodeAnalysisRun(activeEpisode.id)?.promise) {
+            const stillHasRun = Boolean(getEpisodeAnalysisRun(activeEpisode.id)?.promise);
+            const markerStillLive = Boolean(loadAnalysisTaskMarker(activeEpisode.id)?.taskId);
+            if (!stillHasRun && !markerStillLive) {
                 setIsAnalyzing(false);
                 setActiveAnalysisTaskId('');
             }
@@ -12421,6 +12521,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return true;
     }, [
         activeEpisode?.id,
+        applyBackgroundTaskMonitoringUi,
         beginAnalysisTimer,
         isTaskCanceledError,
         loadAnalysisTaskMarker,
@@ -12486,7 +12587,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 clearAnalysisTaskMarker(episodeId);
                 releaseEpisodeAnalysisRun(episodeId);
                 detachedAnalysisRunEpisodeRef.current = null;
-                resetBootstrapAnalysisUiIfIdle();
+                setIsAnalyzing(false);
+                setIsRetryingPhase2(false);
+                setActiveAnalysisTaskId('');
+                // Soft-stop monitoring only — keep restored progress logs; no failure/retry prompt.
+                setAnalysisFlowStatus((prev) => {
+                    const phase = String(prev?.phase || '').trim().toLowerCase();
+                    if (!phase || phase === 'idle' || ['completed', 'warning', 'failed'].includes(phase)) return prev;
+                    return {
+                        phase: 'completed',
+                        message: t('后台分析任务已结束。', 'Background analysis task has finished.'),
+                    };
+                });
+                setAnalysisUiReport((prev) => {
+                    if (!prev || String(prev.status || '').trim().toLowerCase() !== 'running') return prev;
+                    const startedAt = Number(prev.startedAt || Date.now());
+                    return {
+                        ...prev,
+                        status: 'completed',
+                        error: '',
+                        warning: '',
+                        durationMs: Math.max(0, Date.now() - (Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now())),
+                    };
+                });
                 if (onLog) {
                     const reason = terminalStatus === 'not_found'
                         ? 'backend task no longer exists (server may have restarted)'
@@ -12520,6 +12643,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         reattachToExistingAnalysisRun,
         resetBootstrapAnalysisUiIfIdle,
         resumeAnalysisFromTaskMarker,
+        t,
     ]);
 
     useEffect(() => {
@@ -14876,31 +15000,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
             if (analysisCanceled) {
                 if (onLog) onLog('Analysis task canceled by user.', 'warning');
-            } else {
+            } else if (!retainMarker) {
                 if (onLog) onLog(`Analysis Failed: ${friendlyAnalysisError}`);
             }
-            setAnalysisFlowStatus(
-                analysisCanceled
-                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                    : retainMarker
-                        ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
-                        : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
-            );
-            setAnalysisUiReport({
-                status: analysisCanceled ? 'warning' : retainMarker ? 'warning' : 'failed',
-                startedAt,
-                durationMs: Date.now() - startedAt,
-                phaseTimings,
-                importReport: importReport,
-                runtimeMeta,
-                warning: analysisCanceled
-                    ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
-                    : retainMarker
-                        ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
-                        : '',
-                error: analysisCanceled || retainMarker ? '' : friendlyAnalysisError,
-            });
-            if (!analysisCanceled && !retainMarker) {
+            if (analysisCanceled) {
+                setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                setAnalysisUiReport({
+                    status: 'warning',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings,
+                    importReport: importReport,
+                    runtimeMeta,
+                    warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
+                    error: '',
+                });
+            } else if (retainMarker) {
+                applyBackgroundTaskMonitoringUi('script_opt', startedAt);
+            } else {
+                setAnalysisFlowStatus({ phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) });
+                setAnalysisUiReport({
+                    status: 'failed',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings,
+                    importReport: importReport,
+                    runtimeMeta,
+                    warning: '',
+                    error: friendlyAnalysisError,
+                });
                 alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
@@ -14915,9 +15043,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             analysisRunInFlightRef.current = false;
             if (!scriptEditorMountedRef.current) return;
-            setIsAnalyzing(false);
-            setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!retainMarker) {
+                setIsAnalyzing(false);
+                setActiveAnalysisTaskId('');
+                analysisStopRequestedRef.current = false;
+            } else {
+                setTimeout(() => { void tryResumePendingAnalysis(); }, 0);
+            }
         }
         };
         const runPromise = runAnalysisPipeline();
@@ -15918,31 +16050,35 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const phaseTimings = computeAnalysisPhaseTimings(phaseMarks);
             if (analysisCanceled) {
                 if (onLog) onLog('Advanced analysis task canceled by user.', 'warning');
-            } else {
+            } else if (!retainMarker) {
                 if (onLog) onLog(`Advanced analysis failed: ${friendlyAnalysisError}`);
             }
-            setAnalysisFlowStatus(
-                analysisCanceled
-                    ? { phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') }
-                    : retainMarker
-                        ? { phase: 'warning', message: t('分析连接中断，任务仍在后台运行。返回本页后会自动恢复进度。', 'Analysis connection interrupted. The task is still running; return here to resume progress.') }
-                        : { phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) }
-            );
-            setAnalysisUiReport({
-                status: analysisCanceled ? 'warning' : retainMarker ? 'warning' : 'failed',
-                startedAt,
-                durationMs: Date.now() - startedAt,
-                phaseTimings,
-                importReport: importReport,
-                runtimeMeta,
-                warning: analysisCanceled
-                    ? t('分析任务已由用户停止。', 'Analysis task was stopped by user.')
-                    : retainMarker
-                        ? t('分析连接中断，返回本页后会自动恢复进度。', 'Connection interrupted. Return here to resume progress.')
-                        : '',
-                error: analysisCanceled || retainMarker ? '' : friendlyAnalysisError,
-            });
-            if (!analysisCanceled && !retainMarker) {
+            if (analysisCanceled) {
+                setAnalysisFlowStatus({ phase: 'warning', message: t('分析任务已停止。', 'Analysis task was stopped.') });
+                setAnalysisUiReport({
+                    status: 'warning',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings,
+                    importReport: importReport,
+                    runtimeMeta,
+                    warning: t('分析任务已由用户停止。', 'Analysis task was stopped by user.'),
+                    error: '',
+                });
+            } else if (retainMarker) {
+                applyBackgroundTaskMonitoringUi('script_opt', startedAt);
+            } else {
+                setAnalysisFlowStatus({ phase: 'failed', message: t(`分析失败：${friendlyAnalysisError}`, `Analysis failed: ${friendlyAnalysisError}`) });
+                setAnalysisUiReport({
+                    status: 'failed',
+                    startedAt,
+                    durationMs: Date.now() - startedAt,
+                    phaseTimings,
+                    importReport: importReport,
+                    runtimeMeta,
+                    warning: '',
+                    error: friendlyAnalysisError,
+                });
                 alert(`Analysis failed: ${friendlyAnalysisError}`);
             }
         } finally {
@@ -15957,9 +16093,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             analysisRunInFlightRef.current = false;
             if (!scriptEditorMountedRef.current) return;
-            setIsAnalyzing(false);
-            setActiveAnalysisTaskId('');
-            analysisStopRequestedRef.current = false;
+            if (!retainMarker) {
+                setIsAnalyzing(false);
+                setActiveAnalysisTaskId('');
+                analysisStopRequestedRef.current = false;
+            } else {
+                setTimeout(() => { void tryResumePendingAnalysis(); }, 0);
+            }
         }
         };
         const runPromise = runAnalysisPipeline();
@@ -20229,39 +20369,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
             
 
-            {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (
+            {(analysisFlowStatus.phase !== 'idle' || analysisUiReport || analysisFlowStatusHistory.length > 0) && (() => {
+                const progressPhase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
+                const hasLiveBackgroundTask = Boolean(
+                    isAnalyzing
+                    || isRetryingPhase2
+                    || String(activeAnalysisTaskId || '').trim()
+                    || loadAnalysisTaskMarker(activeEpisode?.id)?.taskId
+                );
+                const showRetryButton = !hasLiveBackgroundTask
+                    && (progressPhase === 'warning' || progressPhase === 'failed');
+                const startedClock = formatHistoryClock(analysisProgressStartedAt);
+                const currentMessage = String(
+                    toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || ''
+                ).trim();
+                return (
                 <div className={`mb-4 shrink-0 rounded-2xl border px-4 py-3 text-sm backdrop-blur-sm ${
-                    analysisFlowStatus.phase === 'failed'
+                    progressPhase === 'failed'
                         ? 'border-red-500/30 bg-red-500/10 text-red-100'
-                        : analysisFlowStatus.phase === 'warning'
+                        : progressPhase === 'warning'
                             ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
-                            : analysisFlowStatus.phase === 'completed'
+                            : progressPhase === 'completed'
                                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
                                 : 'border-purple-500/30 bg-purple-500/10 text-purple-100'
                 }`}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2.5">
-                            {analysisFlowStatus.phase === 'completed' ? <CheckCircle className="w-4 h-4 shrink-0" /> : analysisFlowStatus.phase === 'failed' ? <X className="w-4 h-4 shrink-0" /> : analysisFlowStatus.phase === 'warning' ? <Info className="w-4 h-4 shrink-0" /> : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />}
+                            {progressPhase === 'completed' ? <CheckCircle className="w-4 h-4 shrink-0" /> : progressPhase === 'failed' ? <X className="w-4 h-4 shrink-0" /> : progressPhase === 'warning' ? <Info className="w-4 h-4 shrink-0" /> : <Loader2 className="w-4 h-4 shrink-0 animate-spin" />}
                             <div className="min-w-0">
                                 <div className="font-semibold tracking-wide">
-                                    {analysisFlowStatus.phase === 'completed'
+                                    {progressPhase === 'completed'
                                         ? t('分析已完成', 'Analysis complete')
-                                        : analysisFlowStatus.phase === 'failed'
+                                        : progressPhase === 'failed'
                                             ? t('分析失败', 'Analysis failed')
-                                            : analysisFlowStatus.phase === 'warning'
+                                            : progressPhase === 'warning'
                                                 ? t('分析完成（有提示）', 'Analysis finished with notices')
                                                 : t('剧本分析进行中', 'Script analysis in progress')}
                                 </div>
-                                <div className="mt-0.5 truncate text-xs opacity-80">
-                                    {String(toBusinessHistoryMessage(analysisFlowStatus?.message) || analysisFlowStatus?.message || '').trim()
-                                        || (isAnalyzing
-                                            ? `${t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')} · ${formatDurationMs(analysisHeartbeatElapsedMs)}`
-                                            : t('可关闭此提示，继续编辑剧本。', 'You can dismiss this and keep editing.'))}
+                                <div className="mt-0.5 text-xs opacity-80 tabular-nums">
+                                    {startedClock
+                                        ? `${t('启动', 'Started')} ${startedClock} · ${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`
+                                        : `${t('耗时', 'Elapsed')} ${formatDurationMs(analysisHeartbeatElapsedMs)}`}
+                                    {(isAnalyzing || isRetryingPhase2) ? (
+                                        <span className="ml-2 opacity-70">{t('复杂剧本通常需要较长时间', 'Complex scripts usually take longer')}</span>
+                                    ) : null}
                                 </div>
+                                {currentMessage ? (
+                                    <div className="mt-0.5 truncate text-xs opacity-80">{currentMessage}</div>
+                                ) : (!isAnalyzing && !isRetryingPhase2 ? (
+                                    <div className="mt-0.5 truncate text-xs opacity-80">
+                                        {t('可关闭此提示，继续编辑剧本。上滑可查看历史进度。', 'You can dismiss this and keep editing. Scroll up for earlier progress.')}
+                                    </div>
+                                ) : null)}
                             </div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                            {!isAnalyzing && (analysisFlowStatus.phase === 'warning' || analysisFlowStatus.phase === 'failed') && (
+                            {showRetryButton && (
                                 <button
                                     type="button"
                                     onClick={handleAnalysisClick}
@@ -20270,7 +20433,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     {t('重试', 'Retry')}
                                 </button>
                             )}
-                            {!isAnalyzing && (
+                            {!isAnalyzing && !isRetryingPhase2 && (
                                 <button
                                     type="button"
                                     onClick={dismissAnalysisProgressPanel}
@@ -20286,8 +20449,58 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             {String(analysisFlowStatus.highlightHint).trim()}
                         </div>
                     )}
+                    {analysisFlowStatusHistory.length > 0 && (
+                        <div
+                            ref={analysisProgressLogRef}
+                            onScroll={(event) => {
+                                const el = event.currentTarget;
+                                const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                                analysisProgressLogStickToBottomRef.current = distanceFromBottom < 48;
+                            }}
+                            className="mt-3 max-h-44 overflow-y-auto overscroll-contain custom-scrollbar space-y-1.5 pr-1"
+                            title={t('上滑查看更早的进度日志', 'Scroll up to see earlier progress logs')}
+                        >
+                            {analysisFlowStatusHistory.map((item, index) => {
+                                const isLatest = index === analysisFlowStatusHistory.length - 1;
+                                const itemStartedAt = Number(item?.createdAt || 0);
+                                const itemEndedAt = hasAnalysisHistoryEndedAt(item) ? Number(item.endedAt) : 0;
+                                const itemDurationMs = Number.isFinite(itemStartedAt) && itemStartedAt > 0
+                                    ? Math.max(0, (itemEndedAt > 0 ? itemEndedAt : Date.now()) - itemStartedAt)
+                                    : 0;
+                                const startedTime = formatHistoryClock(itemStartedAt);
+                                const phaseLabel = getBusinessPhaseLabel(item?.phase);
+                                const displayMessage = toBusinessHistoryMessage(item?.message);
+                                const highlightHint = String(item?.highlightHint || '').trim();
+                                return (
+                                    <div
+                                        key={item.id || `${itemStartedAt}-${index}`}
+                                        className={`text-xs rounded-md px-2.5 py-2 border ${isLatest ? 'border-white/20 bg-black/20 opacity-100' : 'border-white/10 bg-black/10 opacity-90'}`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <span className="font-semibold tracking-wide text-[10px] opacity-80">{phaseLabel}</span>
+                                            <span className="text-[10px] opacity-60 tabular-nums shrink-0">
+                                                {startedTime
+                                                    ? `${t('启动', 'Started')} ${startedTime} · ${t('耗时', 'Elapsed')} ${formatDurationMs(itemDurationMs)}`
+                                                    : `${t('耗时', 'Elapsed')} ${formatDurationMs(itemDurationMs)}`}
+                                                {` · #${index + 1}`}
+                                            </span>
+                                        </div>
+                                        <div className="mt-1 opacity-95 whitespace-pre-wrap break-words">
+                                            {displayMessage || item.message}
+                                        </div>
+                                        {highlightHint ? (
+                                            <div className={`mt-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold leading-snug ${isLatest ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100' : 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200/90'}`}>
+                                                {highlightHint}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
-            )}
+                );
+            })()}
 
             <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-black/35 via-black/25 to-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] flex flex-col">
                 <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
