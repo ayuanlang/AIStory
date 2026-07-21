@@ -7096,39 +7096,92 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         // Import control: if this scene already has shots, abandon kickoff/import.
+        // Stale dbSceneIdHint (live-import id replaced by later reimport) can 404 — re-resolve once.
+        let existingShots = null;
         try {
-            const existingShots = await fetchShots(dbSceneId);
-            const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
-            if (existingCount > 0 && !force) {
-                storyboardKickoffByMarkerRef.current.add(stableMarker);
-                storyboardKickoffByDbIdRef.current.add(dbSceneId);
-                const skippedProgress = updateStoryboardTaskItem(stableMarker, {
-                    dbSceneId,
+            existingShots = await fetchShots(dbSceneId);
+        } catch (checkErr) {
+            const refreshedId = await resolveDbSceneIdForMarker(null);
+            if (refreshedId && refreshedId !== dbSceneId) {
+                onLog?.(
+                    t(
+                        `[分镜生成] ${stableMarker} Scene #${dbSceneId} 不可用（${checkErr?.message || checkErr}），改用 #${refreshedId}`,
+                        `[Storyboard] ${stableMarker} Scene #${dbSceneId} unavailable (${checkErr?.message || checkErr}); switching to #${refreshedId}`
+                    ),
+                    'warning'
+                );
+                dbSceneId = refreshedId;
+                try {
+                    existingShots = await fetchShots(dbSceneId);
+                } catch (retryErr) {
+                    releaseKickoffClaim();
+                    const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                        sceneOrder,
+                        dbSceneId,
+                        status: 'failed',
+                        error: String(retryErr?.message || retryErr || checkErr?.message || checkErr || 'Scene not found'),
+                    });
+                    publishStoryboardTaskPanelStatus({
+                        markerSceneId: stableMarker,
+                        sceneOrder,
+                        status: 'failed',
+                        errorMessage: String(retryErr?.message || retryErr || ''),
+                        progressSnapshot: failedProgress,
+                    });
+                    onLog?.(
+                        t(
+                            `[分镜生成] ${stableMarker} 检查现有分镜失败：${retryErr?.message || retryErr}`,
+                            `[Storyboard] ${stableMarker} failed to check existing shots: ${retryErr?.message || retryErr}`
+                        ),
+                        'warning'
+                    );
+                    return false;
+                }
+            } else {
+                releaseKickoffClaim();
+                const failedProgress = updateStoryboardTaskItem(stableMarker, {
                     sceneOrder,
-                    status: 'completed',
-                    error: '',
+                    dbSceneId,
+                    status: 'failed',
+                    error: String(checkErr?.message || checkErr || 'Scene not found'),
                 });
                 publishStoryboardTaskPanelStatus({
                     markerSceneId: stableMarker,
                     sceneOrder,
-                    status: 'completed',
-                    progressSnapshot: skippedProgress,
+                    status: 'failed',
+                    errorMessage: String(checkErr?.message || checkErr || ''),
+                    progressSnapshot: failedProgress,
                 });
                 onLog?.(
                     t(
-                        `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，放弃导入`,
-                        `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); import abandoned`
+                        `[分镜生成] ${stableMarker} 检查现有分镜失败：${checkErr?.message || checkErr}`,
+                        `[Storyboard] ${stableMarker} failed to check existing shots: ${checkErr?.message || checkErr}`
                     ),
                     'warning'
                 );
                 return false;
             }
-        } catch (checkErr) {
-            releaseKickoffClaim();
+        }
+        const existingCount = Array.isArray(existingShots) ? existingShots.length : 0;
+        if (existingCount > 0 && !force) {
+            storyboardKickoffByMarkerRef.current.add(stableMarker);
+            storyboardKickoffByDbIdRef.current.add(dbSceneId);
+            const skippedProgress = updateStoryboardTaskItem(stableMarker, {
+                dbSceneId,
+                sceneOrder,
+                status: 'completed',
+                error: '',
+            });
+            publishStoryboardTaskPanelStatus({
+                markerSceneId: stableMarker,
+                sceneOrder,
+                status: 'completed',
+                progressSnapshot: skippedProgress,
+            });
             onLog?.(
                 t(
-                    `[分镜生成] ${stableMarker} 检查现有分镜失败：${checkErr?.message || checkErr}`,
-                    `[Storyboard] ${stableMarker} failed to check existing shots: ${checkErr?.message || checkErr}`
+                    `[分镜生成] ${stableMarker} 场景已有 ${existingCount} 条分镜，放弃导入`,
+                    `[Storyboard] ${stableMarker} already has ${existingCount} shot(s); import abandoned`
                 ),
                 'warning'
             );
@@ -7305,21 +7358,42 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const flushPendingStoryboardKickoffs = useCallback(async (reason = '') => {
+        // Re-queue stranded waiting_env items when env is ready but the pending list was
+        // emptied by a prior flush that failed without updating status (e.g. stale Scene.id).
+        if (environmentAssetReadyRef.current) {
+            const items = storyboardTaskProgressRef.current?.items || {};
+            Object.entries(items).forEach(([marker, item]) => {
+                if (String(item?.status || '').trim().toLowerCase() !== 'waiting_env') return;
+                const stableMarker = String(marker || '').trim();
+                if (!stableMarker) return;
+                // Skip markers already claimed by an in-flight kickoff/resume.
+                if (storyboardKickoffByMarkerRef.current.has(stableMarker)) return;
+                enqueuePendingStoryboardKickoff({
+                    markerSceneId: stableMarker,
+                    sceneOrder: item?.sceneOrder,
+                    dbSceneIdHint: Number(item?.dbSceneId || 0) || null,
+                    importReport: null,
+                });
+            });
+        }
         const queued = Array.isArray(pendingStoryboardKickoffsRef.current)
             ? pendingStoryboardKickoffsRef.current.splice(0)
             : [];
         if (!queued.length) return { started: 0, total: 0, reason };
         let started = 0;
+        const dropStaleHint = /stranded/i.test(String(reason || ''));
         for (const item of queued) {
             const ok = await kickoffStoryboardForImportedScene({
                 ...item,
+                // Drop stale db hint on stranded recovery so resolve walks current workspace.
+                dbSceneIdHint: dropStaleHint ? null : item?.dbSceneIdHint,
                 force: false,
                 resumeQueued: true,
             });
             if (ok) started += 1;
         }
         return { started, total: queued.length, reason };
-    }, [kickoffStoryboardForImportedScene]);
+    }, [enqueuePendingStoryboardKickoff, kickoffStoryboardForImportedScene]);
 
     useEffect(() => {
         flushPendingStoryboardKickoffsRef.current = flushPendingStoryboardKickoffs;
@@ -7395,6 +7469,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 ? pendingStoryboardKickoffsRef.current.length
                 : 0
         );
+        const strandedWaitingEnvCount = () => {
+            const items = storyboardTaskProgressRef.current?.items || {};
+            return Object.values(items).filter(
+                (item) => String(item?.status || '').trim().toLowerCase() === 'waiting_env'
+            ).length;
+        };
         const hasExpectedImportedScenes = () => {
             const live = orchestrationLiveImportedScenesRef.current;
             const canonical = orchestrationCanonicalSceneIdsRef.current;
@@ -7407,7 +7487,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 || storyboardKickoffByMarkerRef.current.size > 0
                 || Number(progress.started || 0) > 0
                 || (storyboardKickoffPromisesRef.current?.size || 0) > 0
-                || pendingQueueCount() > 0;
+                || pendingQueueCount() > 0
+                || strandedWaitingEnvCount() > 0;
         };
 
         let started = snapshotHasWork();
@@ -7415,8 +7496,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (ensureResidual) {
             try {
                 // If env became ready while assets finished, flush queued kickoffs first.
-                if (environmentAssetReadyRef.current && pendingQueueCount() > 0) {
-                    await flushPendingStoryboardKickoffsRef.current?.('await-storyboard');
+                // Also recover stranded waiting_env (queue emptied after a failed flush).
+                if (
+                    environmentAssetReadyRef.current
+                    && (pendingQueueCount() > 0 || strandedWaitingEnvCount() > 0)
+                ) {
+                    await flushPendingStoryboardKickoffsRef.current?.(
+                        strandedWaitingEnvCount() > 0 && pendingQueueCount() <= 0
+                            ? 'await-storyboard-stranded'
+                            : 'await-storyboard'
+                    );
                 }
                 const residual = await ensureStoryboardTasksForImportedScenes(importReport);
                 started = started
@@ -7489,9 +7578,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         while (Date.now() - waitStartedAt < maxWaitMs) {
             if (analysisStopRequestedRef.current) break;
 
-            if (environmentAssetReadyRef.current && pendingQueueCount() > 0) {
+            if (
+                environmentAssetReadyRef.current
+                && (pendingQueueCount() > 0 || strandedWaitingEnvCount() > 0)
+            ) {
                 try {
-                    await flushPendingStoryboardKickoffsRef.current?.('await-storyboard-loop');
+                    await flushPendingStoryboardKickoffsRef.current?.(
+                        strandedWaitingEnvCount() > 0 && pendingQueueCount() <= 0
+                            ? 'await-storyboard-loop-stranded'
+                            : 'await-storyboard-loop'
+                    );
                 } catch (_) {
                     // keep polling
                 }
@@ -7502,7 +7598,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const queued = pendingQueueCount();
             const unresolved = isStoryboardProgressUnresolved(progress)
                 || promiseCount > 0
-                || queued > 0;
+                || queued > 0
+                || strandedWaitingEnvCount() > 0;
             const withinGrace = autoStartEnabled
                 && hasExpectedImportedScenes()
                 && Number(progress.started || 0) <= 0
