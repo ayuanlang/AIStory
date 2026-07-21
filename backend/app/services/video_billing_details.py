@@ -95,6 +95,28 @@ def _load_project_global_info(db: Session, project_id: Optional[int]) -> Dict[st
     return {}
 
 
+def _client_provides_video_visuals(
+    *,
+    aspect_ratio: Any = None,
+    width: Any = None,
+    height: Any = None,
+    resolution: Any = None,
+    video_resolution: Any = None,
+    image_size: Any = None,
+    draft_mode: Any = False,
+) -> bool:
+    """True when request already has enough visual inputs to skip loading project.global_info."""
+    has_aspect = bool(str(aspect_ratio or "").strip())
+    has_res_hint = bool(str(video_resolution or "").strip() or str(resolution or "").strip())
+    has_image_size = bool(str(image_size or "").strip())
+    has_dims = bool(_to_positive_int_or_none(width) and _to_positive_int_or_none(height))
+    if not has_aspect:
+        return False
+    if bool(draft_mode):
+        return True
+    return has_res_hint or has_image_size or has_dims
+
+
 def build_video_generation_billing_details(
     db: Session,
     *,
@@ -169,7 +191,19 @@ def build_video_generation_billing_details(
 
     resolved_project_id = _to_positive_int_or_none(project_id)
     if project_global_info is None:
-        project_global_info = _load_project_global_info(db, resolved_project_id)
+        # ESTIMATE UI usually sends aspect/tier/dims; avoid hydrating large global_info blobs.
+        if mode_text == "ESTIMATE" and _client_provides_video_visuals(
+            aspect_ratio=aspect_ratio,
+            width=width,
+            height=height,
+            resolution=resolution,
+            video_resolution=video_resolution,
+            image_size=image_size,
+            draft_mode=draft_mode,
+        ):
+            project_global_info = {}
+        else:
+            project_global_info = _load_project_global_info(db, resolved_project_id)
     project_visual = _pick_project_visual(project_global_info)
 
     aspect = str(aspect_ratio or "").strip() or str(project_visual.get("aspect_ratio") or "").strip() or "16:9"

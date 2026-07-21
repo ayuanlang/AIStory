@@ -1,5 +1,6 @@
 
 import logging
+import os
 import time
 import re
 import json
@@ -11,6 +12,13 @@ from fastapi import Request
 from starlette.types import ASGIApp, Scope, Receive, Send
 from jose import jwt, JWTError
 from app.core.config import settings
+
+# Successful estimate/video hits are noisy; log at most once per interval (kept for OOM debugging).
+_BILLING_ESTIMATE_LOG_MIN_INTERVAL_SECONDS = max(
+    5.0,
+    float(os.getenv("BILLING_ESTIMATE_LOG_MIN_INTERVAL_SECONDS", "30") or 30),
+)
+_billing_estimate_log_state = {"last_at": 0.0, "suppressed": 0}
 
 # Configure standard loggers to be less noisy
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -477,13 +485,25 @@ class LoggingMiddleware:
             )
 
             if 200 <= status_code < 400:
-                # Keep billing estimate hits visible; suppress other successful API noise.
+                # Keep billing estimate hits visible (rate-limited); suppress other successful API noise.
                 if is_billing_estimate:
-                    logger.info(
-                        f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
-                        f"Action: {action} | Method: {method} | Path: {path} | "
-                        f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms{size_part}"
-                    )
+                    now_ts = time.time()
+                    last_at = float(_billing_estimate_log_state.get("last_at") or 0.0)
+                    if (now_ts - last_at) < _BILLING_ESTIMATE_LOG_MIN_INTERVAL_SECONDS:
+                        _billing_estimate_log_state["suppressed"] = int(
+                            _billing_estimate_log_state.get("suppressed") or 0
+                        ) + 1
+                    else:
+                        suppressed = int(_billing_estimate_log_state.get("suppressed") or 0)
+                        _billing_estimate_log_state["last_at"] = now_ts
+                        _billing_estimate_log_state["suppressed"] = 0
+                        suppressed_part = f" | Suppressed={suppressed}" if suppressed > 0 else ""
+                        logger.info(
+                            f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "
+                            f"Action: {action} | Method: {method} | Path: {path} | "
+                            f"Status: {status_code} | IP: {client_host} | Time: {process_ms}ms"
+                            f"{size_part}{suppressed_part}"
+                        )
             elif 400 <= status_code < 500:
                 logger.warning(
                     f"API Result | UserID: {user_id} | Username: {username} | ProjectID: {project_id} | "

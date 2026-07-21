@@ -1134,8 +1134,9 @@ def cancel_task(task_id: str, current_user: User = Depends(get_current_user)):
 
 IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_JOB_LOCK = threading.Lock()
-IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "3600")))
-IMAGE_JOB_MAX_ITEMS = max(100, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "500")))
+# Tighter defaults for 4GB-class hosts; override via env if needed.
+IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "1800")))
+IMAGE_JOB_MAX_ITEMS = max(50, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "200")))
 IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
@@ -1144,8 +1145,8 @@ IMAGE_JOB_TASKS: Dict[str, Any] = {}
 
 VIDEO_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_JOB_LOCK = threading.Lock()
-VIDEO_JOB_TTL_SECONDS = max(300, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "3600")))
-VIDEO_JOB_MAX_ITEMS = max(100, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "500")))
+VIDEO_JOB_TTL_SECONDS = max(300, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "1800")))
+VIDEO_JOB_MAX_ITEMS = max(50, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "200")))
 VIDEO_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))

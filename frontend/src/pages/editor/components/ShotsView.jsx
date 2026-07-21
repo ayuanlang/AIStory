@@ -756,27 +756,111 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [videoCreditEstimate, setVideoCreditEstimate] = useState(null);
     const [videoCreditEstimating, setVideoCreditEstimating] = useState(false);
     const videoCreditEstimateSeqRef = useRef(0);
+    const videoCreditEstimateOkKeyRef = useRef('');
+    const videoCreditEstimateInflightKeyRef = useRef('');
+    const refreshVideoCreditEstimateRef = useRef(null);
 
-    const refreshVideoCreditEstimate = useCallback(async () => {
-        if (!editingShot) {
+    const projectVideoResolution = project?.global_info?.tech_params?.visual_standard?.video_resolution
+        || project?.global_info?.project_generation_defaults?.video_resolution
+        || '';
+    const projectAspectRatio = project?.global_info?.tech_params?.visual_standard?.aspect_ratio
+        || project?.global_info?.project_generation_defaults?.aspect_ratio
+        || '';
+    const videoCreditSystemApiId = Number(
+        selectedVideoApiId
+        || selectedGenerateVideosApi?.system_api_id
+        || (functionApiConfigs?.generate_videos || []).find((item) => !item?.is_fallback)?.system_api_id
+        || (functionApiConfigs?.generate_videos || [])[0]?.system_api_id
+        || 0
+    ) || 0;
+    const videoCreditApiConfigsReady = Array.isArray(functionApiConfigs?.generate_videos)
+        && functionApiConfigs.generate_videos.length > 0;
+
+    const buildVideoCreditEstimatePayload = useCallback(() => {
+        if (!editingShot?.id) return null;
+        if (!videoCreditSystemApiId) return null;
+        const durParam = resolveShotVideoDurationParam(editingShot.duration);
+        const durationNum = Number(durParam);
+        const prevShot = usePrevVideo ? findPrevContinuationShot(editingShot.id) : null;
+        const prevDur = Number(prevShot?.duration || 0);
+        const modelHint = selectedGenerateVideosApi?.system_api_base_model
+            || selectedGenerateVideosApi?.model
+            || selectedGenerateVideosApi?.provider
+            || '';
+        const preferredAspect = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || undefined;
+        const preferredRes = getProjectPreferredResolution(project?.global_info, activeEpisode?.episode_info, modelHint) || {};
+        const videoTier = getProjectPreferredVideoResolution(project?.global_info, activeEpisode?.episode_info) || '720';
+        const width = preferredRes.width || null;
+        const height = preferredRes.height || null;
+        const videoResolutionLabel = isDraftMode ? '480p' : `${videoTier}p`;
+        return {
+            system_api_id: videoCreditSystemApiId,
+            function_name: 'generate_videos',
+            project_id: projectId || undefined,
+            episode_id: activeEpisode?.id || undefined,
+            shot_id: editingShot.id || undefined,
+            duration: Number.isFinite(durationNum) ? durationNum : 5,
+            draft_mode: !!isDraftMode,
+            use_prev_video: !!usePrevVideo,
+            has_video_input: !!usePrevVideo,
+            input_duration_seconds: (usePrevVideo && Number.isFinite(prevDur) && prevDur > 0) ? prevDur : undefined,
+            aspect_ratio: preferredAspect,
+            width: isDraftMode ? undefined : (width || undefined),
+            height: isDraftMode ? undefined : (height || undefined),
+            resolution: videoResolutionLabel,
+            video_resolution: isDraftMode ? '480' : videoTier,
+            _model_hint: modelHint || undefined,
+        };
+    }, [
+        editingShot?.id,
+        editingShot?.duration,
+        videoCreditSystemApiId,
+        selectedGenerateVideosApi?.system_api_base_model,
+        selectedGenerateVideosApi?.model,
+        selectedGenerateVideosApi?.provider,
+        resolveShotVideoDurationParam,
+        usePrevVideo,
+        findPrevContinuationShot,
+        projectId,
+        activeEpisode?.id,
+        activeEpisode?.episode_info,
+        isDraftMode,
+        project?.global_info,
+        getProjectPreferredAspectRatio,
+        getProjectPreferredResolution,
+        getProjectPreferredVideoResolution,
+    ]);
+
+    const fingerprintVideoCreditEstimatePayload = useCallback((payload) => {
+        if (!payload) return '';
+        return [
+            payload.system_api_id,
+            payload.shot_id,
+            payload.episode_id,
+            payload.project_id,
+            payload.duration,
+            payload.draft_mode ? 1 : 0,
+            payload.use_prev_video ? 1 : 0,
+            payload.input_duration_seconds ?? '',
+            payload.aspect_ratio || '',
+            payload.width || '',
+            payload.height || '',
+            payload.resolution || '',
+            payload.video_resolution || '',
+        ].join('|');
+    }, []);
+
+    const refreshVideoCreditEstimate = useCallback(async ({ force = false } = {}) => {
+        if (!editingShot?.id) {
             setVideoCreditEstimate(null);
+            videoCreditEstimateOkKeyRef.current = '';
+            videoCreditEstimateInflightKeyRef.current = '';
             return null;
         }
-        const apiList = functionApiConfigs?.generate_videos || [];
-        const fallbackApi = apiList.find((item) => !item?.is_fallback) || apiList[0] || null;
-        const systemApiId = Number(
-            selectedVideoApiId
-            || selectedGenerateVideosApi?.system_api_id
-            || fallbackApi?.system_api_id
-            || 0
-        ) || 0;
-        if (!systemApiId) {
-            // Wait until function API configs are loaded; avoid silent skip with no badge update.
-            if (!apiList.length) {
-                console.info('[videoCreditEstimate] waiting for generate_videos API configs');
+        if (!videoCreditSystemApiId) {
+            if (!videoCreditApiConfigsReady) {
                 return null;
             }
-            console.warn('[videoCreditEstimate] skip: no system_api_id');
             setVideoCreditEstimate({
                 ok: false,
                 estimated_credits: null,
@@ -784,65 +868,29 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
             return null;
         }
+        const payloadWithHint = buildVideoCreditEstimatePayload();
+        if (!payloadWithHint) return null;
+        const { _model_hint: modelHint, ...payload } = payloadWithHint;
+        const estimateKey = fingerprintVideoCreditEstimatePayload(payload);
+        if (
+            !force
+            && estimateKey
+            && (
+                estimateKey === videoCreditEstimateOkKeyRef.current
+                || estimateKey === videoCreditEstimateInflightKeyRef.current
+            )
+        ) {
+            return null;
+        }
+
         const seq = ++videoCreditEstimateSeqRef.current;
+        videoCreditEstimateInflightKeyRef.current = estimateKey;
         setVideoCreditEstimating(true);
         try {
-            const durParam = resolveShotVideoDurationParam(editingShot.duration);
-            const durationNum = Number(durParam);
-            const prevShot = usePrevVideo ? findPrevContinuationShot(editingShot.id) : null;
-            const prevDur = Number(prevShot?.duration || 0);
-            const modelHint = selectedGenerateVideosApi?.system_api_base_model
-                || selectedGenerateVideosApi?.model
-                || selectedGenerateVideosApi?.provider
-                || '';
-            const preferredAspect = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info) || undefined;
-            const preferredRes = getProjectPreferredResolution(project?.global_info, activeEpisode?.episode_info, modelHint) || {};
-            const videoTier = getProjectPreferredVideoResolution(project?.global_info, activeEpisode?.episode_info) || '720';
-            const width = preferredRes.width || null;
-            const height = preferredRes.height || null;
-            const videoResolutionLabel = isDraftMode ? '480p' : `${videoTier}p`;
-            // Draft = 480p tier only; omit project 720 dims so estimate cannot keep the higher tier.
-            const payload = {
-                system_api_id: systemApiId,
-                function_name: 'generate_videos',
-                project_id: projectId || undefined,
-                episode_id: activeEpisode?.id || undefined,
-                shot_id: editingShot.id || undefined,
-                duration: Number.isFinite(durationNum) ? durationNum : 5,
-                draft_mode: !!isDraftMode,
-                use_prev_video: !!usePrevVideo,
-                has_video_input: !!usePrevVideo,
-                input_duration_seconds: (usePrevVideo && Number.isFinite(prevDur) && prevDur > 0) ? prevDur : undefined,
-                aspect_ratio: preferredAspect,
-                width: isDraftMode ? undefined : (width || undefined),
-                height: isDraftMode ? undefined : (height || undefined),
-                resolution: videoResolutionLabel,
-                video_resolution: isDraftMode ? '480' : videoTier,
-            };
-            console.info('[videoCreditEstimate] POST /billing/estimate/video', {
-                system_api_id: systemApiId,
-                duration: payload.duration,
-                width: payload.width,
-                height: payload.height,
-                resolution: payload.resolution,
-                aspect_ratio: payload.aspect_ratio,
-                draft_mode: payload.draft_mode,
-                model_hint: modelHint || undefined,
-            });
             const res = await estimateVideoCredits(payload);
             if (seq !== videoCreditEstimateSeqRef.current) return null;
             setVideoCreditEstimate(res || null);
-            const process = res?.billing_process || {};
-            const usage = res?.usage || {};
-            console.info('[videoCreditEstimate] result', {
-                credits: res?.estimated_credits,
-                rule: res?.matched_rule_id || process?.matched_rule_id,
-                logic: process?.logic_branch,
-                provider: res?.provider,
-                model: res?.model,
-                width: usage?.width || payload.width,
-                height: usage?.height || payload.height,
-            });
+            videoCreditEstimateOkKeyRef.current = estimateKey;
             return res;
         } catch (error) {
             if (seq !== videoCreditEstimateSeqRef.current) return null;
@@ -855,56 +903,52 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
             return null;
         } finally {
+            if (videoCreditEstimateInflightKeyRef.current === estimateKey) {
+                videoCreditEstimateInflightKeyRef.current = '';
+            }
             if (seq === videoCreditEstimateSeqRef.current) {
                 setVideoCreditEstimating(false);
             }
         }
     }, [
-        editingShot,
-        selectedVideoApiId,
-        selectedGenerateVideosApi,
-        resolveShotVideoDurationParam,
-        usePrevVideo,
-        findPrevContinuationShot,
-        projectId,
-        activeEpisode,
-        isDraftMode,
-        project,
-        functionApiConfigs,
-        getProjectPreferredAspectRatio,
-        getProjectPreferredResolution,
-        getProjectPreferredVideoResolution,
+        editingShot?.id,
+        videoCreditSystemApiId,
+        videoCreditApiConfigsReady,
+        buildVideoCreditEstimatePayload,
+        fingerprintVideoCreditEstimatePayload,
     ]);
 
-    const projectVideoResolution = project?.global_info?.tech_params?.visual_standard?.video_resolution
-        || project?.global_info?.project_generation_defaults?.video_resolution
-        || '';
-    const projectAspectRatio = project?.global_info?.tech_params?.visual_standard?.aspect_ratio
-        || project?.global_info?.project_generation_defaults?.aspect_ratio
-        || '';
+    refreshVideoCreditEstimateRef.current = refreshVideoCreditEstimate;
 
+    // Auto-estimate only when billing-relevant scalars change — never on unstable object identity.
+    // Duplicate POSTs are blocked inside refresh via payload fingerprint.
     useEffect(() => {
-        if (!editingShot) {
+        if (!editingShot?.id) {
             setVideoCreditEstimate(null);
+            videoCreditEstimateOkKeyRef.current = '';
+            videoCreditEstimateInflightKeyRef.current = '';
             return undefined;
         }
+        if (!isTabActive) return undefined;
+        if (!videoCreditSystemApiId && !videoCreditApiConfigsReady) return undefined;
+
         const timer = setTimeout(() => {
-            refreshVideoCreditEstimate();
-        }, 280);
+            refreshVideoCreditEstimateRef.current?.({ force: false });
+        }, 500);
         return () => clearTimeout(timer);
     }, [
         editingShot?.id,
         editingShot?.duration,
-        selectedVideoApiId,
-        selectedGenerateVideosApi?.system_api_id,
-        functionApiConfigs?.generate_videos,
+        videoCreditSystemApiId,
+        videoCreditApiConfigsReady,
         isDraftMode,
         usePrevVideo,
-        sd2AutoDuration,
         isSd2AutoDurationActive,
         projectVideoResolution,
         projectAspectRatio,
-        refreshVideoCreditEstimate,
+        activeEpisode?.id,
+        projectId,
+        isTabActive,
     ]);
 
     const renderVideoCreditEstimateBadge = (compact = false) => {
@@ -927,7 +971,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     type="button"
                     onClick={(e) => {
                         e.stopPropagation();
-                        refreshVideoCreditEstimate();
+                        refreshVideoCreditEstimate({ force: true });
                     }}
                     disabled={videoCreditEstimating}
                     className="p-0.5 rounded text-amber-200/80 hover:text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
