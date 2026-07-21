@@ -43,6 +43,7 @@ from app.schemas.entity import (  # noqa: E402
     EntityCreate,
     EntityOut,
     EntityUpdate,
+    coerce_anchor_description,
     _coerce_visual_dependencies,
 )
 

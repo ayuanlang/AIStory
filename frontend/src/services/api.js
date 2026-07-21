@@ -1645,8 +1645,29 @@ export const batchSupplementMissingEntities = async (projectId, payload) => {
     return response.data;
 };
 
+const normalizeAnchorDescriptionForApi = (value) => {
+    if (value == null) return value;
+    if (Array.isArray(value)) {
+        return value
+            .flatMap((item) => (Array.isArray(item) ? item : [item]))
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+            .join(', ');
+    }
+    if (typeof value === 'string') return value;
+    return String(value);
+};
+
+const withNormalizedEntityPayload = (data) => {
+    if (!data || typeof data !== 'object' || !('anchor_description' in data)) return data;
+    return {
+        ...data,
+        anchor_description: normalizeAnchorDescriptionForApi(data.anchor_description),
+    };
+};
+
 export const createEntity = async (projectId, data) => {
-    const response = await api.post(`/projects/${projectId}/entities`, data);
+    const response = await api.post(`/projects/${projectId}/entities`, withNormalizedEntityPayload(data));
     return response.data;
 }
 
@@ -1656,7 +1677,7 @@ export const cloneEntityWithLLM = async (projectId, entityId, payload) => {
 }
 
 export const updateEntity = async (entityId, data) => {
-    const response = await api.put(`/entities/${entityId}`, data);
+    const response = await api.put(`/entities/${entityId}`, withNormalizedEntityPayload(data));
     return response.data;
 }
 

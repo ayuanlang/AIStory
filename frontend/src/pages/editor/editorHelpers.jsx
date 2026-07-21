@@ -431,6 +431,19 @@ export const parseVisualDependencies = (value) => {
     return out;
 };
 
+/** LLM sometimes returns phrase arrays; API expects a single comma-separated string. */
+export const normalizeAnchorDescription = (value) => {
+    if (value == null) return '';
+    if (Array.isArray(value)) {
+        return value
+            .flatMap((item) => (Array.isArray(item) ? item : [item]))
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+            .join(', ');
+    }
+    return String(value).trim();
+};
+
 export const SafeImage = ({ src, alt = '', className = '', fallback = null, ...imgProps }) => {
     const rawSrc = String(src || '').trim();
     const containerRef = useRef(null);

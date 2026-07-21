@@ -2066,6 +2066,7 @@ const toBusinessAnalysisLogMessage = (rawMessage, tFn = (zh) => zh) => {
         [/Scene markdown repair:/i, t('场景编排修复：', 'Scene orchestration repair:')],
         [/backend scene orchestration enabled:/i, t('已启用按场场景编排：', 'Per-scene orchestration enabled:')],
         [/Skipped duplicate Stage 3 asset-design trigger/i, t('已跳过重复的资产设计触发', 'Skipped duplicate asset-design trigger')],
+        [/automatic asset design already completed successfully for this episode run/i, t('本轮自动资产设计已成功完成', 'automatic asset design already completed for this episode run')],
         [/Cleared stale phase-2 marker/i, t('已清理过期的资产设计标记', 'Cleared stale asset-design marker')],
         [/Cleared stale scene_beats marker/i, t('已清理过期的场景编排标记', 'Cleared stale scene-orchestration marker')],
         [/未生成或未持久化/g, t('尚未生成或尚未保存', 'was not generated or saved')],
@@ -9843,6 +9844,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const assetRerunHandledNonceRef = useRef(null);
     const superuserModalMutexRef = useRef(Promise.resolve());
     const phase2GenerationInFlightRef = useRef(false);
+    /** Synchronous entry lock so two analyze clicks cannot both pass the in-flight check during setup awaits. */
+    const analysisEntryLockRef = useRef(false);
+    /**
+     * Episode id whose automatic Stage 3 already completed successfully in this browser session.
+     * Blocks a second full auto asset-design fan-out after the first batch succeeds.
+     */
+    const phase2AutoCompletedEpisodeRef = useRef(null);
     const sceneBeatsOnlyRerunInFlightRef = useRef(false);
     const orchestrationLiveImportedScenesRef = useRef(new Set());
     /** Canonical Scene IDs from this run's scene orchestration (unitsToProcess). */
@@ -10435,6 +10443,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setIsRetryingPhase2(false);
                 phase2GenerationInFlightRef.current = false;
                 analysisRunInFlightRef.current = false;
+                analysisEntryLockRef.current = false;
                 setAnalysisFlowStatus({
                     phase: 'warning',
                     message: t('已请求停止当前剧本分析流程。', 'Stop requested for the current script analysis flow.'),
@@ -10475,6 +10484,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setIsRetryingPhase2(false);
             phase2GenerationInFlightRef.current = false;
             analysisRunInFlightRef.current = false;
+            analysisEntryLockRef.current = false;
         }
     }, [activeAnalysisTaskId, activeEpisode?.id, clearAnalysisTaskMarker, isAnalyzing, isRetryingPhase2, loadAnalysisTaskMarker, onLog, t]);
     const refreshAnalysisFromDB = useCallback(async ({ resultField = 'ai_scene_analysis_result' } = {}) => {
@@ -11476,41 +11486,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     ]);
 
     const runPostImportSceneSubjectPipeline = useCallback(async (importReport, explicitText = null, options = {}) => {
-        if (sceneBeatsOnlyRerunInFlightRef.current) {
-            const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
-            onLog?.('仅场景重排期间，资产设计流程已按保护策略暂停。', 'info');
-            return {
-                checkedSceneCount: importedSceneRows.length,
-                missingSceneCount: 0,
-                missingItemCount: 0,
-                missingSceneReports: [],
-                supplementReport: {
-                    createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
-                    countsByType: { character: 0, prop: 0, environment: 0 },
-                },
-                importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
-            };
-        }
-
-        if (phase2GenerationInFlightRef.current) {
-            onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
-            return {
-                checkedSceneCount: 0,
-                missingSceneCount: 0,
-                missingItemCount: 0,
-                missingSceneReports: [],
-                supplementReport: {
-                    createdItems: [], skippedItems: [], failedItems: [], sceneReports: [],
-                    countsByType: { character: 0, prop: 0, environment: 0 },
-                },
-                importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
-            };
-        }
-
-        // Claim env gate before any await so concurrent scene-import kickoffs cannot
-        // treat stale episode env/poster JSON as ready while this run designs assets.
-        environmentAssetDesignPendingRef.current = true;
-
         const importedSceneRows = Array.isArray(importReport?.importedSceneRows) ? importReport.importedSceneRows : [];
         const emptyReport = {
             checkedSceneCount: importedSceneRows.length,
@@ -11524,10 +11499,46 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             importedSubjectCounts: { character: 0, prop: 0, environment: 0 },
         };
 
+        if (sceneBeatsOnlyRerunInFlightRef.current) {
+            onLog?.('仅场景重排期间，资产设计流程已按保护策略暂停。', 'info');
+            return {
+                ...emptyReport,
+                checkedSceneCount: importedSceneRows.length,
+            };
+        }
+
+        if (phase2GenerationInFlightRef.current) {
+            onLog?.('Skipped duplicate Stage 3 asset-design trigger while one is already running.', 'warning');
+            return emptyReport;
+        }
+
+        const episodeIdForPhase2 = Number(activeEpisode?.id || 0) || 0;
+        const allowRepeatAutoStage3 = Boolean(options?.isRetryPhase2 || options?.forceAssetDesign);
+        if (
+            !allowRepeatAutoStage3
+            && episodeIdForPhase2 > 0
+            && phase2AutoCompletedEpisodeRef.current === episodeIdForPhase2
+        ) {
+            onLog?.(
+                'Skipped duplicate Stage 3 asset-design trigger; automatic asset design already completed successfully for this episode run.',
+                'warning'
+            );
+            return {
+                ...emptyReport,
+                skippedDuplicateCompleted: true,
+            };
+        }
+
+        // Claim Stage 3 lock + env gate BEFORE any await so concurrent callers cannot
+        // both pass the in-flight check and fan out character/prop/environment twice.
+        phase2GenerationInFlightRef.current = true;
+        environmentAssetDesignPendingRef.current = true;
+
         onLog?.(`[Stage 3 Debug] checking early return condition: projectId=${projectId}, importedSceneRows count=${importedSceneRows.length}`);
 
         if (!projectId) {
             environmentAssetDesignPendingRef.current = false;
+            phase2GenerationInFlightRef.current = false;
             onLog?.(`[Stage 3 Debug] aborting because projectId is empty.`);
             return emptyReport;
         }
@@ -11565,6 +11576,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             onLog?.(`[Stage 2 Asset Index] Using asset index for Stage 3 (length: ${subjectIndexText.length})`);
         } else {
             environmentAssetDesignPendingRef.current = false;
+            phase2GenerationInFlightRef.current = false;
             onLog?.(`[Stage 3 Asset Design] Error: Failed to find the Stage 2 asset index block. Aborting asset design.`, 'error');
             throw new Error(SUBJECT_INDEX_PARSE_ERROR);
         }
@@ -11593,6 +11605,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         if (!subjectIndexText.trim() || !hasSubjectIndexStructure(subjectIndexText)) {
             environmentAssetDesignPendingRef.current = false;
+            phase2GenerationInFlightRef.current = false;
             onLog?.('[Stage 3 Asset Design] Error: Missing usable Subject Index. Aborting asset design.', 'error');
             throw new Error(t(
                 '缺少资产清单（Subject Index），无法继续资产生成。请先完成第二阶段资产提取后再重试。',
@@ -11633,6 +11646,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         'success'
                     );
                     markEnvironmentAssetDesignReady('assets-all-existing');
+                    if (!allowRepeatAutoStage3 && episodeIdForPhase2 > 0) {
+                        phase2AutoCompletedEpisodeRef.current = episodeIdForPhase2;
+                    }
+                    phase2GenerationInFlightRef.current = false;
                     return {
                         ...emptyReport,
                         skippedExistingAssets: true,
@@ -11650,7 +11667,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
         }
 
-        phase2GenerationInFlightRef.current = true;
         if (options?.isRetryPhase2) {
             setIsRetryingPhase2(true);
         }
@@ -11742,6 +11758,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (!targetFilters && promptFiles.length === 0) {
             onLog?.('[Stage 3 Asset Design] All Stage 3 auto-start switches are disabled; skipping automatic asset design.', 'info');
             markEnvironmentAssetDesignReady('stage3-auto-start-all-off');
+            if (!allowRepeatAutoStage3 && episodeIdForPhase2 > 0) {
+                phase2AutoCompletedEpisodeRef.current = episodeIdForPhase2;
+            }
+            phase2GenerationInFlightRef.current = false;
             return emptyReport;
         }
         if (!promptFiles.some((p) => p.key === 'environments')) {
@@ -12230,6 +12250,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     const createdLen = createdItems.length;
                     const matchedLen = skippedItems.length;
                     onLog?.(`[Stage 3 Asset Design] Independent subtask imports completed. Created/Updated: ${createdLen}, Matched/Skipped: ${matchedLen}`);
+                    if (!allowRepeatAutoStage3 && episodeIdForPhase2 > 0) {
+                        phase2AutoCompletedEpisodeRef.current = episodeIdForPhase2;
+                    }
                     if (failedSubtaskItems.length > 0) {
                         const retryTypes = failedSubtaskItems.map((x) => x.key).filter(Boolean).join(', ');
                         onLog?.(`[Stage 3 Asset Design] Incomplete subtask result detected. Retry missing asset type(s): ${retryTypes || 'unknown'}.`, 'warning');
@@ -12292,7 +12315,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (options?.isRetryPhase2) {
                 setIsRetryingPhase2(false);
             }
-            if (activeEpisode?.id) {
+            // Parent analysis pipeline still owns task markers while scenes/storyboard continue.
+            if (activeEpisode?.id && !analysisRunInFlightRef.current) {
                 clearAnalysisTaskMarker(activeEpisode.id);
             }
         }
@@ -15159,11 +15183,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return reattachToExistingAnalysisRun(existingRun);
             }
         }
-        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
+        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current || analysisEntryLockRef.current)) {
             if (onLog) onLog('Skipped duplicate AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
 
+        analysisEntryLockRef.current = true;
+        if (forceRegenerate) {
+            phase2AutoCompletedEpisodeRef.current = null;
+        }
+
+        try {
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -15180,6 +15210,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             preserveProgressUi: true,
             deferWorkspaceUiReset: false,
         });
+        if (forceRegenerate || clearedBeforeRun) {
+            phase2AutoCompletedEpisodeRef.current = null;
+        }
 
         const resumeState = (forceRegenerate || clearedBeforeRun)
             ? null
@@ -15194,6 +15227,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let analysisCanceled = false;
 
         analysisRunInFlightRef.current = true;
+        phase2AutoCompletedEpisodeRef.current = null;
         clearAnalysisTaskMarker(activeEpisode?.id);
         resetAnalysisFallbackRetryCounts(activeEpisode?.id);
         lastAutoSubjectsImportRef.current = { signature: '', result: null };
@@ -15617,6 +15651,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'standard' });
         return runPromise;
+        } finally {
+            analysisEntryLockRef.current = false;
+        }
     };
 
     const handleSaveAnalysisAttentionNotes = async () => {
@@ -15702,11 +15739,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return reattachToExistingAnalysisRun(existingRun);
             }
         }
-        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current)) {
+        if (!forceRegenerate && (analysisRunInFlightRef.current || analysisResumeInFlightRef.current || analysisEntryLockRef.current)) {
             if (onLog) onLog('Skipped duplicate advanced AI Script Analysis submit while another analysis run is already active.', 'warning');
             return;
         }
 
+        // Claim before any await so a second click / resume cannot start a parallel pipeline.
+        analysisEntryLockRef.current = true;
+        if (forceRegenerate) {
+            phase2AutoCompletedEpisodeRef.current = null;
+        }
+
+        try {
         // Before starting a new analysis, ensure any previous dirty state is canceled backend-side.
         if (activeAnalysisTaskId) {
             try {
@@ -15723,6 +15767,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             preserveProgressUi: true,
             deferWorkspaceUiReset: false,
         });
+        if (forceRegenerate || clearedBeforeRun) {
+            phase2AutoCompletedEpisodeRef.current = null;
+        }
 
         const resumeState = (forceRegenerate || clearedBeforeRun)
             ? null
@@ -15737,6 +15784,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         let analysisCanceled = false;
 
         analysisRunInFlightRef.current = true;
+        phase2AutoCompletedEpisodeRef.current = null;
         clearAnalysisTaskMarker(activeEpisode?.id);
         resetAnalysisFallbackRetryCounts(activeEpisode?.id);
 
@@ -16667,6 +16715,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         trackEpisodeAnalysisRun(episodeId, runPromise, { startedAt, kind: 'advanced' });
         return runPromise;
+        } finally {
+            analysisEntryLockRef.current = false;
+        }
     };
 
     const getStageOutputContent = useCallback((stageKey, outputKey) => {
@@ -16775,6 +16826,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
+        phase2AutoCompletedEpisodeRef.current = null;
         analysisStopRequestedRef.current = false;
         setAnalysisFlowStatus({
             phase: 'script_opt',

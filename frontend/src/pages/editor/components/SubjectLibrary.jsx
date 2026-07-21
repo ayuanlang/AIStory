@@ -2958,7 +2958,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 for (const [entityId, job] of jobEntries) {
                     const jobId = String(job?.jobId || '').trim();
                     if (!jobId) {
-                        if (!getCurrentJobEntry(entityId)) {
+                        const currentEntry = getCurrentJobEntry(entityId);
+                        if (!currentEntry) {
+                            continue;
+                        }
+                        // Batch generate intentionally stamps queued placeholders with an empty
+                        // jobId until on_job_created / trackSubjectBatchImageJob fills it in.
+                        // Do not treat those as orphans — that races the moment batch starts.
+                        const localStatus = String(currentEntry?.status || job?.status || '').trim().toLowerCase();
+                        if (localStatus === 'queued') {
+                            continue;
+                        }
+                        // Another path may have filled jobId since we snapshot entries.
+                        if (String(currentEntry?.jobId || '').trim()) {
                             continue;
                         }
                         // Orphan local markers (no backend job id) must not poll forever.

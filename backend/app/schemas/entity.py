@@ -48,6 +48,28 @@ def coerce_visual_dependencies(value: Any) -> List[str]:
     return out
 
 
+def coerce_anchor_description(value: Any) -> Optional[str]:
+    """Normalize LLM/import payloads: phrase arrays -> comma-separated string."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, (list, tuple)):
+                for sub in item:
+                    text = str(sub or "").strip()
+                    if text:
+                        parts.append(text)
+                continue
+            text = str(item or "").strip()
+            if text:
+                parts.append(text)
+        return ", ".join(parts)
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 # Back-compat alias used across routers.
 _coerce_visual_dependencies = coerce_visual_dependencies
 
@@ -81,6 +103,11 @@ class EntityCreate(BaseModel):
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
 
+    @pydantic.field_validator("anchor_description", mode="before")
+    @classmethod
+    def validate_anchor_description(cls, v: Any) -> Optional[str]:
+        return coerce_anchor_description(v)
+
 
 class EntityOut(BaseModel):
     id: int
@@ -111,6 +138,11 @@ class EntityOut(BaseModel):
     visual_dependencies: Optional[List[str]] = []
     dependency_strategy: Optional[Dict[str, Any]] = {}
     custom_attributes: Optional[Dict[str, Any]] = {}
+
+    @pydantic.field_validator("anchor_description", mode="before")
+    @classmethod
+    def validate_anchor_description(cls, v: Any) -> Optional[str]:
+        return coerce_anchor_description(v)
 
     @pydantic.field_validator("visual_dependencies", mode="before")
     @classmethod
@@ -161,6 +193,11 @@ class EntityUpdate(BaseModel):
 
     visual_dependencies: Optional[List[str]] = None
     dependency_strategy: Optional[Dict[str, Any]] = None
+
+    @pydantic.field_validator("anchor_description", mode="before")
+    @classmethod
+    def validate_anchor_description(cls, v: Any) -> Optional[str]:
+        return coerce_anchor_description(v)
 
     class Config:
         extra = "allow"

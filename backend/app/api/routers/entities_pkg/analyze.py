@@ -890,7 +890,8 @@ async def _execute_analyze_entity_image(
         entity.generation_prompt_en = ""
         if "negative_prompt_en" in updated_info and hasattr(entity, "negative_prompt_en"):
             entity.negative_prompt_en = updated_info["negative_prompt_en"]
-        if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
+        if "anchor_description" in updated_info:
+            entity.anchor_description = coerce_anchor_description(updated_info["anchor_description"])
         
         if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list):
             incoming_deps = updated_info["visual_dependencies"]
@@ -1156,7 +1157,8 @@ def apply_entity_analysis(
     
     if "generation_prompt_cn" in updated_info: entity.generation_prompt_cn = updated_info["generation_prompt_cn"]
     if "generation_prompt_en" in updated_info: entity.generation_prompt_en = updated_info["generation_prompt_en"]
-    if "anchor_description" in updated_info: entity.anchor_description = updated_info["anchor_description"]
+    if "anchor_description" in updated_info:
+        entity.anchor_description = coerce_anchor_description(updated_info["anchor_description"])
     
     if "visual_dependencies" in updated_info and isinstance(updated_info["visual_dependencies"], list): 
             entity.visual_dependencies = updated_info["visual_dependencies"]
