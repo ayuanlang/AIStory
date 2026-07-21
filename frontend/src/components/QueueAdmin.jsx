@@ -144,84 +144,20 @@ export default function QueueAdmin() {
   };
 
   const getTaskStatusLabel = (task) => {
-    const status = String(task?.status || '').trim().toLowerCase();
+    const queueStatus = String(task?.status || '').trim().toLowerCase();
+    const jobStatus = String(task?.callback_diag?.job_status || '').trim().toLowerCase();
     const upstream = String(task?.callback_diag?.upstream_submit_state || '').trim().toLowerCase();
     const hasTicket = Boolean(task?.callback_diag?.provider_callback_ticket);
     const retrying = Number(task?.callback_diag?.callback_submit_retries || 0) > 0 || Boolean(task?.callback_diag?.callback_retry_at);
+    // Prefer runtime job status when queue row is stale (e.g. succeeded + callback_pending).
+    const status = ['succeeded', 'completed', 'done', 'success', 'failed', 'error', 'canceled', 'cancelled'].includes(jobStatus)
+      ? (jobStatus === 'succeeded' || jobStatus === 'success' || jobStatus === 'done' ? 'completed' : jobStatus)
+      : queueStatus;
+    const isTerminalSuccess = ['completed', 'succeeded', 'success', 'done'].includes(status);
+    const isTerminalFailure = ['failed', 'error', 'canceled', 'cancelled'].includes(status);
 
-    if (retrying) {
-      return {
-        text: '回调补偿重试中',
-        filterKey: 'callback_retrying',
-        tone: 'text-orange-300 border-orange-500/40 bg-orange-500/10',
-        icon: 'running',
-      };
-    }
-
-    if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('submitted') || upstream.includes('submit_ok')) && !hasTicket) {
-      return {
-        text: '已提交上游',
-        filterKey: 'submitted_upstream',
-        tone: 'text-sky-300 border-sky-500/40 bg-sky-500/10',
-        icon: 'running',
-      };
-    }
-
-    if (status === 'submit') {
-      return {
-        text: '提交上游中',
-        filterKey: 'submit',
-        tone: 'text-violet-300 border-violet-500/40 bg-violet-500/10',
-        icon: 'running',
-      };
-    }
-
-    if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('callback_pending') || upstream.includes('submitted') || hasTicket)) {
-      return {
-        text: '等待回调入库',
-        filterKey: 'callback_waiting',
-        tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
-        icon: 'running',
-      };
-    }
-
-    if (status === 'waiting_callback') {
-      return {
-        text: '等待回调入库',
-        filterKey: 'callback_waiting',
-        tone: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
-        icon: 'running',
-      };
-    }
-
-    if (status === 'callback_processing') {
-      return {
-        text: '回调处理中',
-        filterKey: 'callback_processing',
-        tone: 'text-teal-300 border-teal-500/40 bg-teal-500/10',
-        icon: 'running',
-      };
-    }
-
-    if (status === 'queued') {
-      return {
-        text: '排队中',
-        filterKey: 'queued',
-        tone: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
-        icon: 'queued',
-      };
-    }
-
-    if (status === 'running' || status === 'processing' || status === 'pending') {
-      return {
-        text: '处理中',
-        filterKey: 'running',
-        tone: 'text-blue-300 border-blue-500/40 bg-blue-500/10',
-        icon: 'running',
-      };
-    }
-
-    if (status === 'completed' || status === 'succeeded' || status === 'success' || status === 'done') {
+    // Terminal outcomes win over stale compensation retry markers.
+    if (isTerminalSuccess) {
       return {
         text: '已完成',
         filterKey: 'completed',
@@ -248,11 +184,71 @@ export default function QueueAdmin() {
       };
     }
 
+    if (retrying && !isTerminalFailure) {
+      return {
+        text: '回调补偿重试中',
+        filterKey: 'callback_retrying',
+        tone: 'text-orange-300 border-orange-500/40 bg-orange-500/10',
+        icon: 'running',
+      };
+    }
+
+    if ((status === 'running' || status === 'processing' || status === 'pending') && (upstream.includes('submitted') || upstream.includes('submit_ok')) && !hasTicket) {
+      return {
+        text: '已提交上游',
+        filterKey: 'submitted_upstream',
+        tone: 'text-sky-300 border-sky-500/40 bg-sky-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'submit') {
+      return {
+        text: '提交上游中',
+        filterKey: 'submit',
+        tone: 'text-violet-300 border-violet-500/40 bg-violet-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (
+      (status === 'waiting_callback' || status === 'callback_processing')
+      || ((status === 'running' || status === 'processing' || status === 'pending')
+        && (upstream.includes('callback_pending') || upstream.includes('submitted') || hasTicket))
+    ) {
+      return {
+        text: status === 'callback_processing' ? '回调处理中' : '等待回调入库',
+        filterKey: status === 'callback_processing' ? 'callback_processing' : 'callback_waiting',
+        tone: status === 'callback_processing'
+          ? 'text-teal-300 border-teal-500/40 bg-teal-500/10'
+          : 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
+        icon: 'running',
+      };
+    }
+
+    if (status === 'queued') {
+      return {
+        text: '排队中',
+        filterKey: 'queued',
+        tone: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
+        icon: 'queued',
+      };
+    }
+
+    if (status === 'running' || status === 'processing' || status === 'pending') {
+      return {
+        text: '处理中',
+        filterKey: 'running',
+        tone: 'text-blue-300 border-blue-500/40 bg-blue-500/10',
+        icon: 'running',
+      };
+    }
+
     return {
-      text: status ? `未知(${status})` : '未知',
-      filterKey: 'unknown',
+      text: status || '未知',
+      filterKey: status || 'unknown',
       tone: 'text-gray-300 border-gray-500/40 bg-gray-500/10',
-      icon: 'done',
+      icon: 'queued',
     };
   };
 

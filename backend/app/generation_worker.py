@@ -2,7 +2,7 @@ import signal
 import threading
 import time
 
-from app.api import endpoints
+from app.services.generation_runtime.queue_worker import start_generation_queue_worker
 from app.core.logging import configure_uvicorn_logging_noise_reduction, logger
 
 
@@ -40,7 +40,7 @@ def main() -> None:
     else:
         logger.warning("Generation worker startup: RUN_DB_BOOTSTRAP_ON_START disabled")
 
-    endpoints.start_generation_queue_worker()
+    start_generation_queue_worker()
     logger.info("Generation worker consuming queue")
 
     while not _STOP_EVENT.is_set():

@@ -787,8 +787,8 @@ async def lifespan(app: FastAPI):
         logger.warning("RUN_DB_BOOTSTRAP_ON_START is disabled; skipping startup DB bootstrap")
     if _RUN_GENERATION_QUEUE_WORKER_ON_START:
         logger.info("Application startup: generation queue worker enabled in web process")
-        endpoints_module, _ = _resolve_endpoints_router()
-        await asyncio.to_thread(endpoints_module.start_generation_queue_worker)
+        from app.services.generation_runtime.queue_worker import start_generation_queue_worker
+        await asyncio.to_thread(start_generation_queue_worker)
     else:
         logger.info("Application startup: generation queue worker disabled in web process")
     maintenance_stop_event: asyncio.Event | None = None
@@ -1342,6 +1342,12 @@ from app.api.routers.workspace_residual import router as workspace_residual_rout
 app.include_router(workspace_residual_router, prefix=settings.API_V1_STR)
 from app.api.routers.projects_workspace import router as projects_workspace_router
 app.include_router(projects_workspace_router, prefix=settings.API_V1_STR)
+from app.api.routers.admin_queue import router as admin_queue_router
+app.include_router(admin_queue_router, prefix=settings.API_V1_STR)
+from app.api.routers.tasks import router as tasks_router
+app.include_router(tasks_router, prefix=settings.API_V1_STR)
+from app.api.routers.settings_effective import router as settings_effective_router
+app.include_router(settings_effective_router, prefix=settings.API_V1_STR)
 # Helpers were split across routers; refresh fills after every peer is importable.
 from app.api.routers.helper_bind import rebind_all_router_helpers
 rebind_all_router_helpers()
@@ -1349,7 +1355,6 @@ from app.api.video_credit_estimate import router as video_credit_estimate_router
 app.include_router(video_credit_estimate_router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)
 app.include_router(groups_api.router, prefix=settings.API_V1_STR)
-app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
 app.include_router(invoices_api.router, prefix=settings.API_V1_STR + "/invoices", tags=["invoices"])
 from app.api.project_retention_admin import router as project_retention_admin_router
 app.include_router(project_retention_admin_router, prefix=settings.API_V1_STR)

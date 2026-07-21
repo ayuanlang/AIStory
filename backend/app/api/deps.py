@@ -41,6 +41,38 @@ def is_current_http_mutating() -> bool:
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/login/access-token")
 
+
+def get_current_claims(token: str = Depends(oauth2_scheme)) -> dict:
+    """Lightweight JWT claim extraction (no DB). Used by generation job ACL paths."""
+    from typing import Any, Dict
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        raise credentials_exception
+
+    username = str(payload.get("sub") or payload.get("uname") or "").strip()
+    if not username:
+        raise credentials_exception
+
+    uid_raw = payload.get("uid")
+    try:
+        user_id = int(uid_raw) if uid_raw is not None else None
+    except Exception:
+        user_id = None
+
+    is_superuser = bool(payload.get("is_superuser") or payload.get("superuser"))
+    return {
+        "username": username,
+        "user_id": user_id,
+        "is_superuser": is_superuser,
+    }
+
+
 _USER_AUTH_CACHE_TTL_SECONDS = int(os.getenv("USER_AUTH_CACHE_TTL_SECONDS", "45") or 45)
 _USER_AUTH_CACHE_STALE_GRACE_SECONDS = int(os.getenv("USER_AUTH_CACHE_STALE_GRACE_SECONDS", "600") or 600)
 _USER_AUTH_CACHE_MAX_ENTRIES = int(os.getenv("USER_AUTH_CACHE_MAX_ENTRIES", "2048") or 2048)
