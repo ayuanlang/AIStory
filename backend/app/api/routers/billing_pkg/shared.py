@@ -15,7 +15,10 @@ from app.core.time_utils import now_bj_iso
 from app.db.session import get_db
 from app.models.all_models import (
     PaymentOrder,
+    Project,
+    ProjectShare,
     RechargePlan,
+    SystemAPISetting,
     TransactionHistory,
     User,
     WechatPayConfig,
@@ -33,6 +36,7 @@ from app.schemas.billing import (
 )
 from app.services.billing_service import billing_service
 from app.services.payment_service import payment_service
+from app.services.tool_billing_taxonomy_service import tool_billing_taxonomy_service
 from app.services.wechat_pay_config import _get_active_wechat_config, _wechat_config_to_dict
 
 logger = logging.getLogger("api_logger")

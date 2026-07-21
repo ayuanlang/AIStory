@@ -317,3 +317,52 @@ def test_video_job_billing_has_runtime_target():
     import app.services.generation_runtime.video_job_billing as vjb
     assert callable(getattr(vjb, "_resolve_media_runtime_target"))
     assert getattr(vjb, "media_service", None) is not None
+
+
+def test_image_generation_runner_module():
+    from app.services.generation_runtime.image_generation_runner import (
+        _run_generate_image,
+        _run_generate_image_job,
+    )
+    from app.services.generation_runtime.project_generation_context import (
+        _normalize_seed_value,
+        _resolve_effective_negative_prompt,
+    )
+    from app.services.generation_runtime.video_provider_options import _build_video_provider_options
+    from app.services.generation_runtime.job_timeout import _maybe_finalize_stuck_job, _resolve_job_elapsed_seconds
+    from app.services.generation_runtime.queue_config_runtime import _is_pure_callback_mode_enabled
+    from app.services.user_model_preferences import _normalize_cfg, _normalize_temperature
+    assert callable(_run_generate_image)
+    assert callable(_run_generate_image_job)
+    assert _normalize_seed_value(42) == 42
+    assert _normalize_seed_value(0) is None
+    text, source = _resolve_effective_negative_prompt(None, "start_frame", "image")
+    assert source == "default_frame_integrity"
+    assert text
+    assert callable(_build_video_provider_options)
+    assert callable(_maybe_finalize_stuck_job)
+    assert _resolve_job_elapsed_seconds({}) is None
+    assert isinstance(_is_pure_callback_mode_enabled(), bool)
+    assert _normalize_cfg(1.5) == 1.5
+    assert _normalize_temperature(3) == 2.0
+
+
+def test_generation_shared_thinned():
+    from pathlib import Path
+    shared = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "shared.py"
+    lines = len(shared.read_text(encoding="utf-8").splitlines())
+    assert lines < 800
+    import app.api.routers.generation.shared as g
+    assert callable(g._run_generate_image)
+    assert callable(g._maybe_finalize_stuck_job)
+    paths = {getattr(r, "path", None) for r in g.router.routes}
+    assert "/generate/image" in paths
+    assert "/generate/image/submit" in paths
+
+
+def test_queue_worker_has_image_runner_lazy_path():
+    import inspect
+    import app.services.generation_runtime.queue_worker as qw
+    src = inspect.getsource(qw._process_generation_queue_task)
+    assert "image_generation_runner" in src
+    assert callable(getattr(qw, "_maybe_finalize_stuck_job"))

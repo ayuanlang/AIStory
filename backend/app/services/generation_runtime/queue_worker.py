@@ -41,6 +41,10 @@ from app.services.generation_task_queue import (
     patch_generation_task_payload,
     start_generation_task_worker,
 )
+from app.services.media_service import media_service
+from app.services.video_service import create_montage
+from app.services.generation_runtime.job_timeout import _maybe_finalize_stuck_job
+
 from app.services.task_manager import (
     get_status as _get_task_status,
     cancel as _cancel_task,
@@ -50,47 +54,12 @@ from app.services.task_manager import (
 )
 
 logger = logging.getLogger("api_logger")
-_q_conf = load_queue_config()
-
-def _queue_runtime_config() -> Dict[str, Any]:
-    try:
-        loaded = load_queue_config()
-        if isinstance(loaded, dict):
-            return loaded
-    except Exception:
-        pass
-    return dict(_q_conf or {})
-
-
-def _queue_cfg_bool(key: str, default: bool = False) -> bool:
-    cfg = _queue_runtime_config()
-    value = cfg.get(key, default)
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _queue_cfg_int(key: str, default: int, minimum: int = 0, maximum: int = 10**9) -> int:
-    cfg = _queue_runtime_config()
-    try:
-        raw = int(cfg.get(key, default))
-    except Exception:
-        raw = int(default)
-    return max(int(minimum), min(int(maximum), int(raw)))
-
-
-def _is_pure_callback_mode_enabled() -> bool:
-    auto_mode = _queue_cfg_bool("pure_callback_mode_auto", True)
-    if auto_mode:
-        is_public_deploy = bool(
-            str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
-            or str(os.getenv("RENDER") or "").strip()
-            or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
-            or str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()
-            or str(os.getenv("VERCEL_URL") or "").strip()
-        )
-        return is_public_deploy
-    return _queue_cfg_bool("pure_callback_mode", False)
+from app.services.generation_runtime.queue_config_runtime import (  # noqa: F401
+    _is_pure_callback_mode_enabled,
+    _queue_cfg_bool,
+    _queue_cfg_int,
+    _queue_runtime_config,
+)
 
 
 def _generation_task_status(task_ref: Any, *, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -176,6 +145,7 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
+        from app.services.generation_runtime.image_generation_runner import _run_generate_image_job
         return await _run_generate_image_job(
             job_id,
             int(user_id),
@@ -190,6 +160,7 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
+        from app.api.routers.generation.video_jobs import _run_generate_video_job
         return await _run_generate_video_job(
             job_id,
             int(user_id),
@@ -228,7 +199,7 @@ def _run_callback_compensation_once() -> None:
         _maybe_finalize_video_job_from_provider_callback,
         _normalize_generation_status,
     )
-    from app.api.routers.generation.shared import _maybe_finalize_stuck_job
+    # _maybe_finalize_stuck_job imported from generation_runtime.job_timeout
 
     pure_callback_mode = _is_pure_callback_mode_enabled()
     safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
