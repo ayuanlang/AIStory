@@ -228,7 +228,7 @@ def persist_assets_extraction_stage(
     episode: Episode,
     result_content: str,
 ) -> Dict[str, Any]:
-    from app.api.endpoints import sanitize_subject_index_text
+    from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 
     episode.ai_scene_analysis_subject_index = sanitize_subject_index_text(result_content)
     db.commit()

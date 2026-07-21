@@ -4237,7 +4237,7 @@ class BillingService:
                 ).first()
                 if allocation and allocation.credit_limit != -1:
                     if (allocation.used_credits or 0) + reserved_cost > allocation.credit_limit:
-                        raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
+                        raise HTTPException(status_code=402, detail="项目组积分配额已超限。 / Project group credit allocation exceeded.")
                         
         remaining_cost = reserved_cost
         if can_use_group_credits and group and (group.credits or 0) > 0 and remaining_cost > 0:
@@ -4252,7 +4252,7 @@ class BillingService:
 
         if remaining_cost > 0:
             if (user.credits or 0) < remaining_cost:
-                 raise HTTPException(status_code=402, detail="Insufficient personal credits.")
+                 raise HTTPException(status_code=402, detail="个人积分不足。 / Insufficient personal credits.")
             billed_personal_credits = remaining_cost
             user.credits -= remaining_cost
 
@@ -5011,7 +5011,7 @@ class BillingService:
         if user.credits < cost:
             raise HTTPException(
                 status_code=402, 
-                detail=f"Insufficient credits. Required: {cost}. Please top up or ask your group admin."
+                detail=f"积分不足。需要：{cost}。请充值或联系群组管理员。 / Insufficient credits. Required: {cost}. Please top up or ask your group admin."
             )
         return True
 
@@ -5076,7 +5076,7 @@ class BillingService:
                 ).first()
                 if allocation and allocation.credit_limit != -1:
                     if allocation.used_credits + final_cost > allocation.credit_limit:
-                        raise HTTPException(status_code=402, detail="Project group credit allocation exceeded.")
+                        raise HTTPException(status_code=402, detail="项目组积分配额已超限。 / Project group credit allocation exceeded.")
         
         remaining_cost = final_cost
         if can_use_group_credits and group and (group.credits or 0) > 0 and remaining_cost > 0:
@@ -5091,7 +5091,7 @@ class BillingService:
 
         if remaining_cost > 0:
             if (user.credits or 0) < remaining_cost:
-                 raise HTTPException(status_code=402, detail="Insufficient personal credits.")
+                 raise HTTPException(status_code=402, detail="个人积分不足。 / Insufficient personal credits.")
             billed_personal_credits = remaining_cost
             user.credits -= remaining_cost
             

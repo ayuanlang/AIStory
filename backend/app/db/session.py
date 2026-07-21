@@ -162,11 +162,12 @@ if is_sqlite:
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
-# Invalidate connections on disconnect errors so the pool discards them
+# SQLAlchemy 2.0: disconnects invalidate via is_disconnect / invalidate_pool_on_disconnect
+# (ExceptionContext has no invalidate_connection attribute).
 @event.listens_for(engine, "handle_error")
 def _handle_db_error(context):
-    if context.connection is not None and context.is_disconnect:
-        context.invalidate_connection = True
+    if context.is_disconnect:
+        context.invalidate_pool_on_disconnect = True
 
 
 @event.listens_for(engine.pool, "checkout")

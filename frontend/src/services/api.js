@@ -444,6 +444,15 @@ const VIDEO_JOB_TIMEOUT_MS_DEFAULT = (() => {
     return Math.min(15 * 60 * 1000, Math.max(60 * 1000, parsed));
 })();
 
+// Client → backend /generate/{image|video}/submit only (not job poll / callback wait).
+const MEDIA_SUBMIT_TIMEOUT_MS = (() => {
+    const parsed = Number(import.meta?.env?.VITE_MEDIA_SUBMIT_TIMEOUT_MS || 120000);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 120000;
+    }
+    return Math.max(15000, Math.min(180000, Math.floor(parsed)));
+})();
+
 const IMAGE_STATUS_MAX_CONCURRENT = (() => {
     const parsed = Number(import.meta?.env?.VITE_IMAGE_STATUS_MAX_CONCURRENT || 2);
     if (!Number.isFinite(parsed)) return 2;
@@ -2361,6 +2370,12 @@ const postMediaGenerationSubmitWithParallelLimitRetry = async (path, payload, co
         )
     );
     const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
+    const submitConfig = {
+        ...config,
+        timeout: Number.isFinite(Number(config?.timeout))
+            ? Number(config.timeout)
+            : MEDIA_SUBMIT_TIMEOUT_MS,
+    };
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         if (shouldCancel?.()) {
@@ -2370,7 +2385,7 @@ const postMediaGenerationSubmitWithParallelLimitRetry = async (path, payload, co
             throw cancelError;
         }
         try {
-            return await api.post(path, payload, config);
+            return await api.post(path, payload, submitConfig);
         } catch (error) {
             lastError = error;
             if (!isMediaParallelLimitError(error) || attempt >= maxAttempts) {

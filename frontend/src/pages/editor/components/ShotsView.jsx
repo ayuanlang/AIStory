@@ -140,6 +140,8 @@ import {
     getSettingSourceByCategory,
     formatProviderModelEndpointError,
     isSeedance2VideoBaseModel,
+    isSeedanceVideoModelName,
+    clampSeedanceVideoDuration,
 } from '../editorConfig';
 import {
     PROJECT_EP_TYPE_OPTIONS,
@@ -345,6 +347,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         () => isSeedance2VideoBaseModel(selectedGenerateVideosApi?.system_api_base_model),
         [selectedGenerateVideosApi]
     );
+    const isSelectedVideoApiSeedance = useMemo(
+        () => isSeedanceVideoModelName(
+            selectedGenerateVideosApi?.system_api_name,
+            selectedGenerateVideosApi?.system_api_model,
+            selectedGenerateVideosApi?.system_api_base_model,
+            selectedGenerateVideosApi?.alias,
+            selectedGenerateVideosApi?.name,
+            selectedGenerateVideosApi?.model,
+            selectedGenerateVideosApi?.provider,
+        ),
+        [selectedGenerateVideosApi]
+    );
     const isSd2AutoDurationActive = isSelectedVideoApiSeedance2 && sd2AutoDuration;
 
     useEffect(() => {
@@ -384,8 +398,26 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const normalized = String(shotDuration ?? '').trim();
         if (normalized === '-1') return 5;
         const tableDuration = parseFloat(shotDuration);
-        return Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
-    }, [isSd2AutoDurationActive]);
+        let duration = Number.isFinite(tableDuration) && tableDuration > 0 ? tableDuration : 5;
+        if (isSelectedVideoApiSeedance) {
+            duration = clampSeedanceVideoDuration(duration).duration;
+        }
+        return duration;
+    }, [isSd2AutoDurationActive, isSelectedVideoApiSeedance]);
+
+    const notifySeedanceDurationClampIfNeeded = useCallback((originalDuration, clampedDuration) => {
+        const original = Number(originalDuration);
+        const clamped = Number(clampedDuration);
+        if (!Number.isFinite(original) || original <= 0) return;
+        if (!Number.isFinite(clamped) || clamped === original) return;
+        if (original >= 4 && original <= 15) return;
+        const msg = t(
+            'Seedance最小时长必须为4，最大为15',
+            'Seedance minimum duration must be 4s, maximum 15s'
+        );
+        notifyUiMessage(msg, 'warning');
+        onLog?.(msg, 'warning');
+    }, [t, onLog]);
 
     const [promptSubmitLangPref, setPromptSubmitLangPref] = useState(() => getPromptSubmitLanguagePreference());
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
@@ -8571,7 +8603,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
             
             // Duration Logic: Seedance2 auto duration uses -1; otherwise use shot table duration.
+            // Seedance models clamp to [4, 15] and notify when out of range.
+            const rawTableDuration = (() => {
+                if (isSd2AutoDurationActive) return -1;
+                const normalized = String(editingShot.duration ?? '').trim();
+                if (normalized === '-1') return 5;
+                const parsed = parseFloat(editingShot.duration);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+            })();
             const durParam = resolveShotVideoDurationParam(editingShot.duration);
+            if (isSelectedVideoApiSeedance) {
+                notifySeedanceDurationClampIfNeeded(rawTableDuration, durParam);
+            }
             const prevContShot = (usePrevVideo || shouldInjectContinuationPrompt)
                 ? findPrevContinuationShot(targetShotId || editingShot.id)
                 : null;

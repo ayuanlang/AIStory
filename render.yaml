@@ -24,11 +24,11 @@ services:
       echo "[boot] KIE data import is disabled during deploy"
       export RUN_DB_BOOTSTRAP_ON_START=1
       echo "[boot] RUN_DB_BOOTSTRAP_ON_START=1 to run startup DB bootstrap"
-      echo "[boot] starting gunicorn on PORT=${PORT}"
+      echo "[boot] starting gunicorn on PORT=${PORT} workers=${WEB_CONCURRENCY:-1}"
       exec gunicorn app.main:app \
         -k uvicorn.workers.UvicornWorker \
         --bind 0.0.0.0:$PORT \
-        --workers 1 \
+        --workers ${WEB_CONCURRENCY:-1} \
         --timeout ${GUNICORN_TIMEOUT:-180} \
         --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-180} \
         --keep-alive ${GUNICORN_KEEPALIVE:-15} \
@@ -58,8 +58,9 @@ services:
         value: "31536000"
       - key: GZIP_MINIMUM_SIZE
         value: "1024"
+      # 4GB-class hosts: keep a single async worker; do not raise without more RAM.
       - key: WEB_CONCURRENCY
-        value: "2"
+        value: "1"
       - key: RUN_GENERATION_QUEUE_WORKER_ON_START
         value: "0"
       - key: RUN_MAINTENANCE_SCHEDULER
@@ -115,6 +116,10 @@ services:
         value: "300"
       - key: ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS
         value: "300"
+      - key: MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS
+        value: "15"
+      - key: MEDIA_SUBMIT_IO_TIMEOUT_SECONDS
+        value: "60"
       - key: LLM_DEBUG_LOG
         value: "0"
       - key: LLM_DEBUG_LOG_CONTENT
@@ -197,6 +202,10 @@ services:
         value: "0"
       - key: GENERATION_QUEUE_WORKER_THREADS
         value: "2"
+      - key: MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS
+        value: "15"
+      - key: MEDIA_SUBMIT_IO_TIMEOUT_SECONDS
+        value: "60"
       - key: GUNICORN_TIMEOUT
         value: "600"
       - key: GUNICORN_GRACEFUL_TIMEOUT
@@ -268,6 +277,8 @@ services:
         value: "1"
       - key: VITE_ANALYZE_SCENE_SUBMIT_TIMEOUT_MS
         value: "300000"
+      - key: VITE_MEDIA_SUBMIT_TIMEOUT_MS
+        value: "120000"
       - key: BACKEND_PROXY_TARGET
         value: "https://aistory-backend-xggg.onrender.com"
       - key: BACKEND_PROXY_TIMEOUT_MS

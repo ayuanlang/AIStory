@@ -474,7 +474,7 @@ def allocate_group_credits(
         if total <= 0:
             raise HTTPException(status_code=400, detail="total_amount must be positive")
         if total > pool:
-            raise HTTPException(status_code=400, detail="Insufficient group credits")
+            raise HTTPException(status_code=400, detail="组积分不足。 / Insufficient group credits.")
         plan = _build_equal_allocations(target_ids, total)
     elif mode == "custom":
         if not body.allocations:
@@ -512,7 +512,7 @@ def allocate_group_credits(
     if total_out > pool:
         raise HTTPException(
             status_code=400,
-            detail=f"Insufficient group credits: need {total_out}, have {pool}",
+            detail=f"组积分不足：需要 {total_out}，当前 {pool}。 / Insufficient group credits: need {total_out}, have {pool}.",
         )
 
     group.credits = pool - total_out

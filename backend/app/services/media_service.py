@@ -42,6 +42,22 @@ logger = logging.getLogger("media_service")
 
 DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS = int(os.getenv("VIDEO_POLL_TIMEOUT_SECONDS", "600"))
 DEFAULT_N1N_IMAGE_READ_TIMEOUT_SECONDS = max(120, int(os.getenv("N1N_IMAGE_READ_TIMEOUT_SECONDS", "300")))
+# Upstream create-task HTTP only (not poll / callback wait). Keep short so hung providers fail fast.
+DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS = max(
+    5, int(os.getenv("MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS", "15") or 15)
+)
+DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS = max(
+    15, int(os.getenv("MEDIA_SUBMIT_IO_TIMEOUT_SECONDS", "60") or 60)
+)
+
+
+def _media_submit_timeout_pair(
+    connect_timeout: Optional[int] = None,
+    io_timeout: Optional[int] = None,
+) -> Tuple[int, int]:
+    connect = DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS if connect_timeout is None else int(connect_timeout)
+    io = DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS if io_timeout is None else int(io_timeout)
+    return (max(5, connect), max(15, io))
 
 _BASE64_PATTERN = re.compile(r'(data:[\w/+.-]+;base64,)[A-Za-z0-9+/=]{64,}')
 _RAW_BASE64_PATTERN = re.compile(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{256,}(?:={0,2})(?![A-Za-z0-9+/=])')
@@ -3624,19 +3640,40 @@ class MediaGenerationService:
 
         return None
 
-    async def _submit_and_poll_image_task(self, url, payload, api_key, log_tag, extra_metadata=None, poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS, poll_interval_seconds: int = 2, provider_payload_callback: Any = None):
+    async def _submit_and_poll_image_task(
+        self,
+        url,
+        payload,
+        api_key,
+        log_tag,
+        extra_metadata=None,
+        poll_timeout_seconds: int = DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS,
+        poll_interval_seconds: int = 2,
+        provider_payload_callback: Any = None,
+        pure_callback_mode: bool = False,
+        callback_enabled: bool = False,
+        callback_ticket: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         provider_name = str((extra_metadata or {}).get("provider") or "").strip().lower()
 
         safe_url = _strip_query_from_log_url(url) or url
         _debug_log(f"[{log_tag}] Submitting to URL: {safe_url} | Payload: {_format_payload_for_log(payload)}")
 
+        submit_timeouts = _media_submit_timeout_pair()
+
         def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
             request_headers = dict(headers)
             if connection_close:
                 request_headers["Connection"] = "close"
-            c_timeout = connect_timeout or 60
-            kwargs = {"json": payload, "headers": request_headers, "timeout": (c_timeout, 60), "verify": False}
+            c_timeout = connect_timeout or submit_timeouts[0]
+            kwargs = {
+                "json": payload,
+                "headers": request_headers,
+                "timeout": (c_timeout, submit_timeouts[1]),
+                "verify": False,
+            }
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.post(url, **kwargs)
@@ -3721,6 +3758,32 @@ class MediaGenerationService:
                         task_id,
                         callback_err,
                     )
+
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "[%s] pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                    log_tag,
+                    task_id,
+                    callback_ticket or None,
+                    callback_url or None,
+                )
+                pending_meta = dict(extra_metadata or {})
+                pending_meta.update(
+                    {
+                        "raw": data,
+                        "submit_raw": data,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                    }
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": pending_meta,
+                }
 
             max_attempts = max(1, int(poll_timeout_seconds / max(1, poll_interval_seconds)))
             for _ in range(max_attempts):
@@ -6676,17 +6739,22 @@ class MediaGenerationService:
             raw_endpoint = tool_conf.get("endpoint") or "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
             endpoint = self._normalize_doubao_video_tasks_endpoint(raw_endpoint)
             raw_callback_url = str(
-                tool_conf.get("callback_url")
+                tool_conf.get("_provider_callback_url")
+                or tool_conf.get("callback_url")
                 or tool_conf.get("callbackUrl")
                 or tool_conf.get("callBackUrl")
                 or tool_conf.get("webHook")
                 or ""
             ).strip()
-            callback_ticket = f"doubao-{gen_type}"
+            callback_ticket = str(tool_conf.get("_provider_callback_ticket") or "").strip() or f"doubao-{gen_type}"
             callback_tool_conf = dict(tool_conf or {})
             if raw_callback_url:
                 callback_tool_conf.setdefault("callback_url", raw_callback_url)
             callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+            callback_enabled = bool(callback_url and callback_url != "-1")
+            pure_callback_mode = bool(
+                str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
             if callback_url and callback_url != raw_callback_url:
                 logger.info(
                     "Doubao callback auto-assigned | gen_type=%s ticket=%s callback_url=%s raw_callback=%s",
@@ -6875,6 +6943,10 @@ class MediaGenerationService:
                 extra_metadata=base_metadata,
                 poll_timeout_seconds=poll_timeout_seconds,
                 poll_interval_seconds=poll_interval_seconds,
+                pure_callback_mode=pure_callback_mode,
+                callback_enabled=callback_enabled,
+                callback_ticket=callback_ticket,
+                callback_url=callback_url,
                 provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
             )
 
@@ -6899,6 +6971,10 @@ class MediaGenerationService:
         callback_tool_conf = dict(tool_conf or {})
         if raw_callback_url: callback_tool_conf.setdefault("callback_url", raw_callback_url)
         callback_url = self._resolve_provider_callback_url(callback_tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(
+            str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
 
         def _normalize_bool(raw: Any, default: bool) -> bool:
             if raw is None:
@@ -7043,9 +7119,11 @@ class MediaGenerationService:
 
         # Always pass the resolved audio flag to Vidu payload.
         payload["is_rec"] = bool(sound_enabled)
+        if callback_enabled:
+            payload["webhookUrl"] = callback_url
 
         _debug_log(
-            f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}, Sound={payload.get('is_rec')}"
+            f"[Vidu] Job Submission: Model={model}, Dur={payload.get('duration')}, Res={payload.get('resolution')}, MultiFrame={is_multiframe}, Sound={payload.get('is_rec')}, callback_enabled={callback_enabled}"
         )
         
         headers = {
@@ -7056,7 +7134,7 @@ class MediaGenerationService:
         try:
             # Submit
             resp = await asyncio.to_thread(
-                lambda: requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120))
+                lambda: requests.post(endpoint, json=payload, headers=headers, timeout=_media_submit_timeout_pair())
             )
             if resp.status_code not in [200, 201]:
                 return {"error": f"Vidu Error {resp.status_code}", "details": resp.text}
@@ -7065,6 +7143,40 @@ class MediaGenerationService:
             task_id = data.get("id")
             if not task_id:
                 return {"error": "No Task ID returned", "details": resp.text}
+
+            task_id_callback = tool_conf.get("_provider_task_id_callback")
+            if callable(task_id_callback):
+                try:
+                    callback_result = task_id_callback(str(task_id))
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                except Exception as callback_err:
+                    logger.warning("Vidu task_id_callback_failed | task_id=%s error=%s", task_id, callback_err)
+
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "Vidu pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                    task_id,
+                    callback_ticket,
+                    callback_url,
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": {
+                        "raw": data,
+                        "submit_raw": data,
+                        "provider": "vidu",
+                        "model": model,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                        "has_audio": bool(sound_enabled),
+                        "sound": bool(sound_enabled),
+                    },
+                }
 
             # Poll
             poll_url = f"{endpoint}/{task_id}"
@@ -7130,6 +7242,17 @@ class MediaGenerationService:
         callback_deployment_hint = self._is_public_deployment_hint()
         callback_public_base = self._resolve_public_base_url()
         callback_url = self._resolve_provider_callback_url(tool_conf, callback_ticket)
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(
+            str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        # Never wait-only on callbacks when this process is not on a publicly reachable deploy.
+        if pure_callback_mode and not self._is_public_deployment_hint():
+            logger.info(
+                "[GrsaiTrace][%s] pure_callback_mode ignored on non-public deploy; falling back to provider poll",
+                trace_id,
+            )
+            pure_callback_mode = False
         callback_source = "none"
         if raw_callback_url and raw_callback_url != "-1":
             callback_source = "explicit"
@@ -7138,12 +7261,13 @@ class MediaGenerationService:
         elif callback_url == "-1" or raw_callback_url == "-1":
             callback_source = "disabled"
         logger.info(
-            "[GrsaiTrace][%s] callback resolution | ticket=%s raw_callback=%s resolved_callback=%s callback_source=%s deployment_hint=%s public_base=%s",
+            "[GrsaiTrace][%s] callback resolution | ticket=%s raw_callback=%s resolved_callback=%s callback_source=%s pure_callback_mode=%s deployment_hint=%s public_base=%s",
             trace_id,
             callback_ticket,
             _strip_query_from_log_url(raw_callback_url),
             _strip_query_from_log_url(callback_url),
             callback_source,
+            pure_callback_mode and callback_enabled,
             callback_deployment_hint,
             _strip_query_from_log_url(callback_public_base),
         )
@@ -7385,6 +7509,10 @@ class MediaGenerationService:
                 trace_id=trace_id,
                 task_id_callback=task_id_callback,
                 extra_headers=grsai_extra_headers,
+                pure_callback_mode=pure_callback_mode,
+                callback_enabled=callback_enabled,
+                callback_ticket=callback_ticket,
+                callback_url=callback_url,
             )
 
         # Video
@@ -7558,13 +7686,31 @@ class MediaGenerationService:
             )
             
             # Double check payload validity before sending
-            return await self._submit_and_poll_grsai(endpoint, payload, api_key, result_url, is_video=True, extra_metadata=base_metadata, trace_id=trace_id)
+            video_task_id_callback = tool_conf.get("_grsai_task_id_callback")
+            if not callable(video_task_id_callback):
+                video_task_id_callback = tool_conf.get("_provider_task_id_callback")
+            if not callable(video_task_id_callback):
+                video_task_id_callback = None
+            return await self._submit_and_poll_grsai(
+                endpoint,
+                payload,
+                api_key,
+                result_url,
+                is_video=True,
+                extra_metadata=base_metadata,
+                trace_id=trace_id,
+                task_id_callback=video_task_id_callback,
+                pure_callback_mode=pure_callback_mode,
+                callback_enabled=callback_enabled,
+                callback_ticket=callback_ticket,
+                callback_url=callback_url,
+            )
     
     async def _submit_and_poll_grsai_legacy(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
-        # Increased timeout to 300s
-        def _post(): return requests.post(url, json=payload, headers=headers, timeout=(30, 600), verify=False)
+        def _post():
+            return requests.post(url, json=payload, headers=headers, timeout=_media_submit_timeout_pair(), verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
@@ -7871,7 +8017,8 @@ class MediaGenerationService:
         
         _debug_log(f"[Wanxiang] POSTING to {endpoint} with Model {model}")
         
-        def _post(): return requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
+        def _post():
+            return requests.post(endpoint, json=payload, headers=headers, timeout=_media_submit_timeout_pair(), verify=False)
         
         try:
             resp = await asyncio.to_thread(_post)
@@ -8075,7 +8222,7 @@ class MediaGenerationService:
         _debug_log(f"[HappyHorse] POSTING to {endpoint} with model={model} refs={len(resolved_refs)}")
 
         def _post():
-            return requests.post(endpoint, json=payload, headers=headers, timeout=(15, 120), verify=False)
+            return requests.post(endpoint, json=payload, headers=headers, timeout=_media_submit_timeout_pair(), verify=False)
 
         try:
             resp = await asyncio.to_thread(_post)
@@ -9374,12 +9521,23 @@ class MediaGenerationService:
                 "seconds": payload.get("seconds"),
                 "size": payload.get("size"),
             }
+            callback_enabled = bool(callback_url and callback_url != "-1")
+            pure_callback_mode = bool(
+                str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+            if callback_enabled:
+                payload["webhookUrl"] = callback_url
+                payload["callback_url"] = callback_url
             return await self._submit_and_poll_video(
                 submit_url,
                 payload,
                 api_key,
                 f"{str(provider_name).lower()}_video",
                 extra_metadata=base_metadata,
+                pure_callback_mode=pure_callback_mode,
+                callback_enabled=callback_enabled,
+                callback_ticket=callback_ticket,
+                callback_url=callback_url,
                 provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
             )
 
@@ -9615,7 +9773,7 @@ class MediaGenerationService:
             endpoint,
             json=payload,
             headers=headers,
-            timeout=(20, 90),
+            timeout=_media_submit_timeout_pair(),
             verify=False,
         )
 
@@ -9644,7 +9802,7 @@ class MediaGenerationService:
                     endpoint,
                     json=payload,
                     headers=headers,
-                    timeout=(20, 90),
+                    timeout=_media_submit_timeout_pair(),
                     verify=False,
                 )
                 if submit_resp_retry.status_code not in [200, 201, 202]:
@@ -9906,7 +10064,14 @@ class MediaGenerationService:
         }
         
         try:
-            resp = await asyncio.to_thread(requests.post, submit_url, json=payload, headers=headers, timeout=(15, 60), verify=False)
+            resp = await asyncio.to_thread(
+                requests.post,
+                submit_url,
+                json=payload,
+                headers=headers,
+                timeout=_media_submit_timeout_pair(),
+                verify=False,
+            )
             data = resp.json() if resp.text else {}
             if resp.status_code not in [200, 201]:
                 return {"error": f"Submission Failed {resp.status_code}", "details": data, "submit_failed": True}
@@ -9929,12 +10094,13 @@ class MediaGenerationService:
         if not task_id:
             return {"error": f"No Task ID or URL returned: {data}", "submit_failed": True}
 
-        if pure_callback_mode and callback_enabled and str(gen_type or "").strip().lower() == "video":
+        if pure_callback_mode and callback_enabled and str(gen_type or "").strip().lower() in {"video", "image"}:
             logger.info(
-                "AICLUB pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                "AICLUB pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s gen_type=%s",
                 task_id,
                 callback_ticket,
                 callback_url,
+                gen_type,
             )
             pending_meta = dict(base_metadata)
             pending_meta.update(
@@ -11410,6 +11576,10 @@ class MediaGenerationService:
             )
         if callback_url:
             payload["callback_url"] = callback_url
+        callback_enabled = bool(callback_url and callback_url != "-1")
+        pure_callback_mode = bool(
+            str(tool_conf.get("_pure_callback_mode") or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
 
         extra_metadata = {
             "provider": provider_name,
@@ -11425,6 +11595,10 @@ class MediaGenerationService:
             f"{str(provider_name).lower()}_kling_image",
             extra_metadata=extra_metadata,
             provider_payload_callback=tool_conf.get("_provider_payload_callback") if callable(tool_conf.get("_provider_payload_callback")) else None,
+            pure_callback_mode=pure_callback_mode,
+            callback_enabled=callback_enabled,
+            callback_ticket=callback_ticket,
+            callback_url=callback_url,
         )
 
     async def _handle_stability_generation(self, gen_type, prompt, config, ref_image=None, negative_prompt: Optional[str] = None):
@@ -11677,11 +11851,12 @@ class MediaGenerationService:
             normalized = _normalize_provider_task_usage(_extract_provider_task_usage(value))
             return normalized or None
 
-        def _post_json(url, body, use_proxy=True, connect_timeout=15, read_timeout=120):
+        def _post_json(url, body, use_proxy=True, connect_timeout=None, read_timeout=None):
+            submit_timeouts = _media_submit_timeout_pair(connect_timeout=connect_timeout, io_timeout=read_timeout)
             kwargs = {
                 "json": body,
                 "headers": headers,
-                "timeout": (connect_timeout, read_timeout),
+                "timeout": submit_timeouts,
                 "verify": False,
             }
             if not use_proxy:
@@ -11693,10 +11868,10 @@ class MediaGenerationService:
             for submit_attempt in range(max_submit_attempts):
                 try:
                     try:
-                        resp = await asyncio.to_thread(_post_json, submit_url, payload, True, 15, 120)
+                        resp = await asyncio.to_thread(_post_json, submit_url, payload, True)
                     except (requests.exceptions.ProxyError, requests.exceptions.SSLError) as e:
                         _debug_log(f"[{log_tag}] RunningHub submit failed with proxy ({str(e)[:120]}), retrying without proxy...", "warning")
-                        resp = await asyncio.to_thread(_post_json, submit_url, payload, False, 15, 120)
+                        resp = await asyncio.to_thread(_post_json, submit_url, payload, False)
                     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                         return self._build_ambiguous_submit_result("runninghub", log_tag, e, submit_url, extra_metadata)
                 except requests.exceptions.RequestException as e:
@@ -11926,12 +12101,19 @@ class MediaGenerationService:
         
         _debug_log(f"[{log_tag}] Submitting to URL: {url} | Payload: {_strip_base64_from_log(payload)}")
         
+        submit_timeouts = _media_submit_timeout_pair()
+
         def _post(use_proxy=True, connection_close: bool = False, connect_timeout=None):
             request_headers = dict(headers)
             if connection_close:
                 request_headers["Connection"] = "close"
-            c_timeout = connect_timeout or 60
-            kwargs = {"json": payload, "headers": request_headers, "timeout": (c_timeout, 60), "verify": False}
+            c_timeout = connect_timeout or submit_timeouts[0]
+            kwargs = {
+                "json": payload,
+                "headers": request_headers,
+                "timeout": (c_timeout, submit_timeouts[1]),
+                "verify": False,
+            }
             if not use_proxy:
                 kwargs["proxies"] = {"http": None, "https": None}
             return requests.post(url, **kwargs)
@@ -12186,7 +12368,7 @@ class MediaGenerationService:
             kwargs = {
                 "json": payload,
                 "headers": request_headers,
-                "timeout": (30, 120),
+                "timeout": _media_submit_timeout_pair(),
                 "verify": False,
             }
             if not use_proxy:
@@ -12468,7 +12650,22 @@ class MediaGenerationService:
                 )
             return {"error": str(exc), "submit_failed": True}
 
-    async def _submit_and_poll_grsai(self, url, payload, api_key, result_url, is_video=False, extra_metadata=None, trace_id: Optional[str] = None, task_id_callback: Optional[Callable[[str], Any]] = None, extra_headers: Optional[Dict[str, str]] = None):
+    async def _submit_and_poll_grsai(
+        self,
+        url,
+        payload,
+        api_key,
+        result_url,
+        is_video=False,
+        extra_metadata=None,
+        trace_id: Optional[str] = None,
+        task_id_callback: Optional[Callable[[str], Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        pure_callback_mode: bool = False,
+        callback_enabled: bool = False,
+        callback_ticket: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         if extra_headers:
             for header_name, header_value in extra_headers.items():
@@ -12488,8 +12685,14 @@ class MediaGenerationService:
         payload_digest = hashlib.md5(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         payload_bytes = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         log_tag = "grsai_video" if is_video else "grsai_image"
-        submit_connect_timeout = max(10, int(os.getenv("GRSAI_SUBMIT_CONNECT_TIMEOUT_SECONDS", "20")))
-        submit_io_timeout = max(120, int(os.getenv("GRSAI_SUBMIT_IO_TIMEOUT_SECONDS", "300")))
+        submit_connect_timeout = max(
+            5,
+            int(os.getenv("GRSAI_SUBMIT_CONNECT_TIMEOUT_SECONDS", str(DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS)) or DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS),
+        )
+        submit_io_timeout = max(
+            15,
+            int(os.getenv("GRSAI_SUBMIT_IO_TIMEOUT_SECONDS", str(DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS)) or DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS),
+        )
 
         def _build_url_pairs(submit_url: str, poll_url: str):
             pairs = [(submit_url, poll_url)]
@@ -12628,6 +12831,33 @@ class MediaGenerationService:
                         task_id,
                         callback_err,
                     )
+
+            if pure_callback_mode and callback_enabled:
+                logger.info(
+                    "[GrsaiTrace][%s] pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s is_video=%s",
+                    trace_id,
+                    task_id,
+                    callback_ticket or None,
+                    _strip_query_from_log_url(callback_url),
+                    bool(is_video),
+                )
+                pending_meta = dict(extra_metadata or {})
+                pending_meta.update(
+                    {
+                        "raw": data,
+                        "submit_raw": data,
+                        "task_id": str(task_id),
+                        "taskId": str(task_id),
+                        "pending_callback": True,
+                        "callback_ticket": callback_ticket,
+                        "callback_url": callback_url,
+                    }
+                )
+                return {
+                    "pending_callback": True,
+                    "provider_task_id": str(task_id),
+                    "metadata": pending_meta,
+                }
 
             for i in range(150):
                 await asyncio.sleep(5)
@@ -14739,7 +14969,22 @@ class MediaGenerationService:
                     )
             
             logger.info("KIE performing HTTP Request | Method: POST | URL: %s | Payload_model: %s", submit_url, submit_payload.get('model'))
-            return requests.post(submit_url, json=submit_payload, headers=headers, timeout=(30, 600), verify=False)
+            return requests.post(
+                submit_url,
+                json=submit_payload,
+                headers=headers,
+                timeout=_media_submit_timeout_pair(
+                    connect_timeout=max(
+                        5,
+                        int(os.getenv("KIE_SUBMIT_CONNECT_TIMEOUT_SECONDS", str(DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS)) or DEFAULT_MEDIA_SUBMIT_CONNECT_TIMEOUT_SECONDS),
+                    ),
+                    io_timeout=max(
+                        15,
+                        int(os.getenv("KIE_SUBMIT_IO_TIMEOUT_SECONDS", str(DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS)) or DEFAULT_MEDIA_SUBMIT_IO_TIMEOUT_SECONDS),
+                    ),
+                ),
+                verify=False,
+            )
 
         def _kie_response_details(response: requests.Response) -> Dict[str, Any]:
             raw_text = ""
@@ -15274,12 +15519,13 @@ class MediaGenerationService:
                     callback_err,
                 )
 
-        if pure_callback_mode and callback_enabled and gen_type == "video":
+        if pure_callback_mode and callback_enabled and str(gen_type or "").strip().lower() in {"video", "image"}:
             logger.info(
-                "KIE pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s",
+                "KIE pure callback mode enabled | task_id=%s callback_ticket=%s callback_url=%s gen_type=%s",
                 task_id,
                 callback_ticket or None,
                 callback_url or None,
+                gen_type,
             )
             pending_meta = dict(base_metadata or {})
             pending_meta.update(
@@ -16109,10 +16355,19 @@ class MediaGenerationService:
         return public_base.rstrip("/")
 
     def _is_public_deployment_hint(self) -> bool:
+        """True only when a cloud/public base can actually receive provider webhooks.
+
+        FRONTEND_BASE_URL alone is not enough — local Vite often sets it, and providers
+        cannot reach localhost. Match queue ``pure_callback_mode_auto`` deploy signals.
+        """
         return bool(
-            self._resolve_public_base_url()
+            str(os.getenv("AISTORY_PUBLIC_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip()
+            or str(getattr(settings, "RENDER_EXTERNAL_URL", "") or "").strip()
+            or str(os.getenv("RENDER_EXTERNAL_URL") or "").strip()
             or str(os.getenv("RENDER") or "").strip()
             or str(os.getenv("RAILWAY_STATIC_URL") or "").strip()
+            or str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+            or str(os.getenv("VERCEL_URL") or "").strip()
         )
 
     def _resolve_provider_callback_url(self, tool_conf: Dict[str, Any], callback_ticket: str) -> str:

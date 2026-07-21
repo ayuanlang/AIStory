@@ -410,6 +410,114 @@ def _ensure_shots_project_episode_shot_id_unique_index(*, is_postgres: bool) -> 
             logger.warning("Shot unique index DDL failed (non-fatal): %s | err=%s", ddl, exc)
 
 
+def _canonicalize_scene_no_for_unique_index(scene_no: str) -> str:
+    """Mirror import canonicalization: EP01_SC03/03/3 → '3'; letter-suffix kept."""
+    import re
+
+    source = str(scene_no or "").strip()
+    if not source:
+        return ""
+    letter_match = re.fullmatch(r"(EP\d+_SC\d+[A-Za-z]+)", source, flags=re.IGNORECASE)
+    if letter_match:
+        return letter_match.group(1).upper()
+    canonical_match = re.fullmatch(r"EP\d+_SC(\d+)", source, flags=re.IGNORECASE)
+    if canonical_match:
+        return str(int(canonical_match.group(1)))
+    sc_match = re.fullmatch(r"SC?(\d+)", source, flags=re.IGNORECASE)
+    if sc_match:
+        return str(int(sc_match.group(1)))
+    if re.fullmatch(r"\d+", source):
+        return str(int(source))
+    return source
+
+
+def _ensure_scenes_episode_scene_no_unique_index(*, is_postgres: bool) -> None:
+    """Enforce active Scene uniqueness: one scene_no per episode (project implied)."""
+    if not is_postgres and engine.dialect.name != "sqlite":
+        logger.info("Skip scenes episode/scene_no unique index migration for dialect=%s", engine.dialect.name)
+        return
+
+    # 1) Canonicalize legacy aliases (EP01_SC03 → 3) then soft-delete active dupes.
+    try:
+        db = SessionLocal()
+        try:
+            Scene = models.Scene
+            rows = (
+                db.query(Scene)
+                .filter(
+                    (Scene.is_deleted.is_(False)) | (Scene.is_deleted.is_(None)),
+                    Scene.scene_no.isnot(None),
+                )
+                .order_by(Scene.episode_id.asc(), Scene.id.asc())
+                .all()
+            )
+            changed = 0
+            for row in rows:
+                canonical = _canonicalize_scene_no_for_unique_index(getattr(row, "scene_no", None))
+                if not canonical:
+                    continue
+                if str(row.scene_no or "").strip() != canonical:
+                    row.scene_no = canonical
+                    changed += 1
+            if changed:
+                db.commit()
+                logger.info("Canonicalized %s active scene_no value(s) before unique index", changed)
+            else:
+                db.rollback()
+
+            # Soft-delete older active duplicates per (episode_id, canonical scene_no).
+            active_rows = (
+                db.query(Scene)
+                .filter(
+                    (Scene.is_deleted.is_(False)) | (Scene.is_deleted.is_(None)),
+                    Scene.scene_no.isnot(None),
+                )
+                .order_by(Scene.episode_id.asc(), Scene.id.desc())
+                .all()
+            )
+            seen = set()
+            soft_deleted = 0
+            now = now_bj_iso()
+            for row in active_rows:
+                key = (
+                    int(getattr(row, "episode_id", 0) or 0),
+                    str(getattr(row, "scene_no", "") or "").strip().upper(),
+                )
+                if not key[1]:
+                    continue
+                if key in seen:
+                    row.is_deleted = True
+                    row.deleted_at = now
+                    soft_deleted += 1
+                    continue
+                seen.add(key)
+            if soft_deleted:
+                db.commit()
+                logger.info(
+                    "Soft-deleted %s duplicate active scene(s) before unique index",
+                    soft_deleted,
+                )
+            else:
+                db.rollback()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Scene canonicalization/dedup before unique index failed (non-fatal): %s", exc)
+
+    ddl = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_scenes_episode_scene_no_active "
+        "ON scenes (episode_id, upper(trim(scene_no))) "
+        "WHERE scene_no IS NOT NULL AND trim(scene_no) <> '' "
+        "AND coalesce(is_deleted, false) = false"
+    )
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(ddl))
+            logger.info("Ensured scenes episode/scene_no unique index")
+        except Exception as exc:
+            logger.warning("Scene unique index DDL failed (non-fatal): %s | err=%s", ddl, exc)
+
+
 def _ensure_entities_episode_scoped_unique_indexes(*, is_postgres: bool) -> None:
     """Enforce entity uniqueness for project+episode+type+normalized-name at DB level."""
     # Expression/partial unique indexes are supported by PostgreSQL and SQLite.
@@ -1178,6 +1286,11 @@ def check_and_migrate_tables(*, critical_only: bool = False):
             _ensure_shots_project_episode_shot_id_unique_index(is_postgres=is_postgres)
         except Exception as e:
             logger.error(f"Failed to ensure shots project/episode/shot_id unique index: {e}")
+
+        try:
+            _ensure_scenes_episode_scene_no_unique_index(is_postgres=is_postgres)
+        except Exception as e:
+            logger.error(f"Failed to ensure scenes episode/scene_no unique index: {e}")
 
         try:
             _ensure_assets_normalized_url_unique_index(is_postgres=is_postgres)

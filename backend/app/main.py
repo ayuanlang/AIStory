@@ -1320,6 +1320,31 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 _endpoints_module, _endpoints_router = _resolve_endpoints_router()
 app.include_router(_endpoints_router, prefix=settings.API_V1_STR)
+from app.api.routers.auth import router as auth_router
+app.include_router(auth_router, prefix=settings.API_V1_STR)
+from app.api.routers.admin_ops import router as admin_ops_router
+app.include_router(admin_ops_router, prefix=settings.API_V1_STR)
+from app.api.routers.billing import router as billing_router
+app.include_router(billing_router, prefix=settings.API_V1_STR)
+from app.api.routers.tools_agent import router as tools_agent_router
+app.include_router(tools_agent_router, prefix=settings.API_V1_STR)
+from app.api.routers.script_analysis_diagnosis import router as script_analysis_diagnosis_router
+app.include_router(script_analysis_diagnosis_router, prefix=settings.API_V1_STR)
+from app.api.routers.prompts_analyze import router as prompts_analyze_router
+app.include_router(prompts_analyze_router, prefix=settings.API_V1_STR)
+from app.api.routers.entities import router as entities_router
+app.include_router(entities_router, prefix=settings.API_V1_STR)
+from app.api.routers.assets import router as assets_router
+app.include_router(assets_router, prefix=settings.API_V1_STR)
+from app.api.routers.generate import router as generate_router
+app.include_router(generate_router, prefix=settings.API_V1_STR)
+from app.api.routers.workspace_residual import router as workspace_residual_router
+app.include_router(workspace_residual_router, prefix=settings.API_V1_STR)
+from app.api.routers.projects_workspace import router as projects_workspace_router
+app.include_router(projects_workspace_router, prefix=settings.API_V1_STR)
+# Helpers were split across routers; refresh fills after every peer is importable.
+from app.api.routers.helper_bind import rebind_all_router_helpers
+rebind_all_router_helpers()
 from app.api.video_credit_estimate import router as video_credit_estimate_router
 app.include_router(video_credit_estimate_router, prefix=settings.API_V1_STR)
 app.include_router(settings_api.router, prefix=settings.API_V1_STR)

@@ -410,13 +410,28 @@ const findDbSceneByPatchSceneId = (dbScenes, patchSceneId) => {
     const patchToken = normalizeSceneIdToken(patchSceneId);
     if (!patchToken) return null;
     const rows = Array.isArray(dbScenes) ? dbScenes : [];
-    // Exact Scene ID match only — never fall back to order, or leftover scenes
-    // from a previous run can steal storyboard kickoff for orchestration IDs.
-    return rows.find((row) => (
+    // Prefer exact Scene ID / scene_no / scene_code token match.
+    const exact = rows.find((row) => (
         [row?.scene_no, row?.scene_id, row?.scene_code]
             .map(normalizeSceneIdToken)
             .some((token) => token && token === patchToken)
-    )) || null;
+    ));
+    if (exact) return exact;
+
+    // Same episode scene number aliases: EP01_SC03 ↔ "3" / "03".
+    // Letter-suffix IDs stay exact-only so SC03A never steals SC03.
+    if (sceneIdHasLetterSuffix(patchSceneId)) return null;
+    const patchOrder = deriveSceneOrderFromSceneId(patchSceneId);
+    if (!(Number.isFinite(patchOrder) && patchOrder > 0)) return null;
+    return rows.find((row) => {
+        const candidates = [row?.scene_no, row?.scene_id, row?.scene_code];
+        return candidates.some((raw) => {
+            if (!String(raw || '').trim()) return false;
+            if (sceneIdHasLetterSuffix(raw)) return false;
+            const order = deriveSceneOrderFromSceneId(raw);
+            return Number.isFinite(order) && order > 0 && order === patchOrder;
+        });
+    }) || null;
 };
 
 const dbSceneMatchesPatchSceneId = (dbScenes, patchSceneId) => (
@@ -617,8 +632,23 @@ const alignSceneBeatsCandidatesWithStage2 = (scriptCandidates, stage2ByScene, ep
         };
     });
 
-    // When Stage 2 results exist, the selectable list must match Phase 2 cards exactly.
-    return aligned;
+    // Keep Stage 1 units missing from Stage 2 so incomplete orchestration remains recoverable.
+    units.forEach((unit, idx) => {
+        if (used.has(idx)) return;
+        aligned.push({
+            ...unit,
+            stage2Aligned: false,
+            missingFromStage2: true,
+            displayLabel: unit?.displayLabel || unit?.sceneId,
+        });
+    });
+
+    return aligned.sort((left, right) => {
+        if ((left.sceneOrder || 0) !== (right.sceneOrder || 0)) {
+            return (left.sceneOrder || 0) - (right.sceneOrder || 0);
+        }
+        return String(left.sceneId || '').localeCompare(String(right.sceneId || ''));
+    });
 };
 
 const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
@@ -2102,6 +2132,16 @@ const isAnalysisLiveStepActive = (phase, stepKey, { isLive = false } = {}) => {
     return false;
 };
 
+const isStoryboardTaskProgressSettled = (progressValue) => {
+    const progress = normalizeStoryboardTaskProgress(progressValue);
+    const started = Number(progress.started || 0);
+    if (started <= 0) return false;
+    const running = Number(progress.running || 0);
+    const waiting = Number(progress.waiting || 0);
+    const finished = Number(progress.completed || 0) + Number(progress.failed || 0);
+    return running <= 0 && waiting <= 0 && finished >= started;
+};
+
 const isPersistedAnalysisProgressRunning = (progressUi) => {
     if (!progressUi || progressUi.dismissed === true) return false;
     const flowStatus = (progressUi.flowStatus && typeof progressUi.flowStatus === 'object')
@@ -2112,6 +2152,10 @@ const isPersistedAnalysisProgressRunning = (progressUi) => {
     const phase = String(flowStatus?.phase || 'idle').trim().toLowerCase();
     const reportStatus = String(uiReport?.status || '').trim().toLowerCase();
     if (reportStatus === 'running') return true;
+    // Storyboard panel can linger on phase=storyboard after all shots settle; that is not a live run.
+    if (phase === 'storyboard' && isStoryboardTaskProgressSettled(uiReport?.storyboardTaskProgress)) {
+        return false;
+    }
     if (phase && !['idle', 'completed', 'failed', 'warning'].includes(phase)) return true;
     if (flowHistory.some((item) => !hasAnalysisHistoryEndedAt(item))) return true;
     return false;
@@ -3524,6 +3568,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             });
         });
     }, []);
+
+    // Heal stuck "剧本分析进行中" when storyboard already settled 1/1 but the panel
+    // never left phase=storyboard (no live pipeline / marker).
+    useEffect(() => {
+        if (!isAnalyzing && !isRetryingPhase2) return;
+        if (
+            analysisRunInFlightRef.current
+            || analysisResumeInFlightRef.current
+            || phase2GenerationInFlightRef.current
+        ) return;
+        const phase = String(analysisFlowStatus?.phase || '').trim().toLowerCase();
+        if (phase !== 'storyboard') return;
+        const progress = pickRicherStoryboardTaskProgress(
+            storyboardTaskProgress,
+            storyboardTaskProgressRef.current,
+            analysisUiReport?.storyboardTaskProgress,
+        );
+        if (!isStoryboardTaskProgressSettled(progress)) return;
+        latestIsAnalyzingRef.current = false;
+        setIsAnalyzing(false);
+        setIsRetryingPhase2(false);
+        setActiveAnalysisTaskId('');
+        setAnalysisFlowStatus((prev) => ({
+            phase: 'completed',
+            message: String(prev?.message || '').trim()
+                || t('分镜生成已结束', 'Storyboard generation finished'),
+            highlightHint: prev?.highlightHint || '',
+        }));
+        setAnalysisUiReport((prev) => {
+            if (!prev || typeof prev !== 'object') {
+                return {
+                    status: 'completed',
+                    storyboardTaskProgress: progress,
+                    storyboardAutoStarted: true,
+                };
+            }
+            if (String(prev.status || '').trim().toLowerCase() === 'failed') return prev;
+            const startedAt = Number(prev.startedAt || analysisTimerStartedAtRef.current || 0);
+            return {
+                ...prev,
+                status: 'completed',
+                storyboardTaskProgress: progress,
+                durationMs: startedAt > 0
+                    ? Math.max(0, Date.now() - startedAt)
+                    : Number(prev.durationMs || 0) || 0,
+                error: '',
+            };
+        });
+    }, [
+        analysisFlowStatus?.phase,
+        analysisUiReport?.storyboardTaskProgress,
+        isAnalyzing,
+        isRetryingPhase2,
+        storyboardTaskProgress,
+        t,
+    ]);
 
     useEffect(() => {
         if (isAnalyzing) return;
@@ -6560,31 +6660,99 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `"${stableMarker}" storyboard generation failed${orderLabel}${errorMessage ? `: ${errorMessage}` : ''}`
             );
         }
+        const waiting = Number(progress.waiting || 0);
         const finished = completed + failed;
-        const allSettled = started > 0 && running <= 0 && finished >= started;
+        const allSettled = started > 0 && running <= 0 && waiting <= 0 && finished >= started;
         const nextMessage = allSettled
             ? t(
                 `分镜生成已结束（完成 ${completed}/${started}${failed > 0 ? `，失败 ${failed}` : ''}）`,
                 `Storyboard generation finished (${completed}/${started} done${failed > 0 ? `, ${failed} failed` : ''})`
             )
             : t(
-                `分镜生成进行中（已启动 ${started}，完成 ${completed}，失败 ${failed}，运行中 ${running}）`,
-                `Storyboard generation in progress (started ${started}, done ${completed}, failed ${failed}, running ${running})`
+                `分镜生成进行中（已启动 ${started}，完成 ${completed}，失败 ${failed}，运行中 ${running}${waiting > 0 ? `，等待环境 ${waiting}` : ''}）`,
+                `Storyboard generation in progress (started ${started}, done ${completed}, failed ${failed}, running ${running}${waiting > 0 ? `, waiting env ${waiting}` : ''})`
             );
+        // Later pipeline phases (supplement / assets_gen / …) must not be clobbered once shots settle.
+        const storyboardOwnedPhases = new Set(['', 'idle', 'storyboard', 'scene_beats']);
+        const pipelineStillLive = Boolean(
+            analysisRunInFlightRef.current
+            || analysisResumeInFlightRef.current
+            || phase2GenerationInFlightRef.current
+            || latestIsAnalyzingRef.current
+        );
+        const prevPhaseSnapshot = String(
+            latestAnalysisProgressUiRef.current?.flowStatus?.phase || ''
+        ).trim().toLowerCase();
+        const analysisAlreadyTerminal = ['completed', 'warning', 'failed'].includes(prevPhaseSnapshot);
+        // Promote to completed only when shots are done and no parent analysis pipeline is live
+        // (e.g. standalone storyboard rerun). Avoids leaving the panel spinning on phase=storyboard.
+        const shouldFinalizeAnalysis = Boolean(
+            allSettled
+            && !pipelineStillLive
+            && !analysisAlreadyTerminal
+        );
         setAnalysisFlowStatus((prev) => {
             const prevPhase = String(prev?.phase || '').trim().toLowerCase();
             const analysisTerminal = prevPhase === 'completed' || prevPhase === 'warning' || prevPhase === 'failed';
+            if (analysisTerminal) {
+                return {
+                    ...prev,
+                    highlightHint: highlightHint || prev?.highlightHint || '',
+                };
+            }
+            if (!allSettled) {
+                return {
+                    phase: 'storyboard',
+                    message: nextMessage,
+                    highlightHint,
+                };
+            }
+            if (shouldFinalizeAnalysis) {
+                return {
+                    phase: 'completed',
+                    message: nextMessage,
+                    highlightHint,
+                };
+            }
+            // Shots are done but the main analysis pipeline is still running: keep its phase/message
+            // and only surface storyboard progress as a hint.
+            if (!storyboardOwnedPhases.has(prevPhase)) {
+                return {
+                    ...prev,
+                    highlightHint: highlightHint || nextMessage,
+                };
+            }
             return {
-                phase: (!allSettled || !analysisTerminal) ? 'storyboard' : prevPhase,
+                phase: 'storyboard',
                 message: nextMessage,
                 highlightHint,
             };
         });
-        setAnalysisUiReport((prev) => ({
-            ...(prev && typeof prev === 'object' ? prev : {}),
-            storyboardAutoStarted: started > 0 || Boolean(prev?.storyboardAutoStarted),
-            storyboardTaskProgress: progress,
-        }));
+        setAnalysisUiReport((prev) => {
+            const base = {
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                storyboardAutoStarted: started > 0 || Boolean(prev?.storyboardAutoStarted),
+                storyboardTaskProgress: progress,
+            };
+            if (!shouldFinalizeAnalysis) return base;
+            const startedAt = Number(prev?.startedAt || analysisTimerStartedAtRef.current || 0);
+            const durationMs = startedAt > 0
+                ? Math.max(0, Date.now() - startedAt)
+                : Number(prev?.durationMs || 0) || 0;
+            return {
+                ...base,
+                status: String(prev?.status || '').trim().toLowerCase() === 'failed' ? prev.status : 'completed',
+                startedAt: startedAt || prev?.startedAt || undefined,
+                durationMs,
+                error: String(prev?.status || '').trim().toLowerCase() === 'failed' ? (prev?.error || '') : '',
+            };
+        });
+        if (shouldFinalizeAnalysis) {
+            latestIsAnalyzingRef.current = false;
+            setIsAnalyzing(false);
+            setIsRetryingPhase2(false);
+            setActiveAnalysisTaskId('');
+        }
     }, [t]);
 
     const flushPendingStoryboardKickoffsRef = useRef(async () => ({ started: 0 }));
@@ -7060,19 +7228,34 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const publishWaitingStatus = () => {
             const progress = normalizeStoryboardTaskProgress(storyboardTaskProgressRef.current);
-            setAnalysisFlowStatus({
-                phase: 'storyboard',
-                message: t(
-                    `正在等待分镜生成完成（已启动 ${progress.started}，完成 ${progress.completed}，失败 ${progress.failed}，运行中 ${progress.running}）...`,
-                    `Waiting for storyboard generation (started ${progress.started}, done ${progress.completed}, failed ${progress.failed}, running ${progress.running})...`
-                ),
+            const waiting = Number(progress.waiting || 0);
+            setAnalysisFlowStatus((prev) => {
+                const prevPhase = String(prev?.phase || '').trim().toLowerCase();
+                if (['completed', 'warning', 'failed'].includes(prevPhase)) return prev;
+                return {
+                    phase: 'storyboard',
+                    message: t(
+                        `正在等待分镜生成完成（已启动 ${progress.started}，完成 ${progress.completed}，失败 ${progress.failed}，运行中 ${progress.running}${waiting > 0 ? `，等待环境 ${waiting}` : ''}）...`,
+                        `Waiting for storyboard generation (started ${progress.started}, done ${progress.completed}, failed ${progress.failed}, running ${progress.running}${waiting > 0 ? `, waiting env ${waiting}` : ''})...`
+                    ),
+                };
             });
-            setAnalysisUiReport((prev) => ({
-                ...(prev && typeof prev === 'object' ? prev : {}),
-                status: String(prev?.status || '').trim().toLowerCase() === 'failed' ? prev.status : 'running',
-                storyboardAutoStarted: true,
-                storyboardTaskProgress: progress,
-            }));
+            setAnalysisUiReport((prev) => {
+                const prevStatus = String(prev?.status || '').trim().toLowerCase();
+                if (['completed', 'warning', 'failed'].includes(prevStatus)) {
+                    return {
+                        ...(prev && typeof prev === 'object' ? prev : {}),
+                        storyboardAutoStarted: true,
+                        storyboardTaskProgress: progress,
+                    };
+                }
+                return {
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    status: prevStatus === 'failed' ? prev.status : 'running',
+                    storyboardAutoStarted: true,
+                    storyboardTaskProgress: progress,
+                };
+            });
             return progress;
         };
 
@@ -7097,9 +7280,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (analysisStopRequestedRef.current) break;
             const progress = publishWaitingStatus();
             const promiseCount = storyboardKickoffPromisesRef.current?.size || 0;
-            const settled = progress.started <= 0
-                || (progress.running <= 0 && promiseCount <= 0 && (progress.completed + progress.failed) >= progress.started);
-            if (settled) break;
+            const settled = isStoryboardTaskProgressSettled(progress) && promiseCount <= 0;
+            if (settled || (Number(progress.started || 0) <= 0 && promiseCount <= 0)) break;
             if (promiseCount > 0) {
                 await Promise.allSettled(Array.from(storyboardKickoffPromisesRef.current.values()));
                 continue;
@@ -9686,9 +9868,29 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             } catch (_) {
                 // Ignore marker parse failures during restore.
             }
+        } else if (
+            String(flowStatus?.phase || '').trim().toLowerCase() === 'storyboard'
+            && isStoryboardTaskProgressSettled(uiReport?.storyboardTaskProgress)
+        ) {
+            // Settled storyboard snapshot left phase=storyboard; show completed so the panel stops spinning.
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: String(flowStatus?.message || '').trim()
+                    || t('分镜生成已结束', 'Storyboard generation finished'),
+                highlightHint: flowStatus?.highlightHint || '',
+            });
+            if (uiReport) {
+                setAnalysisUiReport({
+                    ...uiReport,
+                    status: String(uiReport.status || '').trim().toLowerCase() === 'failed'
+                        ? uiReport.status
+                        : 'completed',
+                });
+            }
+            setIsAnalyzing(false);
         }
         return true;
-    }, [beginAnalysisTimer, hasPersistableAnalysisProgress]);
+    }, [beginAnalysisTimer, hasPersistableAnalysisProgress, t]);
 
     const dismissAnalysisProgressPanel = useCallback(() => {
         analysisProgressDismissedRef.current = true;
@@ -12541,7 +12743,47 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const pendingMarker = loadAnalysisTaskMarker(episodeId);
         const activeRun = getEpisodeAnalysisRun(episodeId);
         const hasPendingWork = Boolean(pendingMarker?.taskId || activeRun?.promise);
-        if (!hasPendingWork && (isAnalyzing || isRetryingPhase2)) return;
+        if (!hasPendingWork) {
+            // Stale isAnalyzing with no live marker/run (often after storyboard settles on phase=storyboard).
+            if (
+                (isAnalyzing || isRetryingPhase2)
+                && !analysisRunInFlightRef.current
+                && !analysisResumeInFlightRef.current
+                && !phase2GenerationInFlightRef.current
+            ) {
+                const ui = latestAnalysisProgressUiRef.current || {};
+                const phase = String(ui?.flowStatus?.phase || '').trim().toLowerCase();
+                const storyboardSettled = isStoryboardTaskProgressSettled(ui?.uiReport?.storyboardTaskProgress);
+                if (phase === 'storyboard' && storyboardSettled) {
+                    latestIsAnalyzingRef.current = false;
+                    setIsAnalyzing(false);
+                    setIsRetryingPhase2(false);
+                    setActiveAnalysisTaskId('');
+                    setAnalysisFlowStatus({
+                        phase: 'completed',
+                        message: String(ui?.flowStatus?.message || '').trim()
+                            || t('分镜生成已结束', 'Storyboard generation finished'),
+                        highlightHint: ui?.flowStatus?.highlightHint || '',
+                    });
+                    setAnalysisUiReport((prev) => {
+                        if (!prev || typeof prev !== 'object') return prev;
+                        if (String(prev.status || '').trim().toLowerCase() === 'failed') return prev;
+                        const startedAt = Number(prev.startedAt || analysisTimerStartedAtRef.current || 0);
+                        return {
+                            ...prev,
+                            status: 'completed',
+                            durationMs: startedAt > 0
+                                ? Math.max(0, Date.now() - startedAt)
+                                : Number(prev.durationMs || 0) || 0,
+                            error: '',
+                        };
+                    });
+                    return;
+                }
+                resetBootstrapAnalysisUiIfIdle();
+            }
+            return;
+        }
 
         analysisResumeCoordinatorRef.current = { running: true, episodeId };
         try {
@@ -17225,14 +17467,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             scopedScenes = dbScenes;
         }
 
-        // Dedupe by normalized Scene ID (legacy double-import); newest db id wins.
+        // Dedupe by canonical scene number (EP01_SC03 ↔ "3"); newest db id wins.
         const bestByMarker = new Map();
         for (const scene of (Array.isArray(scopedScenes) ? scopedScenes : [])) {
             const dbId = Number(scene?.id || 0);
             if (!Number.isFinite(dbId) || dbId <= 0) continue;
             const marker = String(scene?.scene_no || scene?.scene_id || scene?.scene_code || '').trim()
                 || `#${dbId}`;
-            const token = normalizeSceneIdToken(marker) || marker;
+            const order = deriveSceneOrderFromSceneId(marker);
+            const token = (
+                sceneIdHasLetterSuffix(marker)
+                    ? (normalizeSceneIdToken(marker) || marker)
+                    : (Number.isFinite(order) && order > 0
+                        ? `sc#${order}`
+                        : (normalizeSceneIdToken(marker) || marker))
+            );
             const prev = bestByMarker.get(token);
             if (!prev || dbId > Number(prev.dbSceneId || 0)) {
                 bestByMarker.set(token, {
@@ -17240,7 +17489,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     dbSceneId: dbId,
                     sceneOrder: Number(
                         progressItems[marker]?.sceneOrder
-                        || deriveSceneOrderFromSceneId(marker)
+                        || order
                         || 0
                     ) || 0,
                     displayLabel: String(scene?.scene_name || marker).trim() || marker,
@@ -17298,12 +17547,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         analysisProgressDismissedRef.current = false;
         setIsRerunningStoryboard(true);
+        const rerunStartedAt = Date.now();
+        beginAnalysisTimer(rerunStartedAt);
         setAnalysisFlowStatus({
             phase: 'storyboard',
             message: rerunMode === 'single'
                 ? t(`正在重跑分镜生成：${targetSceneId}...`, `Rerunning storyboard for ${targetSceneId}...`)
                 : t(`正在重跑全部 ${targets.length} 场分镜生成...`, `Rerunning storyboard for all ${targets.length} scenes...`),
         });
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt: rerunStartedAt,
+            durationMs: 0,
+            error: '',
+        }));
 
         let started = 0;
         try {
@@ -17316,11 +17574,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 });
                 if (ok) started += 1;
             }
-            setAnalysisUiReport((prev) => ({
-                ...(prev && typeof prev === 'object' ? prev : {}),
-                storyboardAutoStarted: true,
-                storyboardTaskProgress: storyboardTaskProgressRef.current || EMPTY_STORYBOARD_TASK_PROGRESS,
-            }));
             onLog?.(
                 t(
                     `[分镜生成] 已按场景重跑调起 ${started}/${targets.length} 场`,
@@ -17333,11 +17586,41 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     phase: 'warning',
                     message: t('分镜生成重跑未成功调起（可能仍在运行或缺少场景 ID）。', 'Storyboard rerun did not start (already running or missing scene id).'),
                 });
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    status: 'warning',
+                    durationMs: Date.now() - rerunStartedAt,
+                }));
+                return;
             }
+            const waitResult = await awaitPendingStoryboardTasks({
+                importReport: null,
+                ensureResidual: false,
+            });
+            const progress = normalizeStoryboardTaskProgress(
+                waitResult?.progress || storyboardTaskProgressRef.current
+            );
+            const failed = Number(progress.failed || 0);
+            setAnalysisFlowStatus({
+                phase: failed > 0 ? 'warning' : 'completed',
+                message: t(
+                    `分镜生成已结束（完成 ${progress.completed}/${progress.started}${failed > 0 ? `，失败 ${failed}` : ''}）`,
+                    `Storyboard generation finished (${progress.completed}/${progress.started} done${failed > 0 ? `, ${failed} failed` : ''})`
+                ),
+            });
+            setAnalysisUiReport((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                status: failed > 0 ? 'warning' : 'completed',
+                startedAt: rerunStartedAt,
+                durationMs: Date.now() - rerunStartedAt,
+                storyboardAutoStarted: true,
+                storyboardTaskProgress: progress,
+                error: '',
+            }));
         } finally {
             setIsRerunningStoryboard(false);
         }
-    }, [kickoffStoryboardForImportedScene, onLog, t]);
+    }, [awaitPendingStoryboardTasks, beginAnalysisTimer, kickoffStoryboardForImportedScene, onLog, t]);
 
     const openStoryboardRerunModal = useCallback(async () => {
         if (!activeEpisode?.id || isAnalyzing || isRerunningStoryboard) return;

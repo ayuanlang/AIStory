@@ -135,6 +135,30 @@ export const isSeedance2VideoBaseModel = (baseModel) => {
     return /^seedance[-_]?2(?:$|[-_.])/.test(normalized);
 };
 
+/** True when any identity part contains "Seedance" (case-insensitive). */
+export const isSeedanceVideoModelName = (...identityParts) => {
+    return identityParts.some((part) => String(part || '').toLowerCase().includes('seedance'));
+};
+
+export const SEEDANCE_DURATION_MIN_SECONDS = 4;
+export const SEEDANCE_DURATION_MAX_SECONDS = 15;
+
+/**
+ * Clamp Seedance video duration to [4, 15]. Preserves -1 (auto) and non-positive values.
+ * @returns {{ duration: number, clamped: boolean, original: number }}
+ */
+export const clampSeedanceVideoDuration = (duration) => {
+    const original = Number(duration);
+    if (!Number.isFinite(original) || original <= 0) {
+        return { duration: original, clamped: false, original };
+    }
+    const clamped = Math.max(
+        SEEDANCE_DURATION_MIN_SECONDS,
+        Math.min(SEEDANCE_DURATION_MAX_SECONDS, original)
+    );
+    return { duration: clamped, clamped: clamped !== original, original };
+};
+
 export const getSettingSourceByCategory = (settings, category) => {
     const active = (settings || []).find((item) => item?.category === category && item?.is_active);
     if (!active) return 'unset';

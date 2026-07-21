@@ -12,6 +12,14 @@ from typing import Any, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.services.billing_service import billing_service
+from app.services.project_visual_resolution import (
+    infer_dims_from_video_resolution_tier,
+    infer_project_resolution,
+    normalize_project_image_size,
+    normalize_project_video_resolution,
+    project_video_resolution_label,
+    resolve_video_billing_runtime_target,
+)
 
 
 def is_per_second_video_provider(provider: Any) -> bool:
@@ -154,28 +162,16 @@ def build_video_generation_billing_details(
         details: passed to estimate_cost_breakdown / reserve_credits
         meta: resolved provider/model/system_api_id + flags used by callers
     """
-    from app.api.endpoints import (
-        _resolve_media_runtime_target,
-        _infer_project_resolution,
-        _normalize_project_image_size,
-        _normalize_project_video_resolution,
-        _project_video_resolution_label,
-        _infer_dims_from_video_resolution_tier,
-    )
-
     mode_text = str(billing_mode or "ESTIMATE").strip().upper() or "ESTIMATE"
     fn_name = str(function_name or "generate_videos").strip() or "generate_videos"
 
     if runtime_target is None:
-        runtime_target = _resolve_media_runtime_target(
+        # Light resolve via system_api cache — never import endpoints / get_api_config.
+        runtime_target = resolve_video_billing_runtime_target(
+            system_api_id=system_api_id,
             provider=provider,
             model=model,
-            media_type="video",
             category="Video",
-            user_id=user_id,
-            user_credits=(user_credits or 0),
-            function_name=fn_name,
-            system_api_id=system_api_id,
         )
     else:
         runtime_target = dict(runtime_target)
@@ -212,13 +208,13 @@ def build_video_generation_billing_details(
     resolved_video_resolution = str(resolution or "").strip() or None
     resolved_video_image_size = str(image_size or project_visual.get("image_size") or "").strip() or None
     if resolved_video_image_size:
-        resolved_video_image_size = _normalize_project_image_size(resolved_video_image_size) or resolved_video_image_size
+        resolved_video_image_size = normalize_project_image_size(resolved_video_image_size) or resolved_video_image_size
 
     is_draft = bool(draft_mode)
     if is_draft:
         resolved_video_image_size = "0.5K"
         resolved_video_resolution = "480p"
-        draft_dims = _infer_dims_from_video_resolution_tier(
+        draft_dims = infer_dims_from_video_resolution_tier(
             aspect,
             "480",
             provider=reserve_provider,
@@ -231,13 +227,13 @@ def build_video_generation_billing_details(
             resolved_video_height = None
     else:
         video_tier = (
-            _normalize_project_video_resolution(video_resolution)
-            or _normalize_project_video_resolution(resolution)
-            or _normalize_project_video_resolution(project_visual.get("video_resolution"))
+            normalize_project_video_resolution(video_resolution)
+            or normalize_project_video_resolution(resolution)
+            or normalize_project_video_resolution(project_visual.get("video_resolution"))
             or "720"
         )
-        resolved_video_resolution = _project_video_resolution_label(video_tier)
-        video_dims = _infer_dims_from_video_resolution_tier(
+        resolved_video_resolution = project_video_resolution_label(video_tier)
+        video_dims = infer_dims_from_video_resolution_tier(
             aspect,
             video_tier,
             provider=reserve_provider,
@@ -247,7 +243,7 @@ def build_video_generation_billing_details(
             resolved_video_width, resolved_video_height = video_dims
 
     if (not resolved_video_width or not resolved_video_height) and resolved_video_image_size and aspect:
-        inferred_dims = _infer_project_resolution(aspect, resolved_video_image_size)
+        inferred_dims = infer_project_resolution(aspect, resolved_video_image_size)
         if inferred_dims:
             inferred_w, inferred_h = inferred_dims
             if not resolved_video_width and inferred_w:

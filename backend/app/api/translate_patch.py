@@ -48,12 +48,12 @@ async def translate_prompt_llm(
                 reserve_details, provider, model
             )
             if not reservation_tx:
-                raise HTTPException(status_code=402, detail="Insufficient balance.")
+                raise HTTPException(status_code=402, detail="余额不足。 / Insufficient balance.")
     except HTTPException:
         raise
     except Exception as e:
          logger.error(f"[translate] pre-billing failed: {e}")
-         raise HTTPException(status_code=500, detail="Billing precheck failed.")
+         raise HTTPException(status_code=500, detail="计费预检失败。 / Billing precheck failed.")
 
     target_lang_display = "English" if to_lang == "en" else "Simplified Chinese"
     source_lang_display = "Simplified Chinese" if from_lang == "zh" else "English"

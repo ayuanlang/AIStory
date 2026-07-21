@@ -331,6 +331,11 @@ class ScriptSegment(Base):
 
 class Scene(Base):
     __tablename__ = "scenes"
+    # Active-row uniqueness is enforced in init_db as partial unique index
+    # uq_scenes_episode_scene_no_active on (episode_id, upper(trim(scene_no)))
+    # WHERE coalesce(is_deleted,false)=false — soft-deleted rows may reuse the same Scene No.
+    # episode_id already scopes to one project; scene_no is canonicalized at import
+    # (EP01_SC03 / 03 / 3 → "3"; letter-suffix IDs keep full EP##_SC##X).
     id = Column(Integer, primary_key=True, index=True)
     episode_id = Column(Integer, ForeignKey("episodes.id"))
     
@@ -932,7 +937,7 @@ class Invoice(Base):
     created_at = Column(String, default=now_bj_iso)
 
 
-import datetime
+from datetime import datetime as _dt
 
 class EntityHistory(Base):
     __tablename__ = "entity_history"
@@ -957,7 +962,7 @@ class EntityHistory(Base):
     visual_params = Column(Text, nullable=True)
     narrative_description = Column(Text, nullable=True)
     
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=_dt.utcnow)
 
 
 class MarketIntelReport(Base):
