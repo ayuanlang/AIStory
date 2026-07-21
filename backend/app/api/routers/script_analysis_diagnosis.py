@@ -581,83 +581,13 @@ from app.services.user_model_preferences import (  # noqa: E402,F401
 )
 
 
-def _pick_first_non_empty_text(*values: Any) -> str:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                text = _pick_first_non_empty_text(item)
-                if text:
-                    return text
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return ""
-
-
-def _extract_project_creativity_value(project_metadata: Any) -> str:
-    if not isinstance(project_metadata, dict):
-        return ""
-
-    basic_information = project_metadata.get("basic_information") if isinstance(project_metadata.get("basic_information"), dict) else {}
-    basic_info = project_metadata.get("basic_info") if isinstance(project_metadata.get("basic_info"), dict) else {}
-    e_global_info = project_metadata.get("e_global_info") if isinstance(project_metadata.get("e_global_info"), dict) else {}
-    story_input = project_metadata.get("story_generator_global_input") if isinstance(project_metadata.get("story_generator_global_input"), dict) else {}
-
-    return _pick_first_non_empty_text(
-        project_metadata.get("creativity"),
-        basic_information.get("creativity"),
-        basic_info.get("creativity"),
-        e_global_info.get("creativity"),
-        story_input.get("creativity"),
-    )
-
-
-def _map_project_creativity_to_temperature(creativity_value: Any) -> Optional[float]:
-    raw = str(creativity_value or "").strip()
-    if not raw:
-        return None
-
-    normalized = raw.lower()
-
-    if "遵守剧本优先" in raw or "strict to script" in normalized:
-        return 0.35
-    if "增加想象力" in raw or "increase imagination" in normalized:
-        return 0.95
-    if "正常" in raw or "normal" in normalized:
-        return 0.7
-
-    return None
-
-
-def _inject_project_creativity_temperature(
-    llm_config: Optional[Dict[str, Any]],
-    project_metadata: Any,
-    *,
-    context: str,
-) -> Optional[Dict[str, Any]]:
-    if not isinstance(llm_config, dict):
-        return llm_config
-
-    creativity_value = _extract_project_creativity_value(project_metadata)
-    temperature = _map_project_creativity_to_temperature(creativity_value)
-    if temperature is None:
-        return llm_config
-
-    cfg = llm_config.get("config") if isinstance(llm_config.get("config"), dict) else {}
-    cfg["temperature"] = float(temperature)
-    llm_config["config"] = cfg
-    logger.info(
-        "[%s] applied creativity-driven temperature creativity=%s temperature=%s",
-        context,
-        creativity_value,
-        temperature,
-    )
-    return llm_config
-
-
+# Creativity → temperature helpers live in script_analysis_llm_config (service layer).
+from app.services.script_analysis_llm_config import (  # noqa: E402
+    _extract_project_creativity_value,
+    _inject_project_creativity_temperature,
+    _map_project_creativity_to_temperature,
+    _pick_first_non_empty_text,
+)
 
 
 def get_effective_api_setting(db: Session, user: User, provider: str = None, category: str = None) -> Optional[APISetting]:
