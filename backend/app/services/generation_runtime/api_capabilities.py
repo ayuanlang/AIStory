@@ -2,8 +2,9 @@
 """API capability flag / enum mapping helpers for generation."""
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.effective_api_setting import _safe_json_dict
 

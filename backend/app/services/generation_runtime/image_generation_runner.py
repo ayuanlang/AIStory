@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import math
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -12,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models.all_models import User
+from app.models.all_models import Entity, Project, User
 from app.schemas.generation import GenerationRequest
 from app.services.billing_service import billing_service
 from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
