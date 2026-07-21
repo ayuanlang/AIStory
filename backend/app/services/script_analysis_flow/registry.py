@@ -137,8 +137,9 @@ def _base_node_specs() -> List[Dict[str, Any]]:
             "phase": 2,
             "title": "逐场景分镜生成",
             "prompt_file": "skills/shot_generation.md",
-            # Scene import alone is not enough: wait for environment visual assets
-            # (asset_design_environment) so shot prompts can use ENV image baselines.
+            # Per imported scene: scene_markdown (workspace import) + asset_design_environment
+            # (environments + posters/covers) must both be ready before shot generation.
+            # Character/prop design is intentionally not a dependency.
             "depends_on": ["scene_markdown", "asset_design_environment"],
             "outputs": ["shots_markdown", "shot_rows"],
             "persist_targets": ["scene.ai_shots_result", "shot_rows"],

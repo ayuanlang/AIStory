@@ -1254,6 +1254,52 @@ def _build_shot_regenerate_prompts(
     return system_prompt, user_prompt
 
 
+def _resolve_scene_for_shot_persist(
+    db: Session,
+    *,
+    scene_id: int,
+    episode_id: Optional[int] = None,
+    scene_no: Optional[str] = None,
+) -> Tuple[Any, Optional[int]]:
+    """
+    Resolve the workspace scene row to persist shot markdown onto.
+
+    During script-analysis orchestration, a purge+reimport can replace the row
+    while ai_generate_shots LLM is in flight. Prefer the original id; if missing,
+    fall back to the active scene in the same episode with the same scene_no.
+    Returns (scene, remapped_from_scene_id|None).
+    """
+    scene = db.query(Scene).filter(Scene.id == int(scene_id)).first()
+    if scene is not None:
+        return scene, None
+
+    ep_id = int(episode_id or 0)
+    keys = [
+        str(k or "").strip()
+        for k in _scene_no_lookup_keys(scene_no, scene_id=scene_no)
+        if str(k or "").strip()
+    ]
+    if ep_id <= 0 or not keys:
+        return None, None
+
+    candidates = (
+        db.query(Scene)
+        .filter(Scene.episode_id == ep_id, _active_scene_clause())
+        .order_by(Scene.id.desc())
+        .all()
+    )
+    key_set = {k.upper() for k in keys}
+    for row in candidates:
+        row_keys = {
+            str(k or "").strip().upper()
+            for k in _scene_no_lookup_keys(getattr(row, "scene_no", None), scene_id=getattr(row, "scene_no", None))
+            if str(k or "").strip()
+        }
+        if row_keys & key_set:
+            return row, int(scene_id)
+    return None, None
+
+
 def _persist_scene_shot_generation_result(
     *,
     db: Session,
@@ -1262,6 +1308,8 @@ def _persist_scene_shot_generation_result(
     markdown_text: str,
     rows: List[Dict[str, Any]],
     usage: Optional[Dict[str, Any]] = None,
+    episode_id: Optional[int] = None,
+    scene_no: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Persist LLM shot-generation output to scene staging storage only.
@@ -1276,16 +1324,32 @@ def _persist_scene_shot_generation_result(
     }
     # The original ORM instance may be detached after _release_db_connection;
     # reload a session-bound instance before applying updates.
-    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    scene, remapped_from = _resolve_scene_for_shot_persist(
+        db,
+        scene_id=int(scene_id),
+        episode_id=episode_id,
+        scene_no=scene_no,
+    )
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
+    persist_scene_id = int(getattr(scene, "id", 0) or 0)
+    if remapped_from is not None:
+        warning = (
+            f"Original scene_id={remapped_from} was replaced during generation; "
+            f"persisted to active scene_id={persist_scene_id} scene_no={getattr(scene, 'scene_no', '')}"
+        )
+        result_wrapper["warnings"].append(warning)
+        result_wrapper["remapped_scene_id"] = persist_scene_id
+        result_wrapper["requested_scene_id"] = int(remapped_from)
+        logger.warning("[shot_generation.persist] %s", warning)
     scene.ai_shots_result = str(markdown_text or "")
     db.commit()
     logger.info(
-        "[shot_generation.persist] saved scene_id=%s markdown_len=%s rows=%s",
-        scene_id,
+        "[shot_generation.persist] saved scene_id=%s markdown_len=%s rows=%s remapped_from=%s",
+        persist_scene_id,
         len(scene.ai_shots_result or ""),
         len(result_wrapper.get("content") or []),
+        remapped_from,
     )
     return result_wrapper
 
@@ -2078,8 +2142,14 @@ async def ai_generate_shots(
             )
             raise
 
+        # Capture identity before releasing the DB for the long LLM call: orchestration
+        # purge+reimport may replace this row while generation is in flight.
+        persist_episode_id = int(getattr(episode, "id", 0) or 0) or None
+        persist_scene_no = str(getattr(scene, "scene_no", "") or "").strip() or None
+
         logger.info(
-            f"[ai_generate_shots] context scene_id={scene_id} episode_id={episode.id} project_id={project.id}"
+            f"[ai_generate_shots] context scene_id={scene_id} episode_id={episode.id} project_id={project.id} "
+            f"scene_no={persist_scene_no or ''}"
         )
 
         if req and req.user_prompt:
@@ -2342,6 +2412,8 @@ async def ai_generate_shots(
             markdown_text=response_content,
             rows=shots_data,
             usage=usage,
+            episode_id=persist_episode_id,
+            scene_no=persist_scene_no,
         )
         if generate_skipped:
             result_wrapper["warnings"] = list(
@@ -2351,8 +2423,9 @@ async def ai_generate_shots(
                 )
             )
 
+        response_scene_id = int(result_wrapper.get("remapped_scene_id") or scene_id or 0) or scene_id
         logger.info(
-            f"[ai_generate_shots] response_ready scene_id={scene_id} "
+            f"[ai_generate_shots] response_ready scene_id={response_scene_id} requested_scene_id={scene_id} "
             f"response_keys={list(result_wrapper.keys())} content_count={len(result_wrapper.get('content') or [])}"
         )
         

@@ -1754,13 +1754,13 @@ const Settings = () => {
                             <div>
                                 <h3 className="text-sm font-semibold text-white/90">{t('剧本分析流程节点自动启动', 'Script Analysis Flow Node Auto Start')}</h3>
                                 <p className="text-[11px] text-muted-foreground mt-1">
-                                    {t('控制场景编排完成后是否自动启动分镜，以及资产抽取完成后是否自动启动各类资产实现节点。手动重跑不受这些开关影响。', 'Controls whether storyboard generation auto-starts after scene planning and which asset-design nodes auto-start after asset extraction. Manual reruns are not affected.')}
+                                    {t('控制分镜是否在「该场场景编排入库 + 环境与海报资产设计完成」后自动启动，以及资产抽取完成后是否自动启动各类资产实现节点。手动重跑不受这些开关影响。', 'Controls whether storyboard auto-starts after each scene is imported and environment/poster asset design completes, and which asset-design nodes auto-start after asset extraction. Manual reruns are not affected.')}
                                 </p>
                             </div>
                             {isSavingScriptAnalysisFlow && <span className="text-[11px] text-muted-foreground">{t('保存中...', 'Saving...')}</span>}
                         </div>
                         {[
-                            { key: 'storyboard_generation', zh: '自动启动逐场景分镜生成（需环境资产设计完成）', en: 'Auto-start Per-scene Storyboard (requires env asset design)' },
+                            { key: 'storyboard_generation', zh: '自动启动逐场景分镜生成（需该场场景编排入库 + 环境与海报资产设计完成）', en: 'Auto-start Per-scene Storyboard (requires scene import + environment/poster asset design)' },
                             { key: 'asset_design_character', zh: '自动启动角色资产实现', en: 'Auto-start Character Asset Design' },
                             { key: 'asset_design_prop', zh: '自动启动道具资产实现', en: 'Auto-start Prop Asset Design' },
                             { key: 'asset_design_environment', zh: '自动启动场景/海报资产实现', en: 'Auto-start Environment/Poster Asset Design' },
