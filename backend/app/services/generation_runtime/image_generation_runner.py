@@ -51,6 +51,7 @@ from app.services.generation_runtime.generation_errors import _format_generation
 from app.services.generation_runtime.generation_filename import _build_generation_filename_base
 from app.services.generation_runtime.job_store import (
     IMAGE_JOB_LOCK,
+    IMAGE_JOB_MAX_RUNNING_SECONDS,
     IMAGE_JOB_STORE,
     IMAGE_JOB_TASKS,
     _extract_job_result_url,

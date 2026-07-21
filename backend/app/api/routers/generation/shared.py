@@ -33,6 +33,7 @@ router = APIRouter(tags=["generate"])
 from app.services.generation_runtime.job_store import (  # noqa: E402
     IMAGE_ACTIVE_SCOPE_STORE,
     IMAGE_JOB_LOCK,
+    IMAGE_JOB_MAX_RUNNING_SECONDS,
     IMAGE_JOB_STORE,
     VIDEO_ACTIVE_SCOPE_STORE,
     VIDEO_JOB_LOCK,
