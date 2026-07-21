@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.models import all_models as models
 
+ProviderKeyPool = models.ProviderKeyPool
+
+
 def _build_provider_alias_lookup(db: Session) -> Dict[str, str]:
     rows = db.query(ProviderKeyPool.provider, ProviderKeyPool.provider_alias).all()
     alias_map: Dict[str, str] = {}
