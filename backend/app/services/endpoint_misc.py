@@ -10,11 +10,22 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
+from app.db.init_db import check_and_migrate_tables
 from app.db.session import SessionLocal
+from app.models import all_models as models
 from app.models.all_models import User
 from app.services.system_log_service import log_action
 
 logger = logging.getLogger("api_logger")
+
+ProjectAssetReviewThread = getattr(models, "ProjectAssetReviewThread", None)
+ProjectAssetReviewRound = getattr(models, "ProjectAssetReviewRound", None)
+ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
+_REVIEW_MODELS_AVAILABLE = all(
+    model is not None
+    for model in (ProjectAssetReviewThread, ProjectAssetReviewRound, ProjectAssetReviewMessage)
+)
+
 
 def _require_review_models() -> None:
     if _REVIEW_MODELS_AVAILABLE:
