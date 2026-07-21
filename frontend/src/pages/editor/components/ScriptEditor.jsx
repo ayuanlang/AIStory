@@ -3736,6 +3736,39 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return /episode\s*1\b/.test(title) || /第\s*1\s*集/.test(title);
     }, [activeEpisode?.title]);
 
+    // Must be declared before extractJsonFromLlmText / llmJsonResultContent useMemo (TDZ).
+    const repairJSON = (jsonStr) => {
+        try {
+            return JSON.parse(jsonStr);
+        } catch (e) {
+            // Regex to match "key": value where value is unquoted
+            let repaired = jsonStr.replace(
+                /"([^"]+)"\s*:\s*([^\s"{\[][\s\S]*?)(?=\s*[,}\]])/g,
+                (match, key, value) => {
+                    const trimmedValue = value.trim();
+                    if (!trimmedValue) return match;
+
+                    // Allow valid JSON primitives (numbers, bools, null)
+                    if (/^(true|false|null)$/.test(trimmedValue)) return match;
+                    if (!isNaN(parseFloat(trimmedValue)) && isFinite(trimmedValue)) return match;
+
+                    // Quote the string, escaping quotes and newlines
+                    const safeValue = trimmedValue
+                        .replace(/\\/g, '\\\\') // Escape backslashes first
+                        .replace(/"/g, '\\"')
+                        .replace(/\n/g, '\\n'); // Avoid actual newlines in string
+
+                    return `"${key}": "${safeValue}"`;
+                }
+            );
+            try {
+                return JSON.parse(repaired);
+            } catch (e2) {
+                return [];
+            }
+        }
+    };
+
     const extractJsonFromLlmText = (text) => {
         if (!text || typeof text !== 'string') return '';
 
@@ -3948,38 +3981,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         }
 
         return null;
-    };
-
-    const repairJSON = (jsonStr) => {
-        try {
-            return JSON.parse(jsonStr);
-        } catch (e) {
-            // Regex to match "key": value where value is unquoted
-            let repaired = jsonStr.replace(
-                /"([^"]+)"\s*:\s*([^\s"{\[][\s\S]*?)(?=\s*[,}\]])/g, 
-                (match, key, value) => {
-                    const trimmedValue = value.trim();
-                    if (!trimmedValue) return match;
-                    
-                    // Allow valid JSON primitives (numbers, bools, null)
-                    if (/^(true|false|null)$/.test(trimmedValue)) return match;
-                    if (!isNaN(parseFloat(trimmedValue)) && isFinite(trimmedValue)) return match;
-                    
-                    // Quote the string, escaping quotes and newlines
-                    const safeValue = trimmedValue
-                        .replace(/\\/g, '\\\\') // Escape backslashes first
-                        .replace(/"/g, '\\"')
-                        .replace(/\n/g, '\\n'); // Avoid actual newlines in string
-                    
-                    return `"${key}": "${safeValue}"`;
-                }
-            );
-            try {
-                return JSON.parse(repaired);
-            } catch(e2) {
-                return [];
-            }
-        }
     };
 
     const extractNamedJsonArrayFromRawText = (inputText, keyName) => {
