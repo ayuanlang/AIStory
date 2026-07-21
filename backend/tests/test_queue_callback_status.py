@@ -41,7 +41,6 @@ def test_poll_mode_submit_job_is_not_callback_waiting():
             "upstream_submit_state": "submitted",
         }
     ) is False
-    # Brief race: submit already marked callback_pending counts as waiting.
     assert _job_is_callback_waiting(
         {
             "status": "submit",
@@ -53,8 +52,8 @@ def test_poll_mode_submit_job_is_not_callback_waiting():
 def test_naive_beijing_timestamp_not_inflated_by_eight_hours():
     from app.services.generation_runtime.job_store import _parse_iso_datetime, _seconds_since_iso_timestamp
 
-    bj = timezone(timedelta(hours=8))
-    wall = datetime.now(bj).replace(tzinfo=None) - timedelta(seconds=120)
+    tz = timezone(timedelta(hours=8))
+    wall = datetime.now(tz).replace(tzinfo=None) - timedelta(seconds=120)
     naive_bj_iso = wall.isoformat(timespec="seconds")
     elapsed = _seconds_since_iso_timestamp(naive_bj_iso)
     assert elapsed is not None
@@ -67,7 +66,7 @@ def test_callback_wait_elapsed_ignores_created_at():
     from app.services.generation_runtime.job_store import _job_callback_wait_elapsed_seconds
     from app.core.time_utils import now_bj_iso
 
-    old = "2026-07-20T12:00:00+08:00"
+    old = "2026-07-21T12:00:00.000+08:00"
     job = {
         "created_at": old,
         "started_at": None,
@@ -89,7 +88,7 @@ def test_job_has_success_result():
     assert not _job_has_success_result({"status": "waiting_callback", "result": None})
 
 
-def test_job_subject_to_timeout_excludes_succeeded_with_stale_pending():
+def test_job_is_subject_to_timeout_excludes_succeeded_with_stale_pending():
     from app.api.routers.generation.shared import _job_is_subject_to_running_timeout
 
     assert _job_is_subject_to_running_timeout(
@@ -99,3 +98,33 @@ def test_job_subject_to_timeout_excludes_succeeded_with_stale_pending():
             "started_at": "2026-07-21T16:43:16+08:00",
         }
     ) is False
+
+
+def test_set_image_job_heals_false_exhaust_on_success():
+    from app.services.generation_runtime.job_store import (
+        IMAGE_JOB_LOCK,
+        IMAGE_JOB_STORE,
+        _set_image_job,
+    )
+
+    job_id = "test-heal-false-exhaust"
+    with IMAGE_JOB_LOCK:
+        IMAGE_JOB_STORE[job_id] = {
+            "job_id": job_id,
+            "status": "failed",
+            "error": "image job callback wait exhausted after 28859s (retries=1/1, limit=900s)",
+            "upstream_submit_state": "callback_wait_exhausted",
+            "callback_submit_retries": 1,
+            "callback_retry_at": "2026-07-21T23:53:38.961024+08:00",
+        }
+
+    _set_image_job(job_id, status="succeeded", finished_at="2026-07-21T23:56:05+08:00")
+
+    with IMAGE_JOB_LOCK:
+        healed = dict(IMAGE_JOB_STORE.pop(job_id, {}) or {})
+
+    assert healed.get("status") == "succeeded"
+    assert healed.get("upstream_submit_state") == "completed"
+    assert healed.get("error") in (None, "")
+    assert int(healed.get("callback_submit_retries") or 0) == 0
+    assert healed.get("callback_retry_at") is None

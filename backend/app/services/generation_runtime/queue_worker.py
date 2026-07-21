@@ -185,12 +185,18 @@ def start_generation_queue_worker() -> None:
 
 _CALLBACK_COMPENSATION_STARTED = False
 _CALLBACK_COMPENSATION_LOCK = threading.Lock()
+# Bump when compensation guards change so StatReload-surviving daemon threads exit
+# instead of keeping pre-fix closures that false-exhaust local poll jobs (~28800s).
+_CALLBACK_COMPENSATION_CODE_VERSION = 4
+_CALLBACK_COMPENSATION_THREAD_VERSION = 0
 
 
 def _run_callback_compensation_once() -> None:
     if not _queue_cfg_bool("callback_compensation_scan_enabled", True):
         return
 
+    # Fresh imports every scan: uvicorn StatReload can leave this daemon thread alive
+    # while module-level `from job_store import ...` bindings stay on pre-fix functions.
     from app.services.endpoint_misc import _safe_int
     from app.services.generation_runtime.callbacks import (
         _extract_job_provider_callback_ticket,
@@ -199,15 +205,39 @@ def _run_callback_compensation_once() -> None:
         _maybe_finalize_video_job_from_provider_callback,
         _normalize_generation_status,
     )
-    # _maybe_finalize_stuck_job imported from generation_runtime.job_timeout
+    from app.services.generation_runtime.job_store import (
+        IMAGE_JOB_LOCK,
+        IMAGE_JOB_STORE,
+        IMAGE_JOB_TASKS,
+        VIDEO_JOB_LOCK,
+        VIDEO_JOB_STORE,
+        VIDEO_JOB_TASKS,
+        _set_image_job,
+        _set_video_job,
+        _is_terminal_generation_job_status,
+        _job_has_success_result,
+        _job_is_callback_waiting,
+        _seconds_since_iso_timestamp,
+        _job_callback_wait_elapsed_seconds,
+        IMAGE_JOB_MAX_RUNNING_SECONDS,
+        VIDEO_JOB_MAX_RUNNING_SECONDS,
+        _prune_image_jobs_locked,
+        _prune_video_jobs_locked,
+    )
+    from app.services.generation_runtime.job_timeout import _maybe_finalize_stuck_job
+    from app.services.generation_runtime.queue_config_runtime import (
+        _is_pure_callback_mode_enabled as _live_pure_callback_mode_enabled,
+        _queue_cfg_bool as _live_queue_cfg_bool,
+        _queue_cfg_int as _live_queue_cfg_int,
+    )
 
-    pure_callback_mode = _is_pure_callback_mode_enabled()
-    safe_batch = _queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
-    image_share_percent = _queue_cfg_int("callback_compensation_image_share_percent", 50, minimum=0, maximum=100)
-    retry_enabled = _queue_cfg_bool("callback_loss_retry_enabled", True)
-    retry_after_seconds = _queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
+    pure_callback_mode = _live_pure_callback_mode_enabled()
+    safe_batch = _live_queue_cfg_int("callback_compensation_scan_batch_size", 10, minimum=1, maximum=200)
+    image_share_percent = _live_queue_cfg_int("callback_compensation_image_share_percent", 50, minimum=0, maximum=100)
+    retry_enabled = _live_queue_cfg_bool("callback_loss_retry_enabled", True)
+    retry_after_seconds = _live_queue_cfg_int("callback_loss_retry_after_seconds", 1200, minimum=60, maximum=86400)
     timeout_retry_after_seconds = min(retry_after_seconds, 120)
-    max_submit_retries = _queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
+    max_submit_retries = _live_queue_cfg_int("callback_loss_max_submit_retries", 1, minimum=0, maximum=5)
 
     candidates: List[Tuple[str, str, Dict[str, Any]]] = []
     image_candidates: List[Tuple[str, Dict[str, Any]]] = []
@@ -236,6 +266,8 @@ def _run_callback_compensation_once() -> None:
                 _is_terminal_generation_job_status(status)
                 and (
                     "callback_pending" in upstream_state
+                    or "callback_wait" in upstream_state
+                    or "callback_retry" in upstream_state
                     or not str(job.get("upstream_submit_state") or "").strip()
                     or needs_false_fail_recover
                 )
@@ -395,6 +427,11 @@ def _run_callback_compensation_once() -> None:
         if not _job_is_callback_waiting(job):
             continue
 
+        # Hard stop: status=submit/running without waiting_callback is always poll-mode.
+        poll_like_status = _normalize_generation_status(job.get("status")) in {"submit", "running"}
+        if poll_like_status and "callback_pending" not in str(job.get("upstream_submit_state") or "").strip().lower():
+            continue
+
         mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
 
         if not retry_enabled:
@@ -541,42 +578,71 @@ def _run_callback_compensation_once() -> None:
             )
 
 
-def _callback_compensation_thread_main() -> None:
+def _callback_compensation_thread_main(thread_version: int) -> None:
     import sys
 
     while True:
+        live_version = int(globals().get("_CALLBACK_COMPENSATION_CODE_VERSION") or 0)
+        mod = sys.modules.get(__name__)
+        if mod is not None:
+            try:
+                live_version = int(getattr(mod, "_CALLBACK_COMPENSATION_CODE_VERSION", live_version) or live_version)
+            except Exception:
+                pass
+        if int(thread_version) != int(live_version):
+            logger.info(
+                "[CallbackCompensation] exiting stale worker | thread_version=%s live_version=%s",
+                thread_version,
+                live_version,
+            )
+            return
         try:
             # Prefer the live module attribute so a process that importlib-reloads
             # this module picks up compensation fixes without a stuck old closure.
-            mod = sys.modules.get(__name__)
-            run_once = getattr(mod, "_run_callback_compensation_once", _run_callback_compensation_once)
+            run_once = getattr(mod, "_run_callback_compensation_once", _run_callback_compensation_once) if mod else _run_callback_compensation_once
             run_once()
         except Exception:
             logger.exception("[CallbackCompensation] worker loop failed")
-        interval_seconds = _queue_cfg_int("callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600)
+        try:
+            from app.services.generation_runtime.queue_config_runtime import _queue_cfg_int as _live_interval_cfg
+
+            interval_seconds = _live_interval_cfg(
+                "callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600
+            )
+        except Exception:
+            interval_seconds = _queue_cfg_int(
+                "callback_compensation_scan_interval_seconds", 60, minimum=10, maximum=600
+            )
         time.sleep(interval_seconds)
 
 
 def _start_callback_compensation_worker() -> None:
-    global _CALLBACK_COMPENSATION_STARTED
-    if _CALLBACK_COMPENSATION_STARTED:
-        logger.info(
-            "[CallbackCompensation] worker already running | pure_callback_mode=%s",
-            _is_pure_callback_mode_enabled(),
-        )
-        return
+    global _CALLBACK_COMPENSATION_STARTED, _CALLBACK_COMPENSATION_THREAD_VERSION
     with _CALLBACK_COMPENSATION_LOCK:
-        if _CALLBACK_COMPENSATION_STARTED:
+        if (
+            _CALLBACK_COMPENSATION_STARTED
+            and int(_CALLBACK_COMPENSATION_THREAD_VERSION) == int(_CALLBACK_COMPENSATION_CODE_VERSION)
+        ):
+            logger.info(
+                "[CallbackCompensation] worker already running | version=%s pure_callback_mode=%s",
+                _CALLBACK_COMPENSATION_THREAD_VERSION,
+                _is_pure_callback_mode_enabled(),
+            )
             return
+        # Spawn a versioned worker. Older StatReload-surviving threads see the
+        # bumped _CALLBACK_COMPENSATION_CODE_VERSION and exit on their next loop.
+        _CALLBACK_COMPENSATION_THREAD_VERSION = int(_CALLBACK_COMPENSATION_CODE_VERSION)
         thread = threading.Thread(
             target=_callback_compensation_thread_main,
+            args=(int(_CALLBACK_COMPENSATION_THREAD_VERSION),),
             daemon=True,
-            name="generation-callback-compensation",
+            name=f"generation-callback-compensation-v{_CALLBACK_COMPENSATION_THREAD_VERSION}",
         )
         thread.start()
         _CALLBACK_COMPENSATION_STARTED = True
         logger.info(
-            "[CallbackCompensation] worker started | pure_callback_mode=%s",
+            "[CallbackCompensation] worker started | version=%s pure_callback_mode=%s",
+            _CALLBACK_COMPENSATION_THREAD_VERSION,
             _is_pure_callback_mode_enabled(),
         )
 

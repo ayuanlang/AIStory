@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -63,6 +64,7 @@ from app.services.generation_runtime.media_persist import (
     _oss_upload_succeeded_for_url,
     _persist_data_uri_image_result,
     _persist_remote_image_result,
+    _persist_remote_media_result,
     _resolve_media_bind_url,
 )
 from app.services.generation_runtime.media_runtime_target import _resolve_media_runtime_target

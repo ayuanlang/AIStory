@@ -56,12 +56,19 @@ def _reconcile_terminal_job_queue_state(
     status = _normalize_generation_status(job.get("status"))
     upstream_state = str(job.get("upstream_submit_state") or "").strip().lower()
     if status == "succeeded":
-        if "callback_pending" in upstream_state or not upstream_state or upstream_state == "unknown":
+        if (
+            "callback_pending" in upstream_state
+            or "callback_wait" in upstream_state
+            or "callback_retry" in upstream_state
+            or not upstream_state
+            or upstream_state == "unknown"
+        ):
             set_job_func(
                 job_id,
                 upstream_submit_state="completed",
                 callback_submit_retries=0,
                 callback_retry_at=None,
+                error=None,
             )
         mark_generation_task_status_external(job_id, status="completed", error=None)
     elif status == "failed":

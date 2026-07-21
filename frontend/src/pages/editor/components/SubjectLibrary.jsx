@@ -1506,6 +1506,8 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     }, [projectId]);
     const SUBJECT_IMAGE_JOB_TTL_MS = 1000 * 60 * 60 * 6;
     const SUBJECT_IMAGE_JOB_MAX_RUNNING_MS = 1000 * 60 * 20;
+    // False "callback wait exhausted" (~28800s skew) often recovers to succeeded within a few minutes.
+    const SUBJECT_IMAGE_JOB_FALSE_EXHAUST_GRACE_MS = 1000 * 60 * 4;
 
     const getTempMediaFilenameFromUrl = useCallback((url) => {
         const rawUrl = String(url || '').trim();
@@ -3213,11 +3215,50 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     }
 
                     if (status === 'failed' || status === 'canceled' || status === 'cancelled' || status === 'error') {
+                        const failureError = String(statusResp?.error || status || '').trim();
+                        const failureErrorLower = failureError.toLowerCase();
+                        const isFalseCallbackExhaust =
+                            status === 'failed'
+                            && (
+                                failureErrorLower.includes('callback wait exhausted')
+                                || failureErrorLower.includes('callback wait timed out')
+                            );
+                        if (isFalseCallbackExhaust) {
+                            const now = Date.now();
+                            const falseExhaustStartedAt = Number(job?.falseExhaustStartedAt || 0) || now;
+                            const falseExhaustElapsed = now - falseExhaustStartedAt;
+                            if (falseExhaustElapsed < SUBJECT_IMAGE_JOB_FALSE_EXHAUST_GRACE_MS) {
+                                if (
+                                    isActivePoll()
+                                    && getCurrentJobEntry(entityId, jobId)
+                                    && onLog
+                                    && !job?.falseExhaustLogged
+                                ) {
+                                    onLog(
+                                        t(
+                                            `主体生成收到疑似误报失败，继续等待实际结果：${job?.entityName || entityId}`,
+                                            `Subject generation got a likely false failure; still waiting for the real result: ${job?.entityName || entityId}`
+                                        ),
+                                        'warning'
+                                    );
+                                }
+                                statusUpdates[String(entityId)] = {
+                                    status: 'running',
+                                    statusFailureCount: 0,
+                                    lastStatusError: failureError,
+                                    lastPolledAt: now,
+                                    falseExhaustStartedAt,
+                                    falseExhaustLogged: true,
+                                };
+                                continue;
+                            }
+                        }
+
                         if (getCurrentJobEntry(entityId, jobId)) {
                             clearLocalSubjectImageJobState(entityId);
                         }
                         if (isActivePoll() && shouldLogSubjectJobTerminal(jobId, 'failed') && onLog) {
-                            onLog(t(`主体生成失败：${job?.entityName || entityId} - ${statusResp?.error || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${statusResp?.error || status}`), 'error');
+                            onLog(t(`主体生成失败：${job?.entityName || entityId} - ${failureError || status}`, `Subject generation failed: ${job?.entityName || entityId} - ${failureError || status}`), 'error');
                         }
                         continue;
                     }
@@ -3277,7 +3318,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         };
         // Depend on job identity (entityId:jobId), not every status patch — otherwise each poll
         // tears down and recreates the interval and can skip ticks under the polling lock.
-    }, [SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, shouldLogSubjectJobTerminal, subjectImageJobWatchKey, t]);
+    }, [SUBJECT_IMAGE_JOB_FALSE_EXHAUST_GRACE_MS, SUBJECT_IMAGE_JOB_MAX_RUNNING_MS, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES, SUBJECT_IMAGE_JOB_MAX_STATUS_FAILURES_PERSISTING, SUBJECT_IMAGE_JOB_PERSIST_LOG_INTERVAL_MS, SUBJECT_IMAGE_JOB_PERSIST_WAIT_MS, SUBJECT_IMAGE_JOB_STATUS_NOT_FOUND_GRACE_MS, applySubjectEntityImageLocally, clearLocalSubjectImageJobState, extractImageJobResultUrl, forceClearSubjectImageJob, isEphemeralProviderMediaUrl, onLog, projectId, refreshPersistedSubjectEntityImage, refreshSubjectAssetsAfterImageCompletion, shouldLogSubjectJobTerminal, subjectImageJobWatchKey, t]);
 
     const openMediaPicker = (callback, context = {}) => {
         setPickerConfig({ isOpen: true, callback, context });

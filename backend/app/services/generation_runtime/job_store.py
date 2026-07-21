@@ -1050,9 +1050,30 @@ def _set_image_job(job_id: str, **fields) -> None:
             fields["result"] = _compact_job_result(fields.get("result"))
         current.update(fields)
         current["job_id"] = job_id
-        IMAGE_JOB_STORE[job_id] = current
 
         status = str(current.get("status") or "").strip().lower()
+        # Success paths sometimes set status=succeeded without clearing a prior false
+        # "callback wait exhausted" marker; heal here so UI/diagnostics stay coherent.
+        if status in {"succeeded", "completed", "done", "success"}:
+            upstream = str(current.get("upstream_submit_state") or "").strip().lower()
+            if (
+                "callback_wait" in upstream
+                or "callback_pending" in upstream
+                or "callback_retry" in upstream
+                or not upstream
+            ):
+                current["upstream_submit_state"] = "completed"
+            if "error" not in fields or fields.get("error") in (None, ""):
+                err_text = str(current.get("error") or "").strip().lower()
+                if (not err_text) or ("callback wait" in err_text) or ("timed out" in err_text):
+                    current["error"] = None
+            if "callback_submit_retries" not in fields:
+                current["callback_submit_retries"] = 0
+            if "callback_retry_at" not in fields:
+                current["callback_retry_at"] = None
+
+        IMAGE_JOB_STORE[job_id] = current
+
         result_url = _extract_job_result_url(current.get("result"))
         if status != previous_status or (result_url and result_url != previous_result_url):
             logger.info(
@@ -1084,9 +1105,28 @@ def _set_video_job(job_id: str, **fields) -> None:
             fields["result"] = _compact_job_result(fields.get("result"))
         current.update(fields)
         current["job_id"] = job_id
-        VIDEO_JOB_STORE[job_id] = current
 
         status = str(current.get("status") or "").strip().lower()
+        if status in {"succeeded", "completed", "done", "success"}:
+            upstream = str(current.get("upstream_submit_state") or "").strip().lower()
+            if (
+                "callback_wait" in upstream
+                or "callback_pending" in upstream
+                or "callback_retry" in upstream
+                or not upstream
+            ):
+                current["upstream_submit_state"] = "completed"
+            if "error" not in fields or fields.get("error") in (None, ""):
+                err_text = str(current.get("error") or "").strip().lower()
+                if (not err_text) or ("callback wait" in err_text) or ("timed out" in err_text):
+                    current["error"] = None
+            if "callback_submit_retries" not in fields:
+                current["callback_submit_retries"] = 0
+            if "callback_retry_at" not in fields:
+                current["callback_retry_at"] = None
+
+        VIDEO_JOB_STORE[job_id] = current
+
         result_url = _extract_job_result_url(current.get("result"))
         if status != previous_status or (result_url and result_url != previous_result_url):
             logger.info(

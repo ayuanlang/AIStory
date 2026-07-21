@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException, Request
@@ -21,6 +21,13 @@ from app.core.config import settings
 from app.core.time_utils import now_bj_iso
 from app.db.session import SessionLocal
 from app.services.billing_service import billing_service
+from app.services.generation_runtime.callback_http import (
+    _dispatch_generation_callback,
+    _resolve_callback_url_from_payload,
+)
+from app.services.generation_runtime.generation_filename import (
+    _build_persist_filename_base_from_context,
+)
 from app.services.generation_runtime.job_store import *
 from app.services.generation_runtime import media_persist as _mp
 from app.services.oss_storage_service import oss_storage_service

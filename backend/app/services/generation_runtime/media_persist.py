@@ -21,7 +21,7 @@ import requests
 from fastapi import HTTPException
 from PIL import Image
 from pydantic import BaseModel
-from sqlalchemy import String, cast
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -30,12 +30,18 @@ from app.db.session import SessionLocal
 from app.models import all_models as models
 from app.models.all_models import Asset, Entity, Project, Shot, User
 from app.services.asset_meta_probe import enrich_asset_meta_info, ensure_resolution_fields, probe_media_from_path
+from app.services.generation_runtime.generation_filename import (
+    _build_persist_filename_base_from_context,
+)
 from app.services.generation_runtime.job_store import (
     ASSET_REGISTRATION_LOCK,
+    VIDEO_JOB_LOCK,
     VIDEO_JOB_STORE,
+    _extract_job_result_url,
     _read_video_job_file,
     _set_video_job,
 )
+from app.services.media_service import media_service
 from app.services.oss_storage_service import oss_storage_service
 from app.services.generation_runtime.asset_registration import (  # noqa: F401
     _bind_generated_media_to_entity,
@@ -1037,6 +1043,9 @@ def _resolve_video_bind_url(
     if _is_provider_direct_oss_url(source, meta, db):
         # Provider-side direct OSS links are durable object keys, but often private.
         # Return a freshly signed URL so bind/proxy/clients can fetch immediately.
+        # Lazy import: callbacks imports media_persist at module load.
+        from app.services.generation_runtime.callbacks import _ensure_accessible_media_result_url
+
         meta["provider_direct_oss_url"] = True
         accessible = _ensure_accessible_media_result_url(source, meta)
         return accessible or source, False, meta

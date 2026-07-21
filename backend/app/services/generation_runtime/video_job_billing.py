@@ -16,6 +16,7 @@ from app.services.billing_service import billing_service
 from app.services.model_invocation_billing import (  # noqa: F401
     _extract_provider_usage_from_metadata,
     _resolve_usage_token_total,
+    _safe_int_token,
 )
 from app.services.generation_runtime.media_runtime_target import (  # noqa: F401
     _resolve_media_runtime_target,
@@ -28,6 +29,7 @@ from app.services.generation_runtime.job_store import (
     _extract_job_result_url,
     _set_video_job,
 )
+from app.services.generation_runtime.media_persist import _hydrate_video_job_record
 
 logger = logging.getLogger("api_logger")
 
@@ -475,6 +477,14 @@ async def _settle_or_cancel_video_job_billing_from_callback(
     callback_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Settle/cancel open video reservation after provider callback using actual usage when possible."""
+    # Lazy: callbacks imports this module at bottom of callbacks.py.
+    from app.services.generation_runtime.callbacks import (
+        _extract_callback_task_id,
+        _extract_job_provider_task_id,
+        _merge_provider_task_ids_into_settle,
+        _normalize_generation_status,
+    )
+
     job = _hydrate_video_job_record(job_id, job) if job_id else (job or {})
     if not isinstance(job, dict):
         return job or {}

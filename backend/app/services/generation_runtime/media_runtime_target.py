@@ -2,10 +2,12 @@
 """Resolve provider/model runtime target for media generation."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 from app.services.media_service import media_service
 
+logger = logging.getLogger("api_logger")
 
 def _build_runtime_llm_config(provider: Optional[str], model: Optional[str], media_type: str = "media") -> Optional[Dict[str, str]]:
     provider_text = str(provider or "").strip()

@@ -11,6 +11,8 @@ from app.schemas.generation import VoiceGenerationRequest
 from app.services.agent_service import agent_service
 from app.services.effective_api_setting import _to_bool
 from app.services.llm_service import llm_service
+from app.services.generation_runtime.project_generation_context import _normalize_seed_value
+from app.services.prompt_resolve import _resolve_prompt_text
 
 logger = logging.getLogger("api_logger")
 

@@ -13,8 +13,9 @@ from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.all_models import Asset, Entity, Episode, Project, Scene, Shot, User
-from app.services.asset_meta_probe import enrich_asset_meta_info
+from app.services.asset_meta_probe import enrich_asset_meta_info, ensure_resolution_fields
 from app.services.asset_meta_utils import (
     _asset_meta_dict,
     _asset_optional_int,
@@ -22,7 +23,22 @@ from app.services.asset_meta_utils import (
 )
 from app.services.generation_runtime.job_store import ASSET_REGISTRATION_LOCK
 from app.services.oss_storage_service import oss_storage_service
+from app.services.provider_alias import (
+    _attach_provider_alias_to_dict,
+    _build_provider_alias_lookup,
+)
+from app.services.soft_delete import (
+    _active_asset_clause,
+    _active_entity_clause,
+    _active_episode_clause,
+)
 from app.services.system_log_service import log_action
+
+# workspace.shared does not import generation_runtime — safe at module load.
+from app.api.routers.workspace.shared import (  # noqa: E402
+    _require_project_access,
+    _resolve_episode_sort_number,
+)
 
 logger = logging.getLogger("api_logger")
 
@@ -632,6 +648,8 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                     existing_asset.meta_info = enriched_meta
                 _sync_asset_denormalized_fields(existing_asset)
                 if existing_asset.project_id:
+                    from app.api.routers.assets_pkg.shared import _mark_asset_as_current_project_asset
+
                     _mark_asset_as_current_project_asset(db, existing_asset)
                     db.commit()
                 return existing_asset
@@ -678,6 +696,8 @@ def _register_asset_helper(db: Session, user_id: int, url: str, req: Any, source
                 if existing_after_conflict:
                     return existing_after_conflict
                 raise
+            from app.api.routers.assets_pkg.shared import _mark_asset_as_current_project_asset
+
             _mark_asset_as_current_project_asset(db, asset)
             db.commit()
             return asset
@@ -858,6 +878,11 @@ def _bind_generated_media_to_shot(
     except Exception:
         return
 
+    from app.services.generation_runtime.media_persist import (
+        _enrich_media_metadata_from_generation_context,
+        _ensure_media_bound_at,
+    )
+
     asset_type = str(get_attr(req, "asset_type") or "").strip().lower()
     changed = False
 
@@ -1033,9 +1058,16 @@ def _bind_generated_media_to_entity(db: Session, current_user: User, req: Any, m
         return
 
     try:
+        from app.api.routers.workspace.shared import _require_project_access
+
         project = _require_project_access(db, int(entity.project_id), current_user)
     except Exception:
         return
+
+    from app.services.generation_runtime.media_persist import (
+        _is_ephemeral_provider_media_url,
+        _resolve_precise_asset_library_url,
+    )
 
     stable_media_url = str(media_url or "").strip()
     if _is_ephemeral_provider_media_url(stable_media_url):
