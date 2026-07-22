@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # How long (seconds) completed/failed results stay in memory before eviction.
-_RESULT_TTL = 600  # 10 minutes
+_RESULT_TTL = max(60, int(os.getenv("ASYNC_TASK_RESULT_TTL_SECONDS", "300") or 300))
 _RUNNING_TASK_MAX_AGE_SECONDS = max(300, int(os.getenv("ASYNC_TASK_MAX_AGE_SECONDS", "1200")))
 _RESULT_MAX_BYTES = max(16 * 1024, int(os.getenv("ASYNC_TASK_RESULT_MAX_BYTES", str(256 * 1024)) or (256 * 1024)))
 _RESULT_PREVIEW_MAX_CHARS = max(512, int(os.getenv("ASYNC_TASK_RESULT_PREVIEW_MAX_CHARS", "4096") or 4096))
@@ -79,11 +79,58 @@ def _serialize_for_db(value: Any) -> Optional[str]:
         return json.dumps(str(value), ensure_ascii=False)
 
 
+def _estimate_json_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+    except Exception:
+        try:
+            return len(str(value).encode("utf-8", errors="ignore"))
+        except Exception:
+            return 0
+
+
+def _is_truncated_task_result(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value.get("__truncated__"))
+
+
 def _compact_task_result(value: Any) -> Any:
-    return value
+    """Keep process heap small; full payload remains in async_tasks DB row."""
+    if value is None:
+        return None
+    nbytes = _estimate_json_bytes(value)
+    if nbytes <= _RESULT_MAX_BYTES:
+        return value
+
+    if isinstance(value, str):
+        return {
+            "__truncated__": True,
+            "__original_bytes__": nbytes,
+            "preview": value[:_RESULT_PREVIEW_MAX_CHARS],
+        }
+    if isinstance(value, dict):
+        kept: Dict[str, Any] = {
+            "__truncated__": True,
+            "__original_bytes__": nbytes,
+            "preview_keys": [str(k) for k in list(value.keys())[:48]],
+        }
+        for key in ("status", "ok", "error", "code", "task_id", "job_id"):
+            if key in value and not isinstance(value.get(key), (dict, list)):
+                kept[key] = value.get(key)
+        return kept
+    if isinstance(value, list):
+        return {
+            "__truncated__": True,
+            "__original_bytes__": nbytes,
+            "preview_len": len(value),
+        }
+    return {
+        "__truncated__": True,
+        "__original_bytes__": nbytes,
+        "preview": str(value)[:_RESULT_PREVIEW_MAX_CHARS],
+    }
 
 
-def _save_task_to_db(rec: "_TaskRecord") -> None:
+def _save_task_to_db(rec: "_TaskRecord", *, result_override: Any = None) -> None:
     try:
         _ensure_db_table_ready()
         if not _DB_TABLE_READY:
@@ -111,6 +158,7 @@ def _save_task_to_db(rec: "_TaskRecord") -> None:
                     finished_at=excluded.finished_at
                 """
             )
+            result_value = result_override if result_override is not None else rec.result
             db.execute(
                 sql,
                 {
@@ -118,7 +166,7 @@ def _save_task_to_db(rec: "_TaskRecord") -> None:
                     "user_id": rec.user_id,
                     "kind": rec.kind,
                     "status": rec.status,
-                    "result_json": _serialize_for_db(rec.result) if rec.result is not None else None,
+                    "result_json": _serialize_for_db(result_value) if result_value is not None else None,
                     "error": rec.error,
                     "error_code": rec.error_code,
                     "created_at": rec.created_at,
@@ -201,9 +249,22 @@ def _get_or_load_task_record(task_id: str) -> Optional["_TaskRecord"]:
     if rec is None:
         rec = _load_task_from_db(task_id)
         if rec is not None:
+            # DB keeps the full result; keep only a compact copy in the process heap.
+            if rec.status == "completed" and rec.result is not None:
+                rec.result = _compact_task_result(rec.result)
             with _lock:
                 _tasks[task_id] = rec
     return rec
+
+
+def _resolve_task_result_for_client(rec: "_TaskRecord") -> Any:
+    result = rec.result
+    if not _is_truncated_task_result(result):
+        return result
+    db_rec = _load_task_from_db(rec.task_id)
+    if db_rec is not None and db_rec.result is not None and not _is_truncated_task_result(db_rec.result):
+        return db_rec.result
+    return result
 
 
 def create_task_record(*, task_id: Optional[str] = None, user_id: Optional[int] = None, kind: str = "llm", status: str = "pending") -> str:
@@ -234,14 +295,16 @@ def set_task_status(
 
     stable_status = str(status or "pending").strip().lower() or "pending"
     rec.status = stable_status
-    rec.result = _compact_task_result(result) if stable_status == "completed" else None
+    full_result = result if stable_status == "completed" else None
     rec.error = str(error) if error else None
     rec.error_code = error_code
     if stable_status in {"completed", "failed", "canceled"}:
         rec.finished_at = time.time()
     else:
         rec.finished_at = None
-    _save_task_to_db(rec)
+    # Persist full payload, then keep a compact copy in RAM.
+    _save_task_to_db(rec, result_override=full_result)
+    rec.result = _compact_task_result(full_result) if full_result is not None else None
     return get_status(rec.task_id, user_id=rec.user_id)
 
 
@@ -299,13 +362,15 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
                 rec.error = rec.cancel_reason or "Task canceled by user"
                 rec.error_code = 499
                 return
-            rec.result = _compact_task_result(fn())
+            full_result = fn()
             if rec.cancel_requested:
                 rec.status = "canceled"
                 rec.error = rec.cancel_reason or "Task canceled by user"
                 rec.error_code = 499
+                rec.result = None
             else:
                 rec.status = "completed"
+                rec.result = full_result
         except Exception as exc:
             if rec.cancel_requested:
                 rec.status = "canceled"
@@ -322,7 +387,10 @@ def submit(fn: Callable[[], Any], *, user_id: Optional[int] = None, kind: str = 
                 logger.error("Task %s (%s) failed: %s\n%s", task_id, kind, exc, traceback.format_exc())
         finally:
             rec.finished_at = time.time()
-            _save_task_to_db(rec)
+            full_for_db = rec.result
+            _save_task_to_db(rec, result_override=full_for_db)
+            if rec.status == "completed" and full_for_db is not None:
+                rec.result = _compact_task_result(full_for_db)
 
     _executor.submit(_worker)
 
@@ -365,7 +433,7 @@ def get_status(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str
         "kind": rec.kind,
     }
     if rec.status == "completed":
-        info["result"] = rec.result
+        info["result"] = _resolve_task_result_for_client(rec)
     elif rec.status == "canceled":
         info["error"] = rec.error or "Task canceled by user"
         info["error_code"] = rec.error_code or 499
@@ -374,6 +442,45 @@ def get_status(task_id: str, user_id: Optional[int] = None) -> Optional[Dict[str
         if rec.error_code:
             info["error_code"] = rec.error_code
     return info
+
+
+def snapshot_async_task_store_footprint(sample_items: int = 24) -> Dict[str, Any]:
+    """Approx in-process async task store size for runtime.diag."""
+    with _lock:
+        _evict_stale()
+        items = list(_tasks.items())
+    total = 0
+    truncated = 0
+    status_counts: Dict[str, int] = {}
+    sample_limit = max(1, int(sample_items or 24))
+    for idx, (_tid, rec) in enumerate(items):
+        status = str(getattr(rec, "status", "") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if _is_truncated_task_result(getattr(rec, "result", None)):
+            truncated += 1
+        if idx < sample_limit:
+            total += _estimate_json_bytes(
+                {
+                    "task_id": getattr(rec, "task_id", None),
+                    "status": status,
+                    "kind": getattr(rec, "kind", None),
+                    "result": getattr(rec, "result", None),
+                    "error": getattr(rec, "error", None),
+                }
+            )
+    sampled = min(len(items), sample_limit)
+    avg = int(total / sampled) if sampled else 0
+    return {
+        "name": "async_task_store",
+        "count": len(items),
+        "sampled": sampled,
+        "approx_avg_bytes": avg,
+        "approx_total_bytes": avg * len(items),
+        "truncated_result_count": truncated,
+        "status_counts": status_counts,
+        "ttl_seconds": _RESULT_TTL,
+        "result_max_bytes": _RESULT_MAX_BYTES,
+    }
 
 
 def cancel(task_id: str, user_id: Optional[int] = None, reason: str = "Task canceled by user") -> Optional[Dict[str, Any]]:

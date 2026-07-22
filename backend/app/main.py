@@ -559,26 +559,46 @@ def _snapshot_dict_footprint(name: str, store: Any, lock: Any = None) -> Dict[st
     return info
 
 
+def _try_malloc_trim() -> bool:
+    """Best-effort return freed heap pages to the OS (Linux/glibc only)."""
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6")
+        trim = getattr(libc, "malloc_trim", None)
+        if not callable(trim):
+            return False
+        return bool(trim(0))
+    except Exception:
+        return False
+
+
 def _collect_endpoint_store_footprints() -> List[Dict[str, Any]]:
     footprints: List[Dict[str, Any]] = []
     endpoints_module = globals().get("_endpoints_module") or sys.modules.get("app.api.endpoints")
-    if endpoints_module is None:
-        return footprints
-    candidates = [
-        ("image_job_store", getattr(endpoints_module, "IMAGE_JOB_STORE", None), getattr(endpoints_module, "IMAGE_JOB_LOCK", None)),
-        ("video_job_store", getattr(endpoints_module, "VIDEO_JOB_STORE", None), getattr(endpoints_module, "VIDEO_JOB_LOCK", None)),
-        ("generation_callback_store", getattr(endpoints_module, "GENERATION_CALLBACK_STORE", None), getattr(endpoints_module, "GENERATION_CALLBACK_LOCK", None)),
-        ("generation_callback_async_inflight", getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT", None), getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK", None)),
-        ("generation_callback_no_match_cache", getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_CACHE", None), getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_LOCK", None)),
-        ("webhook_replay_store", getattr(endpoints_module, "WEBHOOK_REPLAY_STORE", None), getattr(endpoints_module, "WEBHOOK_REPLAY_LOCK", None)),
-        ("generation_job_pool_cache", getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE", None), getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE_LOCK", None)),
-        ("analyze_scene_recent_tasks", getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS", None), getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS_LOCK", None)),
-    ]
+    if endpoints_module is not None:
+        candidates = [
+            ("image_job_store", getattr(endpoints_module, "IMAGE_JOB_STORE", None), getattr(endpoints_module, "IMAGE_JOB_LOCK", None)),
+            ("video_job_store", getattr(endpoints_module, "VIDEO_JOB_STORE", None), getattr(endpoints_module, "VIDEO_JOB_LOCK", None)),
+            ("generation_callback_store", getattr(endpoints_module, "GENERATION_CALLBACK_STORE", None), getattr(endpoints_module, "GENERATION_CALLBACK_LOCK", None)),
+            ("generation_callback_async_inflight", getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT", None), getattr(endpoints_module, "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK", None)),
+            ("generation_callback_no_match_cache", getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_CACHE", None), getattr(endpoints_module, "GENERATION_CALLBACK_NO_MATCH_LOG_LOCK", None)),
+            ("webhook_replay_store", getattr(endpoints_module, "WEBHOOK_REPLAY_STORE", None), getattr(endpoints_module, "WEBHOOK_REPLAY_LOCK", None)),
+            ("generation_job_pool_cache", getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE", None), getattr(endpoints_module, "_GENERATION_JOB_POOL_CACHE_LOCK", None)),
+            ("analyze_scene_recent_tasks", getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS", None), getattr(endpoints_module, "_ANALYZE_SCENE_RECENT_TASKS_LOCK", None)),
+        ]
 
-    for name, store, lock in candidates:
-        if not isinstance(store, dict):
-            continue
-        footprints.append(_snapshot_dict_footprint(name, store, lock))
+        for name, store, lock in candidates:
+            if not isinstance(store, dict):
+                continue
+            footprints.append(_snapshot_dict_footprint(name, store, lock))
+
+    try:
+        from app.services.task_manager import snapshot_async_task_store_footprint
+
+        footprints.append(snapshot_async_task_store_footprint(_RUNTIME_DIAG_STORE_SAMPLE_ITEMS))
+    except Exception:
+        pass
 
     footprints.sort(key=lambda item: int(item.get("approx_total_bytes") or 0), reverse=True)
     return footprints
@@ -664,7 +684,31 @@ async def _runtime_diag_log_loop(stop_event: asyncio.Event) -> None:
                 vmrss_kb >= watermark_kb
                 and (now_ts - last_high_watermark_log_at) >= _RUNTIME_DIAG_HIGH_WATERMARK_COOLDOWN_SECONDS
             ):
+                # Opportunistic prune + return pages before capturing the high report.
+                try:
+                    endpoints_module = globals().get("_endpoints_module") or sys.modules.get("app.api.endpoints")
+                    if endpoints_module is not None:
+                        image_lock = getattr(endpoints_module, "IMAGE_JOB_LOCK", None)
+                        video_lock = getattr(endpoints_module, "VIDEO_JOB_LOCK", None)
+                        prune_image = getattr(endpoints_module, "_prune_image_jobs_locked", None)
+                        prune_video = getattr(endpoints_module, "_prune_video_jobs_locked", None)
+                        if image_lock is not None and callable(prune_image):
+                            with image_lock:
+                                prune_image()
+                        if video_lock is not None and callable(prune_video):
+                            with video_lock:
+                                prune_video()
+                    from app.services.task_manager import snapshot_async_task_store_footprint
+
+                    snapshot_async_task_store_footprint(8)  # triggers _evict_stale
+                except Exception:
+                    pass
+                import gc
+
+                gc.collect()
+                trimmed = _try_malloc_trim()
                 high_report = _collect_high_memory_report(payload)
+                high_report["malloc_trim"] = trimmed
                 logger.warning("runtime.diag.high | %s", json.dumps(high_report, ensure_ascii=False, default=str))
                 last_high_watermark_log_at = now_ts
         except Exception as exc:

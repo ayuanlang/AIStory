@@ -149,8 +149,8 @@ _q_conf = load_queue_config()
 IMAGE_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_JOB_LOCK = threading.Lock()
 # Tighter defaults for 4GB-class hosts; override via env if needed.
-IMAGE_JOB_TTL_SECONDS = max(300, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "1800")))
-IMAGE_JOB_MAX_ITEMS = max(50, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "200")))
+IMAGE_JOB_TTL_SECONDS = max(120, int(os.getenv("IMAGE_JOB_TTL_SECONDS", "600")))
+IMAGE_JOB_MAX_ITEMS = max(20, int(os.getenv("IMAGE_JOB_MAX_ITEMS", "80")))
 IMAGE_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 IMAGE_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("IMAGE_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
@@ -159,8 +159,8 @@ IMAGE_JOB_TASKS: Dict[str, Any] = {}
 
 VIDEO_JOB_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_JOB_LOCK = threading.Lock()
-VIDEO_JOB_TTL_SECONDS = max(300, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "1800")))
-VIDEO_JOB_MAX_ITEMS = max(50, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "200")))
+VIDEO_JOB_TTL_SECONDS = max(120, int(os.getenv("VIDEO_JOB_TTL_SECONDS", "600")))
+VIDEO_JOB_MAX_ITEMS = max(20, int(os.getenv("VIDEO_JOB_MAX_ITEMS", "80")))
 VIDEO_SUBMIT_IDEMPOTENCY_STORE: Dict[str, Dict[str, Any]] = {}
 VIDEO_ACTIVE_SCOPE_STORE: Dict[str, str] = {}
 VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS = max(30, int(os.getenv("VIDEO_SUBMIT_IDEMPOTENCY_TTL_SECONDS", "120")))
@@ -176,10 +176,10 @@ _JOB_TIMEOUT_CHECK_STATUSES = frozenset({"running", "submit", "waiting_callback"
 
 GENERATION_CALLBACK_STORE: Dict[str, Dict[str, Any]] = {}
 GENERATION_CALLBACK_LOCK = threading.Lock()
-GENERATION_CALLBACK_TTL_SECONDS = max(300, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "3600")))
-GENERATION_CALLBACK_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_MAX_ITEMS", "1500")))
+GENERATION_CALLBACK_TTL_SECONDS = max(120, int(os.getenv("GENERATION_CALLBACK_TTL_SECONDS", "1800")))
+GENERATION_CALLBACK_MAX_ITEMS = max(50, int(os.getenv("GENERATION_CALLBACK_MAX_ITEMS", "400")))
 GENERATION_CALLBACK_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "_generation_callbacks")
-GENERATION_CALLBACK_MAX_BYTES = max(4096, int(os.getenv("GENERATION_CALLBACK_MAX_BYTES", "65536")))
+GENERATION_CALLBACK_MAX_BYTES = max(4096, int(os.getenv("GENERATION_CALLBACK_MAX_BYTES", "32768")))
 GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS = max(5, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_THROTTLE_SECONDS", "30")))
 GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS", "2000")))
 GENERATION_CALLBACK_NO_MATCH_LOG_CACHE: Dict[str, float] = {}
@@ -234,11 +234,33 @@ SHOT_MEDIA_BATCH_THREADS_LOCK = threading.Lock()
 
 _GENERATION_JOB_POOL_CACHE_TTL_SECONDS = max(1.0, float(os.getenv("GENERATION_JOB_POOL_CACHE_TTL_SECONDS", "3") or 3.0))
 _GENERATION_JOB_POOL_CACHE_MAX_ITEMS = max(32, int(os.getenv("GENERATION_JOB_POOL_CACHE_MAX_ITEMS", "256") or 256))
-_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "172800") or 172800))
+_GENERATION_JOB_STALE_DELETE_SECONDS = max(300, int(os.getenv("GENERATION_JOB_STALE_DELETE_SECONDS", "7200") or 7200))
+# Stuck non-terminal jobs (orphaned waiting_callback / running) must not live forever in RAM.
+_GENERATION_JOB_STALE_NON_TERMINAL_SECONDS = max(
+    600,
+    int(os.getenv("GENERATION_JOB_STALE_NON_TERMINAL_SECONDS", "3600") or 3600),
+)
+_JOB_PROMPT_KEEP_CHARS = max(64, int(os.getenv("GENERATION_JOB_PROMPT_KEEP_CHARS", "256") or 256))
 _GENERATION_JOB_POOL_CACHE_LOCK = threading.Lock()
 _GENERATION_JOB_POOL_CACHE: Dict[str, Dict[str, Any]] = {}
 
 ASSET_REGISTRATION_LOCK = threading.Lock()
+
+_HEAVY_JOB_TEXT_KEYS = (
+    "prompt",
+    "negative_prompt",
+    "raw_prompt",
+    "optimized_prompt",
+    "system_prompt",
+)
+_HEAVY_JOB_OBJECT_KEYS = (
+    "request_payload",
+    "req_payload",
+    "combined_payload",
+    "provider_raw_response",
+    "callback_payload",
+    "raw_callback_payload",
+)
 
 
 
@@ -677,6 +699,50 @@ def _compact_job_result(result: Any) -> Any:
     return compact or {"url": result.get("url")}
 
 
+def _strip_heavy_job_text(value: Any) -> Any:
+    text = str(value or "")
+    if len(text) <= _JOB_PROMPT_KEEP_CHARS:
+        return text
+    return f"{text[:_JOB_PROMPT_KEEP_CHARS]}...[stripped:{len(text)}chars]"
+
+
+def _slim_terminal_job_fields(job: Dict[str, Any]) -> None:
+    """Drop large prompt/payload fields once a job is terminal so idle RSS can shrink."""
+    if not isinstance(job, dict):
+        return
+    if not _is_terminal_generation_job_status(job.get("status")):
+        return
+    for key in _HEAVY_JOB_TEXT_KEYS:
+        if key in job and job.get(key) not in (None, ""):
+            job[key] = _strip_heavy_job_text(job.get(key))
+    for key in _HEAVY_JOB_OBJECT_KEYS:
+        if key in job:
+            job.pop(key, None)
+
+
+def _job_age_seconds(job: Dict[str, Any], now: datetime) -> float:
+    stamp = (
+        _parse_iso_datetime(job.get("finished_at"))
+        or _parse_iso_datetime(job.get("updated_at"))
+        or _parse_iso_datetime(job.get("started_at"))
+        or _parse_iso_datetime(job.get("created_at"))
+        or _coerce_naive_utc_datetime(_job_sort_key(job))
+    )
+    try:
+        return max(0.0, (now - stamp).total_seconds())
+    except Exception:
+        return 0.0
+
+
+def _delete_generation_job_state_best_effort(*, kind: str, job_id: str) -> None:
+    try:
+        from app.services.generation_task_queue import delete_generation_job_state
+
+        delete_generation_job_state(kind=kind, job_id=job_id)
+    except Exception as exc:
+        logger.debug("delete_generation_job_state skipped | kind=%s job_id=%s err=%s", kind, job_id, exc)
+
+
 def _extract_job_result_url(result: Any) -> str:
     def _normalize_candidate_url(raw_value: Any) -> str:
         value = str(raw_value or "").strip()
@@ -900,6 +966,7 @@ def _drop_image_job_locked(job_id: str, *, unlink_file: bool = True) -> None:
         IMAGE_SUBMIT_IDEMPOTENCY_STORE.pop(key, None)
     if unlink_file:
         _unlink_job_snapshot_file(_image_job_file_path, stable_job_id)
+    _delete_generation_job_state_best_effort(kind="image", job_id=stable_job_id)
 
 
 def _drop_video_job_locked(job_id: str, *, unlink_file: bool = True) -> None:
@@ -920,26 +987,33 @@ def _drop_video_job_locked(job_id: str, *, unlink_file: bool = True) -> None:
         VIDEO_SUBMIT_IDEMPOTENCY_STORE.pop(key, None)
     if unlink_file:
         _unlink_job_snapshot_file(_video_job_file_path, stable_job_id)
+    _delete_generation_job_state_best_effort(kind="video", job_id=stable_job_id)
 
 
 def _prune_image_jobs_locked() -> None:
     now = _coerce_naive_utc_datetime()
     expired_ids = []
+    non_terminal_limit = max(
+        float(IMAGE_JOB_MAX_RUNNING_SECONDS) * 2.0,
+        float(_GENERATION_JOB_STALE_NON_TERMINAL_SECONDS),
+    )
 
     for job_id, job in IMAGE_JOB_STORE.items():
-        if not _is_terminal_generation_job_status(job.get("status")):
+        age_seconds = _job_age_seconds(job or {}, now)
+        if _is_terminal_generation_job_status((job or {}).get("status")):
+            if age_seconds > IMAGE_JOB_TTL_SECONDS:
+                expired_ids.append(job_id)
+            else:
+                _slim_terminal_job_fields(job)
             continue
-
-        finished_at = _parse_iso_datetime(job.get("finished_at")) or _coerce_naive_utc_datetime(_job_sort_key(job))
-        age_seconds = (now - finished_at).total_seconds()
-        if age_seconds > IMAGE_JOB_TTL_SECONDS:
+        if age_seconds > non_terminal_limit:
             expired_ids.append(job_id)
 
     for job_id in expired_ids:
         _drop_image_job_locked(job_id)
 
     if len(IMAGE_JOB_STORE) > IMAGE_JOB_MAX_ITEMS:
-        # Overflow must never evict non-terminal jobs; clients may still be polling them.
+        # Overflow must never evict fresh non-terminal jobs; clients may still be polling them.
         terminal_ordered = sorted(
             (
                 (job_id, job)
@@ -964,21 +1038,27 @@ def _prune_image_jobs_locked() -> None:
 def _prune_video_jobs_locked() -> None:
     now = _coerce_naive_utc_datetime()
     expired_ids = []
+    non_terminal_limit = max(
+        float(VIDEO_JOB_MAX_RUNNING_SECONDS) * 2.0,
+        float(_GENERATION_JOB_STALE_NON_TERMINAL_SECONDS),
+    )
 
     for job_id, job in VIDEO_JOB_STORE.items():
-        if not _is_terminal_generation_job_status(job.get("status")):
+        age_seconds = _job_age_seconds(job or {}, now)
+        if _is_terminal_generation_job_status((job or {}).get("status")):
+            if age_seconds > VIDEO_JOB_TTL_SECONDS:
+                expired_ids.append(job_id)
+            else:
+                _slim_terminal_job_fields(job)
             continue
-
-        finished_at = _parse_iso_datetime(job.get("finished_at")) or _coerce_naive_utc_datetime(_job_sort_key(job))
-        age_seconds = (now - finished_at).total_seconds()
-        if age_seconds > VIDEO_JOB_TTL_SECONDS:
+        if age_seconds > non_terminal_limit:
             expired_ids.append(job_id)
 
     for job_id in expired_ids:
         _drop_video_job_locked(job_id)
 
     if len(VIDEO_JOB_STORE) > VIDEO_JOB_MAX_ITEMS:
-        # Overflow must never evict non-terminal jobs; clients may still be polling them.
+        # Overflow must never evict fresh non-terminal jobs; clients may still be polling them.
         terminal_ordered = sorted(
             (
                 (job_id, job)
@@ -1072,8 +1152,6 @@ def _set_image_job(job_id: str, **fields) -> None:
             if "callback_retry_at" not in fields:
                 current["callback_retry_at"] = None
 
-        IMAGE_JOB_STORE[job_id] = current
-
         result_url = _extract_job_result_url(current.get("result"))
         if status != previous_status or (result_url and result_url != previous_result_url):
             logger.info(
@@ -1089,7 +1167,9 @@ def _set_image_job(job_id: str, **fields) -> None:
             task_scope = str(current.get("task_scope") or "").strip()
             if task_scope and IMAGE_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
                 IMAGE_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+            _slim_terminal_job_fields(current)
 
+        IMAGE_JOB_STORE[job_id] = current
         _write_image_job_file(job_id, current)
 
     _clear_generation_job_pool_cache()
@@ -1125,8 +1205,6 @@ def _set_video_job(job_id: str, **fields) -> None:
             if "callback_retry_at" not in fields:
                 current["callback_retry_at"] = None
 
-        VIDEO_JOB_STORE[job_id] = current
-
         result_url = _extract_job_result_url(current.get("result"))
         if status != previous_status or (result_url and result_url != previous_result_url):
             logger.info(
@@ -1142,7 +1220,9 @@ def _set_video_job(job_id: str, **fields) -> None:
             task_scope = str(current.get("task_scope") or "").strip()
             if task_scope and VIDEO_ACTIVE_SCOPE_STORE.get(task_scope) == job_id:
                 VIDEO_ACTIVE_SCOPE_STORE.pop(task_scope, None)
+            _slim_terminal_job_fields(current)
 
+        VIDEO_JOB_STORE[job_id] = current
         _write_video_job_file(job_id, current)
 
     _clear_generation_job_pool_cache()

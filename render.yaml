@@ -96,6 +96,8 @@ services:
         value: "50"
       - key: RUNTIME_DIAG_LOG_ENABLED
         value: "1"
+      - key: RUNTIME_DIAG_HEARTBEAT_ENABLED
+        value: "1"
       - key: RUNTIME_DIAG_LOG_INTERVAL_SECONDS
         value: "30"
       - key: RUNTIME_DIAG_HIGH_WATERMARK_MB
@@ -126,12 +128,26 @@ services:
         value: "0"
       - key: MEDIA_DEBUG_LOG
         value: "0"
+      - key: IMAGE_JOB_TTL_SECONDS
+        value: "600"
+      - key: VIDEO_JOB_TTL_SECONDS
+        value: "600"
       - key: IMAGE_JOB_MAX_ITEMS
-        value: "200"
+        value: "80"
       - key: VIDEO_JOB_MAX_ITEMS
-        value: "200"
-      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "80"
+      - key: GENERATION_JOB_STALE_DELETE_SECONDS
+        value: "7200"
+      - key: GENERATION_JOB_STALE_NON_TERMINAL_SECONDS
+        value: "3600"
+      - key: ASYNC_TASK_RESULT_TTL_SECONDS
         value: "300"
+      - key: ASYNC_TASK_RESULT_MAX_BYTES
+        value: "262144"
+      - key: GENERATION_CALLBACK_TTL_SECONDS
+        value: "1800"
+      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "400"
       - key: GENERATION_CALLBACK_MAX_BYTES
         value: "16384"
       - key: GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS
@@ -218,6 +234,8 @@ services:
         value: "50"
       - key: RUNTIME_DIAG_LOG_ENABLED
         value: "1"
+      - key: RUNTIME_DIAG_HEARTBEAT_ENABLED
+        value: "1"
       - key: RUNTIME_DIAG_LOG_INTERVAL_SECONDS
         value: "30"
       - key: RUNTIME_DIAG_HIGH_WATERMARK_MB
@@ -232,12 +250,26 @@ services:
         value: "15"
       - key: RUNTIME_DIAG_TRACEMALLOC_TOP
         value: "8"
+      - key: IMAGE_JOB_TTL_SECONDS
+        value: "600"
+      - key: VIDEO_JOB_TTL_SECONDS
+        value: "600"
       - key: IMAGE_JOB_MAX_ITEMS
-        value: "200"
+        value: "80"
       - key: VIDEO_JOB_MAX_ITEMS
-        value: "200"
-      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "80"
+      - key: GENERATION_JOB_STALE_DELETE_SECONDS
+        value: "7200"
+      - key: GENERATION_JOB_STALE_NON_TERMINAL_SECONDS
+        value: "3600"
+      - key: ASYNC_TASK_RESULT_TTL_SECONDS
         value: "300"
+      - key: ASYNC_TASK_RESULT_MAX_BYTES
+        value: "262144"
+      - key: GENERATION_CALLBACK_TTL_SECONDS
+        value: "1800"
+      - key: GENERATION_CALLBACK_MAX_ITEMS
+        value: "400"
       - key: GENERATION_CALLBACK_MAX_BYTES
         value: "16384"
       - key: GENERATION_CALLBACK_NO_MATCH_LOG_MAX_ITEMS
