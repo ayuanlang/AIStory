@@ -4,9 +4,12 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.services.story_trend_search_service import (
+    _attach_priority_fields,
     _collect_search_snippets_for_queries,
-    _result_relevance_score,
+    _row_evidence_text,
+    format_search_evidence_lines,
     is_informative_search_snippet,
+    resolve_excerpt_max_len,
 )
 
 EPISODE_SCRIPT_MAX_SNIPPETS = 10
@@ -603,38 +606,37 @@ def build_episode_script_search_queries(
     return queries[:EPISODE_SCRIPT_MAX_QUERIES]
 
 
-def _filter_informative_snippets(snippets: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
+def _filter_informative_snippets(snippets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
     for row in snippets:
         if not isinstance(row, dict):
             continue
         title = str(row.get("title") or "").strip()
-        snippet = str(row.get("snippet") or "").strip()
+        evidence = _row_evidence_text(row)
         url = str(row.get("url") or "").strip()
-        if is_informative_search_snippet(snippet, title=title, url=url):
+        if is_informative_search_snippet(evidence, title=title, url=url):
             out.append(row)
     return out
 
 
 def _cap_snippets(
-    snippets: List[Dict[str, str]],
+    snippets: List[Dict[str, Any]],
     *,
     max_snippets: int = EPISODE_SCRIPT_MAX_SNIPPETS,
     reference_query: str = "",
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     if not snippets:
         return []
     usable = _filter_informative_snippets(snippets)
-    ranked = sorted(
-        usable,
-        key=lambda row: _result_relevance_score(
-            reference_query,
-            str(row.get("title") or ""),
-            str(row.get("snippet") or ""),
-            str(row.get("url") or ""),
-        ),
-        reverse=True,
-    )
+    ranked: List[Dict[str, Any]] = []
+    for row in usable:
+        ranked.append(
+            _attach_priority_fields(
+                dict(row),
+                query=reference_query or str(row.get("query") or ""),
+            )
+        )
+    ranked.sort(key=lambda row: (int(row.get("priority") or 0), len(_row_evidence_text(row))), reverse=True)
     return ranked[: max(1, int(max_snippets or EPISODE_SCRIPT_MAX_SNIPPETS))]
 
 
@@ -679,8 +681,8 @@ def build_episode_script_reference_user_prompt(
     lines = [
         "[EPISODE_REFERENCE_RESEARCH_START]",
         "【分集参考检索 / Episode Reference Research】",
-        "Use these web snippets as reference for trope rhythm, iconic staging, dialogue punch, and climax beats.",
-        "Localize and recombine; do NOT copy plots, character names, or verbatim lines.",
+        "Use these priority-ordered web evidence blocks as reference for trope rhythm, iconic staging, dialogue punch, and climax beats.",
+        "Consume P0 first, then P1, then P2. Prefer Evidence body over titles. Localize and recombine; do NOT copy plots, character names, or verbatim lines.",
         f"Episode Number: {episode_number}",
         f"Project Title: {project_title or '(none)'}",
         f"Preferred Language: {language or 'zh'}",
@@ -713,26 +715,29 @@ def build_episode_script_reference_user_prompt(
             lines.append(f"- {key}: {rendered}")
 
     lines.append("")
-    lines.append(f"Web Search Snippets (max {search_bundle.get('snippet_cap', EPISODE_SCRIPT_MAX_SNIPPETS)}, text-only):")
-    rendered_snippets = 0
-    for idx, item in enumerate(search_bundle.get("snippets") or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        snippet = str(item.get("snippet") or "").strip()
-        if not is_informative_search_snippet(snippet, title=title, url=str(item.get("url") or "")):
-            continue
-        rendered_snippets += 1
-        lines.extend(
-            [
-                f"[{idx}] Query: {item.get('query', '')}",
-                f"Title: {title}",
-                f"Summary: {snippet[:480]}",
-                "",
-            ]
+    evidence_cap = int(search_bundle.get("snippet_cap") or EPISODE_SCRIPT_MAX_SNIPPETS)
+    evidence_chars = min(resolve_excerpt_max_len(), 1500)
+    usable = [
+        item
+        for item in (search_bundle.get("snippets") or [])
+        if isinstance(item, dict)
+        and is_informative_search_snippet(
+            _row_evidence_text(item),
+            title=str(item.get("title") or ""),
+            url=str(item.get("url") or ""),
         )
+    ][:evidence_cap]
+    lines.extend(
+        format_search_evidence_lines(
+            usable,
+            include_url=False,
+            max_chars_per_item=evidence_chars,
+            heading=f"Web Search Evidence (max {evidence_cap}, text-only, priority-ordered):",
+        )
+    )
+    rendered_snippets = sum(1 for item in usable if _row_evidence_text(item))
     if rendered_snippets <= 0:
-        lines.append("(No informative web snippets returned; rely on Extracted Search Key Elements and Episode Framework above.)")
+        lines.append("(No informative web evidence returned; rely on Extracted Search Key Elements and Episode Framework above.)")
     lines.append("[EPISODE_REFERENCE_RESEARCH_END]")
     search_bundle["rendered_snippet_count"] = rendered_snippets
     return "\n".join(lines).strip()

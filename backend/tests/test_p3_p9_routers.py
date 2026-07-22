@@ -366,3 +366,320 @@ def test_queue_worker_has_image_runner_lazy_path():
     src = inspect.getsource(qw._process_generation_queue_task)
     assert "image_generation_runner" in src
     assert callable(getattr(qw, "_maybe_finalize_stuck_job"))
+
+
+def test_video_voice_generation_runner_modules():
+    from app.services.generation_runtime.video_generation_runner import (
+        _run_generate_video,
+        _run_generate_video_job,
+    )
+    from app.services.generation_runtime.voice_generation_runner import _run_generate_voice
+    from app.services.generation_runtime.log_sanitize import (
+        _mask_secret_for_log,
+        _sanitize_generation_runtime_config_for_log,
+    )
+    assert callable(_run_generate_video)
+    assert callable(_run_generate_video_job)
+    assert callable(_run_generate_voice)
+    assert "***" in _mask_secret_for_log("abcdefghij")
+    assert _sanitize_generation_runtime_config_for_log({"api_key": "abcdefghij"})["api_key"] != "abcdefghij"
+
+
+def test_video_jobs_thinned_and_reexports():
+    from pathlib import Path
+    import app.api.routers.generation.video_jobs as vj
+    path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "video_jobs.py"
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 2500
+    assert callable(vj._run_generate_video)
+    assert callable(vj._run_generate_voice)
+    paths = {getattr(r, "path", None) for r in vj.router.routes}
+    assert "/generate/video" in paths
+    assert "/generate/voice" in paths
+
+
+def test_prompts_shared_has_explicit_skill_imports():
+    import inspect
+    import app.api.routers.prompts.shared as ps
+    src = inspect.getsource(ps)
+    assert "skills_loader" in src
+    assert "scene_analysis_feature_skills" in src
+    assert callable(ps.load_skills_registry)
+    assert callable(ps.get_scene_analysis_feature_catalog)
+
+
+def test_video_ref_pipeline_module():
+    from app.services.generation_runtime.video_ref_pipeline import (
+        DEFAULT_SHOT_VIDEO_MODE,
+        _normalize_video_ref_mode,
+        _parse_shot_tech,
+        _dedupe_media_ref_urls,
+        _limit_keyframes_for_video_mode,
+        _build_project_entity_lookup,
+    )
+    from app.services.system_api_lookup import get_system_api_setting
+    assert DEFAULT_SHOT_VIDEO_MODE == "entity_refs"
+    assert _normalize_video_ref_mode("entity-refs") == "entity_refs"
+    assert _normalize_video_ref_mode("auto") == ""
+    assert _dedupe_media_ref_urls(["a", "a", "b"]) == ["a", "b"]
+    assert _limit_keyframes_for_video_mode(["1", "2", "3"], "start")[:1]
+    assert callable(_parse_shot_tech)
+    assert callable(_build_project_entity_lookup)
+    assert callable(get_system_api_setting)
+
+
+def test_batch_media_thinned_reexports_pipeline():
+    from pathlib import Path
+    import app.api.routers.generation.batch_media as bm
+    path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "batch_media.py"
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 2000
+    assert callable(bm._append_video_api_ref_mapping)
+    assert callable(bm._is_shot_video_batch_eligible)
+    assert callable(bm._run_shot_media_batch_job)
+    # Import appears before eligible helper uses _parse_shot_tech
+    src = path.read_text(encoding="utf-8")
+    assert src.index("video_ref_pipeline import") < src.index("def _is_shot_video_batch_eligible")
+
+
+def test_video_runner_uses_ref_pipeline_not_batch_media():
+    import inspect
+    from app.services.generation_runtime import video_generation_runner as vr
+    src = inspect.getsource(vr)
+    assert "video_ref_pipeline" in src
+    assert "batch_media" not in src
+
+
+def test_prompts_shared_no_early_bind_call():
+    import inspect
+    import app.api.routers.prompts.shared as ps
+    src = inspect.getsource(ps)
+    assert "_bind_endpoint_helpers(include_routers=False)" not in src
+    assert "def _bind_endpoint_helpers" in src  # kept for package rebind
+    import app.api.routers.prompts as pkg
+    assert pkg.router is ps.router
+
+
+def test_shot_markdown_module():
+    from pathlib import Path
+    import app.services.shot_markdown as sm
+    assert callable(sm.parse_shots_markdown_table)
+    assert callable(sm.sanitize_shots_markdown_table_text)
+    assert callable(sm._validate_shot_rows_or_raise)
+    headers, rows, n = sm.parse_shots_markdown_table(
+        "| Shot ID | Shot Name |\n| --- | --- |\n| EP01_SC01_SH01 | A |\n"
+    )
+    assert "Shot ID" in headers
+    assert rows and rows[0]["Shot ID"] == "EP01_SC01_SH01"
+    ws = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shared.py"
+    assert len(ws.read_text(encoding="utf-8").splitlines()) < 5200
+    assert "from app.services.shot_markdown import" in ws.read_text(encoding="utf-8")
+
+
+def test_scene_markdown_orchestration_and_await_sink():
+    from app.services.scene_markdown_orchestration import (
+        SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+        SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC,
+        SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+    )
+    from app.services.analyze_scene_dedup import _await_analyze_scene_segment
+    import app.api.endpoints as ep
+    import inspect
+    assert SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS == 3
+    assert SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC == 2.0
+    assert SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS == 1
+    assert callable(_await_analyze_scene_segment)
+    assert ep._await_analyze_scene_segment is _await_analyze_scene_segment
+    pf = inspect.getsource(importlib.import_module("app.api.routers.prompts.progress_flow"))
+    assert "scene_markdown_orchestration" in pf
+
+
+def test_project_access_and_deletion_ops():
+    from pathlib import Path
+    from app.services.project_access import (
+        _require_project_access,
+        _is_project_shared_with_user,
+        _normalize_project_share_role,
+        _PROJECT_SHARE_ROLES,
+    )
+    from app.services.deletion_ops import (
+        _start_deletion_batch,
+        _soft_delete_shots,
+        _active_asset_clause,
+    )
+    import app.api.routers.workspace.shared as ws
+    assert "editor" in _PROJECT_SHARE_ROLES
+    assert _normalize_project_share_role("EDITOR") == "editor"
+    assert callable(_require_project_access)
+    assert callable(_is_project_shared_with_user)
+    assert callable(_start_deletion_batch)
+    assert callable(_soft_delete_shots)
+    assert _active_asset_clause() is not None
+    assert ws._require_project_access is _require_project_access
+    assert ws._start_deletion_batch is _start_deletion_batch
+    shared = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shared.py"
+    assert len(shared.read_text(encoding="utf-8").splitlines()) < 1200
+    assert "from app.services.project_access import" in shared.read_text(encoding="utf-8")
+    assert "from app.services.deletion_ops import" in shared.read_text(encoding="utf-8")
+
+
+def test_asset_registration_uses_project_access():
+    import inspect
+    from app.services.generation_runtime import asset_registration as ar
+    src = inspect.getsource(ar)
+    assert "from app.services.project_access import" in src
+    assert ar._require_project_access.__module__ == "app.services.project_access"
+
+
+def test_story_markdown_and_market_intel_sinks():
+    from pathlib import Path
+    from app.services.markdown_generation import (
+        is_valid_markdown_output,
+        generate_markdown_with_retry,
+        _parse_episode_heading_from_markdown,
+    )
+    from app.services.story_generator_llm import (
+        _sanitize_llm_json_text,
+        _normalize_story_field_map,
+        _CREATIVE_INPUT_STRUCTURE_KEYS,
+    )
+    from app.services.market_intel_ops import (
+        _require_market_intel_model,
+        _build_trending_dramas_markdown,
+        _industry_analysis_section_map,
+    )
+    from app.services.project_episode_utils import _resolve_episode_sort_number
+    import app.api.routers.workspace.shared as ws
+    assert is_valid_markdown_output("# Title\n\n- item")
+    assert not is_valid_markdown_output("plain")
+    assert callable(generate_markdown_with_retry)
+    assert _parse_episode_heading_from_markdown("# EP01 - Foo")["episode_number"] == 1
+    assert _sanitize_llm_json_text('```json\n{"a":1}\n```')
+    assert _normalize_story_field_map({"a": " x "}, ["a"])["a"] == "x"
+    assert "logline" in _CREATIVE_INPUT_STRUCTURE_KEYS or len(_CREATIVE_INPUT_STRUCTURE_KEYS) >= 3
+    assert callable(_require_market_intel_model)
+    assert "热榜" in _build_trending_dramas_markdown("2026-07", "s", [])
+    assert _industry_analysis_section_map()
+    assert callable(_resolve_episode_sort_number)
+    assert ws.generate_markdown_with_retry is generate_markdown_with_retry
+    assert ws._run_structure_llm_call.__module__ == "app.services.story_generator_llm"
+    root = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace"
+    shared_src = (root / "shared.py").read_text(encoding="utf-8")
+    story_src = (root / "story_generator.py").read_text(encoding="utf-8")
+    assert len(shared_src.splitlines()) < 1200
+    assert "from app.services.markdown_generation import" in shared_src
+    assert "from app.services.story_generator_llm import" in story_src
+    assert "from app.services.market_intel_ops import" in story_src
+
+
+def test_asset_registration_uses_episode_utils():
+    import inspect
+    from app.services.generation_runtime import asset_registration as ar
+    src = inspect.getsource(ar)
+    assert "project_episode_utils" in src
+    assert ar._resolve_episode_sort_number.__module__ == "app.services.project_episode_utils"
+
+
+def test_workspace_story_generator_section():
+    from pathlib import Path
+    import app.api.routers.workspace as wp
+    import app.api.routers.workspace.story_generator as sg
+    from app.services.project_generation_defaults import (
+        _ensure_project_generation_defaults,
+        _resolve_project_video_sound,
+    )
+    from app.services.scene_no_utils import _canonicalize_scene_no, _find_active_scene_by_scene_no
+    import app.api.routers.workspace.shared as ws
+    paths = {getattr(r, "path", None) for r in wp.router.routes}
+    assert "/projects/{project_id}/story_generator/global" in paths
+    assert "/projects/{project_id}/story_generator/analyze_novel" in paths
+    assert sg.router is wp.router
+    assert callable(sg.generate_project_story_dna_global)
+    assert ws._ensure_project_generation_defaults is _ensure_project_generation_defaults
+    assert ws._canonicalize_scene_no is _canonicalize_scene_no
+    assert _canonicalize_scene_no("EP01_SC03") == "3"
+    assert _resolve_project_video_sound({}) is True
+    assert _ensure_project_generation_defaults({}).get("video_sound") is True
+    assert callable(_find_active_scene_by_scene_no)
+    shared = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shared.py"
+    src = shared.read_text(encoding="utf-8")
+    assert len(src.splitlines()) < 1200
+    assert "story_generator/global" not in src
+    assert "from app.services.project_generation_defaults import" in src
+    assert "from app.services.scene_no_utils import" in src
+
+
+def test_image_runner_uses_generation_defaults_service():
+    import inspect
+    from app.services.generation_runtime import image_generation_runner as ir
+    src = inspect.getsource(ir)
+    assert "project_generation_defaults" in src
+    assert "workspace.shared" not in src.split("def _ensure_project_generation_defaults")[1].split("async def")[0]
+
+
+def test_project_sharing_and_scene_subject_helpers():
+    from pathlib import Path
+    import app.api.routers.workspace as wp
+    import app.api.routers.workspace.project_sharing as ps
+    from app.services.scene_subject_helpers import (
+        _normalize_subject_entity_type,
+        _extract_subjects_json_from_text,
+        _build_project_subject_inventory,
+    )
+    import app.api.routers.workspace.scenes as sc
+    import app.api.routers.workspace.shared as ws
+    paths = {getattr(r, "path", None) for r in wp.router.routes}
+    assert "/projects/{project_id}/shares" in paths
+    assert "/projects/{project_id}/review_threads" in paths
+    assert "/review_threads/{thread_id}/rounds" in paths
+    assert ps.router is wp.router
+    assert callable(ps.list_project_shares)
+    assert callable(ps.create_project_review_thread)
+    assert _normalize_subject_entity_type("道具") == "prop"
+    assert sc._build_project_subject_inventory is _build_project_subject_inventory
+    assert isinstance(_extract_subjects_json_from_text("{}"), dict)
+    shared = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shared.py"
+    scenes = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "scenes.py"
+    assert len(shared.read_text(encoding="utf-8").splitlines()) < 1200
+    assert "review_threads" not in shared.read_text(encoding="utf-8")
+    assert len(scenes.read_text(encoding="utf-8").splitlines()) < 1200
+    assert "from app.services.scene_subject_helpers import" in scenes.read_text(encoding="utf-8")
+
+
+def test_prompts_use_scene_subject_helpers():
+    import inspect
+    import app.api.routers.prompts.prompt_files as pf
+    import app.api.routers.prompts.analyze_scene as az
+    assert "scene_subject_helpers" in inspect.getsource(pf)
+    assert "scene_subject_helpers" in inspect.getsource(az)
+
+
+def test_shot_generation_prompts_and_episode_script_section():
+    from pathlib import Path
+    import app.api.routers.workspace as wp
+    import app.api.routers.workspace.episode_script_generator as esg
+    import app.api.routers.workspace.shots as shots
+    from app.services.shot_generation_prompts import (
+        _build_project_prompt_context,
+        _build_shot_prompts,
+        _map_shared_prompt_mode_to_shot_generation_mode,
+    )
+    paths = {getattr(r, "path", None) for r in wp.router.routes}
+    assert "/episodes/{episode_id}/script_generator/scenes" in paths
+    assert "/projects/{project_id}/script_generator/episodes/scripts" in paths
+    assert esg.router is wp.router
+    assert callable(esg.generate_episode_scenes_from_story)
+    assert callable(esg.generate_project_episode_scripts_from_global_framework)
+    assert _map_shared_prompt_mode_to_shot_generation_mode("feature_stack") == "routed"
+    assert isinstance(_build_project_prompt_context({"script_title": "X"}), dict)
+    assert shots._build_shot_prompts is _build_shot_prompts
+    shots_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shots.py"
+    ep_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "episodes.py"
+    assert len(shots_path.read_text(encoding="utf-8").splitlines()) < 3000
+    assert len(ep_path.read_text(encoding="utf-8").splitlines()) < 1300
+    assert "script_generator/scenes" not in ep_path.read_text(encoding="utf-8")
+    assert "from app.services.shot_generation_prompts import" in shots_path.read_text(encoding="utf-8")
+
+
+def test_analyze_scene_uses_shot_prompt_context():
+    import inspect
+    import app.api.routers.prompts.analyze_scene as az
+    assert "shot_generation_prompts" in inspect.getsource(az)

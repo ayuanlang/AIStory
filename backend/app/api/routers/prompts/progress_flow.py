@@ -22,6 +22,15 @@ globals().update(
     }
 )
 
+from app.services.scene_markdown_orchestration import (  # noqa: E402,F401
+    SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+    SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+    SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC,
+)
+from app.services.project_access import (  # noqa: E402,F401
+    _require_project_access,
+)
+
 
 class ScriptAnalysisFlowRunNodeRequest(BaseModel):
     node_key: str

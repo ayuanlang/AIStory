@@ -35,10 +35,8 @@ from app.services.soft_delete import (
 from app.services.system_log_service import log_action
 
 # workspace.shared does not import generation_runtime — safe at module load.
-from app.api.routers.workspace.shared import (  # noqa: E402
-    _require_project_access,
-    _resolve_episode_sort_number,
-)
+from app.services.project_access import _require_project_access  # noqa: E402
+from app.services.project_episode_utils import _resolve_episode_sort_number  # noqa: E402
 
 logger = logging.getLogger("api_logger")
 

@@ -2,19 +2,21 @@
 """Analyze-scene async dedup table helpers."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, engine
 from app.schemas.agent import AnalyzeSceneRequest
+from app.services.llm_service import llm_service
 from app.services.task_manager import get_status as _get_task_status
 
 logger = logging.getLogger("api_logger")
@@ -251,3 +253,19 @@ def _collect_analyze_scene_dedup_stats(db: Session, now_ts: Optional[float] = No
         "prune_interval_seconds": int(_ANALYZE_SCENE_DEDUP_PRUNE_INTERVAL_SECONDS),
     }
 
+
+
+async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
+    started_at = time.monotonic()
+    llm_task = asyncio.create_task(llm_service.chat_completion_with_fallback(messages, config))
+    try:
+        return await asyncio.wait_for(asyncio.shield(llm_task), timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[analyze_scene] segment_soft_timeout episode_provider=%s model=%s timeout=%ss elapsed=%.2fs; continuing to wait for provider result",
+            (config or {}).get("provider"),
+            (config or {}).get("model"),
+            _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+            time.monotonic() - started_at,
+        )
+        return await llm_task

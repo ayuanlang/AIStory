@@ -22,6 +22,22 @@ globals().update(
     }
 )
 
+from app.services.analyze_scene_dedup import (  # noqa: E402,F401
+    _await_analyze_scene_segment,
+)
+from app.services.project_access import (  # noqa: E402,F401
+    _require_project_access,
+)
+
+from app.services.scene_subject_helpers import (  # noqa: E402,F401
+    _build_prior_entity_generation_prompts_block,
+    _extract_subjects_json_from_text,
+)
+
+from app.services.shot_generation_prompts import (  # noqa: E402,F401
+    _build_project_prompt_context,
+)
+
 
 @router.post("/analyze_scene", response_model=Dict[str, Any])
 async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db), async_mode: str = Query("0")): # user auth optional depending on reqs, kept for safety

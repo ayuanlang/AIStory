@@ -160,7 +160,7 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        from app.api.routers.generation.video_jobs import _run_generate_video_job
+        from app.services.generation_runtime.video_generation_runner import _run_generate_video_job
         return await _run_generate_video_job(
             job_id,
             int(user_id),

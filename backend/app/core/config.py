@@ -102,6 +102,21 @@ class Settings(BaseSettings):
     DISABLE_DDG_HTML_SEARCH: str = os.getenv("DISABLE_DDG_HTML_SEARCH", "").strip()
     # Optional override, comma-separated: serper,brave,tavily,ddg_html,ddgs,bing_html,searxng
     SEARCH_BACKENDS: str = os.getenv("SEARCH_BACKENDS", "").strip()
+    # After SERP rank: fetch body for top-K URLs (always, not only weak snippets).
+    SEARCH_ENRICH_TOP_K: int = max(0, int(os.getenv("SEARCH_ENRICH_TOP_K", "5") or 5))
+    SEARCH_SNIPPET_MAX_LEN: int = max(200, int(os.getenv("SEARCH_SNIPPET_MAX_LEN", "800") or 800))
+    SEARCH_EXCERPT_MAX_LEN: int = max(400, int(os.getenv("SEARCH_EXCERPT_MAX_LEN", "2000") or 2000))
+    SEARCH_ALWAYS_ENRICH_TOP_K: bool = os.getenv("SEARCH_ALWAYS_ENRICH_TOP_K", "1") not in {
+        "0",
+        "false",
+        "False",
+    }
+    TAVILY_SEARCH_DEPTH: str = (os.getenv("TAVILY_SEARCH_DEPTH", "advanced") or "advanced").strip().lower()
+    TAVILY_INCLUDE_RAW_CONTENT: bool = os.getenv("TAVILY_INCLUDE_RAW_CONTENT", "1") not in {
+        "0",
+        "false",
+        "False",
+    }
 
     # Daily DB backup + stale project retention (Asia/Shanghai 03:00 scheduler).
     # Default on for Render; off for local/dev unless explicitly enabled.

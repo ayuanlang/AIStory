@@ -1169,9 +1169,11 @@ from app.services.auth_security import (
     verify_password_reset_token,
 )
 
-SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS = 3
-SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC = 2.0
-SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS = 1
+from app.services.scene_markdown_orchestration import (  # noqa: E402,F401
+    SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+    SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
+    SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC,
+)
 
 
 _USER_MEDIA_GENERATION_ACTIVE_STATUSES = frozenset(
@@ -1301,39 +1303,10 @@ from app.services.auth_login import (
 )
 
 
-def _mask_secret_for_log(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) <= 8:
-        return "*" * len(raw)
-    return f"{raw[:4]}***{raw[-4:]}"
-
-
-def _sanitize_generation_runtime_config_for_log(value: Any) -> Any:
-    secret_keys = {
-        "api_key",
-        "apikey",
-        "authorization",
-        "x-api-key",
-        "access_token",
-        "refresh_token",
-        "private_key",
-    }
-    if isinstance(value, dict):
-        sanitized = {}
-        for key, item in value.items():
-            key_text = str(key or "").strip().lower()
-            if key_text in secret_keys:
-                sanitized[key] = _mask_secret_for_log(item)
-            else:
-                sanitized[key] = _sanitize_generation_runtime_config_for_log(item)
-        return sanitized
-    if isinstance(value, list):
-        return [_sanitize_generation_runtime_config_for_log(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_sanitize_generation_runtime_config_for_log(item) for item in value)
-    return value
+from app.services.generation_runtime.log_sanitize import (  # noqa: E402,F401
+    _mask_secret_for_log,
+    _sanitize_generation_runtime_config_for_log,
+)
 
 
 from app.models.all_models import SystemLog

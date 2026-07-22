@@ -95,8 +95,7 @@ logger = logging.getLogger("api_logger")
 
 
 def _ensure_project_generation_defaults(global_info: Any) -> Dict[str, Any]:
-    # Lazy import to avoid circular import with workspace.shared at module load.
-    from app.api.routers.workspace.shared import _ensure_project_generation_defaults as _fn
+    from app.services.project_generation_defaults import _ensure_project_generation_defaults as _fn
     return _fn(global_info)
 
 

@@ -44,13 +44,57 @@ SEARXNG_INSTANCES = (
 REPORT_MONTHS_WINDOW = 2
 DEFAULT_LIMIT_PER_QUERY = 10
 MIN_USEFUL_SNIPPET_LEN = 40
-MAX_ENRICH_PER_QUERY = 2
-SNIPPET_MAX_LEN = 480
+MAX_ENRICH_PER_QUERY = 5
+SNIPPET_MAX_LEN = 800
+EXCERPT_MAX_LEN = 2000
+# Skip re-fetch when SERP/raw text is already dense enough (unless always-enrich).
+ENRICH_SKIP_MIN_CHARS = 360
 SEARCH_CONCURRENCY_LIMIT = 3
 SEARCH_QUERY_DELAY_SEC = 0.35
 HTML_SEARCH_RETRIES = 2
 DDG_HTML_SEARCH_TIMEOUT_SEC = 8
 DDGS_SEARCH_RETRIES = 2
+PRIORITY_TIER_P0 = 40
+PRIORITY_TIER_P1 = 20
+
+
+def _cfg_int(name: str, default: int) -> int:
+    raw = getattr(settings, name, None)
+    if raw is None or raw == "":
+        raw = os.getenv(name, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _cfg_bool(name: str, default: bool = True) -> bool:
+    raw = getattr(settings, name, None)
+    if raw is None or raw == "":
+        env = os.getenv(name, "")
+        if env == "":
+            return bool(default)
+        raw = env
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def resolve_snippet_max_len() -> int:
+    return max(200, _cfg_int("SEARCH_SNIPPET_MAX_LEN", SNIPPET_MAX_LEN))
+
+
+def resolve_excerpt_max_len() -> int:
+    return max(400, _cfg_int("SEARCH_EXCERPT_MAX_LEN", EXCERPT_MAX_LEN))
+
+
+def resolve_enrich_top_k(default: Optional[int] = None) -> int:
+    fallback = MAX_ENRICH_PER_QUERY if default is None else int(default)
+    return max(0, _cfg_int("SEARCH_ENRICH_TOP_K", fallback))
+
+
+def resolve_always_enrich_top_k() -> bool:
+    return _cfg_bool("SEARCH_ALWAYS_ENRICH_TOP_K", True)
 SEARCH_BACKEND_ALIASES = {
     "serper": "serper",
     "brave": "brave",
@@ -255,16 +299,131 @@ def _result_relevance_score(query: str, title: str, snippet: str, url: str = "")
     return score
 
 
-def _rank_results_for_query(query: str, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+EVIDENCE_TAG_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("climax", ("高潮", "名场面", "反转", "climax", "iconic", "高潮戏")),
+    ("hook", ("钩子", "开篇", "悬念", "hook", "开场", "吸睛")),
+    ("dialogue", ("对白", "台词", "金句", "dialogue", "旁白", "独白")),
+    ("trope", ("桥段", "套路", "母题", "trope", "类型梗")),
+    ("market", ("热榜", "排行", "题材", "趋势", "数据", "热度", "榜单")),
+    ("action", ("动作", "打斗", "走位", "动作戏", "fight", "blocking")),
+)
+
+
+def _infer_evidence_tags(title: str, evidence: str, query: str = "") -> List[str]:
+    haystack = f"{title} {evidence} {query}".lower()
+    tags: List[str] = []
+    for tag, markers in EVIDENCE_TAG_RULES:
+        if any(marker.lower() in haystack for marker in markers):
+            tags.append(tag)
+    return tags[:4]
+
+
+def _priority_tier(score: int) -> str:
+    if int(score or 0) >= PRIORITY_TIER_P0:
+        return "P0"
+    if int(score or 0) >= PRIORITY_TIER_P1:
+        return "P1"
+    return "P2"
+
+
+def _result_priority_score(
+    query: str,
+    title: str,
+    evidence: str,
+    url: str = "",
+    *,
+    enriched: bool = False,
+    source: str = "",
+) -> int:
+    """Composite priority for next-stage consumption (higher = feed first)."""
+    text = str(evidence or "").strip()
+    score = _result_relevance_score(query, title, text, url)
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    word_count = len(re.findall(r"[a-zA-Z]{3,}", text))
+    score += min(28, cjk_count // 10)
+    score += min(16, word_count // 8)
+    score += min(24, len(text) // 100)
+    if enriched:
+        score += 12
+    source_key = str(source or "").strip().lower()
+    if source_key == "tavily":
+        score += 6
+    elif source_key in {"serper", "brave"}:
+        score += 3
+    if _is_informative_snippet(text, title=title, url=url):
+        score += 8
+    else:
+        score -= 10
+    host = str(url or "").lower()
+    if any(marker in host for marker in ("douyin.com", "tiktok.com", "ixigua.com", "bilibili.com/video")):
+        score -= 8
+    tags = _infer_evidence_tags(title, text, query)
+    score += min(12, len(tags) * 3)
+    return score
+
+
+def _row_evidence_text(row: Dict[str, Any]) -> str:
+    excerpt = str(row.get("excerpt") or "").strip()
+    snippet = str(row.get("snippet") or "").strip()
+    if excerpt and (not snippet or len(excerpt) >= len(snippet)):
+        return excerpt
+    return snippet or excerpt
+
+
+def _attach_priority_fields(row: Dict[str, Any], *, query: str = "") -> Dict[str, Any]:
+    title = str(row.get("title") or "").strip()
+    url = str(row.get("url") or "").strip()
+    evidence = _row_evidence_text(row)
+    enriched = str(row.get("enriched") or "").strip() in {"1", "true", "True", "yes"}
+    source = str(row.get("source") or "").strip()
+    q = str(query or row.get("query") or "").strip()
+    priority = _result_priority_score(
+        q,
+        title,
+        evidence,
+        url,
+        enriched=enriched,
+        source=source,
+    )
+    tags = _infer_evidence_tags(title, evidence, q)
+    row["priority"] = priority
+    row["priority_tier"] = _priority_tier(priority)
+    row["evidence_tags"] = tags
+    if evidence and not str(row.get("excerpt") or "").strip() and len(evidence) > len(str(row.get("snippet") or "")):
+        row["excerpt"] = evidence
+    return row
+
+
+def _rank_results_for_query(query: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not rows:
         return []
     return sorted(
         rows,
-        key=lambda row: _result_relevance_score(
+        key=lambda row: _result_priority_score(
             query,
             str(row.get("title") or ""),
-            str(row.get("snippet") or ""),
+            _row_evidence_text(row),
             str(row.get("url") or ""),
+            enriched=str(row.get("enriched") or "").strip() in {"1", "true", "True"},
+            source=str(row.get("source") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def _sort_snippets_by_priority(snippets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not snippets:
+        return []
+    decorated: List[Dict[str, Any]] = []
+    for row in snippets:
+        if not isinstance(row, dict):
+            continue
+        decorated.append(_attach_priority_fields(dict(row)))
+    return sorted(
+        decorated,
+        key=lambda row: (
+            int(row.get("priority") or 0),
+            len(_row_evidence_text(row)),
         ),
         reverse=True,
     )
@@ -284,23 +443,24 @@ def _normalize_url(url: str) -> str:
     return str(url or "").strip().lower().rstrip("/")
 
 
-def _useful_result_count(rows: List[Dict[str, str]]) -> int:
+def _useful_result_count(rows: List[Dict[str, Any]]) -> int:
     count = 0
     for row in rows:
-        snippet = str(row.get("snippet") or "").strip()
-        if snippet and not _is_low_quality_snippet(snippet):
+        evidence = _row_evidence_text(row)
+        if evidence and not _is_low_quality_snippet(evidence):
             count += 1
     return count
 
 
-def _merge_result_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    merged: Dict[str, Dict[str, str]] = {}
+def _merge_result_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for row in rows:
         title = str(row.get("title") or "").strip()
         snippet = str(row.get("snippet") or "").strip()
+        excerpt = str(row.get("excerpt") or "").strip()
         url = str(row.get("url") or "").strip()
-        if not title and not snippet:
+        if not title and not snippet and not excerpt:
             continue
         key = _normalize_url(url) if url else f"title:{title.lower()}"
         if key in merged:
@@ -309,19 +469,25 @@ def _merge_result_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
                 existing["snippet"] = snippet
                 if row.get("source"):
                     existing["source"] = row.get("source")
+            if len(excerpt) > len(str(existing.get("excerpt") or "")):
+                existing["excerpt"] = excerpt
             if title and not existing.get("title"):
                 existing["title"] = title
             if url and not existing.get("url"):
                 existing["url"] = url
             if row.get("source") and not existing.get("source"):
                 existing["source"] = row.get("source")
+            if row.get("enriched") and not existing.get("enriched"):
+                existing["enriched"] = row.get("enriched")
         else:
             merged[key] = {
                 "query": str(row.get("query") or "").strip(),
                 "title": title,
                 "snippet": snippet,
+                "excerpt": excerpt,
                 "url": url,
                 "source": str(row.get("source") or "").strip(),
+                "enriched": row.get("enriched") or "",
             }
             order.append(key)
     return [merged[key] for key in order]
@@ -367,7 +533,14 @@ def _search_ddgs_text(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY) -> Li
     return results
 
 
-def _fetch_page_summary(url: str, *, max_chars: int = SNIPPET_MAX_LEN) -> str:
+def _clean_extracted_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    return cleaned
+
+
+def _fetch_page_summary(url: str, *, max_chars: Optional[int] = None) -> str:
+    """Fetch usable page body/meta text for evidence packing (not link-only)."""
+    limit = int(max_chars or resolve_excerpt_max_len())
     if not url.startswith(("http://", "https://")):
         return ""
     try:
@@ -378,6 +551,12 @@ def _fetch_page_summary(url: str, *, max_chars: int = SNIPPET_MAX_LEN) -> str:
         if "text/html" not in content_type and "application/xhtml" not in content_type:
             return ""
         soup = BeautifulSoup(response.text, "html.parser")
+        for junk in soup(["script", "style", "noscript", "svg", "iframe"]):
+            junk.decompose()
+        for junk in soup.find_all(["nav", "footer", "aside", "form", "header"]):
+            junk.decompose()
+
+        meta_text = ""
         for tag_name, attrs in (
             ("meta", {"property": "og:description"}),
             ("meta", {"name": "description"}),
@@ -385,21 +564,29 @@ def _fetch_page_summary(url: str, *, max_chars: int = SNIPPET_MAX_LEN) -> str:
         ):
             tag = soup.find(tag_name, attrs=attrs)
             if tag and tag.get("content"):
-                text_value = str(tag.get("content") or "").strip()
+                text_value = _clean_extracted_text(str(tag.get("content") or ""))
                 if len(text_value) >= 20:
-                    return text_value[:max_chars]
+                    meta_text = text_value
+                    break
+
         article = soup.find("article") or soup.find("main") or soup.body
+        parts: List[str] = []
         if article:
-            parts: List[str] = []
-            for paragraph in article.find_all("p", limit=10):
-                chunk = paragraph.get_text(" ", strip=True)
-                if len(chunk) < 30:
+            for paragraph in article.find_all(["p", "li"], limit=40):
+                chunk = _clean_extracted_text(paragraph.get_text(" ", strip=True))
+                if len(chunk) < 24:
+                    continue
+                if _is_low_quality_snippet(chunk) and len(chunk) < 80:
                     continue
                 parts.append(chunk)
-                if sum(len(part) for part in parts) >= max_chars:
+                if sum(len(part) for part in parts) >= limit:
                     break
-            if parts:
-                return " ".join(parts)[:max_chars]
+        body_text = _clean_extracted_text(" ".join(parts))[:limit]
+        if body_text and _is_informative_snippet(body_text, url=url):
+            return body_text
+        if meta_text and (not body_text or len(meta_text) > len(body_text)):
+            return meta_text[:limit]
+        return body_text or meta_text[:limit]
     except Exception as exc:
         logger.debug("[ai_short_drama_search] page fetch failed url=%s err=%s", url, exc)
     return ""
@@ -794,11 +981,17 @@ def _search_brave(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_P
     return results
 
 
-def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, str]]:
+def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_PER_QUERY) -> List[Dict[str, Any]]:
     api_key = str(api_key or resolve_search_api_keys().get("tavily", "")).strip()
     if not api_key:
         return []
-    results: List[Dict[str, str]] = []
+    results: List[Dict[str, Any]] = []
+    depth = str(getattr(settings, "TAVILY_SEARCH_DEPTH", "") or os.getenv("TAVILY_SEARCH_DEPTH", "advanced") or "advanced").strip().lower()
+    if depth not in {"basic", "advanced"}:
+        depth = "advanced"
+    include_raw = _cfg_bool("TAVILY_INCLUDE_RAW_CONTENT", True)
+    excerpt_limit = resolve_excerpt_max_len()
+    snippet_limit = resolve_snippet_max_len()
     try:
         response = requests.post(
             TAVILY_SEARCH_API_URL,
@@ -809,11 +1002,12 @@ def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
             json={
                 "query": query,
                 "max_results": max(3, min(limit, 10)),
-                "search_depth": "basic",
-                "topic": "news",
+                "search_depth": depth,
+                "topic": "general",
                 "include_answer": False,
+                "include_raw_content": include_raw,
             },
-            timeout=25,
+            timeout=35,
         )
         if response.status_code != 200:
             logger.warning(
@@ -827,16 +1021,25 @@ def _search_tavily(query: str, *, api_key: str = "", limit: int = DEFAULT_LIMIT_
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title") or "").strip()
-            snippet = str(item.get("content") or item.get("raw_content") or "").strip()
+            content = _clean_extracted_text(str(item.get("content") or ""))
+            raw = _clean_extracted_text(str(item.get("raw_content") or ""))
             url = str(item.get("url") or "").strip()
-            if title or snippet:
+            excerpt = ""
+            if raw and len(raw) > len(content):
+                excerpt = raw[:excerpt_limit]
+            elif content:
+                excerpt = content[:excerpt_limit]
+            snippet = (content or raw)[:snippet_limit]
+            if title or snippet or excerpt:
                 results.append(
                     {
                         "query": query,
                         "title": title,
                         "snippet": snippet,
+                        "excerpt": excerpt,
                         "url": url,
                         "source": "tavily",
+                        "enriched": "1" if raw and len(raw) >= ENRICH_SKIP_MIN_CHARS else "",
                     }
                 )
     except Exception as exc:
@@ -991,8 +1194,8 @@ def _search_duckduckgo_html(query: str, *, limit: int = DEFAULT_LIMIT_PER_QUERY)
     return results
 
 
-def _snippet_key(item: Dict[str, str]) -> str:
-    return f"{item.get('url', '').strip().lower()}|{item.get('title', '').strip().lower()}"
+def _snippet_key(item: Dict[str, Any]) -> str:
+    return f"{str(item.get('url') or '').strip().lower()}|{str(item.get('title') or '').strip().lower()}"
 
 
 async def _search_query_bundle(
@@ -1002,9 +1205,9 @@ async def _search_query_bundle(
     limit_per_query: int,
     backend_chain: Optional[List[str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
-    max_enrich_per_query: int = MAX_ENRICH_PER_QUERY,
+    max_enrich_per_query: Optional[int] = None,
     require_informative_snippet: bool = False,
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     combined_rows = await _collect_search_results_for_query(
         query,
         search_api_keys=search_api_keys,
@@ -1014,53 +1217,81 @@ async def _search_query_bundle(
     )
     merged = _rank_results_for_query(query, _merge_result_rows(combined_rows))
 
-    enrich_budget = max(0, int(max_enrich_per_query or 0))
+    snippet_limit = resolve_snippet_max_len()
+    excerpt_limit = resolve_excerpt_max_len()
+    enrich_budget = resolve_enrich_top_k(
+        MAX_ENRICH_PER_QUERY if max_enrich_per_query is None else max_enrich_per_query
+    )
+    always_enrich = resolve_always_enrich_top_k()
     enriched_count = 0
     for item in merged:
         if enriched_count >= enrich_budget:
             break
         title = str(item.get("title") or "").strip()
         snippet = str(item.get("snippet") or "").strip()
+        excerpt = str(item.get("excerpt") or "").strip()
         url = str(item.get("url") or "").strip()
-        if _is_informative_snippet(snippet, title=title, url=url):
-            continue
         if not url:
             continue
-        page_text = await asyncio.to_thread(_fetch_page_summary, url)
-        if page_text and _is_informative_snippet(page_text, title=title, url=url):
-            item["snippet"] = page_text
-            enriched_count += 1
+        existing = excerpt or snippet
+        already_dense = (
+            len(existing) >= ENRICH_SKIP_MIN_CHARS
+            and _is_informative_snippet(existing, title=title, url=url)
+        )
+        if already_dense and not always_enrich:
+            continue
+        if already_dense and always_enrich and len(existing) >= min(excerpt_limit, 1200):
+            item["enriched"] = item.get("enriched") or "1"
+            continue
+        page_text = await asyncio.to_thread(_fetch_page_summary, url, max_chars=excerpt_limit)
+        enriched_count += 1
+        if not page_text:
+            continue
+        if len(page_text) > len(excerpt):
+            item["excerpt"] = page_text[:excerpt_limit]
+        if len(page_text) > len(snippet):
+            item["snippet"] = page_text[:snippet_limit]
+        if _is_informative_snippet(page_text, title=title, url=url):
+            item["enriched"] = "1"
 
-    filtered: List[Dict[str, str]] = []
-    fallback: List[Dict[str, str]] = []
+    filtered: List[Dict[str, Any]] = []
+    fallback: List[Dict[str, Any]] = []
     for item in merged:
         title = str(item.get("title") or "").strip()
-        snippet = str(item.get("snippet") or "").strip()[:SNIPPET_MAX_LEN]
         url = str(item.get("url") or "").strip()
         if not title:
             continue
-        snippet = _fallback_snippet_text(title, snippet, url)[:SNIPPET_MAX_LEN]
-        row = {
+        excerpt = str(item.get("excerpt") or "").strip()[:excerpt_limit]
+        snippet = str(item.get("snippet") or "").strip()
+        evidence = _fallback_snippet_text(title, excerpt or snippet, url)[:excerpt_limit]
+        if not evidence:
+            continue
+        row: Dict[str, Any] = {
             "query": query,
             "title": title,
-            "snippet": snippet,
+            # Downstream historically reads `snippet`; store best available body text here.
+            "snippet": evidence,
+            "excerpt": excerpt or evidence,
             "url": url,
             "source": str(item.get("source") or "unknown").strip(),
+            "enriched": str(item.get("enriched") or "").strip(),
         }
-        if _is_informative_snippet(snippet, title=title, url=url):
+        _attach_priority_fields(row, query=query)
+        if _is_informative_snippet(_row_evidence_text(row), title=title, url=url):
             filtered.append(row)
         elif not require_informative_snippet:
             fallback.append(row)
 
-    if not require_informative_snippet and len(filtered) < limit_per_query:
-        for row in fallback:
-            if row in filtered:
+    ranked = _sort_snippets_by_priority(filtered)
+    if not require_informative_snippet and len(ranked) < limit_per_query:
+        for row in _sort_snippets_by_priority(fallback):
+            if any(_snippet_key(row) == _snippet_key(existing) for existing in ranked):
                 continue
-            filtered.append(row)
-            if len(filtered) >= limit_per_query:
+            ranked.append(row)
+            if len(ranked) >= limit_per_query:
                 break
 
-    return filtered[:limit_per_query]
+    return ranked[:limit_per_query]
 
 
 async def _collect_search_snippets_for_queries(
@@ -1105,7 +1336,7 @@ async def _collect_search_snippets_for_queries(
             report_kind,
         )
 
-    async def _bounded_search(query: str) -> List[Dict[str, str]]:
+    async def _bounded_search(query: str) -> List[Dict[str, Any]]:
         async with semaphore:
             await asyncio.sleep(SEARCH_QUERY_DELAY_SEC)
             return await _search_query_bundle(
@@ -1123,13 +1354,15 @@ async def _collect_search_snippets_for_queries(
     bundles = await asyncio.gather(*tasks)
     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
 
-    snippets: List[Dict[str, str]] = []
+    snippets: List[Dict[str, Any]] = []
     seen_snippets: set[str] = set()
+    tier_stats: Dict[str, int] = {"P0": 0, "P1": 0, "P2": 0}
 
     for html_results in bundles:
         for item in html_results:
+            evidence = _row_evidence_text(item)
             if require_informative_snippet and not _is_informative_snippet(
-                str(item.get("snippet") or ""),
+                evidence,
                 title=str(item.get("title") or ""),
                 url=str(item.get("url") or ""),
             ):
@@ -1140,16 +1373,20 @@ async def _collect_search_snippets_for_queries(
             seen_snippets.add(key)
             snippets.append(item)
 
+    snippets = _sort_snippets_by_priority(snippets)
     source_stats: Dict[str, int] = {}
     for item in snippets:
         if not isinstance(item, dict):
             continue
         source = str(item.get("source") or "unknown").strip() or "unknown"
         source_stats[source] = source_stats.get(source, 0) + 1
+        tier = str(item.get("priority_tier") or "P2").strip() or "P2"
+        tier_stats[tier] = int(tier_stats.get(tier, 0) or 0) + 1
 
     logger.info(
         "[ai_short_drama_search] search complete report_kind=%s queries=%s snippets=%s elapsed_ms=%s "
-        "queries_with_results=%s queries_empty=%s backend_calls=%s backend_raw_rows=%s backend_useful_rows=%s source_stats=%s",
+        "queries_with_results=%s queries_empty=%s backend_calls=%s backend_raw_rows=%s backend_useful_rows=%s "
+        "source_stats=%s tier_stats=%s enrich_top_k=%s",
         report_kind,
         len(queries),
         len(snippets),
@@ -1160,6 +1397,8 @@ async def _collect_search_snippets_for_queries(
         diagnostics.get("backend_raw_rows") or {},
         diagnostics.get("backend_useful_rows") or {},
         source_stats,
+        tier_stats,
+        max_enrich_per_query,
     )
 
     return {
@@ -1172,6 +1411,7 @@ async def _collect_search_snippets_for_queries(
         "snippets": snippets,
         "instant_notes": [],
         "source_stats": source_stats,
+        "tier_stats": tier_stats,
         "search_diagnostics": {
             "elapsed_ms": elapsed_ms,
             "queries_with_results": int(diagnostics.get("queries_with_results", 0) or 0),
@@ -1179,6 +1419,8 @@ async def _collect_search_snippets_for_queries(
             "backend_calls": diagnostics.get("backend_calls") or {},
             "backend_raw_rows": diagnostics.get("backend_raw_rows") or {},
             "backend_useful_rows": diagnostics.get("backend_useful_rows") or {},
+            "tier_stats": tier_stats,
+            "enrich_top_k": max_enrich_per_query,
         },
     }
 
@@ -1194,6 +1436,8 @@ async def collect_industry_analysis_search_snippets(
         queries,
         month_label=month_label,
         limit_per_query=limit_per_query,
+        max_enrich_per_query=resolve_enrich_top_k(MAX_ENRICH_PER_QUERY),
+        require_informative_snippet=True,
         months_window=months_window,
         report_kind="industry_analysis",
     )
@@ -1210,6 +1454,8 @@ async def collect_trending_dramas_search_snippets(
         queries,
         month_label=month_label,
         limit_per_query=limit_per_query,
+        max_enrich_per_query=resolve_enrich_top_k(MAX_ENRICH_PER_QUERY),
+        require_informative_snippet=True,
         months_window=months_window,
         report_kind="trending_dramas",
     )
@@ -1226,9 +1472,57 @@ async def collect_trending_ai_short_drama_search_snippets(
         queries,
         month_label=month_label,
         limit_per_query=limit_per_query,
+        max_enrich_per_query=resolve_enrich_top_k(MAX_ENRICH_PER_QUERY),
+        require_informative_snippet=True,
         months_window=months_window,
         report_kind="combined",
     )
+
+
+def format_search_evidence_lines(
+    snippets: Any,
+    *,
+    include_url: bool = True,
+    max_chars_per_item: Optional[int] = None,
+    heading: str = "Web Search Evidence (priority-ordered):",
+) -> List[str]:
+    """Render ranked evidence blocks for the next LLM stage."""
+    limit = int(max_chars_per_item or resolve_excerpt_max_len())
+    lines: List[str] = [heading]
+    ranked = _sort_snippets_by_priority([row for row in (snippets or []) if isinstance(row, dict)])
+    rendered = 0
+    for idx, item in enumerate(ranked, start=1):
+        evidence = _row_evidence_text(item)[:limit]
+        if not evidence:
+            continue
+        title = str(item.get("title") or "").strip()
+        tier = str(item.get("priority_tier") or _priority_tier(int(item.get("priority") or 0))).strip() or "P2"
+        priority = int(item.get("priority") or 0)
+        tags = item.get("evidence_tags") or []
+        if isinstance(tags, str):
+            tag_text = tags.strip()
+        else:
+            tag_text = ",".join(str(tag).strip() for tag in tags if str(tag).strip())
+        header = f"[{idx}] [{tier}] score={priority}"
+        if tag_text:
+            header = f"{header} tags={tag_text}"
+        lines.extend(
+            [
+                header,
+                f"Query: {item.get('query', '')}",
+                f"Title: {title}",
+                f"Evidence: {evidence}",
+            ]
+        )
+        if include_url:
+            url = str(item.get("url") or "").strip()
+            if url:
+                lines.append(f"URL: {url}")
+        lines.append("")
+        rendered += 1
+    if rendered <= 0:
+        lines.append("(No informative web evidence returned.)")
+    return lines
 
 
 def _format_search_bundle_context(
@@ -1249,25 +1543,17 @@ def _format_search_bundle_context(
         f"Project Title: {project_title or '(none)'}",
         f"Preferred Language: {language or 'zh'}",
         f"Analysis Focus: {analysis_focus}",
+        "Consume evidence in priority order: P0 first, then P1, then P2. Prefer Evidence body over URLs.",
     ]
     if target_list_size is not None:
         lines.append(f"Target List Size: up to {max(3, min(int(target_list_size or 12), 20))} dramas")
-    lines.extend(["", "Web Search Snippets:"])
-    for idx, item in enumerate(search_bundle.get("snippets") or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        snippet = str(item.get("snippet") or "").strip()
-        if not snippet:
-            continue
-        lines.extend(
-            [
-                f"[{idx}] Query: {item.get('query', '')}",
-                f"Title: {item.get('title', '')}",
-                f"Summary: {snippet}",
-                f"URL: {item.get('url', '')}",
-                "",
-            ]
+    lines.append("")
+    lines.extend(
+        format_search_evidence_lines(
+            search_bundle.get("snippets") or [],
+            include_url=True,
         )
+    )
     if search_bundle.get("instant_notes"):
         lines.append("")
         lines.append("Instant Search Notes:")

@@ -4,11 +4,15 @@ from typing import Any, Dict, List, Optional
 
 from app.services.story_trend_search_service import (
     DEFAULT_LIMIT_PER_QUERY,
+    MAX_ENRICH_PER_QUERY,
     _collect_search_snippets_for_queries,
+    format_search_evidence_lines,
+    resolve_enrich_top_k,
 )
 
 CREATIVE_STRUCTURE_LIMIT_PER_QUERY = max(DEFAULT_LIMIT_PER_QUERY, 12)
 CREATIVE_STRUCTURE_MAX_QUERIES = 36
+CREATIVE_STRUCTURE_MAX_ENRICH = max(MAX_ENRICH_PER_QUERY, 6)
 
 
 def _as_str_list(value: Any, *, limit: int = 8) -> List[str]:
@@ -99,6 +103,8 @@ async def collect_creative_structure_search_snippets(
     return await _collect_search_snippets_for_queries(
         queries,
         limit_per_query=limit_per_query,
+        max_enrich_per_query=resolve_enrich_top_k(CREATIVE_STRUCTURE_MAX_ENRICH),
+        require_informative_snippet=True,
         report_kind="creative_structure",
     )
 
@@ -113,6 +119,7 @@ def build_creative_structure_search_user_prompt(
     lines = [
         "Reference Research Focus: climax and iconic scenes (高潮与名场面) first; then classic visuals, dialogue, action blocking, and trope patterns relevant to the brainstorm.",
         "When structuring I7a/I6c, synthesize references from multiple angles: image composition, dialogue lines, physical action, emotional peak staging.",
+        "Consume evidence in priority order: P0 first, then P1, then P2. Prefer Evidence body over URLs.",
         f"Project Title: {project_title or '(none)'}",
         f"Preferred Language: {language or 'zh'}",
         "Extracted Key Elements:",
@@ -142,22 +149,12 @@ def build_creative_structure_search_user_prompt(
         if rendered:
             lines.append(f"- {key}: {rendered}")
     lines.append("")
-    lines.append("Web Search Snippets:")
-    for idx, item in enumerate(search_bundle.get("snippets") or [], start=1):
-        if not isinstance(item, dict):
-            continue
-        snippet = str(item.get("snippet") or "").strip()
-        if not snippet:
-            continue
-        lines.extend(
-            [
-                f"[{idx}] Query: {item.get('query', '')}",
-                f"Title: {item.get('title', '')}",
-                f"Summary: {snippet}",
-                f"URL: {item.get('url', '')}",
-                "",
-            ]
+    lines.extend(
+        format_search_evidence_lines(
+            search_bundle.get("snippets") or [],
+            include_url=True,
         )
+    )
     if search_bundle.get("instant_notes"):
         lines.append("")
         lines.append("Instant Search Notes:")

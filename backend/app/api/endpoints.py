@@ -270,24 +270,8 @@ from app.services.analyze_scene_dedup import (  # noqa: E402,F401
     _ANALYZE_SCENE_DEDUP_WINDOW_SECONDS,
     _ANALYZE_SCENE_OUTPUT_CHAR_HARD_CAP,
     _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
+    _await_analyze_scene_segment,
 )
-
-
-
-async def _await_analyze_scene_segment(messages: List[Dict[str, Any]], config: Dict[str, Any]) -> Dict[str, Any]:
-    started_at = time.monotonic()
-    llm_task = asyncio.create_task(llm_service.chat_completion_with_fallback(messages, config))
-    try:
-        return await asyncio.wait_for(asyncio.shield(llm_task), timeout=_ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[analyze_scene] segment_soft_timeout episode_provider=%s model=%s timeout=%ss elapsed=%.2fs; continuing to wait for provider result",
-            (config or {}).get("provider"),
-            (config or {}).get("model"),
-            _ANALYZE_SCENE_SEGMENT_TIMEOUT_SECONDS,
-            time.monotonic() - started_at,
-        )
-        return await llm_task
 
 
 

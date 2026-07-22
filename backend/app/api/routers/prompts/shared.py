@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import inspect, text
@@ -31,12 +31,26 @@ from app.schemas.agent import AnalyzeSceneRequest
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
 from app.services.llm_service import llm_service
+from app.core.prompts.skills_loader import load_skills_registry, get_skill_meta  # noqa: E402
+from app.core.prompts.scene_analysis_feature_skills import (  # noqa: E402
+    get_scene_analysis_feature_catalog,
+    resolve_scene_analysis_feature_bundle,
+)
+from app.api.settings import (  # noqa: E402
+    get_scene_analysis_system_config,
+    get_script_analysis_flow_config,
+)
+from app.services.script_analysis_flow.registry import (  # noqa: E402
+    get_script_analysis_flow_registry,
+    build_script_analysis_flow_plan,
+)
+
 
 def _bind_endpoint_helpers(*, include_routers: bool = True) -> None:
     from app.api.routers.helper_bind import bind_shared_helpers
     bind_shared_helpers(globals(), __name__, include_routers=include_routers)
 
-_bind_endpoint_helpers(include_routers=False)
+# Early bind removed; __init__ still rebinds for section modules.
 
 from app.services.prompt_resolve import (  # noqa: E402
     _PROMPT_SKILL_ALIAS,

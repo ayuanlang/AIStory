@@ -8624,21 +8624,28 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const globalCtx = getGlobalContextStr({ includeStyle: !/\[Global Style\]\s*\(/i.test(submitPrompt) });
             let finalPrompt = isManual ? submitPrompt : (submitPrompt + globalCtx);
 
-            if (effectiveVideoMode === 'entity_refs_start_end') {
+            if (effectiveVideoMode === 'entity_refs_start_end' || effectiveVideoMode === 'start_end' || effectiveVideoMode === 'start' || effectiveVideoMode === 'end') {
+                // Index against submitted image_urls only. last_frame is a separate API slot
+                // (or will be merged by backend for Seedance); never count it via displayedRefs.
                 const currentStartFrameUrl = String(shotSnapshot.image_url || '').trim();
                 const endRefUrl = String(tech.end_frame_url || '').trim();
                 const resolvedStartUrl = await resolveBlobUrlIfAny(currentStartFrameUrl);
                 const resolvedEndUrl = await resolveBlobUrlIfAny(endRefUrl);
-                
-                const startIdx = resolvedDisplayedRefs.indexOf(resolvedStartUrl) + 1;
-                const endIdx = resolvedDisplayedRefs.indexOf(resolvedEndUrl) + 1;
+                const imageIndexSource = apiSubmitImageUrls.length > 0 ? apiSubmitImageUrls : resolvedDisplayedRefs;
 
-                if (startIdx > 0 && endIdx > 0) {
-                    finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt + `, 参考@Image${endIdx} 作为最后一帧`;
+                const startIdx = resolvedStartUrl ? (imageIndexSource.indexOf(resolvedStartUrl) + 1) : 0;
+                const endInImageIdx = resolvedEndUrl ? (imageIndexSource.indexOf(resolvedEndUrl) + 1) : 0;
+
+                if (startIdx > 0 && endInImageIdx > 0) {
+                    finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt + `, 参考@Image${endInImageIdx} 作为最后一帧`;
+                } else if (startIdx > 0 && apiLastFrameUrl) {
+                    finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt + `, 并以提交的尾帧作为最后一帧`;
                 } else if (startIdx > 0) {
                     finalPrompt = `参考@Image${startIdx} 作为第一帧, ` + finalPrompt;
-                } else if (endIdx > 0) {
-                    finalPrompt = finalPrompt + `, 参考@Image${endIdx} 作为最后一帧`;
+                } else if (endInImageIdx > 0) {
+                    finalPrompt = finalPrompt + `, 参考@Image${endInImageIdx} 作为最后一帧`;
+                } else if (apiLastFrameUrl) {
+                    finalPrompt = finalPrompt + `, 并以提交的尾帧作为最后一帧`;
                 }
             }
 
@@ -8651,6 +8658,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             try {
                 const videoTierForGen = getProjectPreferredVideoResolution(project?.global_info, activeEpisode?.episode_info) || '720';
                 const videoResolutionForGen = isDraftMode ? '480p' : `${videoTierForGen}p`;
+                const preferredAspectRatio = getProjectPreferredAspectRatio(project?.global_info, activeEpisode?.episode_info);
                 videoTaskPromise = generateVideo(finalPrompt, null, null, apiRefVideoUrls, apiLastFrameUrl, durParam, { function_name: 'generate_videos',
                     project_id: projectId,
                     episode_id: activeEpisode?.id ?? shotSnapshot?.episode_id ?? undefined,
@@ -8658,6 +8666,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     draft_mode: isDraftMode,
                     resolution: videoResolutionForGen,
                     video_resolution: isDraftMode ? '480' : videoTierForGen,
+                    ...(preferredAspectRatio ? { aspect_ratio: preferredAspectRatio } : {}),
                     use_prev_video: shouldInjectContinuationPrompt,
                     has_video_input: !!(shouldInjectContinuationPrompt || (Array.isArray(apiRefVideoUrls) && apiRefVideoUrls.length > 0)),
                     // KIE Seedance bills with-video as (input+output) seconds — must match estimate.

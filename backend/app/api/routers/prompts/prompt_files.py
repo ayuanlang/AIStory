@@ -22,6 +22,14 @@ globals().update(
     }
 )
 
+from app.services.scene_subject_helpers import (  # noqa: E402,F401
+    _build_project_subject_inventory,
+    _format_project_subject_inventory_block,
+)
+from app.services.project_access import (  # noqa: E402,F401
+    _require_project_access,
+)
+
 
 @router.get("/projects/{project_id}/subject_inventory_prompt")
 async def get_project_subject_inventory_prompt(

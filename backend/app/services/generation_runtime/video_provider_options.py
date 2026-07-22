@@ -8,39 +8,7 @@ from app.schemas.generation import VideoGenerationRequest
 from app.services.generation_runtime.api_capabilities import _limit_string_list_input
 from app.services.generation_runtime.callback_http import _normalize_callback_url
 from app.services.generation_runtime.project_generation_context import _normalize_seed_value
-
-
-def _normalize_video_ref_mode(value: Any) -> str:
-    mode = str(value or "").strip().lower()
-    if not mode or mode == "auto":
-        return ""
-    refs_aliases = {
-        "entity_refs",
-        "entity-refs",
-        "refs_video",
-        "refs-video",
-        "reference",
-        "reference_image",
-        "reference_images",
-    }
-    if mode in refs_aliases:
-        return "entity_refs"
-    if mode in {
-        "keyframes_entity_refs",
-        "keyframe_entity_refs",
-        "keyframes-entity-refs",
-        "keyframe-entity-refs",
-    }:
-        return "keyframes_entity_refs"
-    if mode in {"entity_refs_start_end", "entity-refs-start-end", "ref_start_end", "ref+start_end"}:
-        return "entity_refs_start_end"
-    if mode in {"start", "start_only", "start-only", "only_start", "only-start"}:
-        return "start"
-    if mode in {"start_end", "start-end", "start+end", "both", "both_ends"}:
-        return "start_end"
-    if mode in {"end", "end_only", "end-only", "only_end", "only-end"}:
-        return "end"
-    return ""
+from app.services.generation_runtime.video_ref_pipeline import _normalize_video_ref_mode  # noqa: E402
 
 
 def _build_video_provider_options(req: VideoGenerationRequest, quality: Optional[str] = None, output_format: Optional[str] = None, mode: Optional[str] = None) -> Dict[str, Any]:

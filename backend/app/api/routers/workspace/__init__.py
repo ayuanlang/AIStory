@@ -10,8 +10,11 @@ from app.api.routers.workspace import episodes as _episodes  # noqa: F401,E402
 from app.api.routers.workspace import scenes as _scenes  # noqa: F401,E402
 from app.api.routers.workspace import shots as _shots  # noqa: F401,E402
 from app.api.routers.workspace import admin_residual as _admin_residual  # noqa: F401,E402
+from app.api.routers.workspace import story_generator as _story_generator  # noqa: F401,E402
+from app.api.routers.workspace import project_sharing as _project_sharing  # noqa: F401,E402
+from app.api.routers.workspace import episode_script_generator as _episode_script_generator  # noqa: F401,E402
 
-_SECTION_MODULES = (_episodes, _scenes, _shots, _admin_residual)
+_SECTION_MODULES = (_episodes, _scenes, _shots, _admin_residual, _story_generator, _project_sharing, _episode_script_generator)
 _SKIP = {"__name__", "__file__", "__package__", "__loader__", "__spec__", "__doc__", "__builtins__"}
 
 
