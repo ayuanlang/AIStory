@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.all_models import User
+from app.db.session import SessionLocal
+from app.models.all_models import Episode, Scene, Shot, User
 from app.schemas.generation import VoiceGenerationRequest
 from app.services.billing_service import billing_service
 from app.services.db_session_utils import _release_db_connection
@@ -19,10 +21,14 @@ from app.services.generation_runtime.api_capabilities import (
     _read_api_capability_list,
     _read_api_capability_number,
 )
+from app.services.generation_runtime.asset_registration import _register_asset_helper
 from app.services.generation_runtime.callbacks import _merge_provider_task_ids_into_settle
 from app.services.generation_runtime.generation_errors import _format_generation_failure_detail
 from app.services.generation_runtime.generation_filename import _build_generation_filename_base
-from app.services.generation_runtime.media_persist import _resolve_media_bind_url
+from app.services.generation_runtime.media_persist import (
+    _persist_remote_media_result,
+    _resolve_media_bind_url,
+)
 from app.services.generation_runtime.media_runtime_target import _resolve_media_runtime_target
 from app.services.generation_runtime.project_generation_context import (
     _ensure_project_generation_seed,

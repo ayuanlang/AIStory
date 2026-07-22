@@ -67,6 +67,17 @@ BEAT_START_PATTERN = re.compile(r"`?\[BEAT_START(?::([^\s\]]+))?\]`?", re.IGNORE
 BEAT_END_PATTERN = re.compile(r"`?\[BEAT_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 ENV_BLOCK_START_PATTERN = re.compile(r"`?\[ENV_BLOCK_START(?::([^\s\]]+))?\]`?", re.IGNORECASE)
 ENV_BLOCK_END_PATTERN = re.compile(r"`?\[ENV_BLOCK_END(?::([^\s\]]+))?\]`?", re.IGNORECASE)
+ENTITY_PROFILE_START_TOKEN = "[ENTITY_PROFILE_START]"
+ENTITY_PROFILE_END_TOKEN = "[ENTITY_PROFILE_END]"
+ENTITY_PROFILE_START_PATTERN = re.compile(
+    r"`?\[ENTITY_PROFILE_START(?::([^\s\]]+))?\]`?",
+    re.IGNORECASE,
+)
+ENTITY_PROFILE_END_PATTERN = re.compile(
+    r"`?\[ENTITY_PROFILE_END(?::([^\s\]]+))?\]`?",
+    re.IGNORECASE,
+)
+LEGACY_ENTITY_PROFILE_HEADER_PATTERN = re.compile(r"【角色设定】")
 LEGACY_BEAT_LINE_PATTERN = re.compile(r"(?m)^\s*-\s*Beat\s+(\d+)\b")
 LEGACY_MAIN_ENV_HEADER_PATTERN = re.compile(r"【主环境】")
 LEGACY_ENV_BLOCK_END_PATTERN = re.compile(
@@ -1440,14 +1451,52 @@ def extract_scene_env_and_beats_body(
     return source_text, "scene_fallback"
 
 
+def extract_entity_profile_block_from_adapted(adapted_script: str) -> str:
+    """
+    Extract Part 2【角色设定】block (`[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]`)
+    from Stage 1 adapted script. Falls back to bare 【角色设定】… before first SCENE_START.
+    """
+    text = str(adapted_script or "")
+    if not text.strip():
+        return ""
+
+    start_match = ENTITY_PROFILE_START_PATTERN.search(text)
+    if start_match:
+        end_match = ENTITY_PROFILE_END_PATTERN.search(text, start_match.end())
+        if end_match:
+            return text[start_match.start(): end_match.end()].strip()
+        # Unclosed marker: take until first SCENE_START
+        scene_match = SCENE_START_PATTERN.search(text, start_match.end())
+        end = scene_match.start() if scene_match else len(text)
+        body = text[start_match.start(): end].rstrip()
+        if body and not ENTITY_PROFILE_END_PATTERN.search(body):
+            body = f"{body}\n{ENTITY_PROFILE_END_TOKEN}"
+        return body.strip()
+
+    header_match = LEGACY_ENTITY_PROFILE_HEADER_PATTERN.search(text)
+    if not header_match:
+        return ""
+    # Only accept legacy header before the first scene (Part 2 preamble)
+    first_scene = SCENE_START_PATTERN.search(text)
+    if first_scene and header_match.start() >= first_scene.start():
+        return ""
+    end = first_scene.start() if first_scene else len(text)
+    body = text[header_match.start(): end].strip()
+    if not body:
+        return ""
+    return f"{ENTITY_PROFILE_START_TOKEN}\n{body}\n{ENTITY_PROFILE_END_TOKEN}"
+
+
 def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     """
-    Rebuild Stage 2.1 script input: per-scene ENV_BLOCK + Beats only
+    Rebuild Stage 2.1 script input: optional【角色设定】+ per-scene ENV_BLOCK + Beats
     (replaces full Stage 1 adapted script with slim extraction).
     """
     script = str(adapted_script or "").strip()
     if not script:
         return ""
+
+    entity_profile = extract_entity_profile_block_from_adapted(script)
 
     try:
         units = parse_scene_units_from_markers(script)
@@ -1458,7 +1507,10 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     if not units:
         return script
 
-    parts: List[str] = [SCENES_BLOCK_START_TOKEN]
+    parts: List[str] = []
+    if entity_profile:
+        parts.append(entity_profile)
+    parts.append(SCENES_BLOCK_START_TOKEN)
     fallback_count = 0
     for unit in units:
         scene_id = str(getattr(unit, "scene_id", "") or "").strip()
@@ -1483,9 +1535,10 @@ def build_assets_extraction_script_from_adapted(adapted_script: str) -> str:
     parts.append(SCENES_BLOCK_END_TOKEN)
     rebuilt = "\n".join(part for part in parts if str(part or "").strip()).strip()
     logger.info(
-        "[assets_extraction] rebuilt env+beat script | scenes=%s fallback_scenes=%s chars=%s→%s",
+        "[assets_extraction] rebuilt env+beat script | scenes=%s fallback_scenes=%s entity_profile=%s chars=%s→%s",
         len(units),
         fallback_count,
+        bool(entity_profile),
         len(script),
         len(rebuilt),
     )
@@ -2517,6 +2570,7 @@ __all__ = [
     "extract_env_block_from_scene_text",
     "extract_legacy_env_block_from_scene_text",
     "extract_scene_env_and_beats_body",
+    "extract_entity_profile_block_from_adapted",
     "build_assets_extraction_script_from_adapted",
     "extract_scene_markdown_text_from_analyze_result",
     "import_analyze_scene_stage_result",

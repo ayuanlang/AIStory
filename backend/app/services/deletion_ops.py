@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso

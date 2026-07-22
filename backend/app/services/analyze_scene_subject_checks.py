@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.entity_token import normalize_entity_token
+from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 
 logger = logging.getLogger("api_logger")
 

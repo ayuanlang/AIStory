@@ -1823,7 +1823,7 @@ class LLMService:
                      response_text=response.text[:500],
                  )
                  logger.warning("%s", human_summary)
-                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+                 self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": None,
                      "provider": "doubao",
                      "category": "LLM",
                      "request": {"url": url, "model": model, "payload": payload},
@@ -1868,7 +1868,7 @@ class LLMService:
             )
             logger.error(f"Doubao Multimodal failed: {e}")
             logger.error("%s", human_summary)
-            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+            self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": None,
                 "provider": "doubao",
                 "category": "LLM",
                 "request": {"url": url, "model": model, "payload": payload},
@@ -1910,7 +1910,7 @@ class LLMService:
              return {"content": content, "usage": usage}
         except Exception as e:
              logger.error(f"OpenAI Vision call failed: {e}")
-             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": extra_config.get("request_id") if extra_config else None,
+             self._safe_log_json("LLM_RESPONSE_ERROR", { "request_id": None,
                  "provider": "openai",
                  "model": model,
                  "request": {"url": base_url, "messages": messages},

@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.time_utils import now_bj_iso
 from app.db.session import SessionLocal
-from app.models.all_models import User
+from app.models.all_models import Episode, Project, Scene, Shot, User
 from app.schemas.generation import VideoGenerationRequest
 from app.services.billing_service import billing_service
-from app.services.db_session_utils import _release_db_connection
+from app.services.db_session_utils import _release_db_connection, _snapshot_user_principal
 from app.services.effective_api_setting import _to_bool
 from app.services.generation_runtime.api_capabilities import (
     _limit_media_ref_input,
@@ -28,20 +30,40 @@ from app.services.generation_runtime.api_capabilities import (
     _read_api_capability_list,
     _resolve_video_submit_image_urls,
 )
-from app.services.generation_runtime.asset_registration import _log_api_switch_regenerate_if_needed
-from app.services.generation_runtime.callback_http import _resolve_callback_url_from_payload
-from app.services.generation_runtime.callbacks import _merge_provider_task_ids_into_settle
+from app.services.generation_runtime.asset_registration import (
+    _bind_generated_media_to_shot,
+    _log_api_switch_regenerate_if_needed,
+    _register_asset_helper,
+)
+from app.services.generation_runtime.callback_http import (
+    _dispatch_generation_callback,
+    _resolve_callback_url_from_payload,
+)
+from app.services.generation_runtime.callbacks import (
+    _build_result_from_provider_callback,
+    _extract_job_provider_task_id,
+    _get_generation_callback_payload,
+    _is_ambiguous_image_submit_detail,
+    _merge_provider_task_ids_into_settle,
+    _normalize_generation_status,
+)
 from app.services.generation_runtime.generation_errors import _format_generation_failure_detail
 from app.services.generation_runtime.generation_filename import _build_generation_filename_base
 from app.services.generation_runtime.job_store import (
     VIDEO_JOB_LOCK,
+    VIDEO_JOB_MAX_RUNNING_SECONDS,
     VIDEO_JOB_STORE,
+    VIDEO_JOB_TASKS,
+    _clear_generation_job_pool_cache,
+    _extract_job_result_url,
     _set_video_job,
 )
 from app.services.generation_runtime.log_sanitize import _sanitize_generation_runtime_config_for_log
 from app.services.generation_runtime.media_persist import (
     _enrich_media_metadata_from_generation_context,
+    _hydrate_video_job_record,
     _oss_upload_succeeded_for_url,
+    _persist_remote_video_result,
     _resolve_video_bind_url,
 )
 from app.services.generation_runtime.media_runtime_target import _resolve_media_runtime_target
@@ -54,10 +76,16 @@ from app.services.generation_runtime.project_generation_context import (
 )
 from app.services.generation_runtime.queue_config_runtime import _is_pure_callback_mode_enabled
 from app.services.generation_runtime.seedance_duration import (
+    SEEDANCE_DURATION_MAX_SECONDS,
+    SEEDANCE_DURATION_MIN_SECONDS,
     _clamp_seedance_duration,
     _is_seedance_model_name,
 )
-from app.services.generation_runtime.video_job_billing import _persist_video_job_billing_reservation
+from app.services.generation_runtime.video_job_billing import (
+    _cancel_video_job_pending_reservation,
+    _persist_video_job_billing_reservation,
+    _settle_or_cancel_video_job_billing_from_callback,
+)
 from app.services.generation_runtime.video_provider_options import _build_video_provider_options
 from app.services.generation_runtime.video_ref_pipeline import (
     _align_kling_elements_to_prompt_mentions,

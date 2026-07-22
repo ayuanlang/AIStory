@@ -30,6 +30,7 @@ from app.services.llm_markdown_sanitize import (
 )
 from app.services.prompt_resolve import _resolve_prompt_text
 from app.services.scene_no_utils import _scene_no_lookup_keys
+from app.services.scene_subject_helpers import _normalize_subject_entity_type
 from app.services.shot_markdown import (
     _is_provider_moderation_block_response,
     _pick_shot_cell,

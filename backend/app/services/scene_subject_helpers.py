@@ -2,13 +2,16 @@
 """Scene subject inventory / markdown parse / subjects JSON helpers."""
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.core.entity_token import subject_compare_key, subject_compare_key_variants
+from app.core.prompt_injection import wrap_injection_section
 from app.models.all_models import Entity, Episode
 from app.services.llm_markdown_sanitize import sanitize_subject_index_text
 from app.services.project_episode_utils import _resolve_episode_sort_number

@@ -13076,6 +13076,9 @@ class MediaGenerationService:
                 )
                 model = remapped_model
 
+        # Capture after alias remap, before modality auto-switch (t2v→i2v / t2i→i2i).
+        initial_submitted_model = str(model or "").strip()
+
         # ── Modality-aware model switching for KIE video ──
         # When a reference image is provided, auto-switch text-to-video models to
         # their image-to-video counterpart so the image is actually used as input.

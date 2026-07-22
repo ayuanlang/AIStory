@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Any, Dict
+import json
+from typing import TYPE_CHECKING, Any, Dict
+
+if TYPE_CHECKING:
+    from app.schemas.generation import VideoGenerationRequest
 
 _VIDEO_DEDUP_WINDOW_SECONDS = 20
 _VIDEO_DEDUP_MAX_CACHE = 256

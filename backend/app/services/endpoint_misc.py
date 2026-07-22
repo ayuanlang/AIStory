@@ -2,6 +2,7 @@
 """Small shared endpoint helpers (schema heal, vendor messages, batch logging)."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
