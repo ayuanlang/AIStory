@@ -74,6 +74,10 @@ def _env_int(*keys: str, default: int) -> int:
 _OSS_UPLOAD_INFLIGHT_LOCK = threading.Lock()
 _OSS_UPLOAD_INFLIGHT: Dict[str, threading.Event] = {}   # key -> event signalled when done
 _OSS_UPLOAD_INFLIGHT_RESULTS: Dict[str, Optional[Dict[str, Any]]] = {}  # key -> result
+_OSS_UPLOAD_INFLIGHT_RESULTS_MAX = max(
+    32,
+    int(os.getenv("OSS_UPLOAD_INFLIGHT_RESULTS_MAX", "256") or 256),
+)
 
 # Threshold above which put_object is replaced by managed multipart upload.
 _OSS_MULTIPART_THRESHOLD_BYTES = max(
@@ -83,6 +87,10 @@ _OSS_MULTIPART_THRESHOLD_BYTES = max(
 _OSS_MULTIPART_CHUNK_BYTES = max(
     4 * 1024 * 1024,
     int(os.getenv("OSS_MULTIPART_CHUNK_MB", "6")) * 1024 * 1024,
+)
+_OSS_HASH_CHUNK_BYTES = max(
+    256 * 1024,
+    int(os.getenv("OSS_HASH_CHUNK_KB", "1024") or 1024) * 1024,
 )
 
 
@@ -512,6 +520,75 @@ class OSSStorageService:
             raw = f"generated_{os.urandom(8).hex()}{ext}"
         return raw
 
+    def _content_addressed_filename(
+        self,
+        filename: str,
+        *,
+        content_hash: str,
+        content_type: Optional[str],
+        category: str,
+    ) -> str:
+        """Rewrite generated filenames to a stable content-hash name."""
+        ext = os.path.splitext(filename)[1]
+        if not ext:
+            ext = mimetypes.guess_extension(content_type or "") or ".bin"
+            if ext == ".jpe":
+                ext = ".jpg"
+
+        prefix_match = ""
+        if filename.startswith("gen_"):
+            prefix_match = "gen_"
+        elif filename.startswith("rh-upload-"):
+            prefix_match = "rh-upload-"
+
+        if prefix_match or category == "generated":
+            filename = f"{prefix_match}{content_hash[:16]}{ext}"
+        return self._normalize_filename(filename, content_type)
+
+    @staticmethod
+    def _md5_file(path: str) -> Tuple[str, int]:
+        hasher = hashlib.md5()
+        size = 0
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(_OSS_HASH_CHUNK_BYTES)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                size += len(chunk)
+        return hasher.hexdigest(), size
+
+    @staticmethod
+    def _prune_inflight_results_locked() -> None:
+        overflow = len(_OSS_UPLOAD_INFLIGHT_RESULTS) - _OSS_UPLOAD_INFLIGHT_RESULTS_MAX
+        if overflow <= 0:
+            return
+        for stale_key in list(_OSS_UPLOAD_INFLIGHT_RESULTS.keys())[:overflow]:
+            _OSS_UPLOAD_INFLIGHT_RESULTS.pop(stale_key, None)
+
+    def _finish_inflight_upload(self, key: str, result: Optional[Dict[str, Any]] = None) -> None:
+        if result is not None:
+            with _OSS_UPLOAD_INFLIGHT_LOCK:
+                _OSS_UPLOAD_INFLIGHT_RESULTS[key] = result
+                self._prune_inflight_results_locked()
+                evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
+        else:
+            with _OSS_UPLOAD_INFLIGHT_LOCK:
+                evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
+        if evt:
+            evt.set()
+
+    def _acquire_inflight_upload(self, key: str) -> Tuple[Optional[threading.Event], Optional[Dict[str, Any]]]:
+        """Return (waiter_event, cached_result). waiter_event is None when this caller owns the slot."""
+        with _OSS_UPLOAD_INFLIGHT_LOCK:
+            cached = _OSS_UPLOAD_INFLIGHT_RESULTS.get(key)
+            if cached is not None:
+                return None, cached
+            if key in _OSS_UPLOAD_INFLIGHT:
+                return _OSS_UPLOAD_INFLIGHT[key], None
+            _OSS_UPLOAD_INFLIGHT[key] = threading.Event()
+            return None, None
+
     def _build_object_key(
         self,
         pool,
@@ -559,6 +636,298 @@ class OSSStorageService:
             logger.warning("OSS presign failed | key=%s err=%s", key, exc)
             return ""
 
+    def _build_upload_extra_args(
+        self,
+        pool,
+        *,
+        content_type: Optional[str],
+        cache_control: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        extra: Dict[str, Any] = {}
+        if content_type:
+            extra["ContentType"] = content_type
+        if cache_control:
+            extra["CacheControl"] = cache_control
+        sanitized_metadata = self._sanitize_metadata(metadata)
+        if sanitized_metadata:
+            extra["Metadata"] = sanitized_metadata
+        if getattr(pool, "default_storage_class", None):
+            st_class = str(pool.default_storage_class)
+            provider_nm = str(getattr(pool, "provider", "")).lower()
+            if self._is_qiniu_provider(pool):
+                # Qiniu S3-compatible endpoint may reject StorageClass values from AWS semantics.
+                pass
+            elif provider_nm == "backblaze" and st_class == "STANDARD_IA":
+                pass
+            else:
+                extra["StorageClass"] = st_class
+        return extra
+
+    def _put_or_upload_fileobj(
+        self,
+        client,
+        pool,
+        key: str,
+        *,
+        body_bytes: Optional[bytes] = None,
+        file_path: Optional[str] = None,
+        content_size: int,
+        extra_args: Dict[str, Any],
+    ) -> None:
+        """Upload from in-memory bytes or a path. Path path never loads the whole file."""
+        use_multipart = content_size >= _OSS_MULTIPART_THRESHOLD_BYTES or bool(file_path)
+        upload_extra = dict(extra_args or {})
+
+        if use_multipart:
+            transfer_cfg = TransferConfig(
+                multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES,
+                multipart_chunksize=_OSS_MULTIPART_CHUNK_BYTES,
+                max_concurrency=max(1, int(os.getenv("OSS_MULTIPART_CONCURRENCY", "2"))),
+                use_threads=True,
+            )
+            _visible_info(
+                "[OSSUploadMultipart] starting | key=%s bytes=%s threshold=%s chunk=%s source=%s",
+                key,
+                content_size,
+                _OSS_MULTIPART_THRESHOLD_BYTES,
+                _OSS_MULTIPART_CHUNK_BYTES,
+                "file" if file_path else "bytes",
+            )
+
+            def _do_upload(extra: Dict[str, Any]) -> None:
+                if file_path:
+                    with open(file_path, "rb") as handle:
+                        client.upload_fileobj(
+                            handle,
+                            pool.bucket,
+                            key,
+                            ExtraArgs=extra if extra else None,
+                            Config=transfer_cfg,
+                        )
+                else:
+                    client.upload_fileobj(
+                        io.BytesIO(body_bytes or b""),
+                        pool.bucket,
+                        key,
+                        ExtraArgs=extra if extra else None,
+                        Config=transfer_cfg,
+                    )
+
+            try:
+                _do_upload(upload_extra)
+            except Exception as mp_exc:
+                if upload_extra.get("StorageClass") and self._is_invalid_storage_class_error(mp_exc):
+                    upload_extra.pop("StorageClass", None)
+                    _do_upload(upload_extra)
+                else:
+                    raise
+            return
+
+        put_kwargs: Dict[str, Any] = {
+            "Bucket": pool.bucket,
+            "Key": key,
+            "Body": body_bytes or b"",
+        }
+        put_kwargs.update(upload_extra)
+        try:
+            client.put_object(**put_kwargs)
+        except Exception as first_exc:
+            if put_kwargs.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
+                invalid_storage_class = put_kwargs.pop("StorageClass", None)
+                _visible_warning(
+                    "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
+                    getattr(pool, "provider", None),
+                    getattr(pool, "provider_alias", None),
+                    getattr(pool, "id", None),
+                    key,
+                    invalid_storage_class,
+                )
+                client.put_object(**put_kwargs)
+            else:
+                raise
+
+    def _upload_with_pools(
+        self,
+        *,
+        user_id: int,
+        filename: str,
+        content_type: Optional[str],
+        category: str,
+        object_prefix: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+        cache_control: Optional[str],
+        content_size: int,
+        body_bytes: Optional[bytes] = None,
+        file_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        candidate_pools = self._get_active_pools(None)
+        if not candidate_pools:
+            _visible_warning("OSS upload skipped | reason=pool_not_configured")
+            return None
+
+        random.shuffle(candidate_pools)
+        owned_key: Optional[str] = None
+        try:
+            for pool in candidate_pools:
+                cred, reason = self._pick_credential(pool)
+                if not cred:
+                    if reason:
+                        _visible_warning(
+                            "OSS credential skipped | provider=%s reason=%s",
+                            getattr(pool, "provider", None),
+                            reason,
+                        )
+                    continue
+
+                key = self._build_object_key(
+                    pool,
+                    user_id=user_id,
+                    filename=filename,
+                    category=category,
+                    object_prefix=object_prefix,
+                )
+                client = self._build_client(pool, cred)
+                extra_args = self._build_upload_extra_args(
+                    pool,
+                    content_type=content_type,
+                    cache_control=cache_control,
+                    metadata=metadata,
+                )
+
+                try:
+                    _visible_info(
+                        "[OSSUploadRequest] provider=%s alias=%s pool_id=%s bucket=%s key=%s endpoint=%s user_id=%s bytes=%s content_type=%s category=%s object_prefix=%s credential_label=%s storage_class=%s",
+                        getattr(pool, "provider", None),
+                        getattr(pool, "provider_alias", None),
+                        getattr(pool, "id", None),
+                        getattr(pool, "bucket", None),
+                        key,
+                        getattr(pool, "endpoint", None),
+                        user_id,
+                        content_size,
+                        content_type,
+                        category,
+                        object_prefix,
+                        getattr(cred, "label", None),
+                        extra_args.get("StorageClass"),
+                    )
+
+                    # In-flight dedup for identical content-hash keys.
+                    while True:
+                        waiter, cached = self._acquire_inflight_upload(key)
+                        if cached is not None:
+                            _visible_info(
+                                "[OSSUploadDedup] reused cached result | key=%s url=%s",
+                                key,
+                                cached.get("url"),
+                            )
+                            return cached
+                        if waiter is None:
+                            owned_key = key
+                            break
+                        _visible_info("[OSSUploadDedup] waiting for in-flight upload | key=%s", key)
+                        waiter.wait(timeout=700)
+                        cached = _OSS_UPLOAD_INFLIGHT_RESULTS.get(key)
+                        if cached is not None:
+                            _visible_info(
+                                "[OSSUploadDedup] reused in-flight result | key=%s url=%s",
+                                key,
+                                cached.get("url"),
+                            )
+                            return cached
+                        # Original upload failed or timed out; retry as owner.
+
+                    # Skip re-upload when object already exists.
+                    try:
+                        client.head_object(Bucket=pool.bucket, Key=key)
+                        _visible_info(
+                            "[OSSUploadSkipped] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=already_exists",
+                            getattr(pool, "provider", None),
+                            getattr(pool, "provider_alias", None),
+                            getattr(pool, "id", None),
+                            getattr(pool, "bucket", None),
+                            key,
+                        )
+                        url = self._build_public_url(client, pool, key, cred)
+                        if url:
+                            upload_result = {
+                                "key": key,
+                                "url": url,
+                                "provider": getattr(pool, "provider", None),
+                                "bucket": getattr(pool, "bucket", None),
+                                "provider_alias": getattr(pool, "provider_alias", None),
+                                "endpoint": getattr(pool, "endpoint", None),
+                                "public_base_url": self._normalize_public_base_url(pool) or None,
+                            }
+                            self._finish_inflight_upload(key, upload_result)
+                            owned_key = None
+                            return upload_result
+                    except ClientError as ce:
+                        if ce.response["Error"]["Code"] != "404":
+                            logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
+
+                    self._put_or_upload_fileobj(
+                        client,
+                        pool,
+                        key,
+                        body_bytes=body_bytes,
+                        file_path=file_path,
+                        content_size=content_size,
+                        extra_args=extra_args,
+                    )
+                    url = self._build_public_url(client, pool, key, cred)
+                    if not url:
+                        _visible_warning(
+                            "[OSSUploadResponse] provider=%s alias=%s pool_id=%s key=%s status=no_public_url",
+                            getattr(pool, "provider", None),
+                            getattr(pool, "provider_alias", None),
+                            getattr(pool, "id", None),
+                            key,
+                        )
+                        self._finish_inflight_upload(key, None)
+                        owned_key = None
+                        continue
+
+                    _visible_info(
+                        "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=success url=%s",
+                        getattr(pool, "provider", None),
+                        getattr(pool, "provider_alias", None),
+                        getattr(pool, "id", None),
+                        getattr(pool, "bucket", None),
+                        key,
+                        url,
+                    )
+                    upload_result = {
+                        "url": url,
+                        "key": key,
+                        "bucket": pool.bucket,
+                        "provider": pool.provider,
+                        "provider_alias": getattr(pool, "provider_alias", None),
+                        "endpoint": pool.endpoint,
+                        "public_base_url": self._normalize_public_base_url(pool) or None,
+                    }
+                    self._finish_inflight_upload(key, upload_result)
+                    owned_key = None
+                    return upload_result
+                except Exception as exc:
+                    self._finish_inflight_upload(key, None)
+                    owned_key = None
+                    _visible_warning(
+                        "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=error err=%s",
+                        getattr(pool, "provider", None),
+                        getattr(pool, "provider_alias", None),
+                        getattr(pool, "id", None),
+                        getattr(pool, "bucket", None),
+                        key,
+                        exc,
+                    )
+
+            return None
+        finally:
+            if owned_key:
+                self._finish_inflight_upload(owned_key, None)
+
     def upload_bytes(
         self,
         content: bytes,
@@ -574,259 +943,24 @@ class OSSStorageService:
         if not content:
             return None
 
-        # Replace random generated filename with a content hash based filename
-        # to prevent uploading the same file multiple times with different UUIDs
         content_hash = hashlib.md5(content).hexdigest()
-        ext = os.path.splitext(filename)[1]
-        if not ext:
-            ext = mimetypes.guess_extension(content_type or "") or ".bin"
-            if ext == ".jpe":
-                ext = ".jpg"
-        
-        prefix_match = ""
-        if filename.startswith("gen_"):
-            prefix_match = "gen_"
-        elif filename.startswith("rh-upload-"):
-            prefix_match = "rh-upload-"
-        
-        if prefix_match or category == "generated":
-            filename = f"{prefix_match}{content_hash[:16]}{ext}"
-
-        filename = self._normalize_filename(filename, content_type)
-        candidate_pools = self._get_active_pools(None)
-        if not candidate_pools:
-            _visible_warning("OSS upload skipped | reason=pool_not_configured")
-            return None
-
-        random.shuffle(candidate_pools)
-        for pool in candidate_pools:
-            cred, reason = self._pick_credential(pool)
-            if not cred:
-                if reason:
-                    _visible_warning("OSS credential skipped | provider=%s reason=%s", getattr(pool, "provider", None), reason)
-                continue
-
-            key = self._build_object_key(pool, user_id=user_id, filename=filename, category=category, object_prefix=object_prefix)
-            client = self._build_client(pool, cred)
-            extra: Dict[str, Any] = {
-                "Bucket": pool.bucket,
-                "Key": key,
-                "Body": content,
-            }
-            if content_type:
-                extra["ContentType"] = content_type
-            if cache_control:
-                extra["CacheControl"] = cache_control
-            sanitized_metadata = self._sanitize_metadata(metadata)
-            if sanitized_metadata:
-                extra["Metadata"] = sanitized_metadata
-            if getattr(pool, "default_storage_class", None):
-                st_class = str(pool.default_storage_class)
-                provider_nm = str(getattr(pool, "provider", "")).lower()
-                if self._is_qiniu_provider(pool):
-                    # Qiniu S3-compatible endpoint may reject StorageClass values from AWS semantics.
-                    pass
-                elif provider_nm == "backblaze" and st_class == "STANDARD_IA":
-                    pass
-                else:
-                    extra["StorageClass"] = st_class
-
-            try:
-                _visible_info(
-                    "[OSSUploadRequest] provider=%s alias=%s pool_id=%s bucket=%s key=%s endpoint=%s user_id=%s bytes=%s content_type=%s category=%s object_prefix=%s credential_label=%s storage_class=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    getattr(pool, "bucket", None),
-                    key,
-                    getattr(pool, "endpoint", None),
-                    user_id,
-                    len(content),
-                    content_type,
-                    category,
-                    object_prefix,
-                    getattr(cred, "label", None),
-                    extra.get("StorageClass"),
-                )
-
-                # --- In-flight dedup: if an identical key is already being
-                # uploaded by another thread, wait for it and reuse the result
-                # instead of launching a second concurrent upload.
-                with _OSS_UPLOAD_INFLIGHT_LOCK:
-                    if key in _OSS_UPLOAD_INFLIGHT:
-                        waiter = _OSS_UPLOAD_INFLIGHT[key]
-                    else:
-                        waiter = None
-                        _OSS_UPLOAD_INFLIGHT[key] = threading.Event()
-
-                if waiter is not None:
-                    _visible_info(
-                        "[OSSUploadDedup] waiting for in-flight upload | key=%s",
-                        key,
-                    )
-                    waiter.wait(timeout=700)
-                    cached = _OSS_UPLOAD_INFLIGHT_RESULTS.get(key)
-                    if cached is not None:
-                        _visible_info(
-                            "[OSSUploadDedup] reused in-flight result | key=%s url=%s",
-                            key,
-                            cached.get("url"),
-                        )
-                        return cached
-                    # fallthrough: the original upload may have failed; try again
-
-                # Check if object already exists
-                try:
-                    client.head_object(Bucket=pool.bucket, Key=key)
-                    _visible_info(
-                        "[OSSUploadSkipped] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=already_exists",
-                        getattr(pool, "provider", None),
-                        getattr(pool, "provider_alias", None),
-                        getattr(pool, "id", None),
-                        getattr(pool, "bucket", None),
-                        key,
-                    )
-                    url = self._build_public_url(client, pool, key, cred)
-                    if url:
-                        return {
-                            "key": key,
-                            "url": url,
-                            "provider": getattr(pool, "provider", None),
-                        }
-                except ClientError as ce:
-                    # 404 Not Found means we need to upload
-                    if ce.response['Error']['Code'] != '404':
-                        logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
-
-                # Choose upload method: managed multipart for large files,
-                # single put_object for small files.
-                body_bytes = extra.pop("Body", content)
-                use_multipart = len(content) >= _OSS_MULTIPART_THRESHOLD_BYTES
-                if use_multipart:
-                    extra_args = {k: v for k, v in extra.items() if k not in ("Bucket", "Key")}
-                    transfer_cfg = TransferConfig(
-                        multipart_threshold=_OSS_MULTIPART_THRESHOLD_BYTES,
-                        multipart_chunksize=_OSS_MULTIPART_CHUNK_BYTES,
-                        max_concurrency=int(os.getenv("OSS_MULTIPART_CONCURRENCY", "4")),
-                        use_threads=True,
-                    )
-                    _visible_info(
-                        "[OSSUploadMultipart] starting | key=%s bytes=%s threshold=%s chunk=%s",
-                        key,
-                        len(content),
-                        _OSS_MULTIPART_THRESHOLD_BYTES,
-                        _OSS_MULTIPART_CHUNK_BYTES,
-                    )
-                    # Remap boto3 PutObject keys to upload_fileobj ExtraArgs format
-                    upload_extra: Dict[str, Any] = {}
-                    if "ContentType" in extra_args:
-                        upload_extra["ContentType"] = extra_args["ContentType"]
-                    if "CacheControl" in extra_args:
-                        upload_extra["CacheControl"] = extra_args["CacheControl"]
-                    if "Metadata" in extra_args:
-                        upload_extra["Metadata"] = extra_args["Metadata"]
-                    if "StorageClass" in extra_args:
-                        upload_extra["StorageClass"] = extra_args["StorageClass"]
-                    try:
-                        client.upload_fileobj(
-                            io.BytesIO(body_bytes),
-                            pool.bucket,
-                            key,
-                            ExtraArgs=upload_extra if upload_extra else None,
-                            Config=transfer_cfg,
-                        )
-                    except Exception as mp_exc:
-                        if upload_extra.get("StorageClass") and self._is_invalid_storage_class_error(mp_exc):
-                            upload_extra.pop("StorageClass", None)
-                            client.upload_fileobj(
-                                io.BytesIO(body_bytes),
-                                pool.bucket,
-                                key,
-                                ExtraArgs=upload_extra if upload_extra else None,
-                                Config=transfer_cfg,
-                            )
-                        else:
-                            raise
-                else:
-                    extra["Body"] = body_bytes
-                    try:
-                        client.put_object(**extra)
-                    except Exception as first_exc:
-                        if extra.get("StorageClass") and self._is_invalid_storage_class_error(first_exc):
-                            invalid_storage_class = extra.pop("StorageClass", None)
-                            _visible_warning(
-                                "[OSSUploadRetry] provider=%s alias=%s pool_id=%s key=%s reason=invalid_storage_class storage_class=%s",
-                                getattr(pool, "provider", None),
-                                getattr(pool, "provider_alias", None),
-                                getattr(pool, "id", None),
-                                key,
-                                invalid_storage_class,
-                            )
-                            client.put_object(**extra)
-                        else:
-                            raise
-                url = self._build_public_url(client, pool, key, cred)
-                if not url:
-                    _visible_warning(
-                        "[OSSUploadResponse] provider=%s alias=%s pool_id=%s key=%s status=no_public_url",
-                        getattr(pool, "provider", None),
-                        getattr(pool, "provider_alias", None),
-                        getattr(pool, "id", None),
-                        key,
-                    )
-                    # Release waiting threads even on no-url so they don't hang.
-                    with _OSS_UPLOAD_INFLIGHT_LOCK:
-                        evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-                    if evt:
-                        evt.set()
-                    continue
-                _visible_info(
-                    "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=success url=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    getattr(pool, "bucket", None),
-                    key,
-                    url,
-                )
-                upload_result = {
-                    "url": url,
-                    "key": key,
-                    "bucket": pool.bucket,
-                    "provider": pool.provider,
-                    "provider_alias": getattr(pool, "provider_alias", None),
-                    "endpoint": pool.endpoint,
-                    "public_base_url": self._normalize_public_base_url(pool) or None,
-                }
-                # Cache result and unblock any waiters.
-                _OSS_UPLOAD_INFLIGHT_RESULTS[key] = upload_result
-                with _OSS_UPLOAD_INFLIGHT_LOCK:
-                    evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-                if evt:
-                    evt.set()
-                return upload_result
-            except Exception as exc:
-                # Release waiters so they don't hang forever on a failed upload.
-                with _OSS_UPLOAD_INFLIGHT_LOCK:
-                    evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-                if evt:
-                    evt.set()
-                _visible_warning(
-                    "[OSSUploadResponse] provider=%s alias=%s pool_id=%s bucket=%s key=%s status=error err=%s",
-                    getattr(pool, "provider", None),
-                    getattr(pool, "provider_alias", None),
-                    getattr(pool, "id", None),
-                    getattr(pool, "bucket", None),
-                    key,
-                    exc,
-                )
-
-            # If we fall through all pools without success, also clean up inflight entry.
-            with _OSS_UPLOAD_INFLIGHT_LOCK:
-                evt = _OSS_UPLOAD_INFLIGHT.pop(key, None)
-            if evt:
-                evt.set()
-            return None
+        resolved_name = self._content_addressed_filename(
+            filename,
+            content_hash=content_hash,
+            content_type=content_type,
+            category=category,
+        )
+        return self._upload_with_pools(
+            user_id=user_id,
+            filename=resolved_name,
+            content_type=content_type,
+            category=category,
+            object_prefix=object_prefix,
+            metadata=metadata,
+            cache_control=cache_control,
+            content_size=len(content),
+            body_bytes=content,
+        )
 
     def upload_file(
         self,
@@ -840,6 +974,7 @@ class OSSStorageService:
         metadata: Optional[Dict[str, Any]] = None,
         cache_control: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
+        """Stream a local file to OSS without loading the whole file into RAM."""
         target_path = str(file_path or "").strip()
         if not target_path or not os.path.exists(target_path):
             return None
@@ -847,17 +982,26 @@ class OSSStorageService:
         resolved_name = self._normalize_filename(filename or os.path.basename(target_path), content_type)
         guessed_type = content_type or mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
         try:
-            with open(target_path, "rb") as handle:
-                return self.upload_bytes(
-                    handle.read(),
-                    user_id=user_id,
-                    filename=resolved_name,
-                    content_type=guessed_type,
-                    category=category,
-                    object_prefix=object_prefix,
-                    metadata=metadata,
-                    cache_control=cache_control,
-                )
+            content_hash, content_size = self._md5_file(target_path)
+            if content_size <= 0:
+                return None
+            addressed_name = self._content_addressed_filename(
+                resolved_name,
+                content_hash=content_hash,
+                content_type=guessed_type,
+                category=category,
+            )
+            return self._upload_with_pools(
+                user_id=user_id,
+                filename=addressed_name,
+                content_type=guessed_type,
+                category=category,
+                object_prefix=object_prefix,
+                metadata=metadata,
+                cache_control=cache_control,
+                content_size=content_size,
+                file_path=target_path,
+            )
         except Exception as exc:
             logger.warning("OSS upload_file failed | path=%s err=%s", target_path, exc)
             return None

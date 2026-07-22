@@ -66,26 +66,40 @@ def optimize_mp4_faststart(file_path: str) -> bool:
     moov_bytes = bytearray(data[moov_box["start"]:moov_box["end"]])
     _patch_moov_chunk_offsets(moov_bytes, moov_box["size"])
 
-    reordered_parts = []
+    # Build a lightweight write plan (no byte copies), then stream to disk.
+    # Avoids b"".join(...) which briefly holds a second full-size allocation.
+    write_plan = []
     moov_inserted = False
     for box in top_level_boxes:
         if box["type"] == "moov":
             continue
-        reordered_parts.append(data[box["start"]:box["end"]])
+        write_plan.append(("slice", box["start"], box["end"]))
         if not moov_inserted and box["type"] == "ftyp":
-            reordered_parts.append(bytes(moov_bytes))
+            write_plan.append(("moov", 0, 0))
             moov_inserted = True
-
     if not moov_inserted:
-        reordered_parts.insert(0, bytes(moov_bytes))
+        write_plan.insert(0, ("moov", 0, 0))
 
-    new_data = b"".join(reordered_parts)
-    if len(new_data) != len(data):
-        raise ValueError("mp4 faststart rewrite changed file size unexpectedly")
-
+    moov_payload = bytes(moov_bytes)
+    expected_size = len(data)
+    bytes_written = 0
     with tempfile.NamedTemporaryFile(delete=False, dir=os.path.dirname(file_path), suffix=".mp4") as tmp:
-        tmp.write(new_data)
         temp_path = tmp.name
+        for kind, start, end in write_plan:
+            if kind == "moov":
+                tmp.write(moov_payload)
+                bytes_written += len(moov_payload)
+            else:
+                chunk = data[start:end]
+                tmp.write(chunk)
+                bytes_written += len(chunk)
+
+    if bytes_written != expected_size:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        raise ValueError("mp4 faststart rewrite changed file size unexpectedly")
 
     os.replace(temp_path, file_path)
     return True
