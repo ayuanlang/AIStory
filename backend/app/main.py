@@ -848,28 +848,31 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if maintenance_stop_event is not None:
-            maintenance_stop_event.set()
-        if maintenance_task is not None:
+        # Gunicorn max-requests / deploy sends SIGTERM; shut background loops down
+        # without letting CancelledError escape as a Starlette lifespan ERROR.
+        async def _stop_background(task: asyncio.Task | None, stop_event: asyncio.Event | None, *, timeout: float) -> None:
+            if stop_event is not None:
+                stop_event.set()
+            if task is None:
+                return
             try:
-                await asyncio.wait_for(maintenance_task, timeout=5)
+                await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+                return
+            except asyncio.TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                return
             except Exception:
-                maintenance_task.cancel()
-                try:
-                    await maintenance_task
-                except Exception:
-                    pass
-        if runtime_diag_stop_event is not None:
-            runtime_diag_stop_event.set()
-        if runtime_diag_task is not None:
+                pass
+            if not task.done():
+                task.cancel()
             try:
-                await asyncio.wait_for(runtime_diag_task, timeout=3)
-            except Exception:
-                runtime_diag_task.cancel()
-                try:
-                    await runtime_diag_task
-                except Exception:
-                    pass
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        await _stop_background(maintenance_task, maintenance_stop_event, timeout=3)
+        await _stop_background(runtime_diag_task, runtime_diag_stop_event, timeout=2)
 
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)

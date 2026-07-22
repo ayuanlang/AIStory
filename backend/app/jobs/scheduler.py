@@ -53,6 +53,17 @@ def should_catch_up_missed_run(now: Optional[datetime] = None) -> bool:
     return current >= todays_slot
 
 
+async def _run_maintenance_job(label: str) -> None:
+    try:
+        await asyncio.to_thread(run_daily_maintenance)
+    except asyncio.CancelledError:
+        # Worker recycle / deploy SIGTERM: not an application failure.
+        logger.info("Maintenance %s cancelled during shutdown", label)
+        raise
+    except Exception:
+        logger.exception("Maintenance %s failed", label)
+
+
 async def maintenance_scheduler_loop(stop_event: asyncio.Event) -> None:
     logger.info(
         "Maintenance scheduler started | timezone=Asia/Shanghai hour=%02d:%02d backup_keep=%s billing_reconcile_days=%s (project retention is manual)",
@@ -61,26 +72,25 @@ async def maintenance_scheduler_loop(stop_event: asyncio.Event) -> None:
         settings.DB_BACKUP_KEEP_COUNT,
         getattr(settings, "BILLING_RECONCILE_LOOKBACK_DAYS", 3),
     )
-    # Catch up if the web process was down during the 03:00 window.
-    if should_catch_up_missed_run():
-        logger.info("Maintenance catch-up: running missed daily job for today")
-        try:
-            await asyncio.to_thread(run_daily_maintenance)
-        except Exception:
-            logger.exception("Maintenance catch-up failed")
+    try:
+        # Catch up if the web process was down during the 03:00 window.
+        if should_catch_up_missed_run() and not stop_event.is_set():
+            logger.info("Maintenance catch-up: running missed daily job for today")
+            await _run_maintenance_job("catch-up")
 
-    while not stop_event.is_set():
-        delay = seconds_until_next_run()
-        logger.info("Maintenance scheduler sleeping %.0fs until next 03:00 Asia/Shanghai", delay)
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=delay)
-            break
-        except asyncio.TimeoutError:
-            pass
-        if stop_event.is_set():
-            break
-        try:
-            await asyncio.to_thread(run_daily_maintenance)
-        except Exception:
-            logger.exception("Scheduled daily maintenance failed")
-    logger.info("Maintenance scheduler stopped")
+        while not stop_event.is_set():
+            delay = seconds_until_next_run()
+            logger.info("Maintenance scheduler sleeping %.0fs until next 03:00 Asia/Shanghai", delay)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=delay)
+                break
+            except asyncio.TimeoutError:
+                pass
+            if stop_event.is_set():
+                break
+            await _run_maintenance_job("scheduled")
+    except asyncio.CancelledError:
+        logger.info("Maintenance scheduler cancelled")
+        raise
+    finally:
+        logger.info("Maintenance scheduler stopped")
