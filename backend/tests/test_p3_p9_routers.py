@@ -430,14 +430,21 @@ def test_video_ref_pipeline_module():
 def test_batch_media_thinned_reexports_pipeline():
     from pathlib import Path
     import app.api.routers.generation.batch_media as bm
+    from app.services.shot_media_batch_status import (
+        SHOT_MEDIA_BATCH_STATUS_KEY,
+        _read_shot_media_batch_status,
+    )
     path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "batch_media.py"
-    assert len(path.read_text(encoding="utf-8").splitlines()) < 2000
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 1800
     assert callable(bm._append_video_api_ref_mapping)
     assert callable(bm._is_shot_video_batch_eligible)
     assert callable(bm._run_shot_media_batch_job)
+    assert bm._read_shot_media_batch_status is _read_shot_media_batch_status
+    assert bm.SHOT_MEDIA_BATCH_STATUS_KEY == SHOT_MEDIA_BATCH_STATUS_KEY
     # Import appears before eligible helper uses _parse_shot_tech
     src = path.read_text(encoding="utf-8")
     assert src.index("video_ref_pipeline import") < src.index("def _is_shot_video_batch_eligible")
+    assert "from app.services.shot_media_batch_status import" in src
 
 
 def test_video_runner_uses_ref_pipeline_not_batch_media():
@@ -705,8 +712,42 @@ def test_shot_generation_prompts_and_episode_script_section():
 
 def test_analyze_scene_uses_shot_prompt_context():
     import inspect
+    from pathlib import Path
     import app.api.routers.prompts.analyze_scene as az
+    from app.services.analyze_scene_subject_checks import (
+        _normalize_subject_name,
+        _detect_subjects_json_extraction_gap,
+    )
+    from app.services.analyze_scene_text_ops import (
+        _trim_to_scenes_block,
+        _sanitize_scene_beats_stage_text,
+    )
     assert "shot_generation_prompts" in inspect.getsource(az)
+    assert az._normalize_subject_name is _normalize_subject_name
+    assert az._detect_subjects_json_extraction_gap is _detect_subjects_json_extraction_gap
+    assert az._trim_to_scenes_block is _trim_to_scenes_block
+    assert az._sanitize_scene_beats_stage_text is _sanitize_scene_beats_stage_text
+    assert _normalize_subject_name("CHAR:[@Hero]") == "Hero"
+    az_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "prompts" / "analyze_scene.py"
+    assert len(az_path.read_text(encoding="utf-8").splitlines()) < 2600
+    assert "from app.services.analyze_scene_subject_checks import" in az_path.read_text(encoding="utf-8")
+    assert "from app.services.analyze_scene_text_ops import" in az_path.read_text(encoding="utf-8")
+
+
+def test_generation_job_pool_helpers():
+    from pathlib import Path
+    import app.api.routers.generation.video_jobs as vj
+    from app.services.generation_job_pool import (
+        _build_batch_job_item,
+        _normalize_batch_job_status,
+    )
+    assert _normalize_batch_job_status({"running": True}) == "running"
+    assert _normalize_batch_job_status({"force_stopped": True}) == "canceled"
+    assert vj._normalize_batch_job_status is _normalize_batch_job_status
+    assert vj._build_batch_job_item is _build_batch_job_item
+    path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "video_jobs.py"
+    assert "from app.services.generation_job_pool import" in path.read_text(encoding="utf-8")
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 1700
 
 
 def test_shot_import_ops_and_scene_ai_shots_batch():

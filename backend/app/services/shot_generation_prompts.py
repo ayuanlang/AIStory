@@ -22,7 +22,7 @@ from app.core.prompts.shot_generation_feature_skills import (
     resolve_shot_generation_feature_bundle,
 )
 from app.core.time_utils import now_bj_iso
-from app.models.all_models import Entity, Project, Scene
+from app.models.all_models import Entity, Episode, Project, Scene
 from app.api.settings import get_scene_analysis_system_config
 from app.services.llm_markdown_sanitize import (
     sanitize_llm_markdown_output,
