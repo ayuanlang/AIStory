@@ -34,6 +34,7 @@ from app.services.scene_subject_helpers import (  # noqa: E402,F401
     _extract_subjects_json_from_text,
 )
 
+from app.core.entity_token import normalize_entity_token  # noqa: E402,F401
 from app.services.shot_generation_prompts import (  # noqa: E402,F401
     _build_project_prompt_context,
 )

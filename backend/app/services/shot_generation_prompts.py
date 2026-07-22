@@ -10,7 +10,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.core.entity_token import subject_compare_key, subject_compare_key_variants
+from app.core.entity_token import (
+    normalize_entity_token,
+    subject_compare_key,
+    subject_compare_key_variants,
+)
 from app.core.prompt_injection import wrap_injection_section
 from app.core.prompts.shot_generation_feature_skills import (
     get_shot_generation_feature_catalog,

@@ -475,21 +475,37 @@ def test_shot_markdown_module():
 
 
 def test_scene_markdown_orchestration_and_await_sink():
+    from pathlib import Path
     from app.services.scene_markdown_orchestration import (
         SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
         SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC,
         SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
+        _derive_scene_orchestration_phase,
+        _is_retryable_scene_orchestration_error,
+    )
+    from app.services.subject_index_resolve import (
+        resolve_usable_episode_subject_index,
+        _subject_index_has_usable_content,
     )
     from app.services.analyze_scene_dedup import _await_analyze_scene_segment
     import app.api.endpoints as ep
+    import app.api.routers.prompts.progress_flow as pf
     import inspect
     assert SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS == 3
     assert SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC == 2.0
     assert SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS == 1
+    assert _derive_scene_orchestration_phase(import_status="success", parse_status="ok") == "imported"
+    assert callable(_is_retryable_scene_orchestration_error)
+    assert _subject_index_has_usable_content("| S001 | character | a |")
+    assert callable(resolve_usable_episode_subject_index)
+    assert pf.resolve_usable_episode_subject_index is resolve_usable_episode_subject_index
     assert callable(_await_analyze_scene_segment)
     assert ep._await_analyze_scene_segment is _await_analyze_scene_segment
-    pf = inspect.getsource(importlib.import_module("app.api.routers.prompts.progress_flow"))
-    assert "scene_markdown_orchestration" in pf
+    pf_src = inspect.getsource(pf)
+    assert "scene_markdown_orchestration" in pf_src
+    assert "subject_index_resolve" in pf_src
+    pf_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "prompts" / "progress_flow.py"
+    assert len(pf_path.read_text(encoding="utf-8").splitlines()) < 2300
 
 
 def test_project_access_and_deletion_ops():
@@ -672,14 +688,46 @@ def test_shot_generation_prompts_and_episode_script_section():
     assert isinstance(_build_project_prompt_context({"script_title": "X"}), dict)
     assert shots._build_shot_prompts is _build_shot_prompts
     shots_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shots.py"
+    shot_ai_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "api"
+        / "routers"
+        / "workspace"
+        / "shot_ai_generation.py"
+    )
     ep_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "episodes.py"
     assert len(shots_path.read_text(encoding="utf-8").splitlines()) < 3000
     assert len(ep_path.read_text(encoding="utf-8").splitlines()) < 1300
     assert "script_generator/scenes" not in ep_path.read_text(encoding="utf-8")
-    assert "from app.services.shot_generation_prompts import" in shots_path.read_text(encoding="utf-8")
+    assert "from app.services.shot_generation_prompts import" in shot_ai_path.read_text(encoding="utf-8")
 
 
 def test_analyze_scene_uses_shot_prompt_context():
     import inspect
     import app.api.routers.prompts.analyze_scene as az
     assert "shot_generation_prompts" in inspect.getsource(az)
+
+
+def test_shot_import_ops_and_scene_ai_shots_batch():
+    from pathlib import Path
+    import app.api.routers.workspace as wp
+    import app.api.routers.workspace.shot_ai_generation as sai
+    from app.services.scene_ai_shots_batch import (
+        _build_scene_ai_shots_batch_status_response,
+        _start_scene_ai_shots_batch_for_episode,
+    )
+    from app.services.shot_import_ops import _import_scene_shot_rows_to_db
+
+    paths = {getattr(r, "path", None) for r in wp.router.routes}
+    assert "/scenes/{scene_id}/apply_ai_result" in paths
+    assert "/episodes/{episode_id}/scenes/ai_shots/batch/start" in paths
+    assert sai._import_scene_shot_rows_to_db is _import_scene_shot_rows_to_db
+    assert sai._start_scene_ai_shots_batch_for_episode is _start_scene_ai_shots_batch_for_episode
+    resp = _build_scene_ai_shots_batch_status_response({"running": False, "errors": ["e1"]})
+    assert resp["running"] is False
+    assert resp["errors"] == ["e1"]
+    sai_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "workspace" / "shot_ai_generation.py"
+    assert len(sai_path.read_text(encoding="utf-8").splitlines()) < 1400
+    assert "from app.services.scene_ai_shots_batch import" in sai_path.read_text(encoding="utf-8")
+    assert "from app.services.shot_import_ops import" in sai_path.read_text(encoding="utf-8")

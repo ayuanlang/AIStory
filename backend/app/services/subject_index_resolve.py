@@ -1,0 +1,257 @@
+# -*- coding: utf-8 -*-
+"""Subject Index usability checks and episode-field resolve/heal."""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any, List, Tuple
+
+from app.services.llm_markdown_sanitize import sanitize_subject_index_text
+
+logger = logging.getLogger("api_logger")
+
+def _subject_index_rows_present(subject_index_text: Any) -> bool:
+    """Return True when text contains at least one real entity row (not header-only)."""
+    text = str(subject_index_text or "")
+    if not text.strip():
+        return False
+    return bool(
+        re.search(r"(?im)^\s*\|\s*S\d{3,}\s*\|", text)
+        or re.search(r"(?im)^\s*S\d{3,}\s*\|", text)
+        or re.search(
+            r"(?im)^\s*S\d{3,}(?:\s+|\t+|\s*\|\s*)[a-z_]+(?:\s+|\t+|\s*\|\s*)",
+            text,
+        )
+        or re.search(r"(?im)^\s*subject_no\s*=\s*[A-Za-z]?\d+\b", text)
+        or re.search(
+            r"(?im)^\s*\|?\s*[A-Za-z]+\d+\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)",
+            text,
+        )
+        or re.search(
+            r"(?im)^\s*\|?\s*S\d{3,}\s*\|\s*(?:character|prop|environment|cover_poster|角色|道具|环境|封面)",
+            text,
+        )
+    )
+
+
+def _subject_index_has_usable_content(subject_index_text: Any) -> bool:
+    """Return True when Subject Index has at least one real entity row (not header-only)."""
+    sanitized = sanitize_subject_index_text(subject_index_text)
+    if _subject_index_rows_present(sanitized):
+        return True
+    # sanitize may be overly strict (e.g. Chinese headers); fall back to raw row detection.
+    return _subject_index_rows_present(subject_index_text)
+
+
+def _coerce_subject_index_candidate(subject_index_text: Any) -> str:
+    """Return the best usable Subject Index snippet from raw/sanitized text."""
+    raw = str(subject_index_text or "")
+    sanitized = sanitize_subject_index_text(raw)
+    if _subject_index_rows_present(sanitized):
+        return sanitized.strip()
+    if _subject_index_rows_present(raw):
+        # Keep from the first detectable row/header hint to avoid shipping unrelated prose.
+        lines = raw.replace("\r\n", "\n").splitlines()
+        start_idx = 0
+        header_re = re.compile(
+            r"(?i)^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:subject\s*index|subjects\s*index|资产清单|实体清单|设计资产索引)\b"
+        )
+        hint_re = re.compile(r"(?i)subject_no|subject_type|script_entity_coverage")
+        row_re = re.compile(r"(?im)^\s*\|?\s*S\d{3,}\s*\|")
+        for idx, line in enumerate(lines):
+            stripped = str(line or "").strip()
+            if header_re.search(stripped) or hint_re.search(stripped) or row_re.match(stripped):
+                start_idx = idx
+                break
+        return "\n".join(lines[start_idx:]).strip()
+    return sanitized.strip()
+
+
+def _extract_subject_index_from_stage_outputs(stage_outputs_raw: Any) -> str:
+    """Pull Subject Index from episode.ai_stage_outputs stage2.subject_index."""
+    raw = str(stage_outputs_raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    stages = parsed.get("stages") if isinstance(parsed.get("stages"), dict) else {}
+    stage2 = stages.get("stage2") if isinstance(stages.get("stage2"), dict) else {}
+    outputs = stage2.get("outputs") if isinstance(stage2.get("outputs"), dict) else {}
+    slot = outputs.get("subject_index") if isinstance(outputs.get("subject_index"), dict) else {}
+    return _coerce_subject_index_candidate(slot.get("content"))
+
+
+def resolve_usable_episode_subject_index(
+    episode: Any,
+    *,
+    request_text: Any = None,
+    explicit_subject_index: Any = None,
+    heal_episode_field: bool = False,
+    db: Any = None,
+) -> str:
+    """Resolve a usable Subject Index for downstream gates/injection.
+
+    Prefer explicit client-provided Subject Index (what the Stage 2 UI shows), then
+    episode.ai_scene_analysis_subject_index, then stage_outputs, then request-embedded
+    text. Optionally heal a contaminated/empty episode field.
+    """
+    explicit_raw = _coerce_subject_index_candidate(explicit_subject_index)
+    episode_field_raw = _coerce_subject_index_candidate(
+        getattr(episode, "ai_scene_analysis_subject_index", None) if episode is not None else None
+    )
+    stage_outputs_raw = _extract_subject_index_from_stage_outputs(
+        getattr(episode, "ai_stage_outputs", None) if episode is not None else None
+    )
+    request_raw = _coerce_subject_index_candidate(request_text)
+
+    candidates: List[Tuple[str, str]] = [
+        ("explicit", explicit_raw),
+        ("stage_outputs", stage_outputs_raw),
+        ("episode_field", episode_field_raw),
+        ("request_text", request_raw),
+    ]
+    resolved_source = ""
+    resolved_text = ""
+    for source, candidate in candidates:
+        if _subject_index_has_usable_content(candidate):
+            resolved_source = source
+            resolved_text = candidate
+            break
+
+    if not resolved_text:
+        logger.warning(
+            "[subject_index] resolve_miss episode_id=%s explicit_chars=%s episode_chars=%s stage_chars=%s request_chars=%s",
+            getattr(episode, "id", None) if episode is not None else None,
+            len(str(explicit_subject_index or "")),
+            len(str(getattr(episode, "ai_scene_analysis_subject_index", "") or "") if episode is not None else ""),
+            len(str(getattr(episode, "ai_stage_outputs", "") or "") if episode is not None else ""),
+            len(str(request_text or "")),
+        )
+
+    if (
+        heal_episode_field
+        and resolved_text
+        and episode is not None
+        and resolved_source in {"explicit", "stage_outputs", "request_text"}
+        and not _subject_index_has_usable_content(episode_field_raw)
+    ):
+        try:
+            episode.ai_scene_analysis_subject_index = resolved_text
+            if db is not None:
+                db.add(episode)
+                db.commit()
+            logger.info(
+                "[subject_index] healed episode.ai_scene_analysis_subject_index from %s episode_id=%s chars=%s",
+                resolved_source,
+                getattr(episode, "id", None),
+                len(resolved_text),
+            )
+        except Exception as heal_err:
+            logger.warning(
+                "[subject_index] failed healing episode subject index from %s episode_id=%s err=%s",
+                resolved_source,
+                getattr(episode, "id", None),
+                heal_err,
+            )
+            try:
+                if db is not None:
+                    db.rollback()
+            except Exception:
+                pass
+
+    return resolved_text
+
+
+def _subject_index_has_cover_poster(subject_index_text: Any) -> bool:
+    text = sanitize_subject_index_text(subject_index_text)
+    if not text:
+        return False
+
+    if re.search(r"(?i)\bsubject_type\s*=\s*(cover_poster|poster|posters|cover|covers|封面|封面海报|海报)\b", text):
+        return True
+    if re.search(r"(?im)\b(?:subject_type|type)\b\s*[:=]\s*(cover_poster|poster|posters|cover|covers|封面|封面海报|海报)\b", text):
+        return True
+
+    def _normalize_type(value: Any) -> str:
+        key = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if key in {"cover_poster", "coverposter", "poster", "posters", "cover", "covers", "封面", "封面海报", "海报"}:
+            return "cover_poster"
+        return key
+
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "").replace("\ufeff", "").strip()
+        line = re.sub(r"^\s*>\s*", "", line)
+        line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
+        if not line:
+            continue
+        if "|" not in line:
+            continue
+        normalized_line = line.strip("|").strip()
+        parts = [p.strip() for p in normalized_line.split("|")]
+        if len(parts) < 2:
+            continue
+        first_col = str(parts[0] or "").strip().lower()
+        if first_col in {"subject_no", "subject_id", "id", "编号"}:
+            continue
+        if _normalize_type(parts[1]) == "cover_poster":
+            return True
+
+    # subject_no-style line fallback, e.g.:
+    # subject_no=S001 | subject_type=poster | ...
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "").replace("\ufeff", "").strip()
+        if not line:
+            continue
+        if not re.search(r"(?i)\bsubject_(?:no|id)\b", line):
+            continue
+        matched = re.search(r"(?i)\bsubject_type\s*[:=]\s*([a-zA-Z_\-\u4e00-\u9fff]+)", line)
+        if matched and _normalize_type(matched.group(1)) == "cover_poster":
+            return True
+    return False
+
+
+def _script_optimization_has_project_visual_backfill(result_text: Any) -> bool:
+    text = str(result_text or "").strip()
+    if not text:
+        return False
+
+    if re.search(r"(?i)\bproject_visual_backfill\b", text):
+        return True
+    if re.search(r"(?im)^\s*(?:#{1,6}\s*)?Project\s*Visual\s*Backfill\b", text):
+        return True
+
+    fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for match in fence_re.finditer(text):
+        candidate = str(match.group(1) or "").strip()
+        if not candidate:
+            continue
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict) and (
+                "project_visual_backfill" in obj
+                or "Project_Visual_Backfill" in obj
+                or "projectVisualBackfill" in obj
+            ):
+                return True
+        except Exception:
+            continue
+
+    try:
+        maybe_obj = json.loads(text)
+        if isinstance(maybe_obj, dict) and (
+            "project_visual_backfill" in maybe_obj
+            or "Project_Visual_Backfill" in maybe_obj
+            or "projectVisualBackfill" in maybe_obj
+        ):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
