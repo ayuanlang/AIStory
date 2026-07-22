@@ -1601,8 +1601,9 @@ class MediaGenerationService:
             except:
                 pass
         
-        if aspect_ratio:
-            task_payload["ratio"] = str(aspect_ratio)
+        # Seedance task create: ratio mirrors aspect_ratio (same value).
+        final_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
+        task_payload["ratio"] = final_ratio
             
         task_headers = {
             "Authorization": f"Bearer {dp_token}",
@@ -5199,7 +5200,7 @@ class MediaGenerationService:
                 if effective_provider == "grsai":
                     return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if effective_provider == "ark-seedance":
-                    return await self._handle_ark_seedance_generation("video", prompt, active_config, effective_reference_image_url, duration=duration, aspect_ratio=aspect_ratio)
+                    return await self._handle_ark_seedance_generation("video", prompt, active_config, effective_reference_image_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio)
                 if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
@@ -6900,14 +6901,12 @@ class MediaGenerationService:
                 else:
                     payload["draft"] = bool(tool_conf.get("draft", False))
             
-            # For Doubao (Ark), if image is provided, ratio should typically be omitted 
-            # to respect image dimensions (or use 'size'/'resolution' params if available, but ratio causes 400).
-            # Only add ratio for Text-to-Video (no start/end images)
-            if not start_img_url and not last_frame_url:
-                payload["ratio"] = final_ratio
-                _debug_log(f"[DoubaoVideo] ratio_in={aspect_ratio}, ratio_final={final_ratio}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}")
+            # Seedance / Doubao video: always send ratio with the same value as aspect_ratio.
+            payload["ratio"] = final_ratio
             _debug_log(
-                f"[DoubaoVideo] payload_has_ratio={'ratio' in payload}, payload_ratio={payload.get('ratio')}, mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}, callback_enabled={bool(payload.get('callback_url'))}"
+                f"[DoubaoVideo] ratio_in={aspect_ratio}, ratio_final={final_ratio}, "
+                f"mode={'t2v' if (not start_img_url and not last_frame_url) else 'i2v'}, "
+                f"callback_enabled={bool(payload.get('callback_url'))}"
             )
 
 
@@ -8632,6 +8631,8 @@ class MediaGenerationService:
                 ("/openapi/v2/kling-v3.0-pro/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/kling-v3.0-std/image-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/kling-v3.0-std/text-to-video", [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                ("/openapi/v2/seedance-v1.5-pro/", [4, 5, 6, 7, 8, 9, 10, 11, 12]),
+                ("/openapi/v2/seedance-v1-lite/", [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
                 ("/openapi/v2/rhart-video/sparkvideo", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/rhart-video/sparkvideo-2.0-fast/multimodal-video", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
                 ("/openapi/v2/rhart-video/sparkvideo-2.0/multimodal-video", [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
@@ -8645,17 +8646,23 @@ class MediaGenerationService:
                 runtime_enum_catalog.get("durations_seconds") if isinstance(runtime_enum_catalog, dict) else None
             )
 
+        def _is_runninghub_seedance_video_endpoint() -> bool:
+            haystack = f"{endpoint_lower} {model_lower}"
+            return "seedance" in haystack
+
         def _runninghub_video_primary_image_field() -> str:
-            if "kling" in endpoint_lower and "image-to-video" in endpoint_lower:
-                return "firstImageUrl"
+            # Seedance / Kling / Runway / Hailuo / Youchuan i2v all require firstImageUrl.
             if "luma" in endpoint_lower and "image-to-video" in endpoint_lower:
                 return "imageUrl"
-            if "runway" in endpoint_lower and "image-to-video" in endpoint_lower:
-                return "firstImageUrl"
-            if "start-end-to-video" in endpoint_lower or "start-to-end" in endpoint_lower:
-                return "firstImageUrl"
             if "/openapi/v2/rhart-video" in endpoint_lower:
                 return "firstFrameUrl"
+            if (
+                "image-to-video" in endpoint_lower
+                or "start-end-to-video" in endpoint_lower
+                or "start-to-end" in endpoint_lower
+                or _is_runninghub_seedance_video_endpoint()
+            ):
+                return "firstImageUrl"
             return "imageUrl"
 
         def _normalize_runninghub_video_duration(raw_value: Any, default_value: Any = 5) -> Optional[str]:
@@ -8713,9 +8720,9 @@ class MediaGenerationService:
                 else:
                     payload_obj["audio"] = True
             else:
-                if "seedance" in endpoint_lower or "seedance" in model_lower:
-                    av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
-                    payload_obj["generateAudio"] = "true"
+                if _is_runninghub_seedance_video_endpoint():
+                    av = _pick_tool_value("generateAudio", "audio", "sound")
+                    payload_obj["generateAudio"] = "true" if _normalize_bool(av, True) else "false"
                 elif "/openapi/v2/rhart-video/sparkvideo" in endpoint_lower:
                     av = _pick_tool_value("generateAudio") or _pick_tool_value("audio") or _pick_tool_value("sound")
                     if av is not None:
@@ -8994,10 +9001,16 @@ class MediaGenerationService:
                     payload["videoUrl"] = video_refs[0]
             payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution)
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            if _is_runninghub_seedance_video_endpoint():
+                payload["aspectRatio"] = str(explicit_aspect_ratio or "").strip() or "16:9"
+            else:
+                _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
             camera_fixed = _pick_tool_value("cameraFixed")
-            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
+            if _is_runninghub_seedance_video_endpoint():
+                payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false"
+            else:
+                payload["cameraFixed"] = _normalize_bool(camera_fixed, False)
             _set_audio_flags(payload)
         elif "multimodal-video" in endpoint_lower:
             payload["imageUrls"] = image_refs[:9]
@@ -9048,11 +9061,17 @@ class MediaGenerationService:
         elif "text-to-video" in endpoint_lower:
             payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution)
-            _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
+            if _is_runninghub_seedance_video_endpoint():
+                payload["aspectRatio"] = str(explicit_aspect_ratio or "").strip() or "16:9"
+            else:
+                _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             _set_if_present(payload, "size", str(explicit_size).strip() if explicit_size is not None else None)
             
             camera_fixed = _pick_tool_value("cameraFixed")
-            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
+            if _is_runninghub_seedance_video_endpoint():
+                payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false"
+            else:
+                payload["cameraFixed"] = _normalize_bool(camera_fixed, False)
                     
             _set_audio_flags(payload)
         else:
@@ -9061,8 +9080,17 @@ class MediaGenerationService:
                 return {"error": "RunningHub image-to-video requires a reference image input", "submit_failed": True}
             
             primary_field = _runninghub_video_primary_image_field()
+            is_seedance_i2v = _is_runninghub_seedance_video_endpoint() and "image-to-video" in endpoint_lower
             
-            if ref_mode == "entity_refs":
+            if is_seedance_i2v:
+                # Seedance i2v contract: firstImageUrl (required) + optional lastImageUrl.
+                # Do not send imageUrls — upstream rejects empty/missing firstImageUrl.
+                payload["firstImageUrl"] = first_image
+                if resolved_last_frame:
+                    payload["lastImageUrl"] = resolved_last_frame
+                elif len(image_refs) == 2:
+                    payload["lastImageUrl"] = image_refs[1]
+            elif ref_mode == "entity_refs":
                 if "/openapi/v2/rhart-video" in endpoint_lower and "/multimodal-video" not in endpoint_lower:
                     if "sparkvideo" in submit_url.lower():
                         submit_url = submit_url.replace("/image-to-video", "/multimodal-video")
@@ -9091,12 +9119,13 @@ class MediaGenerationService:
                     # unless it's a specific Vidu generation parameter or start-end mode.
                     # This avoids poisoning the last frame generation with e.g. character mapping images.
                     pass
-            if resolved_last_frame and ("/openapi/v2/rhart-video/sparkvideo" in endpoint_lower):
-                payload["lastFrameUrl"] = resolved_last_frame
-            elif resolved_last_frame and "/rhart-video-" in endpoint_lower:
-                payload["lastImageUrl"] = resolved_last_frame
-            elif resolved_last_frame:
-                payload["lastImageUrl"] = resolved_last_frame
+            if not is_seedance_i2v:
+                if resolved_last_frame and ("/openapi/v2/rhart-video/sparkvideo" in endpoint_lower):
+                    payload["lastFrameUrl"] = resolved_last_frame
+                elif resolved_last_frame and "/rhart-video-" in endpoint_lower:
+                    payload["lastImageUrl"] = resolved_last_frame
+                elif resolved_last_frame:
+                    payload["lastImageUrl"] = resolved_last_frame
 
             payload["duration"] = normalized_video_duration
             _set_if_present(payload, "resolution", normalized_video_resolution or "720p")
@@ -9104,13 +9133,20 @@ class MediaGenerationService:
             if "/openapi/v2/rhart-video" in endpoint_lower:
                 _set_if_present(payload, "ratio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
                 _set_if_present(payload, "realPersonMode", True)
+            elif is_seedance_i2v or _is_runninghub_seedance_video_endpoint():
+                # Seedance requires aspectRatio; i2v default is adaptive.
+                seedance_ar = str(explicit_aspect_ratio or "").strip() or ("adaptive" if is_seedance_i2v else "16:9")
+                payload["aspectRatio"] = seedance_ar
             else:
                 _set_if_present(payload, "aspectRatio", str(explicit_aspect_ratio).strip() if explicit_aspect_ratio else None)
             
             _set_if_present(payload, "movementAmplitude", movement_amplitude)
             
             camera_fixed = _pick_tool_value("cameraFixed")
-            payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false" if "seedance" in str(config.get("model", "")).lower() else _normalize_bool(camera_fixed, False)
+            if _is_runninghub_seedance_video_endpoint():
+                payload["cameraFixed"] = "true" if _normalize_bool(camera_fixed, False) else "false"
+            else:
+                payload["cameraFixed"] = _normalize_bool(camera_fixed, False)
                     
             _set_audio_flags(payload)
 
@@ -11007,9 +11043,9 @@ class MediaGenerationService:
             payload["callback_url"] = callback_url
             payload["notify_url"] = callback_url
 
-        normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio)
-        if normalized_ratio:
-            payload["ratio"] = normalized_ratio
+        # Seedance: ratio uses the same value as aspect_ratio (default 16:9).
+        normalized_ratio = self._normalize_aspect_ratio_value(aspect_ratio) or "16:9"
+        payload["ratio"] = normalized_ratio
 
         try:
             payload["duration"] = int(duration if duration is not None else (tool_conf.get("duration") if tool_conf.get("duration") is not None else 5))
