@@ -8,13 +8,10 @@ services:
     buildCommand: |
       cd backend
       pip install --no-cache-dir -r requirements.txt
-    # IMPORTANT: If Render Dashboard Start Command is customized, it overrides
-    # this field. Do not paste a hardcoded "--workers 2" short command there.
-    # Use this script (workers clamped to 1 by default):
-    startCommand: |
-      cd backend
-      chmod +x scripts/start_web.sh
-      exec bash scripts/start_web.sh
+    # IMPORTANT: Render Dashboard "Start Command" overrides this when customized.
+    # If logs still show "--workers 2", the Dashboard command was not updated.
+    # Paste exactly:  cd backend; python run_web.py
+    startCommand: cd backend; python run_web.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
