@@ -1559,7 +1559,10 @@ async def _run_generate_image_job(
             snapshot = dict(IMAGE_JOB_STORE.get(job_id) or {})
         if not callback_url:
             callback_url = _resolve_callback_url_from_payload(snapshot)
-        await _dispatch_generation_callback("image", callback_url, snapshot)
+        from app.services.generation_runtime.callback_http import (
+            _dispatch_generation_callback as _dispatch_cb,
+        )
+        await _dispatch_cb("image", callback_url, snapshot)
 
         with IMAGE_JOB_LOCK:
             IMAGE_JOB_TASKS.pop(job_id, None)

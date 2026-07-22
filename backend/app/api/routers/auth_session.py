@@ -17,7 +17,7 @@ from app.api.deps import cache_user_identity, get_current_user
 from app.core.config import settings
 from app.core.homepage_referral import parse_homepage_referral_token
 from app.db.session import get_db
-from app.models.all_models import User
+from app.models.all_models import TransactionHistory, User
 from app.schemas.user_auth import (
     EMAIL_VERIFICATION_TRIAL_CREDITS,
     USER_ACTIVE_LEVEL_DEFAULT,
@@ -45,6 +45,7 @@ from app.services.auth_login import (
     _get_request_client_ip,
     _log_login_is_active_diagnostics,
     _log_login_stage,
+    _refresh_user_identity_cache,
     _should_block_login_for_maintenance,
     authenticate_user,
 )

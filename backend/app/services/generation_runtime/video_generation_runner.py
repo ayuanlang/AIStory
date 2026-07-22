@@ -2020,7 +2020,10 @@ async def _run_generate_video_job(
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
         if not callback_url:
             callback_url = _resolve_callback_url_from_payload(snapshot)
-        await _dispatch_generation_callback("video", callback_url, snapshot)
+        from app.services.generation_runtime.callback_http import (
+            _dispatch_generation_callback as _dispatch_cb,
+        )
+        await _dispatch_cb("video", callback_url, snapshot)
 
         with VIDEO_JOB_LOCK:
             VIDEO_JOB_TASKS.pop(job_id, None)

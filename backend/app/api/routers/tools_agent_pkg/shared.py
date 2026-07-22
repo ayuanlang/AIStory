@@ -2,12 +2,14 @@
 """Tools + Agent routes (P4)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -21,6 +23,7 @@ from app.schemas.agent import AgentRequest, AgentResponse
 from app.services.agent_service import agent_service
 from app.services.billing_service import billing_service
 from app.services.llm_service import llm_service
+from app.services.system_log_service import log_action
 
 logger = logging.getLogger("api_logger")
 router = APIRouter(tags=["tools-agent"])

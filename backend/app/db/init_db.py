@@ -19,6 +19,7 @@ ProjectAssetReviewMessage = getattr(models, "ProjectAssetReviewMessage", None)
 SystemAPISetting = models.SystemAPISetting
 ProviderKeyPool = models.ProviderKeyPool
 OSSProviderPool = getattr(models, "OSSProviderPool", None)
+DeletedMedia = getattr(models, "DeletedMedia", None)
 DeletionBatch = getattr(models, "DeletionBatch", None)
 DeletionBatchItem = getattr(models, "DeletionBatchItem", None)
 SystemAPIBillingRule = models.SystemAPIBillingRule

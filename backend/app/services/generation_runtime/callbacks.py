@@ -41,7 +41,10 @@ from app.services.asset_meta_utils import _asset_optional_int  # noqa: F401
 logger = logging.getLogger("api_logger")
 
 # Pull media helpers into this module namespace (callback finalize depends on them).
-globals().update({k: v for k, v in vars(_mp).items() if not k.startswith("__")})
+# Only fill missing keys — never clobber explicit imports (e.g. _dispatch_generation_callback).
+for _k, _v in vars(_mp).items():
+    if not str(_k).startswith("__") and _k not in globals():
+        globals()[_k] = _v
 
 def _prune_generation_callback_locked() -> None:
     now = time.time()
@@ -517,11 +520,15 @@ def _is_stale_running_payload(payload: Dict[str, Any], stale_minutes: int = 10) 
 
 # media persist -> app.services.generation_runtime.media_persist
 from app.services.generation_runtime import media_persist as _media_persist  # noqa: E402
-globals().update({k: v for k, v in vars(_media_persist).items() if k == "__all__" or not k.startswith("__")})
+for _k, _v in vars(_media_persist).items():
+    if (_k == "__all__" or not str(_k).startswith("__")) and _k not in globals():
+        globals()[_k] = _v
 
 # shot/promo/script helpers -> script_mode_helpers
 from app.services import script_mode_helpers as _smh  # noqa: E402
-globals().update({k: v for k, v in vars(_smh).items() if not k.startswith('__')})
+for _k, _v in vars(_smh).items():
+    if not str(_k).startswith("__") and _k not in globals():
+        globals()[_k] = _v
 
 
 def _merge_provider_task_ids_into_settle(settle_details: Dict[str, Any], *sources: Any) -> Dict[str, Any]:
@@ -1439,7 +1446,10 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         callback_url = _resolve_callback_url_from_payload(updated_job)
         if not callback_url:
             continue
-        await _dispatch_generation_callback("image", callback_url, updated_job)
+        from app.services.generation_runtime.callback_http import (
+            _dispatch_generation_callback as _dispatch_cb,
+        )
+        await _dispatch_cb("image", callback_url, updated_job)
 
 
 
@@ -2168,7 +2178,10 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         callback_url = _resolve_callback_url_from_payload(updated_job)
         if not callback_url:
             continue
-        await _dispatch_generation_callback("video", callback_url, updated_job)
+        from app.services.generation_runtime.callback_http import (
+            _dispatch_generation_callback as _dispatch_cb,
+        )
+        await _dispatch_cb("video", callback_url, updated_job)
 
 
 def _finalize_video_shot_callback_without_job(callback_ticket: str) -> bool:
