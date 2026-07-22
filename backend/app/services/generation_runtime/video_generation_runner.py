@@ -2020,10 +2020,20 @@ async def _run_generate_video_job(
             snapshot = dict(VIDEO_JOB_STORE.get(job_id) or {})
         if not callback_url:
             callback_url = _resolve_callback_url_from_payload(snapshot)
-        from app.services.generation_runtime.callback_http import (
-            _dispatch_generation_callback as _dispatch_cb,
-        )
-        await _dispatch_cb("video", callback_url, snapshot)
+        # Resolve via live module attribute — never rely on this function's
+        # __globals__ (uvicorn StatReload / daemon queue can keep stale bindings).
+        try:
+            _dispatch = __import__(
+                "app.services.generation_runtime.callback_http",
+                fromlist=["_dispatch_generation_callback"],
+            )._dispatch_generation_callback
+            await _dispatch("video", callback_url, snapshot)
+        except Exception as _cb_exc:
+            logger.warning(
+                "[VideoJob] outbound callback dispatch failed | job_id=%s err=%s",
+                job_id,
+                _cb_exc,
+            )
 
         with VIDEO_JOB_LOCK:
             VIDEO_JOB_TASKS.pop(job_id, None)

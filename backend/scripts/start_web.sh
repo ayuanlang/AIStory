@@ -35,6 +35,7 @@ export WEB_CONCURRENCY="${WORKERS}"
 
 echo "[boot] starting gunicorn on PORT=${PORT:-8000} workers=${WORKERS}"
 exec gunicorn app.main:app \
+  -c gunicorn.conf.py \
   -k uvicorn.workers.UvicornWorker \
   --bind "0.0.0.0:${PORT:-8000}" \
   --workers "${WORKERS}" \

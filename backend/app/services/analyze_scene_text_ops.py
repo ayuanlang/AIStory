@@ -194,3 +194,131 @@ def _extract_reuse_assets_from_subject_index(subject_index_text: str) -> List[Di
             "description": str(parts[5] or "").strip() if len(parts) > 5 else "",
         })
     return assets
+
+def _infer_subject_index_allowed_types_for_request(
+    *,
+    request: Any = None,
+    mode_lower: str = "",
+    prompt_file_lower: str = "",
+    scene_analysis_features: Any = None,
+) -> set:
+    feature_targets: List[Any] = []
+    features = scene_analysis_features
+    if features is None and request is not None:
+        features = getattr(request, "scene_analysis_features", None)
+    if isinstance(features, dict):
+        raw_targets = (
+            features.get("target_entity_types")
+            or features.get("targetEntityTypes")
+            or features.get("asset_target_types")
+            or features.get("assetTargetTypes")
+        )
+        if isinstance(raw_targets, list):
+            feature_targets = raw_targets
+        elif isinstance(raw_targets, str):
+            feature_targets = [part for part in re.split(r"[,，\s]+", raw_targets) if part]
+
+    if feature_targets:
+        normalized_targets = {
+            normalized
+            for normalized in (_normalize_requested_asset_target_type(item) for item in feature_targets)
+            if normalized
+        }
+        if normalized_targets:
+            return normalized_targets
+
+    source = f"{mode_lower} {prompt_file_lower}"
+    target_suffix_match = re.search(r"__targets_([a-z0-9_\-]+)", source, flags=re.IGNORECASE)
+    if target_suffix_match:
+        normalized_targets = {
+            normalized
+            for normalized in (
+                _normalize_requested_asset_target_type(item)
+                for item in str(target_suffix_match.group(1) or "").split("_")
+            )
+            if normalized
+        }
+        if normalized_targets:
+            return normalized_targets
+
+    if "2_pass_generate_assets_characters" in source or "entity_design_character" in source:
+        return {"character"}
+    if "2_pass_generate_assets_props" in source or "entity_design_prop" in source:
+        return {"prop"}
+    if (
+        "2_pass_generate_assets_environments" in source
+        or "entity_design_environment" in source
+        or "entity_design_poster" in source
+    ):
+        return {"environment", "cover"}
+    return set()
+
+def _filter_subject_index_text_by_types(
+    subject_index_text: Any,
+    allowed_types: set,
+    *,
+    log_mode: Any = None,
+    log_prompt_file: Any = None,
+) -> str:
+    text = sanitize_subject_index_text(subject_index_text)
+    if not text or not allowed_types:
+        return text
+
+    filtered_lines: List[str] = []
+    total_subject_rows = 0
+    kept_subject_rows = 0
+    for raw_line in str(text).splitlines():
+        line = str(raw_line or "")
+        stripped = line.strip()
+        key_value_type_match = re.search(r"\bsubject_type\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
+        key_value_subject_match = re.search(r"\bsubject_no\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
+        if key_value_type_match and (key_value_subject_match or re.search(r"\bsubject_name_(?:zh|en|exact)\s*=", stripped, flags=re.IGNORECASE)):
+            total_subject_rows += 1
+            normalized_type = _normalize_subject_index_entity_type(key_value_type_match.group(1))
+            if normalized_type in allowed_types:
+                filtered_lines.append(line)
+                kept_subject_rows += 1
+            continue
+
+        normalized_line = stripped.replace("\ufeff", "").strip()
+        normalized_line = re.sub(r"^\s*>\s*", "", normalized_line)
+        normalized_line = re.sub(r"^\s*[-*+]\s+", "", normalized_line).strip()
+        normalized_line = normalized_line.strip("|").strip()
+        parts = [p.strip() for p in normalized_line.split("|")]
+        is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 2
+        if is_subject_row:
+            total_subject_rows += 1
+            normalized_type = _normalize_subject_index_entity_type(parts[1] if len(parts) > 1 else "")
+            if normalized_type in allowed_types:
+                filtered_lines.append(line)
+                kept_subject_rows += 1
+            continue
+        filtered_lines.append(line)
+
+    filtered_text = "\n".join(filtered_lines).strip()
+    logger.info(
+        "[analyze_scene] filtered subject index for target types types=%s rows=%s kept=%s mode=%s prompt_file=%s",
+        sorted(allowed_types),
+        total_subject_rows,
+        kept_subject_rows,
+        effective_scene_analysis_mode,
+        getattr(request, "prompt_file", None),
+    )
+    return filtered_text
+
+
+def _resolve_scene_beats_adapted_script_text(
+    raw_text: Any,
+    episode_adaptation_fallback: str = "",
+) -> str:
+    from app.services.script_analysis_flow import extract_adapted_script_from_beats_user_input
+
+    adapted = extract_adapted_script_from_beats_user_input(
+        _sanitize_scene_beats_stage_text(raw_text)
+    )
+    if adapted:
+        return adapted
+    if episode_adaptation_fallback:
+        return str(episode_adaptation_fallback)
+    return ""
+

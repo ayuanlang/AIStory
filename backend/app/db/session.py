@@ -30,6 +30,10 @@ DB_POOL_SIZE_EFFECTIVE = _effective_pool_size
 DB_MAX_OVERFLOW_EFFECTIVE = _effective_max_overflow
 DB_POOL_CAPACITY_EFFECTIVE = DB_POOL_SIZE_EFFECTIVE + DB_MAX_OVERFLOW_EFFECTIVE
 
+# Raw psycopg2 opener used by the engine creator and by out-of-pool callers
+# (e.g. startup advisory locks that must survive pool invalidation).
+_connect_raw_postgres_impl = None
+
 engine_kwargs = {
     "connect_args": {"check_same_thread": False, "timeout": 30} if is_sqlite else {},
 }
@@ -117,11 +121,23 @@ if not is_sqlite:
                     continue
             raise last_err
 
+        _connect_raw_postgres_impl = _connect_with_retry
         engine_kwargs["creator"] = _connect_with_retry
         # connect_args already baked into the creator; remove to avoid confusion
         engine_kwargs.pop("connect_args", None)
 
 engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
+
+
+def connect_raw_postgres():
+    """Open a psycopg2 connection outside the SQLAlchemy pool.
+
+    Use this for session-level advisory locks held across unrelated pool work.
+    Pool invalidation must not close the lock-holding connection.
+    """
+    if _connect_raw_postgres_impl is None:
+        raise RuntimeError("connect_raw_postgres requires a postgresql DATABASE_URL")
+    return _connect_raw_postgres_impl()
 
 if not is_sqlite:
     _logger.info(

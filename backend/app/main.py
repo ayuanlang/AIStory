@@ -21,7 +21,7 @@ from app.core.config import settings
 import app.api.settings as settings_api
 import app.api.groups as groups_api
 import app.api.invoices as invoices_api
-from app.db.session import engine, SessionLocal
+from app.db.session import engine, SessionLocal, connect_raw_postgres
 from app.models.all_models import Base, User
 from sqlalchemy import inspect, text
 from app.core.logging import LoggingMiddleware, logger, configure_uvicorn_logging_noise_reduction
@@ -210,6 +210,66 @@ def _is_minimum_schema_ready() -> bool:
     return _get_minimum_schema_readiness_issue() is None
 
 
+def _is_postgres_disconnect_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    needles = (
+        "ssl syscall error",
+        "eof detected",
+        "connection already closed",
+        "server closed the connection",
+        "connection not open",
+        "broken pipe",
+        "could not receive data from server",
+        "connection reset",
+        "terminating connection",
+    )
+    return any(n in msg for n in needles)
+
+
+def _is_bootstrap_run_candidate() -> bool:
+    """Whether this process should attempt migrations (vs wait for a leader).
+
+    Gunicorn worker ids are 1-based; worker 1 is the preferred bootstrap leader.
+    Local uvicorn / generation_worker (no GUNICORN_WORKER_ID) always contend via lock.
+    """
+    role = os.getenv("DB_BOOTSTRAP_ROLE", "auto").strip().lower()
+    if role in {"leader", "run", "1", "true", "yes", "on"}:
+        return True
+    if role in {"follower", "wait", "0", "false", "no", "off"}:
+        return False
+
+    for key in ("GUNICORN_WORKER_ID", "APP_WORKER_ID", "WORKER_ID"):
+        raw = os.getenv(key, "").strip()
+        if not raw:
+            continue
+        try:
+            return int(raw) == 1
+        except ValueError:
+            return raw in {"1", "worker-1", "worker_1"}
+    return True
+
+
+def _wait_until_schema_ready(label: str = "follower") -> bool:
+    deadline = time.monotonic() + _DB_BOOT_LOCK_WAIT_TIMEOUT
+    logger.info(
+        "DB bootstrap: %s waiting up to %ss for schema readiness",
+        label,
+        _DB_BOOT_LOCK_WAIT_TIMEOUT,
+    )
+    while time.monotonic() < deadline:
+        if _is_minimum_schema_ready():
+            return True
+        time.sleep(_DB_BOOT_LOCK_POLL_DELAY)
+    return False
+
+
+def _open_postgres_bootstrap_lock_connection():
+    """Dedicated out-of-pool connection so pool invalidation cannot drop the lock."""
+    conn = connect_raw_postgres()
+    conn.autocommit = True
+    return conn
+
+
 def _wait_for_postgres_bootstrap_slot():
     deadline = time.monotonic() + _DB_BOOT_LOCK_WAIT_TIMEOUT
     waited = False
@@ -217,32 +277,35 @@ def _wait_for_postgres_bootstrap_slot():
     while time.monotonic() < deadline:
         conn = None
         try:
-            conn = engine.connect()
-            acquired = bool(
-                conn.execute(
-                    text("SELECT pg_try_advisory_lock(:key)"),
-                    {"key": _DB_BOOT_LOCK_KEY},
-                ).scalar()
-            )
+            conn = _open_postgres_bootstrap_lock_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", (_DB_BOOT_LOCK_KEY,))
+                row = cur.fetchone()
+                acquired = bool(row[0]) if row else False
             if acquired:
                 if waited and _is_minimum_schema_ready():
-                    conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _DB_BOOT_LOCK_KEY})
-                    conn.close()
+                    _release_postgres_bootstrap_lock(conn)
                     logger.info("DB bootstrap: another worker completed schema bootstrap")
                     return "ready", None
 
                 logger.info(
-                    "DB bootstrap: advisory lock acquired%s",
+                    "DB bootstrap: advisory lock acquired%s (raw connection)",
                     " after wait" if waited else "",
                 )
                 return "run", conn
         except Exception:
             if conn is not None:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             raise
 
         if conn is not None:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
         if not waited:
             logger.info("DB bootstrap: another worker is running migrations; waiting for advisory lock")
@@ -256,16 +319,37 @@ def _release_postgres_bootstrap_lock(conn) -> None:
     if conn is None:
         return
     try:
-        conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _DB_BOOT_LOCK_KEY})
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_DB_BOOT_LOCK_KEY,))
     except Exception as exc:
-        logger.warning("DB bootstrap: failed to release advisory lock cleanly: %s", exc)
+        if _is_postgres_disconnect_error(exc):
+            logger.info(
+                "DB bootstrap: advisory lock connection already closed; lock released by disconnect"
+            )
+        else:
+            logger.warning("DB bootstrap: failed to release advisory lock cleanly: %s", exc)
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _bootstrap_db_schema() -> tuple[bool, bool]:
     """Run blocking schema/bootstrap work before serving requests."""
+    if _is_minimum_schema_ready():
+        logger.info("DB bootstrap: minimum schema already ready; skipping critical steps")
+        return True, False
+
     is_postgres = engine.dialect.name == "postgresql"
+    if is_postgres and not _is_bootstrap_run_candidate():
+        if _wait_until_schema_ready("follower worker"):
+            logger.info("DB bootstrap: follower observed ready schema; skipping critical steps")
+            return True, False
+        logger.warning(
+            "DB bootstrap: follower wait timed out; contending for advisory lock as fallback"
+        )
+
     for _attempt in range(1, _DB_BOOT_MAX_RETRIES + 1):
         bootstrap_lock_conn = None
         try:
@@ -354,13 +438,15 @@ def _env_for_log(name: str) -> str:
 def _log_runtime_startup_profile() -> None:
     version_info = _runtime_version_info()
     logger.info(
-        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s run_maintenance_scheduler=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
+        "Runtime startup profile | pid=%s commit=%s service=%s instance=%s python=%s web_concurrency=%s gunicorn_worker_id=%s db_bootstrap_role=%s gunicorn_timeout=%s gunicorn_graceful_timeout=%s gunicorn_keepalive=%s gunicorn_max_requests=%s gunicorn_max_requests_jitter=%s run_db_bootstrap=%s run_generation_queue_worker=%s run_maintenance_scheduler=%s generation_queue_worker_threads=%s runtime_diag_enabled=%s runtime_diag_interval_seconds=%s runtime_diag_high_watermark_mb=%s runtime_diag_high_watermark_cooldown_seconds=%s runtime_diag_store_sample_items=%s runtime_diag_tracemalloc_enabled=%s runtime_diag_tracemalloc_frames=%s runtime_diag_tracemalloc_top=%s",
         os.getpid(),
         version_info.get("commit_short") or "unknown",
         version_info.get("render_service_name") or "unset",
         version_info.get("render_instance_id") or "unset",
         version_info.get("python_version") or "unknown",
         _env_for_log("WEB_CONCURRENCY"),
+        _env_for_log("GUNICORN_WORKER_ID"),
+        _env_for_log("DB_BOOTSTRAP_ROLE"),
         _env_for_log("GUNICORN_TIMEOUT"),
         _env_for_log("GUNICORN_GRACEFUL_TIMEOUT"),
         _env_for_log("GUNICORN_KEEPALIVE"),

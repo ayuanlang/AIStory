@@ -59,6 +59,8 @@ def main() -> int:
     args = [
         "gunicorn",
         "app.main:app",
+        "-c",
+        "gunicorn.conf.py",
         "-k",
         "uvicorn.workers.UvicornWorker",
         "--bind",

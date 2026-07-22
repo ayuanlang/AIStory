@@ -52,6 +52,18 @@ from app.services.analyze_scene_text_ops import (  # noqa: E402,F401
     _sanitize_scene_beats_stage_text,
     _build_script_to_analyze_block,
     _extract_reuse_assets_from_subject_index,
+    _infer_subject_index_allowed_types_for_request,
+    _filter_subject_index_text_by_types,
+    _resolve_scene_beats_adapted_script_text,
+)
+from app.services.analyze_scene_integrity import (  # noqa: E402,F401
+    _is_length_finish_reason,
+    _estimate_tokens,
+    _merge_usage,
+    _detect_scene_output_sections,
+    _detect_output_integrity,
+    _to_int,
+    _dedupe_overlap,
 )
 
 from app.services.project_access import (  # noqa: E402,F401
@@ -227,187 +239,10 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
     try:
         # Cache user primitives before releasing DB session for long LLM calls.
-        def _is_length_finish_reason(reason: Any) -> bool:
-            r = str(reason or "").strip().lower().replace("-", "_")
-            return r in {
-                "length",
-                "max_tokens",
-                "max_token",
-                "max_output_tokens",
-                "output_token_limit",
-                "token_limit",
-            }
 
-        def _estimate_tokens(text: str) -> int:
-            if not text:
-                return 0
-            # Heuristic: ~4 bytes per token (good enough for debug)
-            return (len(text.encode("utf-8")) + 3) // 4
 
-        def _merge_usage(total: Dict[str, Any], part: Dict[str, Any]) -> Dict[str, Any]:
-            total = dict(total or {})
-            part = dict(part or {})
 
-            def _add(key: str, value: Any):
-                if value is None:
-                    return
-                try:
-                    iv = int(value)
-                except Exception:
-                    return
-                total[key] = int(total.get(key) or 0) + iv
 
-            # Common OpenAI-style keys
-            _add("prompt_tokens", part.get("prompt_tokens"))
-            _add("completion_tokens", part.get("completion_tokens"))
-            _add("total_tokens", part.get("total_tokens"))
-            # Some providers use input/output naming
-            _add("input_tokens", part.get("input_tokens"))
-            _add("output_tokens", part.get("output_tokens"))
-
-            # Preserve provider-specific extra usage fields if they are scalar and not already present
-            for k, v in part.items():
-                if k in total:
-                    continue
-                if isinstance(v, (int, float, str)):
-                    total[k] = v
-            return total
-
-        def _detect_scene_output_sections(output_text: str) -> Dict[str, Any]:
-            text = str(output_text or "")
-            checks = {
-                "part_1": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*1\b"),
-                "subject_index": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Subject\s*Index\b"),
-                "part_2": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Part\s*2\b"),
-                "final_consistency_report": re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Final\s+Consistency\s+Report\b"),
-            }
-            found_sections: Dict[str, bool] = {k: bool(p.search(text)) for k, p in checks.items()}
-            # Disable forced structural continuation to support decoupled Phase 1 / Phase 2 prompts.
-            missing_sections = [] 
-            return {
-                "found_sections": found_sections,
-                "missing_sections": missing_sections,
-                "structure_incomplete": False,
-            }
-
-        def _detect_output_integrity(output_text: str, segments: List[Dict[str, Any]], final_finish_reason: Optional[str]) -> Dict[str, Any]:
-            text = (output_text or "").strip()
-            segment_list = segments or []
-            had_length_finish = any(_is_length_finish_reason(seg.get("finish_reason")) for seg in segment_list)
-            ended_with_length = _is_length_finish_reason(final_finish_reason)
-            section_meta = _detect_scene_output_sections(text)
-            missing_sections = section_meta.get("missing_sections") or []
-            structure_incomplete = bool(section_meta.get("structure_incomplete"))
-
-            json_candidate = ""
-            json_expected = False
-            explicit_json_response = False
-            parseable_json_block_count = 0
-
-            if text.startswith("```"):
-                lowered = text.lower()
-                if "```json" in lowered or ("```" in lowered and ("{" in text or "[" in text)):
-                    json_expected = True
-                    fence_start = text.find("\n")
-                    fence_end = text.rfind("```")
-                    if fence_start != -1 and fence_end != -1 and fence_end > fence_start:
-                        json_candidate = text[fence_start + 1:fence_end].strip()
-
-            if not json_candidate:
-                if text.startswith("{") or text.startswith("["):
-                    json_expected = True
-                    explicit_json_response = True
-                    json_candidate = text
-                else:
-                    first_obj = text.find("{")
-                    last_obj = text.rfind("}")
-                    first_arr = text.find("[")
-                    last_arr = text.rfind("]")
-                    if first_obj != -1 and last_obj > first_obj:
-                        json_expected = True
-                        json_candidate = text[first_obj:last_obj + 1].strip()
-                    elif first_arr != -1 and last_arr > first_arr:
-                        json_expected = True
-                        json_candidate = text[first_arr:last_arr + 1].strip()
-
-            # Non-blocking fallback: count parseable fenced JSON blocks in mixed markdown outputs.
-            try:
-                fence_re = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
-                for m in fence_re.finditer(text):
-                    candidate = str(m.group(1) or "").strip()
-                    if not candidate:
-                        continue
-                    try:
-                        json.loads(candidate)
-                        parseable_json_block_count += 1
-                    except Exception:
-                        continue
-            except Exception:
-                parseable_json_block_count = 0
-
-            json_valid = None
-            json_error = None
-            if json_expected:
-                try:
-                    json.loads(json_candidate)
-                    json_valid = True
-                except Exception as parse_error:
-                    json_valid = False
-                    json_error = str(parse_error)
-
-            truncation_suspected = bool(
-                ended_with_length
-                or (had_length_finish and json_expected and json_valid is False)
-                or structure_incomplete
-            )
-
-            warning_codes: List[str] = []
-            warnings: List[str] = []
-            if ended_with_length:
-                warning_codes.append("ANALYSIS_OUTPUT_TRUNCATED")
-                warnings.append("Analysis output may be incomplete because the response hit a length limit.")
-            elif had_length_finish:
-                warning_codes.append("ANALYSIS_OUTPUT_CONTINUED")
-                warnings.append("Analysis response was split by length limits and auto-continuation was applied.")
-
-            # Only flag JSON invalid for explicit pure-JSON responses.
-            # Mixed markdown + partial JSON should stay non-blocking.
-            should_flag_json_invalid = bool(json_expected and json_valid is False and explicit_json_response)
-            suppress_json_invalid_warning = bool(
-                should_flag_json_invalid
-                and (
-                    is_scene_beats_stage
-                    or is_subject_index_extraction_stage
-                )
-            )
-            if should_flag_json_invalid and not suppress_json_invalid_warning:
-                warning_codes.append("ANALYSIS_JSON_INVALID")
-                warnings.append("Analysis returned invalid or incomplete JSON. Please review before applying.")
-
-            if structure_incomplete:
-                warning_codes.append("ANALYSIS_STRUCTURE_INCOMPLETE")
-                warnings.append(
-                    "Analysis output is missing required sections: "
-                    + ", ".join([str(x) for x in missing_sections])
-                    + "."
-                )
-
-            return {
-                "truncation_detected": had_length_finish,
-                "truncation_suspected": truncation_suspected,
-                "ended_with_length": ended_with_length,
-                "json_expected": json_expected,
-                "json_valid": json_valid,
-                "json_error": json_error,
-                "explicit_json_response": explicit_json_response,
-                "parseable_json_block_count": parseable_json_block_count,
-                "json_invalid_suppressed": suppress_json_invalid_warning,
-                "found_sections": section_meta.get("found_sections") or {},
-                "missing_sections": missing_sections,
-                "structure_incomplete": structure_incomplete,
-                "warning_codes": warning_codes,
-                "warnings": warnings,
-            }
 
 
 
@@ -598,104 +433,13 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
 
 
-        def _infer_subject_index_allowed_types_for_request() -> set:
-            feature_targets: List[Any] = []
-            features = getattr(request, "scene_analysis_features", None)
-            if isinstance(features, dict):
-                raw_targets = (
-                    features.get("target_entity_types")
-                    or features.get("targetEntityTypes")
-                    or features.get("asset_target_types")
-                    or features.get("assetTargetTypes")
-                )
-                if isinstance(raw_targets, list):
-                    feature_targets = raw_targets
-                elif isinstance(raw_targets, str):
-                    feature_targets = [part for part in re.split(r"[,，\s]+", raw_targets) if part]
 
-            if feature_targets:
-                normalized_targets = {
-                    normalized
-                    for normalized in (_normalize_requested_asset_target_type(item) for item in feature_targets)
-                    if normalized
-                }
-                if normalized_targets:
-                    return normalized_targets
+        subject_index_allowed_types_for_request = _infer_subject_index_allowed_types_for_request(
+            request=request,
+            mode_lower=mode_lower,
+            prompt_file_lower=prompt_file_lower,
+        )
 
-            source = f"{mode_lower} {prompt_file_lower}"
-            target_suffix_match = re.search(r"__targets_([a-z0-9_\-]+)", source, flags=re.IGNORECASE)
-            if target_suffix_match:
-                normalized_targets = {
-                    normalized
-                    for normalized in (
-                        _normalize_requested_asset_target_type(item)
-                        for item in str(target_suffix_match.group(1) or "").split("_")
-                    )
-                    if normalized
-                }
-                if normalized_targets:
-                    return normalized_targets
-
-            if "2_pass_generate_assets_characters" in source or "entity_design_character" in source:
-                return {"character"}
-            if "2_pass_generate_assets_props" in source or "entity_design_prop" in source:
-                return {"prop"}
-            if (
-                "2_pass_generate_assets_environments" in source
-                or "entity_design_environment" in source
-                or "entity_design_poster" in source
-            ):
-                return {"environment", "cover"}
-            return set()
-
-        subject_index_allowed_types_for_request = _infer_subject_index_allowed_types_for_request()
-
-        def _filter_subject_index_text_by_types(subject_index_text: Any, allowed_types: set) -> str:
-            text = sanitize_subject_index_text(subject_index_text)
-            if not text or not allowed_types:
-                return text
-
-            filtered_lines: List[str] = []
-            total_subject_rows = 0
-            kept_subject_rows = 0
-            for raw_line in str(text).splitlines():
-                line = str(raw_line or "")
-                stripped = line.strip()
-                key_value_type_match = re.search(r"\bsubject_type\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
-                key_value_subject_match = re.search(r"\bsubject_no\s*=\s*([^|`\n]+)", stripped, flags=re.IGNORECASE)
-                if key_value_type_match and (key_value_subject_match or re.search(r"\bsubject_name_(?:zh|en|exact)\s*=", stripped, flags=re.IGNORECASE)):
-                    total_subject_rows += 1
-                    normalized_type = _normalize_subject_index_entity_type(key_value_type_match.group(1))
-                    if normalized_type in allowed_types:
-                        filtered_lines.append(line)
-                        kept_subject_rows += 1
-                    continue
-
-                normalized_line = stripped.replace("\ufeff", "").strip()
-                normalized_line = re.sub(r"^\s*>\s*", "", normalized_line)
-                normalized_line = re.sub(r"^\s*[-*+]\s+", "", normalized_line).strip()
-                normalized_line = normalized_line.strip("|").strip()
-                parts = [p.strip() for p in normalized_line.split("|")]
-                is_subject_row = bool(re.match(r"^S\d+\b", normalized_line, flags=re.IGNORECASE)) and len(parts) >= 2
-                if is_subject_row:
-                    total_subject_rows += 1
-                    normalized_type = _normalize_subject_index_entity_type(parts[1] if len(parts) > 1 else "")
-                    if normalized_type in allowed_types:
-                        filtered_lines.append(line)
-                        kept_subject_rows += 1
-                    continue
-                filtered_lines.append(line)
-
-            filtered_text = "\n".join(filtered_lines).strip()
-            logger.info(
-                "[analyze_scene] filtered subject index for target types types=%s rows=%s kept=%s mode=%s prompt_file=%s",
-                sorted(allowed_types),
-                total_subject_rows,
-                kept_subject_rows,
-                effective_scene_analysis_mode,
-                getattr(request, "prompt_file", None),
-            )
-            return filtered_text
 
         persisted_subject_index_for_prompt = ""
         persisted_subject_index_raw_for_gate = ""
@@ -728,15 +472,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
 
 
 
-        def _resolve_scene_beats_adapted_script_text(raw_text: Any) -> str:
-            adapted = extract_adapted_script_from_beats_user_input(
-                _sanitize_scene_beats_stage_text(raw_text)
-            )
-            if adapted:
-                return adapted
-            if episode_adaptation_for_scene_beats:
-                return episode_adaptation_for_scene_beats
-            return ""
 
 
         # Scene orchestration (2.2) and asset design require a usable Subject Index.
@@ -790,7 +525,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             # In downstream Subject-Index consumer stages, use persisted sanitized
             # Subject Index as canonical source to avoid request text contamination.
             if is_scene_beats_stage:
-                canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text)
+                canonical_stage_text = _resolve_scene_beats_adapted_script_text(request.text, episode_adaptation_for_scene_beats)
                 if should_trim_before_submit:
                     canonical_stage_text = _trim_to_scenes_block(canonical_stage_text)
                 user_content = f"{saved_subject_index_block}\n\n{_build_script_to_analyze_block(canonical_stage_text)}"
@@ -815,7 +550,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         else:
             request_text_for_prompt = str(request.text or "")
             if is_scene_beats_stage:
-                request_text_for_prompt = _resolve_scene_beats_adapted_script_text(request_text_for_prompt)
+                request_text_for_prompt = _resolve_scene_beats_adapted_script_text(request_text_for_prompt, episode_adaptation_for_scene_beats)
             if should_trim_before_submit:
                 request_text_for_prompt = _trim_to_scenes_block(request_text_for_prompt)
             if is_subject_index_consumer_stage and subject_index_allowed_types_for_request:
@@ -1222,12 +957,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
         if not isinstance(cfg_obj, dict):
             cfg_obj = {}
 
-        def _to_int(value: Any) -> int:
-            try:
-                parsed = int(value)
-                return parsed if parsed > 0 else 0
-            except Exception:
-                return 0
 
         requested_cap = (
             _to_int(cfg_obj.get("max_tokens"))
@@ -1317,22 +1046,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
             "SUFFIX (do not repeat):\n{suffix}"
         )
 
-        def _dedupe_overlap(existing: str, incoming: str) -> str:
-            if not existing or not incoming:
-                return incoming
-            candidates = [
-                existing[-200:],
-                existing[-400:],
-                existing[-800:],
-            ]
-            for c in candidates:
-                if c and incoming.startswith(c):
-                    return incoming[len(c):]
-            inc_l = incoming.lstrip()
-            for c in candidates:
-                if c and inc_l.startswith(c):
-                    return inc_l[len(c):]
-            return incoming
 
         async def _run_loop(target_messages):
             result_parts_loop: List[str] = []

@@ -1559,10 +1559,20 @@ async def _run_generate_image_job(
             snapshot = dict(IMAGE_JOB_STORE.get(job_id) or {})
         if not callback_url:
             callback_url = _resolve_callback_url_from_payload(snapshot)
-        from app.services.generation_runtime.callback_http import (
-            _dispatch_generation_callback as _dispatch_cb,
-        )
-        await _dispatch_cb("image", callback_url, snapshot)
+        # Resolve via live module attribute — never rely on this function's
+        # __globals__ (uvicorn StatReload / daemon queue can keep stale bindings).
+        try:
+            _dispatch = __import__(
+                "app.services.generation_runtime.callback_http",
+                fromlist=["_dispatch_generation_callback"],
+            )._dispatch_generation_callback
+            await _dispatch("image", callback_url, snapshot)
+        except Exception as _cb_exc:
+            logger.warning(
+                "[ImageJob] outbound callback dispatch failed | job_id=%s err=%s",
+                job_id,
+                _cb_exc,
+            )
 
         with IMAGE_JOB_LOCK:
             IMAGE_JOB_TASKS.pop(job_id, None)

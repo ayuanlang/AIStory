@@ -30,6 +30,7 @@ _QUEUE_TABLE_LOCK = threading.Lock()
 _JOB_STATE_TABLE_LOCK = threading.Lock()
 _QUEUE_START_LOCK = threading.Lock()
 _QUEUE_STARTED = False
+_ACTIVE_PROCESSOR: Optional[Callable[[str, str, int, Dict[str, Any]], Any]] = None
 _QUEUE_STOP_EVENT = threading.Event()
 _QUEUE_ASYNC_STOP_EVENT = None  # asyncio.Event initialized when needed
 _QUEUE_POLL_SECONDS = max(0.25, float(os.getenv("GENERATION_QUEUE_POLL_SECONDS", "1.0") or 1.0))
@@ -1222,8 +1223,11 @@ async def _worker_loop_async(worker_name: str, processor: Callable[[str, str, in
             heartbeat_stop = asyncio.Event()
             heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
+            # Prefer hot-swapped processor so uvicorn StatReload can refresh
+            # the generation runner without restarting the daemon queue thread.
+            live_processor = _ACTIVE_PROCESSOR or processor
             processor_result: Any = None
-            result = processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
+            result = live_processor(task["kind"], task["job_id"], task["user_id"], task["payload"])
             try:
                 if asyncio.iscoroutine(result) or isinstance(result, asyncio.Task):
                     processor_result = await asyncio.wait_for(result, timeout=3600.0)
@@ -1361,11 +1365,17 @@ def _worker_thread_main(processor: Callable[[str, str, int, Dict[str, Any]], Non
 
 def start_generation_task_worker(processor: Callable[[str, str, int, Dict[str, Any]], None]) -> None:
     """Start generation task workers using async event loop."""
-    global _QUEUE_STARTED
+    global _QUEUE_STARTED, _ACTIVE_PROCESSOR
+    # Always refresh processor so StatReload picks up fixed runners without a
+    # full process restart (daemon queue thread survives module reloads).
+    _ACTIVE_PROCESSOR = processor
     if _QUEUE_STARTED:
+        logger.info("generation queue worker already running; processor hot-swapped")
         return
     with _QUEUE_START_LOCK:
+        _ACTIVE_PROCESSOR = processor
         if _QUEUE_STARTED:
+            logger.info("generation queue worker already running; processor hot-swapped")
             return
 
         # Re-read after DB bootstrap so admin-saved thread counts actually apply.

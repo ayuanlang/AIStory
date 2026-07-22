@@ -145,7 +145,10 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        from app.services.generation_runtime.image_generation_runner import _run_generate_image_job
+        _run_generate_image_job = __import__(
+            "app.services.generation_runtime.image_generation_runner",
+            fromlist=["_run_generate_image_job"],
+        )._run_generate_image_job
         return await _run_generate_image_job(
             job_id,
             int(user_id),
@@ -160,7 +163,12 @@ async def _process_generation_queue_task(kind: str, job_id: str, user_id: int, p
             provider_callback_url = str(media_service._resolve_provider_callback_url({}, provider_callback_ticket) or "").strip()
         except Exception:
             provider_callback_url = ""
-        from app.services.generation_runtime.video_generation_runner import _run_generate_video_job
+        # Fresh attribute lookup each task — StatReload can leave this processor
+        # closure pointing at a pre-reload module namespace.
+        _run_generate_video_job = __import__(
+            "app.services.generation_runtime.video_generation_runner",
+            fromlist=["_run_generate_video_job"],
+        )._run_generate_video_job
         return await _run_generate_video_job(
             job_id,
             int(user_id),
@@ -187,7 +195,7 @@ _CALLBACK_COMPENSATION_STARTED = False
 _CALLBACK_COMPENSATION_LOCK = threading.Lock()
 # Bump when compensation guards change so StatReload-surviving daemon threads exit
 # instead of keeping pre-fix closures that false-exhaust local poll jobs (~28800s).
-_CALLBACK_COMPENSATION_CODE_VERSION = 4
+_CALLBACK_COMPENSATION_CODE_VERSION = 5
 _CALLBACK_COMPENSATION_THREAD_VERSION = 0
 
 

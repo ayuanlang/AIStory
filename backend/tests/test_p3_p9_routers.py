@@ -495,6 +495,11 @@ def test_scene_markdown_orchestration_and_await_sink():
         _subject_index_has_usable_content,
     )
     from app.services.analyze_scene_dedup import _await_analyze_scene_segment
+    from app.services.scene_markdown_runner import _run_scene_markdown_node_per_scene
+    from app.services.script_progress_helpers import (
+        _normalize_asset_types,
+        _list_episode_scene_progress_rows,
+    )
     import app.api.endpoints as ep
     import app.api.routers.prompts.progress_flow as pf
     import inspect
@@ -506,13 +511,17 @@ def test_scene_markdown_orchestration_and_await_sink():
     assert _subject_index_has_usable_content("| S001 | character | a |")
     assert callable(resolve_usable_episode_subject_index)
     assert pf.resolve_usable_episode_subject_index is resolve_usable_episode_subject_index
+    assert pf._run_scene_markdown_node_per_scene is _run_scene_markdown_node_per_scene
+    assert pf._list_episode_scene_progress_rows is _list_episode_scene_progress_rows
+    assert _normalize_asset_types(["characters", "covers"]) == ["character", "poster"]
     assert callable(_await_analyze_scene_segment)
     assert ep._await_analyze_scene_segment is _await_analyze_scene_segment
     pf_src = inspect.getsource(pf)
-    assert "scene_markdown_orchestration" in pf_src
+    assert "scene_markdown_runner" in pf_src
+    assert "script_progress_helpers" in pf_src
     assert "subject_index_resolve" in pf_src
     pf_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "prompts" / "progress_flow.py"
-    assert len(pf_path.read_text(encoding="utf-8").splitlines()) < 2300
+    assert len(pf_path.read_text(encoding="utf-8").splitlines()) < 1600
 
 
 def test_project_access_and_deletion_ops():
@@ -721,17 +730,32 @@ def test_analyze_scene_uses_shot_prompt_context():
     from app.services.analyze_scene_text_ops import (
         _trim_to_scenes_block,
         _sanitize_scene_beats_stage_text,
+        _infer_subject_index_allowed_types_for_request,
+    )
+    from app.services.analyze_scene_integrity import (
+        _estimate_tokens,
+        _detect_output_integrity,
     )
     assert "shot_generation_prompts" in inspect.getsource(az)
     assert az._normalize_subject_name is _normalize_subject_name
     assert az._detect_subjects_json_extraction_gap is _detect_subjects_json_extraction_gap
     assert az._trim_to_scenes_block is _trim_to_scenes_block
     assert az._sanitize_scene_beats_stage_text is _sanitize_scene_beats_stage_text
+    assert az._estimate_tokens is _estimate_tokens
+    assert az._detect_output_integrity is _detect_output_integrity
     assert _normalize_subject_name("CHAR:[@Hero]") == "Hero"
+    assert _infer_subject_index_allowed_types_for_request(
+        mode_lower="entity_design_prop",
+        prompt_file_lower="",
+    ) == {"prop"}
     az_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "prompts" / "analyze_scene.py"
-    assert len(az_path.read_text(encoding="utf-8").splitlines()) < 2600
-    assert "from app.services.analyze_scene_subject_checks import" in az_path.read_text(encoding="utf-8")
-    assert "from app.services.analyze_scene_text_ops import" in az_path.read_text(encoding="utf-8")
+    src = az_path.read_text(encoding="utf-8")
+    assert len(src.splitlines()) < 2300
+    assert "from app.services.analyze_scene_subject_checks import" in src
+    assert "from app.services.analyze_scene_text_ops import" in src
+    assert "from app.services.analyze_scene_integrity import" in src
+    assert "        def _estimate_tokens(" not in src
+    assert "        def _infer_subject_index_allowed_types_for_request(" not in src
 
 
 def test_generation_job_pool_helpers():

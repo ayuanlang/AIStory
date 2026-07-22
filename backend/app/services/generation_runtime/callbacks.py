@@ -14,12 +14,13 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.time_utils import now_bj_iso
 from app.db.session import SessionLocal
+from app.models.all_models import User
 from app.services.billing_service import billing_service
 from app.services.generation_runtime.callback_http import (
     _dispatch_generation_callback,
@@ -1446,10 +1447,18 @@ async def _finalize_image_jobs_from_provider_callback(callback_ticket: str) -> N
         callback_url = _resolve_callback_url_from_payload(updated_job)
         if not callback_url:
             continue
-        from app.services.generation_runtime.callback_http import (
-            _dispatch_generation_callback as _dispatch_cb,
-        )
-        await _dispatch_cb("image", callback_url, updated_job)
+        try:
+            _dispatch = __import__(
+                "app.services.generation_runtime.callback_http",
+                fromlist=["_dispatch_generation_callback"],
+            )._dispatch_generation_callback
+            await _dispatch("image", callback_url, updated_job)
+        except Exception as _cb_exc:
+            logger.warning(
+                "[ImageCallback] outbound callback dispatch failed | job_id=%s err=%s",
+                job_id,
+                _cb_exc,
+            )
 
 
 
@@ -2178,10 +2187,18 @@ async def _finalize_video_jobs_from_provider_callback(callback_ticket: str) -> N
         callback_url = _resolve_callback_url_from_payload(updated_job)
         if not callback_url:
             continue
-        from app.services.generation_runtime.callback_http import (
-            _dispatch_generation_callback as _dispatch_cb,
-        )
-        await _dispatch_cb("video", callback_url, updated_job)
+        try:
+            _dispatch = __import__(
+                "app.services.generation_runtime.callback_http",
+                fromlist=["_dispatch_generation_callback"],
+            )._dispatch_generation_callback
+            await _dispatch("video", callback_url, updated_job)
+        except Exception as _cb_exc:
+            logger.warning(
+                "[VideoCallback] outbound callback dispatch failed | job_id=%s err=%s",
+                job_id,
+                _cb_exc,
+            )
 
 
 def _finalize_video_shot_callback_without_job(callback_ticket: str) -> bool:
