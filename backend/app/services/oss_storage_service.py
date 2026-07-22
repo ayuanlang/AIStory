@@ -21,6 +21,13 @@ from botocore.exceptions import ClientError
 from sqlalchemy import text
 
 from app.db.session import SessionLocal
+from app.services.oss_upload_dedup import (
+    complete_oss_upload_claim,
+    is_oss_cross_process_dedup_enabled,
+    release_oss_upload_claim,
+    try_claim_oss_upload,
+    wait_for_oss_upload_peer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -768,6 +775,7 @@ class OSSStorageService:
 
         random.shuffle(candidate_pools)
         owned_key: Optional[str] = None
+        owned_cross_key: Optional[str] = None
         try:
             for pool in candidate_pools:
                 cred, reason = self._pick_credential(pool)
@@ -813,7 +821,7 @@ class OSSStorageService:
                         extra_args.get("StorageClass"),
                     )
 
-                    # In-flight dedup for identical content-hash keys.
+                    # Process-local in-flight dedup for identical content-hash keys.
                     while True:
                         waiter, cached = self._acquire_inflight_upload(key)
                         if cached is not None:
@@ -838,6 +846,52 @@ class OSSStorageService:
                             return cached
                         # Original upload failed or timed out; retry as owner.
 
+                    # Cross-process claim (web workers + generation worker share DB).
+                    if is_oss_cross_process_dedup_enabled():
+                        claimed = try_claim_oss_upload(key)
+                        if not claimed:
+                            _visible_info("[OSSUploadCrossDedup] waiting for peer | key=%s", key)
+                            peer_result = wait_for_oss_upload_peer(key)
+                            if peer_result:
+                                self._finish_inflight_upload(key, peer_result)
+                                owned_key = None
+                                return peer_result
+                            # Peer released without a reusable result; prefer durable OSS head.
+                            try:
+                                client.head_object(Bucket=pool.bucket, Key=key)
+                                url = self._build_public_url(client, pool, key, cred)
+                                if url:
+                                    upload_result = {
+                                        "key": key,
+                                        "url": url,
+                                        "provider": getattr(pool, "provider", None),
+                                        "bucket": getattr(pool, "bucket", None),
+                                        "provider_alias": getattr(pool, "provider_alias", None),
+                                        "endpoint": getattr(pool, "endpoint", None),
+                                        "public_base_url": self._normalize_public_base_url(pool) or None,
+                                    }
+                                    self._finish_inflight_upload(key, upload_result)
+                                    owned_key = None
+                                    return upload_result
+                            except ClientError as ce:
+                                if ce.response["Error"]["Code"] != "404":
+                                    logger.warning("OSS head_object warning | key=%s err=%s", key, ce)
+                            claimed = try_claim_oss_upload(key)
+                            if not claimed:
+                                peer_result = wait_for_oss_upload_peer(key)
+                                if peer_result:
+                                    self._finish_inflight_upload(key, peer_result)
+                                    owned_key = None
+                                    return peer_result
+                                _visible_warning(
+                                    "[OSSUploadCrossDedup] proceeding without claim after wait | key=%s",
+                                    key,
+                                )
+                            else:
+                                owned_cross_key = key
+                        else:
+                            owned_cross_key = key
+
                     # Skip re-upload when object already exists.
                     try:
                         client.head_object(Bucket=pool.bucket, Key=key)
@@ -860,6 +914,9 @@ class OSSStorageService:
                                 "endpoint": getattr(pool, "endpoint", None),
                                 "public_base_url": self._normalize_public_base_url(pool) or None,
                             }
+                            if owned_cross_key == key:
+                                complete_oss_upload_claim(key, upload_result)
+                                owned_cross_key = None
                             self._finish_inflight_upload(key, upload_result)
                             owned_key = None
                             return upload_result
@@ -885,6 +942,9 @@ class OSSStorageService:
                             getattr(pool, "id", None),
                             key,
                         )
+                        if owned_cross_key == key:
+                            release_oss_upload_claim(key)
+                            owned_cross_key = None
                         self._finish_inflight_upload(key, None)
                         owned_key = None
                         continue
@@ -907,10 +967,16 @@ class OSSStorageService:
                         "endpoint": pool.endpoint,
                         "public_base_url": self._normalize_public_base_url(pool) or None,
                     }
+                    if owned_cross_key == key:
+                        complete_oss_upload_claim(key, upload_result)
+                        owned_cross_key = None
                     self._finish_inflight_upload(key, upload_result)
                     owned_key = None
                     return upload_result
                 except Exception as exc:
+                    if owned_cross_key == key:
+                        release_oss_upload_claim(key)
+                        owned_cross_key = None
                     self._finish_inflight_upload(key, None)
                     owned_key = None
                     _visible_warning(
@@ -925,6 +991,8 @@ class OSSStorageService:
 
             return None
         finally:
+            if owned_cross_key:
+                release_oss_upload_claim(owned_cross_key)
             if owned_key:
                 self._finish_inflight_upload(owned_key, None)
 
