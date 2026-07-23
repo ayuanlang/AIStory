@@ -8,9 +8,10 @@ from app.api.routers.generation import shared as _shared
 from app.api.routers.generation import users_admin as _users_admin  # noqa: F401,E402
 from app.api.routers.generation import video_jobs as _video_jobs  # noqa: F401,E402
 from app.api.routers.generation import batch_media as _batch_media  # noqa: F401,E402
+from app.api.routers.generation import job_pool as _job_pool  # noqa: F401,E402
 from app.api.routers.generation import montage as _montage  # noqa: F401,E402
 
-_SECTION_MODULES = (_users_admin, _video_jobs, _batch_media, _montage)
+_SECTION_MODULES = (_users_admin, _video_jobs, _batch_media, _job_pool, _montage)
 _SKIP = {"__name__", "__file__", "__package__", "__loader__", "__spec__", "__doc__", "__builtins__"}
 
 

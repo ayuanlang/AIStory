@@ -53,6 +53,7 @@ SHARED_HELPER_MODULES: Tuple[str, ...] = (
     "app.services.project_cost_estimation",
     "app.services.prompt_resolve",
     "app.services.soft_delete",
+    "app.services.project_access",
     "app.services.generation_runtime.job_store",
     "app.services.generation_runtime.media_persist",
     "app.services.generation_runtime.callbacks",

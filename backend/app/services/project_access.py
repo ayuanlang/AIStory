@@ -566,6 +566,27 @@ def _require_review_round_access(db: Session, round_id: int, current_user: User)
     thread, project = _require_review_thread_access(db, int(round_row.thread_id), current_user)
     return round_row, thread, project
 
+
+def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
+    owner_ids = [
+        pid for (pid,) in db.query(Project.id).filter(
+            Project.owner_id == current_user.id,
+            _active_project_clause(),
+        ).all()
+        if pid is not None
+    ]
+    shared_ids = [
+        pid for (pid,) in db.query(ProjectShare.project_id).join(
+            Project, Project.id == ProjectShare.project_id
+        ).filter(
+            ProjectShare.user_id == current_user.id,
+            _active_project_clause(),
+        ).all()
+        if pid is not None
+    ]
+    return sorted(set([int(pid) for pid in owner_ids + shared_ids]))
+
+
 def _require_project_access(
     db: Session,
     project_id: int,

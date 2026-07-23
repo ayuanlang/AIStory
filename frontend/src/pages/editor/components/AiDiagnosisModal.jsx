@@ -77,7 +77,7 @@ export default function AiDiagnosisModal({
         }
     }, []);
 
-    const handleSendCustom = useCallback(async (queryText, normalizedHistory) => {
+    const handleSendCustom = useCallback(async (queryText, normalizedHistory, callbacks) => {
         setChatBusy(true);
         setEmailError('');
         try {
@@ -105,6 +105,10 @@ export default function AiDiagnosisModal({
                 throw new Error(t('AI 未返回有效诊断内容，请稍后重试。', 'AI returned empty diagnosis. Please retry.'));
             }
             lastAdviceRef.current = reply;
+            // Paint into the reply bubble immediately (keeps streaming cursor until finalize).
+            if (typeof callbacks?.onToken === 'function') {
+                callbacks.onToken(reply);
+            }
             onLog?.(t('AI 诊断已回复。', 'AI diagnosis replied.'), 'success');
             return { reply };
         } catch (err) {

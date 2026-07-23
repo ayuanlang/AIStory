@@ -387,14 +387,34 @@ def test_video_voice_generation_runner_modules():
 
 def test_video_jobs_thinned_and_reexports():
     from pathlib import Path
+    import app.api.routers.generation as gen
     import app.api.routers.generation.video_jobs as vj
+    import app.api.routers.generation.job_pool as jp
     path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "video_jobs.py"
-    assert len(path.read_text(encoding="utf-8").splitlines()) < 2500
+    jp_path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "job_pool.py"
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 700
+    assert len(jp_path.read_text(encoding="utf-8").splitlines()) < 200
     assert callable(vj._run_generate_video)
     assert callable(vj._run_generate_voice)
-    paths = {getattr(r, "path", None) for r in vj.router.routes}
+    assert jp.router is gen.router is vj.router
+    assert callable(jp.get_generation_job_pool)
+    assert callable(jp.collect_generation_job_pool)
+    assert callable(jp.stop_all_generation_jobs)
+    assert callable(jp.repair_generation_job_history)
+    assert callable(jp.stop_generation_job)
+    assert callable(jp.delete_generation_job)
+    paths = {getattr(r, "path", None) for r in gen.router.routes}
     assert "/generate/video" in paths
     assert "/generate/voice" in paths
+    assert "/generate/jobs/pool" in paths
+    assert "/generate/jobs/stop-all" in paths
+    assert "from app.services.generation_job_pool import" in jp_path.read_text(encoding="utf-8")
+    svc_src = (
+        Path(__file__).resolve().parents[1] / "app" / "services" / "generation_job_pool.py"
+    ).read_text(encoding="utf-8")
+    assert "def collect_generation_job_pool(" in svc_src
+    assert "def stop_all_generation_jobs(" in svc_src
+    assert "SHOT_MEDIA_BATCH_STATUS_KEY" in svc_src
 
 
 def test_prompts_shared_has_explicit_skill_imports():
@@ -742,13 +762,12 @@ def test_analyze_scene_uses_shot_prompt_context():
         _detect_output_integrity,
     )
     assert "shot_generation_prompts" in inspect.getsource(az)
-    assert az._normalize_subject_name is _normalize_subject_name
     assert az._detect_subjects_json_extraction_gap is _detect_subjects_json_extraction_gap
     assert az._trim_to_scenes_block is _trim_to_scenes_block
-    assert az._sanitize_scene_beats_stage_text is _sanitize_scene_beats_stage_text
     assert az._estimate_tokens is _estimate_tokens
     assert az._detect_output_integrity is _detect_output_integrity
     assert _normalize_subject_name("CHAR:[@Hero]") == "Hero"
+    assert callable(_sanitize_scene_beats_stage_text)
     from app.services.analyze_scene_subject_checks import _format_subject_ref
     assert az._format_subject_ref is _format_subject_ref
     assert _format_subject_ref("Hero", "character") == "CHAR:[@Hero]"
@@ -764,22 +783,41 @@ def test_analyze_scene_uses_shot_prompt_context():
     assert "from app.services.analyze_scene_integrity import" in src
     assert "        def _estimate_tokens(" not in src
     assert "        def _infer_subject_index_allowed_types_for_request(" not in src
+    # Dead re-exports trimmed: helpers live in services, not required on the route module.
+    assert "_normalize_subject_name," not in src
+    assert "_sanitize_scene_beats_stage_text," not in src
 
 
 def test_generation_job_pool_helpers():
     from pathlib import Path
-    import app.api.routers.generation.video_jobs as vj
+    import app.api.routers.generation.job_pool as jp
+    from app.services import generation_job_pool as svc
     from app.services.generation_job_pool import (
         _build_batch_job_item,
         _normalize_batch_job_status,
+        collect_generation_job_pool,
     )
+    from app.services.project_access import _resolve_accessible_project_ids_for_user
     assert _normalize_batch_job_status({"running": True}) == "running"
     assert _normalize_batch_job_status({"force_stopped": True}) == "canceled"
-    assert vj._normalize_batch_job_status is _normalize_batch_job_status
-    assert vj._build_batch_job_item is _build_batch_job_item
-    path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "video_jobs.py"
-    assert "from app.services.generation_job_pool import" in path.read_text(encoding="utf-8")
-    assert len(path.read_text(encoding="utf-8").splitlines()) < 1700
+    assert jp._normalize_batch_job_status is _normalize_batch_job_status
+    assert jp._build_batch_job_item is _build_batch_job_item
+    assert jp.collect_generation_job_pool is collect_generation_job_pool
+    assert callable(svc.repair_generation_job_history)
+    assert callable(svc.stop_generation_job)
+    assert callable(svc.delete_generation_job)
+    assert callable(svc.stop_all_generation_jobs)
+    assert callable(_resolve_accessible_project_ids_for_user)
+    path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "job_pool.py"
+    src = path.read_text(encoding="utf-8")
+    assert "from app.services.generation_job_pool import" in src
+    assert "collect_generation_job_pool" in src
+    assert len(src.splitlines()) < 200
+    svc_path = Path(__file__).resolve().parents[1] / "app" / "services" / "generation_job_pool.py"
+    svc_src = svc_path.read_text(encoding="utf-8")
+    assert "def collect_generation_job_pool(" in svc_src
+    assert "def repair_generation_job_history(" in svc_src
+    assert len(svc_src.splitlines()) < 1500
 
 
 def test_shot_import_ops_and_scene_ai_shots_batch():

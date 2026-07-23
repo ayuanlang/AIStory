@@ -23,14 +23,8 @@ globals().update(
 )
 
 from app.services.scene_markdown_orchestration import (  # noqa: E402,F401
-    SCENE_MARKDOWN_ORCHESTRATION_BATCH_RETRY_ROUNDS,
-    SCENE_MARKDOWN_ORCHESTRATION_MAX_ATTEMPTS,
-    SCENE_MARKDOWN_ORCHESTRATION_RETRY_BASE_DELAY_SEC,
     _extract_analysis_text_from_result,
     _replace_adapted_script_in_beats_user_input,
-    _is_retryable_scene_orchestration_error,
-    _scene_orchestration_error_code,
-    _import_scene_markdown_stage_with_retry,
     _derive_scene_orchestration_phase,
 )
 from app.services.project_access import (  # noqa: E402,F401
@@ -83,7 +77,6 @@ class ProgressReconcileRequest(BaseModel):
 
 
 from app.services.scene_markdown_runner import (  # noqa: E402,F401
-    _extract_scene_markdown_text_from_result,
     _run_scene_markdown_node_per_scene,
 )
 from app.services.script_progress_helpers import (  # noqa: E402,F401
@@ -94,10 +87,7 @@ from app.services.script_progress_helpers import (  # noqa: E402,F401
 )
 
 from app.services.subject_index_resolve import (  # noqa: E402,F401
-    _subject_index_rows_present,
     _subject_index_has_usable_content,
-    _coerce_subject_index_candidate,
-    _extract_subject_index_from_stage_outputs,
     resolve_usable_episode_subject_index,
     _subject_index_has_cover_poster,
     _script_optimization_has_project_visual_backfill,

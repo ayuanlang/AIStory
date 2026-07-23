@@ -1,5 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import {
     sendAgentCommand,
@@ -27,12 +28,27 @@ const MessageBubble = React.memo(({ role, content, streaming: isStreaming, actio
             </div>
         );
     }
+    const hasContent = Boolean(String(content || '').trim());
     return (
         <div className="flex justify-start">
             <div className="max-w-[80%] rounded-lg p-3 bg-muted">
                 <div className="agent-chat-md text-sm">
-                    <ReactMarkdown>{content || ''}</ReactMarkdown>
-                    {isStreaming && <span className="inline-block w-1.5 h-4 ml-0.5 bg-current animate-pulse align-text-bottom" />}
+                    {isStreaming && !hasContent ? (
+                        <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-emerald-400/40 bg-emerald-500/10 text-emerald-200 text-[11px] font-semibold tracking-wide">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                流式开始
+                            </span>
+                            <span className="text-muted-foreground animate-pulse">生成中…</span>
+                        </div>
+                    ) : (
+                        <>
+                            <ReactMarkdown>{content || ''}</ReactMarkdown>
+                            {isStreaming && (
+                                <span className="inline-block w-1.5 h-4 ml-0.5 bg-current animate-pulse align-text-bottom" />
+                            )}
+                        </>
+                    )}
                 </div>
                 {!isStreaming && (() => {
                     const safeActions = Array.isArray(actions) ? actions : [];
@@ -288,9 +304,12 @@ const AgentChat = ({
         const updatedHistory = [...currentHistory, { role: 'user', content: queryText }];
         const withPlaceholder = [...updatedHistory, { role: 'assistant', content: '', streaming: true }];
 
-        setHistoryByMode((prev) => ({ ...(prev || {}), [currentMode]: withPlaceholder }));
-        setLoading(true);
-        setStreaming(true);
+        // Paint user bubble + streaming-start marker before the network wait.
+        flushSync(() => {
+            setHistoryByMode((prev) => ({ ...(prev || {}), [currentMode]: withPlaceholder }));
+            setLoading(true);
+            setStreaming(true);
+        });
         streamBufRef.current = '';
 
         const runtimeContext = {
@@ -314,7 +333,7 @@ const AgentChat = ({
                 const msgs = [...(prev[m] || [])];
                 const last = msgs[msgs.length - 1];
                 if (last && last.role === 'assistant') {
-                    msgs[msgs.length - 1] = { ...last, content: display };
+                    msgs[msgs.length - 1] = { ...last, content: display, streaming: true };
                 }
                 return { ...(prev || {}), [m]: msgs };
             });
@@ -389,7 +408,7 @@ const AgentChat = ({
                 : [];
             if (currentHistory.length > 0) return;
             handleSendRef.current?.(query);
-        }, 0);
+        }, 40);
         return () => {
             cancelled = true;
             window.clearTimeout(timer);

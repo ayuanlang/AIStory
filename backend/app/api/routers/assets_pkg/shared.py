@@ -513,25 +513,7 @@ def _scan_admin_orphan_files(
     return orphan_files, total_size, total_count
 
 
-def _resolve_accessible_project_ids_for_user(db: Session, current_user: User) -> List[int]:
-    owner_ids = [
-        pid for (pid,) in db.query(Project.id).filter(
-            Project.owner_id == current_user.id,
-            _active_project_clause(),
-        ).all()
-        if pid is not None
-    ]
-    shared_ids = [
-        pid for (pid,) in db.query(ProjectShare.project_id).join(
-            Project, Project.id == ProjectShare.project_id
-        ).filter(
-            ProjectShare.user_id == current_user.id,
-            _active_project_clause(),
-        ).all()
-        if pid is not None
-    ]
-    return sorted(set([int(pid) for pid in owner_ids + shared_ids]))
-
+from app.services.project_access import _resolve_accessible_project_ids_for_user  # noqa: E402,F401
 
 @router.get("/assets/unreferenced-ids", response_model=dict)
 def get_unreferenced_asset_ids(

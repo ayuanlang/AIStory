@@ -26,33 +26,18 @@ from app.services.analyze_scene_dedup import (  # noqa: E402,F401
     _await_analyze_scene_segment,
 )
 from app.services.analyze_scene_subject_checks import (  # noqa: E402,F401
-    _normalize_subject_name,
-    _normalize_subject_compare_key,
-    _extract_subjects_from_analysis_text,
-    _extract_entities_from_json_candidates,
     _detect_subject_consistency_warnings,
     _detect_prompt_template_syntax_warnings,
-    _bucket_from_subject_type,
-    _extract_expected_subjects_from_subject_index,
-    _extract_subject_index_records,
-    _build_subject_placeholder,
     _reconcile_subjects_json_with_subject_index,
     _detect_subject_index_coverage_warnings,
-    _collect_subject_keys_by_bucket,
     _detect_subjects_json_extraction_gap,
     _format_subject_ref,
 )
 from app.services.analyze_scene_text_ops import (  # noqa: E402,F401
     _trim_to_scenes_block,
     _normalize_subject_index_entity_type,
-    _normalize_requested_asset_target_type,
-    _strip_embedded_subject_index_from_stage_text,
     _extract_embedded_subject_index_from_stage_text,
-    _unwrap_script_to_analyze,
-    _collapse_exact_duplicated_text,
-    _sanitize_scene_beats_stage_text,
     _build_script_to_analyze_block,
-    _extract_reuse_assets_from_subject_index,
     _infer_subject_index_allowed_types_for_request,
     _filter_subject_index_text_by_types,
     _resolve_scene_beats_adapted_script_text,
@@ -76,7 +61,6 @@ from app.services.scene_subject_helpers import (  # noqa: E402,F401
     _extract_subjects_json_from_text,
 )
 
-from app.core.entity_token import normalize_entity_token  # noqa: E402,F401
 from app.services.shot_generation_prompts import (  # noqa: E402,F401
     _build_project_prompt_context,
 )
