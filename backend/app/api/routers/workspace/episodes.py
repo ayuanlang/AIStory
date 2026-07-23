@@ -185,6 +185,10 @@ def update_episode(
     if hasattr(episode_in, 'ai_stage_outputs') and episode_in.ai_stage_outputs is not None:
         episode.ai_stage_outputs = episode_in.ai_stage_outputs
     if hasattr(episode_in, 'ai_scene_analysis_subject_index') and episode_in.ai_scene_analysis_subject_index is not None:
+        from app.services.subject_index_resolve import (
+            _subject_index_has_usable_content,
+            _extract_subject_index_from_stage_outputs
+        )
         sanitized_subject_index = sanitize_subject_index_text(episode_in.ai_scene_analysis_subject_index)
         if _subject_index_has_usable_content(sanitized_subject_index):
             episode.ai_scene_analysis_subject_index = sanitized_subject_index
