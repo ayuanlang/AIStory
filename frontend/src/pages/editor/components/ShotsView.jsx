@@ -32,7 +32,7 @@ import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
 
 import {
-    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
+    getFullUrl, getMediaUrlWithFallback, canFallbackToAssetProxy, createInitialFrameTrimState, clampFrameTrimPercent, normalizeFrameTrimMargins, brokenMediaUrls, brokenSceneImageUrls, warmMediaUrls, shouldBypassBrokenMediaCache, rememberBrokenMediaUrl, isBrokenMediaUrl, clearBrokenMediaUrl, rememberWarmMediaUrl, isWarmMediaUrl, getSafeMediaUrl, extractImageJobResultUrl, rememberBrokenSceneImageUrl, isBrokenSceneImageUrl, normalizeBatchParallelLimit, normalizeAsciiSubjectSeparatorsForDeps, normalizeSubjectNameForDeps, normalizeSubjectKeyForDeps, normalizeAsciiSubjectSeparators, normalizeSubjectName, normalizeSubjectKey, normalizeImportSubjectKey, IMG_PLACEHOLDER_SRC, parseVisualDependencies, SafeImage, SafeAudio, normalizeMediaRefList, areMediaRefListsEqual, pickBestEntityMatch, collectMatchedEntitiesFromPrompt, collectMatchedEntityImageUrlsFromPrompt, buildShotVideoRefPromptText, buildShotVideoEntityRefSlots, getMissingShotVideoEntityRefSlots, SCENE_SUBJECT_TYPE_LABELS, getSceneSubjectStatusKey, splitSceneSubjectNames, normalizeSceneSubjectDefaultType, parseTypedSceneSubjectToken, extractSceneSubjectRefsFromField, compareShotEnvironmentChange, buildSceneSubjectNameCandidates, extractSceneSubjectRefs, findMatchingEntityByType, findMissingSceneSubjectRefs, findCrossTypeEntityMatches, buildSceneSubjectPlaceholderPayload, createMissingSceneSubjectPlaceholders, collectMatchedSubjectImageUrlsFromPrompt, resolveUnifiedVideoMode, ensureShotDefaultVideoMode, buildAutoVideoRefList, resolveShotVideoActiveRefs, buildShotVideoSubmitRefsFromActiveRefs, isVideoMediaRefUrl, resolveShotVideoPosterUrl, LazyHoverVideo, InViewVideo, ManagedVideoPlayer, parseEpisodeNumberFromText, normalizeEpisodeTitleForDisplay, buildEntityNegativePrompt, normalizeImageSizeOption, normalizeAspectRatioOption, parseAspectRatioParts, parseAspectRatioValue, reduceAspectRatioParts, buildAspectRatioString, inferImageSizeFromResolution, getEpisodePreferredImageSize, getEpisodePreferredAspectRatio, getProjectPreferredImageSize, getProjectPreferredAspectRatio, getProjectPreferredResolution, getProjectPreferredVideoResolution, buildShotDiptychPlan, buildMultiPanelGridPlan, buildMultiPanelAspectContract, getShotDiptychLayoutLabel, buildShotDiptychLayoutInstruction, buildShotDiptychAspectContract, getShotDiptychSeamTrimPx, getShotDiptychSeamBiasPx, getShotDiptychFallbackCropPx, JOINT_DIPTYCH_SPLIT_UPLOAD_VERSION, SHOT_FRAME_ASSET_UPLOAD_VERSION, hashStableText, buildJointShotDiptychUploadIdempotencyKey, buildShotFrameAssetUploadIdempotencyKey, collectSupportedAspectRatioOptions, collectSupportedImageSizeOptions, selectBestShotDiptychRequestAspectRatio, selectBestMultiPanelRequestAspectRatio, selectBestSupportedImageSize, resolveShotPanelExportResolution, resolveShotDiptychRequestResolution, getResolutionByAspectAndImageSize, SHOT_IMAGE_CFG_MIN, SHOT_IMAGE_CFG_MAX, SHOT_IMAGE_CFG_STEP, SHOT_IMAGE_CFG_FALLBACK, clampShotImageCfg, resolveShotImageCfgDefault, extractDialogueOnlyFromPrompt, inferLanguageCodeFromProjectLanguage, buildVoicePromptWithEntityContext, buildEpisodeDisplayLabel, isEphemeralProviderMediaUrl, isDurablePersistedMediaUrl, shotVideoNeedsOssPersist, shotStartFrameNeedsOssPersist, shotEndFrameNeedsOssPersist, shotNeedsAnyOssPersist, shotNeedsAnyOssPersistGraceWaitMs, getShotVideoMediaBoundAtMs, extractVideoJobResultUrl, mergeShotVideoOssPersistState, isShotVideoOssPersistComplete, EPHEMERAL_VIDEO_OSS_SYNC_MAX_MS, EPHEMERAL_VIDEO_OSS_SYNC_INTERVAL_MS, EPHEMERAL_VIDEO_OSS_AUTO_RETRY_MIN_AGE_MS,     resolveShotMediaSlotUrl, mediaUrlNeedsOssPersist,     parseShotTechnicalNotes, DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT, useTabMediaRefreshEffect, TabMediaRefreshButton, useMediaReloadTick, triggerMediaReload
 } from '../editorHelpers';
 
 import { 
@@ -777,6 +777,70 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (currentIdx <= 0) return null;
         return sortedAllShots[currentIdx - 1] || null;
     }, [resolveContinuationShotPool, sortShotsForContinuation]);
+
+    const shotEnvChangeVsPrev = useMemo(() => {
+        if (!editingShot?.id) return null;
+        const prevShot = findPrevContinuationShot(editingShot.id);
+        return compareShotEnvironmentChange(editingShot, prevShot);
+    }, [
+        editingShot,
+        findPrevContinuationShot,
+        // Recompute when associated entities / prompts change on the live edit draft.
+        editingShot?.associated_entities,
+        editingShot?.video_content,
+        editingShot?.video_content_cn,
+        editingShot?.shot_logic_cn,
+        editingShot?.prompt,
+        shots,
+    ]);
+
+    const renderShotEnvChangeBadge = useCallback((compact = false) => {
+        const info = shotEnvChangeVsPrev;
+        if (!info) return null;
+
+        const statusConfig = {
+            first: {
+                label: t('首镜', 'First'),
+                className: 'border-white/20 bg-white/5 text-gray-300',
+                title: t('本场/序列首镜，无上一镜环境可对比', 'First shot in sequence — no previous ENV to compare'),
+            },
+            same: {
+                label: t('同环境', 'Same ENV'),
+                className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+                title: t('与上一镜环境相同', 'Same environment as previous shot'),
+            },
+            angle_or_state: {
+                label: t('视角变', 'Angle Δ'),
+                className: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
+                title: t('同主环境，角度或状态衍生有变化', 'Same main ENV; angle or state derivative changed'),
+            },
+            changed: {
+                label: t('环境变', 'ENV Δ'),
+                className: 'border-rose-500/40 bg-rose-500/10 text-rose-200',
+                title: t('与上一镜主环境不同', 'Main environment differs from previous shot'),
+            },
+            unknown: {
+                label: t('环境?', 'ENV?'),
+                className: 'border-white/20 bg-white/5 text-gray-400',
+                title: t('本镜或上一镜缺少 ENV:[...] 标签', 'Current or previous shot is missing ENV:[...] tags'),
+            },
+        };
+        const cfg = statusConfig[info.status] || statusConfig.unknown;
+        const prevLabel = info.prev || '—';
+        const currentLabel = info.current || '—';
+        const detailTitle = info.status === 'first'
+            ? cfg.title
+            : `${cfg.title}\n${prevLabel} → ${currentLabel}`;
+
+        return (
+            <span
+                className={`inline-flex items-center rounded border whitespace-nowrap ${compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-[11px]'} font-medium ${cfg.className}`}
+                title={detailTitle}
+            >
+                {cfg.label}
+            </span>
+        );
+    }, [shotEnvChangeVsPrev, t]);
 
     const resolvePrevContinuationVideoRefs = useCallback((shotId) => {
         if (!usePrevVideo) return [];
@@ -11910,6 +11974,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     <span className={usePrevVideo ? 'text-primary font-medium' : 'text-gray-400 font-medium'}>{t('上镜续写', 'Shot Continuation')}</span>
                                                 </label>
 
+                                                {renderShotEnvChangeBadge(true)}
+
                                                 <button 
                                                     onClick={() => generateAssetWithLang('video')} 
                                                     disabled={currentShotGenerating}
@@ -13626,6 +13692,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderShotEnvChangeBadge(false)}
                                                                     {renderPromptLangMenu('video')}
                                                                     {renderDetailActionButton({
                                                                         label: t('强制停止', 'Force Stop'),

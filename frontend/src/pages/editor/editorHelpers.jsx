@@ -957,6 +957,84 @@ export const extractSceneSubjectRefsFromField = (value, defaultType, sourceField
         });
 };
 
+const SHOT_ENV_TAG_RE = /\bENV\s*:\s*\[\s*@?([^\]\n]+?)\s*\]/gi;
+
+/** Ordered unique ENV:[...] names from free text (Associated Entities / prompts). */
+export const extractEnvironmentNamesFromText = (value) => {
+    const names = [];
+    const seen = new Set();
+    const text = String(value || '');
+    if (!text) return names;
+    SHOT_ENV_TAG_RE.lastIndex = 0;
+    let match;
+    while ((match = SHOT_ENV_TAG_RE.exec(text)) !== null) {
+        const name = normalizeSubjectName(match[1]);
+        const key = normalizeSubjectKey(name);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        names.push(name);
+    }
+    return names;
+};
+
+/**
+ * Shot ENV tags for continuity checks.
+ * Prefer Associated Entities; fall back to video / logic prompts.
+ */
+export const extractShotEnvironmentNames = (shot) => {
+    const fromAssoc = extractEnvironmentNamesFromText(shot?.associated_entities);
+    if (fromAssoc.length) return fromAssoc;
+    const blob = [
+        shot?.video_content_cn,
+        shot?.video_content,
+        shot?.shot_logic_cn,
+        shot?.prompt,
+    ].map((part) => String(part || '')).join('\n');
+    return extractEnvironmentNamesFromText(blob);
+};
+
+/** Same-angle bucket key: substring before first `-` / space / `_` (shot_generation §1.5). */
+export const getEnvAngleBucketKey = (envName) => {
+    const stable = normalizeSubjectName(envName);
+    if (!stable) return '';
+    const cut = stable.search(/[-_\s]/);
+    return cut < 0 ? stable : stable.slice(0, cut).trim();
+};
+
+/** Main environment after stripping `{N}度` and derivative suffixes. */
+export const getMainEnvironmentName = (envName) => {
+    const stable = normalizeSubjectName(envName);
+    if (!stable) return '';
+    const withoutAngle = stable.replace(/^\d+\s*度/, '').trim();
+    return getEnvAngleBucketKey(withoutAngle) || withoutAngle;
+};
+
+/**
+ * Compare current shot ENV vs previous shot for video continuity UI.
+ * status: first | same | angle_or_state | changed | unknown
+ */
+export const compareShotEnvironmentChange = (currentShot, prevShot) => {
+    const currentNames = extractShotEnvironmentNames(currentShot);
+    const prevNames = prevShot ? extractShotEnvironmentNames(prevShot) : [];
+    const current = currentNames[0] || '';
+    // Prev ending ENV (last tag) vs current opening ENV (first tag).
+    const prev = prevNames.length ? prevNames[prevNames.length - 1] : '';
+
+    if (!prevShot) {
+        return { status: 'first', current, prev: '', currentNames, prevNames };
+    }
+    if (!current || !prev) {
+        return { status: 'unknown', current, prev, currentNames, prevNames };
+    }
+    if (normalizeSubjectKey(current) === normalizeSubjectKey(prev)) {
+        return { status: 'same', current, prev, currentNames, prevNames };
+    }
+    if (normalizeSubjectKey(getMainEnvironmentName(current)) === normalizeSubjectKey(getMainEnvironmentName(prev))) {
+        return { status: 'angle_or_state', current, prev, currentNames, prevNames };
+    }
+    return { status: 'changed', current, prev, currentNames, prevNames };
+};
+
 export const buildSceneSubjectNameCandidates = (rawName) => {
     const source = String(rawName || '').trim();
     const candidates = new Set();
