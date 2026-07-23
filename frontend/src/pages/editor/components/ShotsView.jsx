@@ -538,6 +538,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [shots, setShots] = useState([]);
     const shotsRef = useRef([]);
+    const allEpisodeShotsRef = useRef([]);
     useEffect(() => {
         shotsRef.current = Array.isArray(shots) ? shots : [];
     }, [shots]);
@@ -1153,7 +1154,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const activeResumeVideoJobsRef = useRef(new Set());
     const pausedResumeVideoJobsRef = useRef({});
     const pendingImageJobsRef = useRef({});
-    const allEpisodeShotsRef = useRef([]);
     const editingShotRef = useRef(null);
     const jointDiptychApplyInFlightRef = useRef(new Map());
     const appliedJointDiptychResultsRef = useRef(new Map());
