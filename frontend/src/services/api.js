@@ -3770,6 +3770,10 @@ export const runScriptAnalysisFlowAnalyzeNode = async (nodeKey, scriptText, syst
     if (subjectIndexText) {
         analyze_payload.subject_index_text = subjectIndexText;
     }
+    if (runtimeHooks?.skipEpisodePersist === true || runtimeHooks?.skip_episode_persist === true) {
+        // Concurrent Stage 3 category calls share one episode field; frontend merges then persists.
+        analyze_payload.skip_episode_persist = true;
+    }
     const analysisTraceId = String(runtimeHooks?.analysisTraceId || runtimeHooks?.requestId || '').trim();
     if (analysisTraceId) analyze_payload.analysis_trace_id = analysisTraceId;
     if (runtimeHooks?.analysisFeatures && typeof runtimeHooks.analysisFeatures === 'object') {

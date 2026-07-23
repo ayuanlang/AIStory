@@ -2836,8 +2836,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const buildExistingEntityNameSet = useCallback((entities = []) => {
-        const names = new Set();
+        // type -> Set(normalizedName). Matching must be type-scoped so a CHAR named
+        // like an ENV/PROP from another row (or prior episode import) cannot suppress
+        // that category's Stage 3 launch.
+        const byType = {
+            character: new Set(),
+            prop: new Set(),
+            environment: new Set(),
+            cover_poster: new Set(),
+        };
+        const normalizeEntityTypeKey = (rawType) => {
+            const key = String(rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '_');
+            if (['character', 'characters', 'char', 'role', 'roles', '人物', '角色'].includes(key)) return 'character';
+            if (['prop', 'props', 'item', 'items', 'object', 'objects', '道具', '物件'].includes(key)) return 'prop';
+            if (['environment', 'environments', 'env', 'scene', 'scenes', '场景', '环境'].includes(key)) return 'environment';
+            if (['cover_poster', 'coverposter', 'poster', 'posters', 'cover', 'covers', '封面', '封面海报', '海报'].includes(key)) return 'cover_poster';
+            return '';
+        };
         (Array.isArray(entities) ? entities : []).forEach((entity) => {
+            const typeKey = normalizeEntityTypeKey(entity?.type || entity?.entity_type || entity?.subject_type);
+            if (!typeKey || !byType[typeKey]) return;
             [
                 entity?.name,
                 entity?.name_en,
@@ -2847,16 +2865,23 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 entity?.subject_name,
             ].forEach((raw) => {
                 const token = normalizeEntityToken(raw);
-                if (token) names.add(token);
+                if (token) byType[typeKey].add(token);
             });
         });
-        return names;
+        return byType;
     }, []);
 
-    const filterSubjectIndexExcludingExistingEntities = useCallback((subjectIndexSourceText, existingNameSet) => {
+    const filterSubjectIndexExcludingExistingEntities = useCallback((subjectIndexSourceText, existingNameSetByType) => {
         const source = String(subjectIndexSourceText || '').replace(/<think>[\s\S]*?<\/think>\n*/gi, '').trim();
-        const existing = existingNameSet instanceof Set ? existingNameSet : new Set();
-        if (!source || !existing.size) {
+        const byType = (existingNameSetByType && typeof existingNameSetByType === 'object' && !(existingNameSetByType instanceof Set))
+            ? existingNameSetByType
+            : null;
+        // Legacy Set fallback: treat as untyped (should not happen after buildExistingEntityNameSet update).
+        const legacySet = existingNameSetByType instanceof Set ? existingNameSetByType : null;
+        const hasAnyExisting = byType
+            ? Object.values(byType).some((set) => set instanceof Set && set.size > 0)
+            : Boolean(legacySet && legacySet.size > 0);
+        if (!source || !hasAnyExisting) {
             return { text: source, totalRows: 0, keptRows: 0, skippedRows: 0 };
         }
         let totalRows = 0;
@@ -2867,7 +2892,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!detected.isSubjectRow) return true;
             totalRows += 1;
             const rowNames = extractSubjectIndexRowNames(line);
-            const alreadyExists = rowNames.some((name) => existing.has(name));
+            const typeKey = String(detected.type || '').trim().toLowerCase();
+            const typedSet = byType && typeKey && byType[typeKey] instanceof Set ? byType[typeKey] : null;
+            const alreadyExists = rowNames.some((name) => (
+                typedSet ? typedSet.has(name) : Boolean(legacySet && legacySet.has(name))
+            ));
             if (alreadyExists) {
                 skippedRows += 1;
                 return false;
@@ -12169,13 +12198,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             try {
                 const flowRegistry = await getSceneAnalysisFlowRegistry();
                 const configured = flowRegistry?.stage3_auto_start || flowRegistry?.config?.stage3_auto_start || {};
-                stage3AutoStart = { ...stage3AutoStart, ...configured };
+                // Prefer explicit false from config; missing keys stay on (defaults above).
+                stage3AutoStart = {
+                    asset_design_character: configured?.asset_design_character !== false,
+                    asset_design_prop: configured?.asset_design_prop !== false,
+                    asset_design_environment: configured?.asset_design_environment !== false,
+                };
                 onLog?.(`[Stage 3 Asset Design] Loaded auto-start config: character=${stage3AutoStart.asset_design_character ? 'on' : 'off'}, prop=${stage3AutoStart.asset_design_prop ? 'on' : 'off'}, environment=${stage3AutoStart.asset_design_environment ? 'on' : 'off'}`, 'info');
             } catch (flowErr) {
                 onLog?.(`[Stage 3 Asset Design] Failed to load flow auto-start config; using defaults. ${flowErr?.message || flowErr}`, 'warning');
             }
         }
 
+        // Always launch character / prop / environment in parallel when auto-start (or target filter) allows.
+        // Do not drop prop/env just because character is first in the list.
         const promptFiles = promptFilesRaw.filter(p => {
             if (targetFilters) return targetFilters.includes(p.key);
             return stage3AutoStart[p.nodeKey] !== false;
@@ -12263,7 +12299,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 wrapInjectionSection('Subject Index', pureSubjectIndexText),
             ].filter(Boolean).join('\n\n');
 
-            onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} asset-design LLM call(s): ${promptFiles.map((p) => p.key).join(', ') || 'none'}.`);
+            onLog?.(`[Stage 3 Asset Design] Launching ${targetAssetsCount} concurrent asset-design LLM call(s): ${promptFiles.map((p) => `${p.key}→${p.nodeKey}`).join(', ') || 'none'}.`);
 
             const scriptAnalysisApiId = resolveSelectedScriptAnalysisApiId();
             if (scriptAnalysisApiId) {
@@ -12327,11 +12363,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 return payload;
             };
 
-                        // Run them concurrently
+                        // Run character / prop / environment concurrently (Promise.allSettled).
+            // Each category binds episode_id so pipeline status + subject-index gates work for all three;
+            // skip_episode_persist avoids concurrent overwrite of ai_entity_design_result (frontend merges).
+            const episodeIdForAssetSubtasks = activeEpisode?.id || null;
             const results = await Promise.allSettled(
                 promptsData.map(async (pData, index) => {
                     throwIfAnalysisStopped();
-                    const isPrimary = index === 0;
                     const subtaskTraceId = `${phase2BatchTraceId}-${pData.key || `slot${index + 1}`}`;
                     const subtaskImportSessionId = `import-${subtaskTraceId}`;
                     onLog?.(`[Stage 3 Asset Design] Subtask submit key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId}`, 'info');
@@ -12343,8 +12381,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     if (filteredSubjectIndex.totalRows > 0) {
                         onLog?.(`[Stage 3 Asset Design] Subject Index filtered key=${pData.key || `slot${index + 1}`} kept=${filteredSubjectIndex.keptRows}/${filteredSubjectIndex.totalRows}`, 'info');
                     }
-                    // Full pipeline: category has no remaining rows after existing-entity filter → skip LLM.
-                    if (skipExistingAssets && filteredSubjectIndex.keptRows <= 0) {
+                    // Skip empty category on full-pipeline runs (no rows of this type, or all
+                    // already stripped by existing-entity precheck). Manual Phase-2 retry still
+                    // invokes LLM so edited / non-table Subject Index shapes are not dropped.
+                    if (filteredSubjectIndex.keptRows <= 0 && !options?.isRetryPhase2) {
                         onLog?.(
                             t(
                                 `[Stage 3 Asset Design] ${getAssetDesignTaskLabel(pData.key)} 无需生成（索引无待设计行或均已存在），跳过 LLM`,
@@ -12380,21 +12420,27 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                 ? ['props']
                                 : (pData.key === 'environments' ? ['environments', 'posters', 'covers'] : [])));
                     const sceneAnalysisModeForSubtask = `2_pass_generate_assets_${pData.key}${subtaskRequestedTargets.length ? `__targets_${subtaskRequestedTargets.join('_')}` : ''}`;
+                    const assetNodeKey = pData.nodeKey
+                        || (pData.key === 'characters'
+                            ? 'asset_design_character'
+                            : (pData.key === 'props' ? 'asset_design_prop' : 'asset_design_environment'));
 
                     return awaitAnalyzeSceneWithRecovery(
                         () => runScriptAnalysisFlowAnalyzeNode(
-                            pData.nodeKey || (pData.key === 'characters' ? 'asset_design_character' : (pData.key === 'props' ? 'asset_design_prop' : 'asset_design_environment')),
+                            assetNodeKey,
                             specificSubjectIndexText,
                             pData.content,
                             null,
-                            isPrimary ? (activeEpisode?.id || null) : null, // Only bind episode ID on the first one to avoid DB overwrite race conditions
+                            episodeIdForAssetSubtasks,
                             analysisAttentionNotes,
                             selectedReuseSubjectAssets,
                             {
                                 subjectIndexText: specificSubjectIndexText,
+                                // All categories skip episode field write; merged persist happens below.
+                                skipEpisodePersist: true,
                                 onTaskCreated: (taskId) => {
                                     const stableTaskId = String(taskId || '').trim();
-                                    onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${stableTaskId}`, 'info');
+                                    onLog?.(`[Stage 3 Asset Design] Subtask task created key=${pData.key || `slot${index + 1}`} trace_id=${subtaskTraceId} task_id=${stableTaskId} node=${assetNodeKey}`, 'info');
                                     registerActiveAnalysisTask(stableTaskId);
                                     if (activeEpisode?.id && stableTaskId) {
                                         saveAnalysisTaskMarker(activeEpisode.id, {
