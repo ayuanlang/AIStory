@@ -6771,6 +6771,145 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         hasPersistedEnvironmentAssetDesign,
     ]);
 
+    /** Collect ENV names linked to a workspace scene (anchor + ENV:[] tags in body). */
+    const collectSceneLinkedEnvironmentNames = useCallback((scene) => {
+        const byKey = new Map();
+        const addName = (raw) => {
+            const name = normalizeSubjectName(raw);
+            const key = normalizeSubjectKey(name);
+            if (!key || !name) return;
+            if (!byKey.has(key)) byKey.set(key, name);
+        };
+        for (const ref of extractSceneSubjectRefsFromField(scene?.environment_name, 'environment', 'environment_name')) {
+            addName(ref?.name);
+        }
+        const bodyText = [
+            scene?.environment_name,
+            scene?.core_scene_info,
+            scene?.original_script_text,
+        ].map((part) => String(part || '')).join('\n');
+        const envTagRe = /\bENV\s*:\s*\[\s*@?([^\]\n]+?)\s*\]/gi;
+        let match;
+        while ((match = envTagRe.exec(bodyText)) !== null) {
+            addName(match[1]);
+        }
+        return Array.from(byKey.values());
+    }, []);
+
+    const loadEnvironmentEntitiesForStoryboardGate = useCallback(async () => {
+        const pid = Number(projectId || 0);
+        if (!pid || typeof fetchEntities !== 'function') return [];
+        const eid = Number(activeEpisode?.id || 0);
+        const now = Date.now();
+        const cache = storyboardEnvEntityCacheRef.current;
+        if (
+            Array.isArray(cache?.entities)
+            && Number(cache.projectId || 0) === pid
+            && Number(cache.episodeId || 0) === eid
+            && (now - Number(cache.at || 0)) < 15000
+        ) {
+            return cache.entities;
+        }
+        const rows = await fetchEntities(pid, {
+            type: 'environment',
+            ...(eid > 0 ? { episode_id: eid } : {}),
+        }).catch(() => []);
+        // Shot generation matches project-wide ENV entities; widen if episode-scoped is empty.
+        let entities = Array.isArray(rows) ? rows : [];
+        if (!entities.length && eid > 0) {
+            const projectRows = await fetchEntities(pid, { type: 'environment' }).catch(() => []);
+            entities = Array.isArray(projectRows) ? projectRows : [];
+        }
+        const envEntities = entities.filter((ent) => {
+            const type = String(ent?.type || '').trim().toLowerCase();
+            return type === 'environment' || type === 'env' || type === 'scene' || type === '场景' || type === '环境';
+        });
+        storyboardEnvEntityCacheRef.current = {
+            projectId: pid,
+            episodeId: eid,
+            at: now,
+            entities: envEntities,
+        };
+        return envEntities;
+    }, [activeEpisode?.id, projectId]);
+
+    /**
+     * Per-scene ENV design gate: every ENV linked to this scene must exist in the
+     * entity library with generation_prompt_cn (asset design completed).
+     */
+    const checkSceneLinkedEnvironmentDesignReady = useCallback(async ({
+        markerSceneId = '',
+        dbSceneIdHint = null,
+        sceneRow = null,
+        envEntities = null,
+    } = {}) => {
+        const stage3Config = await ensureStage3AutoStartCache();
+        if (stage3Config?.asset_design_environment === false) {
+            return { ok: true, required: [], missing: [], scene: sceneRow || null };
+        }
+
+        let scene = sceneRow && typeof sceneRow === 'object' ? sceneRow : null;
+        const hintId = Number(dbSceneIdHint || scene?.id || 0);
+        if (!scene && hintId > 0 && activeEpisode?.id && typeof fetchScenes === 'function') {
+            try {
+                const dbScenes = await fetchScenes(activeEpisode.id);
+                scene = (Array.isArray(dbScenes) ? dbScenes : []).find(
+                    (row) => Number(row?.id || 0) === hintId
+                ) || null;
+                if (!scene && markerSceneId) {
+                    scene = findDbSceneByPatchSceneId(dbScenes, markerSceneId) || null;
+                }
+            } catch (_) {
+                scene = null;
+            }
+        } else if (!scene && markerSceneId && activeEpisode?.id && typeof fetchScenes === 'function') {
+            try {
+                const dbScenes = await fetchScenes(activeEpisode.id);
+                scene = findDbSceneByPatchSceneId(dbScenes, markerSceneId) || null;
+            } catch (_) {
+                scene = null;
+            }
+        }
+
+        if (!scene) {
+            return {
+                ok: false,
+                required: [],
+                missing: [],
+                scene: null,
+                reason: 'scene_not_found',
+            };
+        }
+
+        const required = collectSceneLinkedEnvironmentNames(scene);
+        if (!required.length) {
+            return { ok: true, required: [], missing: [], scene };
+        }
+
+        const entities = Array.isArray(envEntities)
+            ? envEntities
+            : await loadEnvironmentEntitiesForStoryboardGate();
+        const missing = [];
+        for (const envName of required) {
+            const matched = findMatchingEntityByType(entities, 'environment', envName);
+            const hasPrompt = Boolean(String(matched?.generation_prompt_cn || '').trim());
+            if (!matched || !hasPrompt) {
+                missing.push(envName);
+            }
+        }
+        return {
+            ok: missing.length === 0,
+            required,
+            missing,
+            scene,
+        };
+    }, [
+        activeEpisode?.id,
+        collectSceneLinkedEnvironmentNames,
+        ensureStage3AutoStartCache,
+        loadEnvironmentEntitiesForStoryboardGate,
+    ]);
+
     const enqueuePendingStoryboardKickoff = useCallback((item = {}) => {
         const marker = String(item?.markerSceneId || '').trim();
         if (!marker) return;
@@ -7052,6 +7191,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             storyboardKickoffByMarkerRef.current.delete(stableMarker);
         };
 
+        // Auto-start switch only applies to pipeline kickoffs; manual rerun uses force.
         if (!force) {
             const autoStart = await isStoryboardAutoStartEnabled();
             if (!autoStart) {
@@ -7078,12 +7218,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     return {
                         phase: prevPhase === 'storyboard' ? prevPhase : (prevPhase || 'scene_beats'),
                         message: t(
-                            '分镜生成等待场景编排入库且环境与海报资产设计完成后再启动...',
-                            'Storyboard waiting for scene import and environment/poster asset design...'
+                            '分镜生成等待场景编排入库且环境资产设计完成后再启动...',
+                            'Storyboard waiting for scene import and environment asset design...'
                         ),
                         highlightHint: t(
-                            `「${stableMarker}」已入库，等待环境与海报资产设计完成后启动分镜`,
-                            `"${stableMarker}" imported; waiting for environment/poster asset design before storyboard`
+                            `「${stableMarker}」已入库，等待环境资产设计完成后启动分镜`,
+                            `"${stableMarker}" imported; waiting for environment asset design before storyboard`
                         ),
                     };
                 });
@@ -7093,14 +7233,54 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }));
                 onLog?.(
                     t(
-                        `[分镜生成] ${stableMarker} 场景编排已入库，等待环境与海报资产设计完成后再启动分镜`,
-                        `[Storyboard] ${stableMarker} scene imported; waiting for environment/poster asset design before shot generation`
+                        `[分镜生成] ${stableMarker} 场景编排已入库，等待环境资产设计完成后再启动分镜`,
+                        `[Storyboard] ${stableMarker} scene imported; waiting for environment asset design before shot generation`
                     ),
                     'info'
                 );
                 // Keep marker claimed so residual ensure skips this scene.
                 return false;
             }
+        }
+
+        // Per-scene ENV design: required for both pipeline (after episode gate) and manual rerun.
+        // At this point episode-level ENV gate is open (or force bypassed auto-start), so a
+        // missing designed ENV for this scene is a hard failure — do not park on waiting_env.
+        const sceneEnvGate = await checkSceneLinkedEnvironmentDesignReady({
+            markerSceneId: stableMarker,
+            dbSceneIdHint,
+        });
+        if (!sceneEnvGate.ok) {
+            const missingLabel = (sceneEnvGate.missing || []).filter(Boolean).join('、')
+                || (sceneEnvGate.reason === 'scene_not_found'
+                    ? t('场景未找到', 'scene not found')
+                    : t('关联环境', 'linked environments'));
+            const errMsg = t(
+                `本场关联环境 ENV 尚未完成资产设计：${missingLabel}`,
+                `Scene-linked ENV asset design incomplete: ${missingLabel}`
+            );
+            releaseKickoffClaim();
+            const failedProgress = updateStoryboardTaskItem(stableMarker, {
+                sceneOrder,
+                status: 'failed',
+                error: errMsg,
+                dbSceneId: Number(dbSceneIdHint || priorItem?.dbSceneId || 0) || undefined,
+            });
+            publishStoryboardTaskPanelStatus({
+                markerSceneId: stableMarker,
+                sceneOrder,
+                status: 'failed',
+                errorMessage: errMsg,
+                progressSnapshot: failedProgress,
+            });
+            onLog?.(
+                t(
+                    `[分镜生成] ${stableMarker} 已阻止：${errMsg}`,
+                    `[Storyboard] ${stableMarker} blocked: ${errMsg}`
+                ),
+                'warning'
+            );
+            return false;
         }
 
         const resolveDbSceneIdForMarker = async (hint = null) => {
@@ -7406,6 +7586,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return true;
     }, [
         activeEpisode?.id,
+        checkSceneLinkedEnvironmentDesignReady,
         enqueuePendingStoryboardKickoff,
         fetchScenes,
         isEnvironmentAssetDesignReady,
@@ -10017,6 +10198,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const storyboardKickoffPromisesRef = useRef(new Map());
     /** Pending storyboard kickoffs waiting for environment visual assets. */
     const pendingStoryboardKickoffsRef = useRef([]);
+    /** Short-lived cache of ENV entities for storyboard gate checks (rerun / kickoff). */
+    const storyboardEnvEntityCacheRef = useRef({ projectId: 0, episodeId: 0, at: 0, entities: null });
     /** True once env asset design for this run/episode is ready (or gate skipped). */
     const environmentAssetReadyRef = useRef(false);
     /**
@@ -18108,7 +18291,64 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         let started = 0;
         try {
+            // Preflight: only rerun scenes whose linked ENV assets are already designed.
+            storyboardEnvEntityCacheRef.current = { projectId: 0, episodeId: 0, at: 0, entities: null };
+            const envEntities = await loadEnvironmentEntitiesForStoryboardGate();
+            const readyTargets = [];
+            const blockedTargets = [];
             for (const item of targets) {
+                const gate = await checkSceneLinkedEnvironmentDesignReady({
+                    markerSceneId: item.sceneId,
+                    dbSceneIdHint: item.dbSceneId,
+                    envEntities,
+                });
+                if (gate.ok) {
+                    readyTargets.push(item);
+                } else {
+                    blockedTargets.push({
+                        ...item,
+                        missing: Array.isArray(gate.missing) ? gate.missing : [],
+                        reason: gate.reason || 'missing_env',
+                    });
+                }
+            }
+            if (blockedTargets.length > 0) {
+                const preview = blockedTargets
+                    .slice(0, 5)
+                    .map((row) => {
+                        const missing = (row.missing || []).filter(Boolean).join('、')
+                            || t('关联环境', 'linked ENV');
+                        return `${row.sceneId || row.displayLabel || '?'}（${missing}）`;
+                    })
+                    .join('；');
+                const more = blockedTargets.length > 5
+                    ? t(` 等 ${blockedTargets.length} 场`, ` and ${blockedTargets.length} scene(s) total`)
+                    : '';
+                onLog?.(
+                    t(
+                        `[分镜生成] 重跑前检查：${blockedTargets.length} 场因关联 ENV 未完成资产设计被跳过：${preview}${more}`,
+                        `[Storyboard] Rerun preflight skipped ${blockedTargets.length} scene(s) — linked ENV not designed: ${preview}${more}`
+                    ),
+                    'warning'
+                );
+            }
+            if (!readyTargets.length) {
+                const msg = t(
+                    '所选场景的关联环境 ENV 尚未完成资产设计，无法重跑分镜。请先完成环境资产设计后再试。',
+                    'Linked ENV asset design is incomplete for the selected scene(s). Finish environment asset design before rerunning storyboard.'
+                );
+                alert(msg);
+                setAnalysisFlowStatus({ phase: 'warning', message: msg });
+                setAnalysisUiReport((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    status: 'warning',
+                    durationMs: Date.now() - rerunStartedAt,
+                    error: msg,
+                }));
+                return;
+            }
+
+            for (const item of readyTargets) {
                 const ok = await kickoffStoryboardForImportedScene({
                     markerSceneId: item.sceneId,
                     sceneOrder: item.sceneOrder,
@@ -18119,15 +18359,18 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             onLog?.(
                 t(
-                    `[分镜生成] 已按场景重跑调起 ${started}/${targets.length} 场`,
-                    `[Storyboard] Rerun kickoff started for ${started}/${targets.length} scene(s)`
+                    `[分镜生成] 已按场景重跑调起 ${started}/${readyTargets.length} 场（ENV 已就绪；另跳过 ${blockedTargets.length} 场）`,
+                    `[Storyboard] Rerun kickoff started for ${started}/${readyTargets.length} scene(s) with ENV ready (${blockedTargets.length} skipped)`
                 ),
                 started > 0 ? 'success' : 'warning'
             );
             if (started <= 0) {
                 setAnalysisFlowStatus({
                     phase: 'warning',
-                    message: t('分镜生成重跑未成功调起（可能仍在运行或缺少场景 ID）。', 'Storyboard rerun did not start (already running or missing scene id).'),
+                    message: t(
+                        '分镜生成重跑未成功调起（ENV 未就绪、仍在运行或缺少场景 ID）。',
+                        'Storyboard rerun did not start (ENV not ready, already running, or missing scene id).'
+                    ),
                 });
                 setAnalysisUiReport((prev) => ({
                     ...(prev && typeof prev === 'object' ? prev : {}),
@@ -18163,7 +18406,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             setIsRerunningStoryboard(false);
         }
-    }, [awaitPendingStoryboardTasks, beginAnalysisTimer, kickoffStoryboardForImportedScene, onLog, t]);
+    }, [
+        awaitPendingStoryboardTasks,
+        beginAnalysisTimer,
+        checkSceneLinkedEnvironmentDesignReady,
+        kickoffStoryboardForImportedScene,
+        loadEnvironmentEntitiesForStoryboardGate,
+        onLog,
+        t,
+    ]);
 
     const openStoryboardRerunModal = useCallback(async () => {
         if (!activeEpisode?.id || isAnalyzing || isRerunningStoryboard) return;
@@ -21758,7 +22009,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         )}
                                 </div>
                                 <div className="mt-1 text-xs text-white/55">
-                                    {t('将按场景页「生成分镜」相同路径重跑：生成镜头表并自动写入 Shots。', 'Uses the same path as scene-page Generate Shots: generate the shot table and auto-apply into Shots.')}
+                                    {t('将按场景页「生成分镜」相同路径重跑：生成镜头表并自动写入 Shots。重跑前会检查该场关联环境 ENV 是否已完成资产设计。', 'Uses the same path as scene-page Generate Shots: generate the shot table and auto-apply into Shots. Rerun requires the scene-linked ENV asset design to be complete.')}
                                 </div>
                             </div>
 
