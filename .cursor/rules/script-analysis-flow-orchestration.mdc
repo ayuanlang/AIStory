@@ -77,7 +77,8 @@ API: `runScriptAnalysisFlowAnalyzeNode` -> `POST /prompts/scene-analysis/flow/ru
 2. Resume/restart paths must match main path concurrency
 3. Never `await` scene orchestration before starting asset design after 2.1
 4. Asset design with `explicitSubjectIndexText` / `parallelWithScenes: true` must not require scene import first
-5. After each scene imports to workspace, start that scene's storyboard only when env visual assets are ready (`asset_design_environment` ok, or no ENV rows / env auto-start off); queue as `waiting_env` until then. Do **not** wait for all scenes / character / prop; end-of-pipeline only residual-kicks scenes not yet started once the env gate is open
+5. After each scene imports to workspace, start that scene's storyboard only when **ENV** asset design is ready (`asset_design_environment` ok / imported, or no ENV rows / env auto-start off); queue as `waiting_env` until then. Do **not** open the gate when character or prop finishes. Arm the ENV gate (`environmentAssetDesignPendingRef`) before parallel scene+asset branches so early imports cannot use stale episode JSON. End-of-pipeline only residual-kicks scenes not yet started once the ENV gate is open.
+6. Storyboard prompt injection (`# Scene Subject Image Prompts (CN)`): **ENV-only** for the current scene's linked environments — do **not** inject CHAR/PROP `generation_prompt_cn`. Subject Index may still list CHAR/PROP/ENV for naming.
 
 ## Scene orchestration asset annotation (prompt contract)
 

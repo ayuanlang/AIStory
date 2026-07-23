@@ -6706,18 +6706,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             || ''
         ).trim();
         if (!assetRaw) return false;
-        // Environment/poster/cover share asset_design_environment; ENV rows are the
-        // storyboard baseline. Accept either environments or posters/covers payload.
+        // Storyboard gate requires ENV design rows — posters/covers alone do not count.
         if (/"environments"\s*:\s*\[\s*\{/i.test(assetRaw)) return true;
-        if (/"posters"\s*:\s*\[\s*\{/i.test(assetRaw) || /"covers"\s*:\s*\[\s*\{/i.test(assetRaw)) {
-            return true;
-        }
         try {
             const payload = getAnalysisEntitiesPayloadFromJsonText(assetRaw) || {};
-            const hasEnv = Array.isArray(payload.environments) && payload.environments.length > 0;
-            const hasPoster = Array.isArray(payload.posters) && payload.posters.length > 0;
-            const hasCover = Array.isArray(payload.covers) && payload.covers.length > 0;
-            return hasEnv || hasPoster || hasCover;
+            return Array.isArray(payload.environments) && payload.environments.length > 0;
         } catch (_) {
             return false;
         }
@@ -6726,6 +6719,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         getAnalysisEntitiesPayloadFromJsonText,
         llmAssetRawResultContent,
     ]);
+
+    /** Arm ENV gate before scene imports can race ahead of asset_design_environment. */
+    const armEnvironmentAssetDesignGate = useCallback((reason = '') => {
+        environmentAssetReadyRef.current = false;
+        environmentAssetDesignPendingRef.current = true;
+        if (reason) {
+            onLog?.(
+                t(
+                    `[分镜生成] 已锁定环境资产门闩，等待 ENV 资产设计完成后再启动（${reason}）`,
+                    `[Storyboard] ENV asset gate armed; waiting for environment asset design (${reason})`
+                ),
+                'info'
+            );
+        }
+    }, [onLog, t]);
 
     const isEnvironmentAssetDesignReady = useCallback(async () => {
         if (environmentAssetReadyRef.current) return true;
@@ -6742,13 +6750,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             environmentAssetDesignPendingRef.current = false;
             return true;
         }
-        // This run's asset_design_environment (env + poster) is still in flight:
-        // never treat stale episode JSON from a prior run as ready.
-        if (environmentAssetDesignPendingRef.current) {
+        // This run's asset_design_environment is still in flight, or analysis is active
+        // but ENV has not been explicitly marked ready yet — never treat leftover episode
+        // JSON / character/prop completion as opening the storyboard gate.
+        if (
+            environmentAssetDesignPendingRef.current
+            || (analysisRunInFlightRef.current && !environmentAssetReadyRef.current)
+        ) {
             return false;
         }
-        // Resume / residual after this run's env node settled (or scene-only paths):
-        // persisted env/poster design is enough to open the gate.
+        // Idle resume / residual after env settled: persisted ENV design opens the gate.
         if (hasPersistedEnvironmentAssetDesign()) {
             environmentAssetReadyRef.current = true;
             return true;
@@ -12211,7 +12222,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                             highlightHint: assetImportReady ? buildAssetReadyHint(pData.key) : '',
                         });
 
-                        // Storyboard gate: release as soon as environment visual assets are ready.
+                        // Storyboard gate: ENV asset design only — never open on character/prop completion.
                         if (pData.key === 'environments' && assetImportReady) {
                             markEnvironmentAssetDesignReady(`env-subtask-ok:${subtaskTraceId}`);
                         }
@@ -15210,6 +15221,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             let postImportSceneSubjectReport = null;
 
             if (needsSceneOrchestration && needsAssetDesign) {
+                armEnvironmentAssetDesignGate('resume-scene-and-assets');
                 const [sceneOutcome, assetOutcome] = await Promise.allSettled([
                     runSceneOrchestrationResumeBranch(),
                     runAssetDesignResumeBranch(),
@@ -15225,8 +15237,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 importReport = sceneOutcome.value || importReport;
                 postImportSceneSubjectReport = assetOutcome.value || null;
             } else if (needsSceneOrchestration) {
+                // Assets already complete — open ENV gate so per-scene storyboard can start after import.
+                if (hasPersistedEnvironmentAssetDesign()) {
+                    markEnvironmentAssetDesignReady('resume-env-already-persisted');
+                } else {
+                    markEnvironmentAssetDesignReady('resume-scene-only-no-env-rows-or-payload');
+                }
                 importReport = await runSceneOrchestrationResumeBranch();
             } else {
+                armEnvironmentAssetDesignGate('resume-assets-only');
                 postImportSceneSubjectReport = await runAssetDesignResumeBranch();
             }
 
@@ -15291,12 +15310,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeEpisode?.ai_scene_analysis_result,
         activeEpisode?.ai_scene_analysis_subject_index,
         activeEpisode?.id,
+        armEnvironmentAssetDesignGate,
         assertWorkspaceSceneImportComplete,
         buildStage2_2UserInputFromStage1,
         buildCompletedAnalysisUiReport,
         canSkipBatchSceneImport,
         fetchScenes,
+        hasPersistedEnvironmentAssetDesign,
         importScenesFromPerScenePatchMap,
+        markEnvironmentAssetDesignReady,
         normalizeLlmMarkdownTable,
         onLog,
         parseMarkdownTable,
@@ -16208,6 +16230,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
 
                 if (onLog) onLog(t('资产清单已就绪，正在同时进行场景编排与资产设计…', 'Asset inventory ready; scene orchestration and asset design are running together...'), 'info');
+
+                // Arm ENV gate before scene orchestration can import + kick off storyboard,
+                // so character/prop finishing first (or stale ENV JSON) cannot open the gate.
+                armEnvironmentAssetDesignGate('advanced-after-2.1');
 
                 // Flip phase immediately so the Subject Index "Edit" control becomes available
                 // while scene orchestration / asset design continue in parallel.
@@ -17212,6 +17238,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 }
             );
 
+            armEnvironmentAssetDesignGate('restart-stage2-parallel');
             const [sceneOutcome, assetOutcome] = await Promise.allSettled([
                 runSceneOrchestrationRestartBranch(),
                 runAssetDesignRestartBranch(),

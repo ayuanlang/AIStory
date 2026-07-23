@@ -446,6 +446,11 @@ def _build_scene_subject_image_prompts_cn_section(
     *,
     scene_id: Optional[int] = None,
 ) -> str:
+    """Inject ENV-only generation_prompt_cn for scene-linked environments.
+
+    Storyboard optical anchoring needs environment CN prompts only.
+    CHAR/PROP image prompts are intentionally excluded from this injection.
+    """
     if not subject_match_keys:
         return ""
 
@@ -461,35 +466,22 @@ def _build_scene_subject_image_prompts_cn_section(
                 return True
         return False
 
-    type_order = {"character": 0, "prop": 1, "environment": 2, "cover": 3}
     matched_entities = [
         ent for ent in (project_entities or [])
         if not bool(getattr(ent, "is_deleted", False))
+        and _normalize_subject_entity_type(getattr(ent, "type", None)) == "environment"
         and _entity_matches_subject_keys(ent)
         and str(getattr(ent, "generation_prompt_cn", None) or "").strip()
     ]
-    matched_entities.sort(
-        key=lambda ent: (
-            type_order.get(_normalize_subject_entity_type(getattr(ent, "type", None)), 9),
-            int(getattr(ent, "id", 0) or 0),
-        )
-    )
+    matched_entities.sort(key=lambda ent: int(getattr(ent, "id", 0) or 0))
 
     prompt_lines: List[str] = []
     seen_refs: set = set()
     for ent in matched_entities:
-        normalized_type = _normalize_subject_entity_type(getattr(ent, "type", None)) or "character"
         canonical_name = str(getattr(ent, "name", None) or getattr(ent, "name_en", None) or "").strip()
         if not canonical_name:
             continue
-        if normalized_type == "character":
-            subject_ref = f"CHAR:[@{canonical_name}]"
-        elif normalized_type == "prop":
-            subject_ref = f"PROP:[{canonical_name}]"
-        elif normalized_type == "environment":
-            subject_ref = f"ENV:[{canonical_name}]"
-        else:
-            subject_ref = f"COVER:[{canonical_name}]"
+        subject_ref = f"ENV:[{canonical_name}]"
         if subject_ref in seen_refs:
             continue
         seen_refs.add(subject_ref)
@@ -500,7 +492,7 @@ def _build_scene_subject_image_prompts_cn_section(
 
     if not prompt_lines:
         logger.info(
-            "[_build_shot_prompts] no scene subject image prompts matched scene_id=%s keys=%s",
+            "[_build_shot_prompts] no scene ENV image prompts matched scene_id=%s keys=%s",
             scene_id,
             len(subject_match_keys),
         )
@@ -508,15 +500,16 @@ def _build_scene_subject_image_prompts_cn_section(
 
     body = (
         "# Scene Subject Image Prompts (CN)\n"
-        "Authoritative Chinese image-generation prompts for scene-involved subjects only. "
-        "Use for visual identity consistency (appearance, materials, palette, anchor features, spatial tone) when writing Video Content (CN). "
-        "Translate into dynamic video language; do not paste static framing/canvas instructions verbatim. "
+        "Authoritative Chinese image-generation prompts for scene-linked ENVIRONMENT assets only "
+        "(ENV generation_prompt_cn for optical anchoring). "
+        "Do NOT expect CHAR/PROP prompts here — character/prop appearance is reference-image bound downstream. "
+        "Translate ENV optics into dynamic video language; do not paste static framing/canvas instructions verbatim. "
         "Entity naming authority remains Scene Subject Index.\n"
         + "\n".join(prompt_lines)
         + "\n"
     )
     logger.info(
-        "[_build_shot_prompts] injected scene subject image prompts scene_id=%s keys=%s rows=%s",
+        "[_build_shot_prompts] injected scene ENV image prompts scene_id=%s keys=%s rows=%s",
         scene_id,
         len(subject_match_keys),
         len(prompt_lines),

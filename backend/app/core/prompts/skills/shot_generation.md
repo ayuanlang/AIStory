@@ -94,12 +94,12 @@ Beats → AI Shot List；主列 `Video Content (CN)`，`Shot Logic (CN)` **必�
 3. 高风险 → 改机位/降复杂/局部特写（**不改** Beat）；完成 §二.8 后出表。
 
 ### 一、输入继承与总控 (Inputs & Semantics)
-0. **运行时注入边界（强制）**：User Prompt 含 `# Project Context`、`# Core Scene Info`、`# Scene Subject Index`、`# Scene Subject Image Prompts (CN)` 四块（后两者按本场景过滤，仅含涉及实体）。**禁止**假设存在 `# Relevant Subject Packets`、`# Entity Reference` 或 `generation_prompt_en` 注入。
-   - **`# Scene Subject Index`（实体存在性）**：**唯一权威**为实体**命名与类型**——哪些 `CHAR:`/`PROP:`/`ENV:` 在本场景登记存在；**只传递存在情况**，**不要求、禁止**在 Video 中据此复述外形/相貌/发型/服饰/道具造型/材质细节。
+0. **运行时注入边界（强制）**：User Prompt 含 `# Project Context`、`# Core Scene Info`、`# Scene Subject Index`、`# Scene Subject Image Prompts (CN)` 四块。**禁止**假设存在 `# Relevant Subject Packets`、`# Entity Reference` 或 `generation_prompt_en` 注入。
+   - **`# Scene Subject Index`（实体存在性）**：按本场景过滤；**唯一权威**为实体**命名与类型**——哪些 `CHAR:`/`PROP:`/`ENV:` 在本场景登记存在；**只传递存在情况**，**不要求、禁止**在 Video 中据此复述外形/相貌/发型/服饰/道具造型/材质细节。
    - **`# Core Scene Info`（Beat 权威）**：Beat 级空间/动作/对白/环境信息**唯一权威**（Beats generation 成稿）。
-   - **`# Scene Subject Image Prompts (CN)`（参考图绑定，管道侧）**：各实体设定图/参考图由下游生视频环节**随附绑定**；拆镜时**可读 ENV 的 CN prompt 提取光学体系**（§0.06），**禁止**在 `Video Content (CN)` 中复述 CHAR/PROP/ENV 的外形、材质、身份锚点或整段粘贴 CN prompt；无对应参考图者**不得自拟外观**。不得自造 Subject Index 外的新实体名。
+   - **`# Scene Subject Image Prompts (CN)`（ENV 光学锚定，强制）**：管道**仅注入本场景关联的 ENV** `generation_prompt_cn`；**不注入** CHAR/PROP。拆镜时**只读 ENV CN prompt 提取光学体系**（§0.06）；CHAR/PROP 设定图由下游生视频环节随附绑定，**禁止**在 `Video Content (CN)` 中复述外形/材质/身份锚点或整段粘贴 CN prompt；无对应参考图者**不得自拟外观**。不得自造 Subject Index 外的新实体名。
    - **本分镜 Video 重心**：基于 Beat 建置 + ENV 资产光学 + 运镜/景深/时序/光影（§三–§五、§0.06）；实体用 Index 标准标签 + 空间/动作/表情/交互 + 环境融合光学，**不写设定图级外形描写**（§0.05）。
-0.05 **实体外形禁复述（强制，参考图负责制）**：凡已有 `# Scene Subject Image Prompts (CN)` / 参考图绑定的 `CHAR:`/`PROP:`/`ENV:`，**外形/相貌/发型/服饰/道具造型/材质/身份锚点由参考图保障**，`Video Content (CN)` **禁止**重复描写或转译 CN prompt 中的静态视觉身份。
+0.05 **实体外形禁复述（强制，参考图负责制）**：外形/相貌/发型/服饰/道具造型/材质/身份锚点由参考图保障（ENV 光学取自本段注入的 ENV CN；CHAR/PROP 取自下游绑定图），`Video Content (CN)` **禁止**重复描写或转译设定图级静态视觉身份。
    - **允许写**：`TYPE:[名称]` 标准标签｜空间落位/朝向/视线/持握（§七.3）｜动作/表情/微表演/对白 `(Pn)`（§六）｜ENV 结构/陈设等**环境资产**可见细节与**物理**微动（§七.7；**白名单实体、禁光影**）｜**发光电子设备亮屏时的屏面可读内容**（界面类型/文案/来电·通话态等，= Beat 态信息继承，≠ PROP 外形复述；见 §三.1「亮屏内容」）。**光学融入**（接地影、环境色溢出、环境 Fill、轮廓分离、灯闪/条纹光等）**只写**「动态连续光影/焦点」「光线连动弧光」（§0.06），**禁止**写入 P 段/`(Pn)`/§七.7。
    - **禁止写**：脸型/五官/妆发/肤色质感/服装版型材质/道具造型细节/七必锚/选角级描述；禁止整段粘贴或改写 CN prompt；禁止与参考图明显矛盾的自创外形；**禁止**只写「屏幕亮着/蓝光屏」而无上游 Beat 已给的具体界面内容（上游未给则标回流，不得自造无关 UI）。
    - **近镜对白（CU/MCU/ECU）**：只写 **ENV 动机光下**的受光面/口型可读/微表情动态（§四.5-E），禁设定图级外形。**读脸近镜服从上游朝向**：背对/侧背且未转正/未切可读 ENV → 禁自拟脸部 CU（只写可见后脑/肩颈/侧影）。
