@@ -667,9 +667,46 @@ const collectOrchestrationResetSceneIds = (units, episodePrefix) => {
 
 const SCENES_BLOCK_START_TOKEN = '[SCENES_BLOCK_START]';
 const SCENES_BLOCK_END_TOKEN = '[SCENES_BLOCK_END]';
+const ENTITY_PROFILE_START_TOKEN = '[ENTITY_PROFILE_START]';
+const ENTITY_PROFILE_END_TOKEN = '[ENTITY_PROFILE_END]';
 const BLOCK_MARKER_LINE_PATTERN = /^\s*`?\[(?:SCENES?_BLOCK_(?:START|END))\]`?\s*$/gim;
 const SCENE_MARKER_LINE_PATTERN = /^\s*`?\[SCENE_(?:START|END)(?::[^\]]+)?\]`?\s*$/gim;
 const MIN_SCENE_UNIT_BODY_CHARS = 50;
+
+/**
+ * Extract Part 2【角色设定】block (`[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]`)
+ * from Stage 1 adapted script. Falls back to bare 【角色设定】… before first SCENE_START.
+ */
+const extractEntityProfileBlockFromAdapted = (adaptedScript) => {
+    const text = String(adaptedScript || '');
+    if (!text.trim()) return '';
+
+    const startRe = /`?\[ENTITY_PROFILE_START(?::([^\s\]]+))?\]`?/i;
+    const endRe = /`?\[ENTITY_PROFILE_END(?::([^\s\]]+))?\]`?/i;
+    const startMatch = startRe.exec(text);
+    if (startMatch) {
+        const afterStart = text.slice(startMatch.index);
+        const endMatch = endRe.exec(afterStart);
+        if (endMatch) {
+            return afterStart.slice(0, endMatch.index + endMatch[0].length).trim();
+        }
+        const sceneMatch = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/i.exec(afterStart);
+        let body = (sceneMatch ? afterStart.slice(0, sceneMatch.index) : afterStart).replace(/\s+$/, '');
+        if (body && !endRe.test(body)) {
+            body = `${body}\n${ENTITY_PROFILE_END_TOKEN}`;
+        }
+        return body.trim();
+    }
+
+    const headerIdx = text.search(/【角色设定】/);
+    if (headerIdx < 0) return '';
+    const firstScene = /`?\[SCENE_START(?::([^\s\]]+))?\]`?/i.exec(text);
+    if (firstScene && headerIdx >= firstScene.index) return '';
+    const end = firstScene ? firstScene.index : text.length;
+    const body = text.slice(headerIdx, end).trim();
+    if (!body) return '';
+    return `${ENTITY_PROFILE_START_TOKEN}\n${body}\n${ENTITY_PROFILE_END_TOKEN}`;
+};
 
 const stripBlockLevelMarkersFromSceneText = (text) => (
     String(text || '')
@@ -1081,12 +1118,13 @@ const extractSceneEnvAndBeatsBody = (sceneText, sceneId = '') => {
 };
 
 /**
- * Rebuild Stage 2.1 script: per-scene ENV_BLOCK + Beats only
+ * Rebuild Stage 2.1 script: optional【角色设定】+ per-scene ENV_BLOCK + Beats
  * (replaces full Stage 1 adapted script).
  */
 const buildAssetsExtractionScriptFromAdapted = (adaptedScript) => {
     const script = String(adaptedScript || '').trim();
     if (!script) return '';
+    const entityProfile = extractEntityProfileBlockFromAdapted(script);
     let units = [];
     try {
         units = parseSceneUnitsFromScriptMarkersText(script);
@@ -1094,7 +1132,9 @@ const buildAssetsExtractionScriptFromAdapted = (adaptedScript) => {
         return script;
     }
     if (!units.length) return script;
-    const parts = [SCENES_BLOCK_START_TOKEN];
+    const parts = [];
+    if (entityProfile) parts.push(entityProfile);
+    parts.push(SCENES_BLOCK_START_TOKEN);
     let fallbackCount = 0;
     units.forEach((unit) => {
         const sceneId = String(unit?.sceneId || '').trim();
@@ -2895,12 +2935,20 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const startIdx = startMatch.index;
             const afterStart = source.slice(startIdx + startMatch[0].length);
             const endMatches = [...afterStart.matchAll(endRegex)];
+            let scenesBlock = '';
             if (!endMatches.length) {
-                return source.slice(startIdx).trim();
+                scenesBlock = source.slice(startIdx).trim();
+            } else {
+                const lastEnd = endMatches[endMatches.length - 1];
+                const endIdxAbs = startIdx + startMatch[0].length + lastEnd.index + lastEnd[0].length;
+                scenesBlock = source.slice(startIdx, endIdxAbs).trim();
             }
-            const lastEnd = endMatches[endMatches.length - 1];
-            const endIdxAbs = startIdx + startMatch[0].length + lastEnd.index + lastEnd[0].length;
-            return source.slice(startIdx, endIdxAbs).trim();
+            // Keep Part 2【角色设定】before SCENES_BLOCK for Stage 2.1 entity_attributes.
+            const entityProfile = extractEntityProfileBlockFromAdapted(source.slice(0, startIdx));
+            if (entityProfile) {
+                return `${entityProfile}\n${scenesBlock}`.trim();
+            }
+            return scenesBlock;
         };
 
         const trimScriptBody = (candidateText) => {
@@ -2908,7 +2956,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             if (!candidate) return '';
 
             // Prefer strict scene block markers when available:
-            // keep only [SCENES_BLOCK_START] ... [SCENES_BLOCK_END].
+            // keep [ENTITY_PROFILE…] (if any) + [SCENES_BLOCK_START] ... [SCENES_BLOCK_END].
             const strictBlock = extractScenesBlockOnly(candidate);
             if (strictBlock) return strictBlock;
 
@@ -3018,11 +3066,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
     const buildStage2UserInputFromStage1 = useCallback((stage1Text, reuseSubjectAssets = []) => {
         const adaptedScriptText = extractStage1AdaptedScriptBody(stage1Text);
-        // Stage 2.1: per-scene ENV_BLOCK + Beats only (not full Stage 1 adapted script).
+        // Stage 2.1: optional【角色设定】+ per-scene ENV_BLOCK + Beats (not full Stage 1 adapted script).
         const slimScriptText = buildAssetsExtractionScriptFromAdapted(adaptedScriptText) || adaptedScriptText;
         const stage1VisualBackfillJson = extractProjectVisualBackfillJsonText(stage1Text);
         const stage2InputParts = [
-            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
+            '请执行第二阶段的第一步：“资产清单”生成（Assets Extraction）。输入为（可选）角色设定块（`[ENTITY_PROFILE_START]`…`[ENTITY_PROFILE_END]`）+ 逐场提取的环境块（`[ENV_BLOCK_START]`…`[ENV_BLOCK_END]`，含【主环境】+【未落环境实体清单】+【衍生环境】）与 Beat 块（`[BEAT_START]`…`[BEAT_END]`），据此提取实体并建立 Subject Index；角色设定块中已摘录的外形/性情/特定动作须写入对应 `entity_attributes`；【未落环境实体清单】供 PROP/建置核销线索，禁止据此另建 ENV 行；项目信息与第一阶段“全局风格”为补充约束；如与原始剧本存在差异，一律以上游结果为准。',
         ];
 
         const projectContextSection = buildStage1ProjectContextSection();
@@ -3056,7 +3104,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         // Keep SCENES_BLOCK as the last section so nothing appears after [SCENES_BLOCK_END].
         stage2InputParts.push(wrapInjectionSection(
             '优化后剧本',
-            `[优化后剧本 - Stage 2.1权威输入（逐场环境块+Beat）]\n${slimScriptText || ''}`
+            `[优化后剧本 - Stage 2.1权威输入（角色设定+逐场环境块+Beat）]\n${slimScriptText || ''}`
         ));
 
         return {
@@ -16070,7 +16118,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAdaptationText(adaptedScriptText);
                 if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
                     onLog(
-                        `Stage 2.1 输入已瘦身为逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
+                        `Stage 2.1 输入已瘦身为角色设定+逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
                         'info'
                     );
                 }
@@ -16935,7 +16983,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             setAdaptationText(adaptedScriptText);
             if (onLog && slimScriptText && slimScriptText !== adaptedScriptText) {
                 onLog(
-                    `Stage 2.1 输入已瘦身为逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
+                    `Stage 2.1 输入已瘦身为角色设定+逐场环境块+Beat：${adaptedScriptText.length}→${slimScriptText.length} 字`,
                     'info'
                 );
             }

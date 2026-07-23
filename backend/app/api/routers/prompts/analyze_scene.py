@@ -40,6 +40,7 @@ from app.services.analyze_scene_subject_checks import (  # noqa: E402,F401
     _detect_subject_index_coverage_warnings,
     _collect_subject_keys_by_bucket,
     _detect_subjects_json_extraction_gap,
+    _format_subject_ref,
 )
 from app.services.analyze_scene_text_ops import (  # noqa: E402,F401
     _trim_to_scenes_block,
@@ -736,32 +737,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     effective_scene_analysis_mode,
                 )
         if (not is_scene_beats_stage) and isinstance(reuse_subject_assets, list) and len(reuse_subject_assets) > 0:
-            def _normalize_subject_type(raw_type: Any) -> str:
-                t = str(raw_type or "").strip().lower()
-                if t in {"character", "characters", "char", "人物", "角色"}:
-                    return "character"
-                if t in {"prop", "props", "道具", "物件"}:
-                    return "prop"
-                if t in {"environment", "environments", "env", "场景", "环境"}:
-                    return "environment"
-                if t in {"cover", "covers", "poster", "posters", "封面", "封面海报"}:
-                    return "cover"
-                return ""
-
-            def _format_subject_ref(name: str, normalized_type: str) -> str:
-                clean_name = _normalize_subject_name(name)
-                if not clean_name:
-                    return ""
-                if normalized_type == "character":
-                    return f"CHAR:[@{clean_name}]"
-                if normalized_type == "prop":
-                    return f"PROP:[{clean_name}]"
-                if normalized_type == "environment":
-                    return f"ENV:[{clean_name}]"
-                if normalized_type == "cover":
-                    return f"COVER:[{clean_name}]"
-                return f"SUBJECT:[{clean_name}]"
-
             normalized_assets = []
             for item in reuse_subject_assets:
                 if not isinstance(item, dict):
@@ -770,7 +745,7 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                 if not name:
                     continue
                 asset_type = str(item.get("type") or "").strip()
-                normalized_type = _normalize_subject_type(asset_type)
+                normalized_type = _normalize_subject_index_entity_type(asset_type)
                 description = str(item.get("description") or "").strip()
                 anchor_description = str(item.get("anchor_description") or "").strip()
                 normalized_assets.append({

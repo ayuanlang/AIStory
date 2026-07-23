@@ -6,11 +6,12 @@ import { api, getTransactions, updateUserCredits, getBillingOptions, getBillingF
 import Footer from '../components/Footer';
 import LlmLogViewer from '../components/LlmLogViewer';
 import QueueAdmin from '../components/QueueAdmin';
+import MemoryMonitorAdmin from '../components/MemoryMonitorAdmin';
 import GroupsAdmin from '../components/GroupsAdmin';
 import ProjectRetentionAdmin from '../components/ProjectRetentionAdmin';
 import BillingReconcileAdmin from '../components/BillingReconcileAdmin';
 import UserEditModal from '../components/UserEditModal';
-import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search, Archive, Scale } from 'lucide-react';
+import { Shield, User, Users, Key, Check, X, Crown, Settings, DollarSign, Activity, List, Plus, Trash2, Edit2, RefreshCw, CreditCard, Upload, Download, Mail, ArrowLeft, HardDrive, Database, Search, Archive, Scale, Cpu } from 'lucide-react';
 import { confirmUiMessage, promptUiMessage } from '../lib/uiMessage';
 
 import { getUiLang, tUI } from '../lib/uiLang';
@@ -5506,6 +5507,7 @@ const UserAdmin = () => {
         { id: 'cost_estimation', label: t('成本估算', 'Cost Estimation'), icon: DollarSign },
         { id: 'system_api', label: t('系统 API', 'System API'), icon: Key },
         { id: 'queue', label: t('队列', 'Queue'), icon: Activity },
+        { id: 'memory', label: t('内存监控', 'Memory'), icon: Cpu },
         { id: 'config_sync', label: t('配置同步', 'Config Sync'), icon: Database },
         { id: 'pricing_rules', label: t('计费规则', 'Pricing Rules'), icon: DollarSign },
         { id: 'oss_pools', label: t('OSS 存储配置', 'OSS Storage'), icon: Database },
@@ -6104,6 +6106,7 @@ const UserAdmin = () => {
 
                     {/* QUEUE TAB */}
                     {activeTab === 'queue' && <QueueAdmin />}
+                    {activeTab === 'memory' && <MemoryMonitorAdmin />}
 
                     {/* GROUPS TAB */}
                     {activeTab === 'groups' && <GroupsAdmin />}

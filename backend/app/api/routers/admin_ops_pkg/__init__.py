@@ -7,8 +7,9 @@ from app.api.routers.admin_ops_pkg import shared as _shared
 
 from app.api.routers.admin_ops_pkg import storage as _storage  # noqa: F401,E402
 from app.api.routers.admin_ops_pkg import configs as _configs  # noqa: F401,E402
+from app.api.routers.admin_ops_pkg import memory as _memory  # noqa: F401,E402
 
-_SECTION_MODULES = (_storage, _configs)
+_SECTION_MODULES = (_storage, _configs, _memory)
 _SKIP = {"__name__", "__file__", "__package__", "__loader__", "__spec__", "__doc__", "__builtins__"}
 
 

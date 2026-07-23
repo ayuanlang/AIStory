@@ -1737,10 +1737,20 @@ def extract_adapted_script_from_beats_user_input(user_text: str) -> str:
     if start_match:
         end_match = SCENES_BLOCK_END_PATTERN.search(normalized, start_match.end())
         if end_match:
-            return normalized[start_match.start(): start_match.end() + end_match.end()].strip()
+            scenes_block = normalized[start_match.start(): start_match.end() + end_match.end()].strip()
+        else:
+            scenes_block = normalized[start_match.start():].strip()
+        entity_profile = extract_entity_profile_block_from_adapted(normalized[: start_match.start()])
+        if entity_profile:
+            return f"{entity_profile}\n{scenes_block}".strip()
+        return scenes_block
     start_idx = text.find(SCENES_BLOCK_START_TOKEN)
     if start_idx >= 0:
-        return text[start_idx:].strip()
+        scenes_block = text[start_idx:].strip()
+        entity_profile = extract_entity_profile_block_from_adapted(text[:start_idx])
+        if entity_profile:
+            return f"{entity_profile}\n{scenes_block}".strip()
+        return scenes_block
     return ""
 
 

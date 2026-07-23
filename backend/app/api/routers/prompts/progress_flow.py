@@ -999,7 +999,7 @@ async def run_scene_analysis_flow_node(
                                 slim_script,
                             )
                             logger.info(
-                                "[剧本分析流程] assets_extraction 已替换为逐场环境+Beat 输入 | chars=%s→%s",
+                                "[剧本分析流程] assets_extraction 已替换为角色设定+逐场环境+Beat 输入 | chars=%s→%s",
                                 len(adapted_for_assets),
                                 len(slim_script),
                             )

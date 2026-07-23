@@ -111,6 +111,42 @@ def _read_persisted_chars(episode: Episode, field_name: str) -> int:
     return len(str(getattr(episode, field_name, "") or ""))
 
 
+def _extract_entity_profile_prefix_before_scenes(candidate_text: str, scenes_start_idx: int) -> str:
+    """Keep Part 2【角色设定】(`[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]`) before SCENES_BLOCK."""
+    if scenes_start_idx <= 0:
+        return ""
+    preamble = str(candidate_text or "")[:scenes_start_idx]
+    if not preamble.strip():
+        return ""
+
+    profile_start = re.search(
+        r"`?\[ENTITY_PROFILE_START(?::[^\s\]]+)?\]`?",
+        preamble,
+        flags=re.IGNORECASE,
+    )
+    if profile_start:
+        after_start = preamble[profile_start.start():]
+        profile_end = re.search(
+            r"`?\[ENTITY_PROFILE_END(?::[^\s\]]+)?\]`?",
+            after_start,
+            flags=re.IGNORECASE,
+        )
+        if profile_end:
+            return after_start[: profile_end.end()].strip()
+        body = after_start.rstrip()
+        if body and not re.search(r"`?\[ENTITY_PROFILE_END(?::[^\s\]]+)?\]`?", body, flags=re.IGNORECASE):
+            body = f"{body}\n[ENTITY_PROFILE_END]"
+        return body.strip()
+
+    legacy = re.search(r"【角色设定】", preamble)
+    if not legacy:
+        return ""
+    body = preamble[legacy.start():].strip()
+    if not body:
+        return ""
+    return f"[ENTITY_PROFILE_START]\n{body}\n[ENTITY_PROFILE_END]"
+
+
 def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
     candidate = str(candidate_text or "").strip()
     if not candidate:
@@ -123,17 +159,13 @@ def _trim_stage1_adapted_script_body(candidate_text: str) -> str:
         scenes_end = re.search(r"`?\[SCENES_BLOCK_END\]`?", after_start, flags=re.IGNORECASE)
         if scenes_end:
             end_idx_abs = scenes_start.end() + scenes_end.end()
-            return candidate[start_idx:end_idx_abs].strip()
-        return candidate[start_idx:].strip()
-
-    if scenes_start:
-        start_idx = scenes_start.start()
-        after_start = candidate[scenes_start.end():]
-        scenes_end = re.search(r"`?\[SCENES_BLOCK_END\]`?", after_start, flags=re.IGNORECASE)
-        if scenes_end:
-            end_idx_abs = scenes_start.end() + scenes_end.end()
-            return candidate[start_idx:end_idx_abs].strip()
-        return candidate[start_idx:].strip()
+            scenes_block = candidate[start_idx:end_idx_abs].strip()
+        else:
+            scenes_block = candidate[start_idx:].strip()
+        entity_profile = _extract_entity_profile_prefix_before_scenes(candidate, start_idx)
+        if entity_profile:
+            return f"{entity_profile}\n{scenes_block}".strip()
+        return scenes_block
 
     if re.search(r"\[SCENE_START:", candidate, flags=re.IGNORECASE):
         end_marker = re.search(

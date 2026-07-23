@@ -243,6 +243,7 @@ def _is_polling_log_suppressed(method: str, path: str) -> bool:
         r"^GET /api/v1/episodes/\d+/shots$",
         r"^GET /api/v1/projects/\d+/script_generator/episodes/scripts/status$",
         r"^GET /api/v1/episodes/\d+/scenes/ai_shots/batch/status$",
+        r"^GET /api/v1/admin/memory-stats$",
         r"^GET /api/v1/episodes/\d+/script_generator/scenes/status$",
         r"^GET /api/v1/episodes/\d+/shots/batch-media/status$",
         r"^GET /api/v1/billing/recharge/status/[^/]+$",

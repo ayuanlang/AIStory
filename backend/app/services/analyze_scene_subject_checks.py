@@ -851,3 +851,20 @@ def _detect_subjects_json_extraction_gap(raw_text: str, selected_payload: Dict[s
         "warnings": warnings,
         "diagnosis": diagnosis,
     }
+
+
+def _format_subject_ref(name: str, normalized_type: str) -> str:
+    """Canonical CHAR/PROP/ENV/COVER subject-ref token for reuse-asset prompts."""
+    clean_name = _normalize_subject_name(name)
+    if not clean_name:
+        return ""
+    if normalized_type == "character":
+        return f"CHAR:[@{clean_name}]"
+    if normalized_type == "prop":
+        return f"PROP:[{clean_name}]"
+    if normalized_type == "environment":
+        return f"ENV:[{clean_name}]"
+    if normalized_type == "cover":
+        return f"COVER:[{clean_name}]"
+    return f"SUBJECT:[{clean_name}]"
+

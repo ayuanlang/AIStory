@@ -434,17 +434,22 @@ def test_batch_media_thinned_reexports_pipeline():
         SHOT_MEDIA_BATCH_STATUS_KEY,
         _read_shot_media_batch_status,
     )
+    from app.services.shot_media_batch_jobs import (
+        _is_shot_video_batch_eligible,
+        _run_shot_media_batch_job,
+    )
     path = Path(__file__).resolve().parents[1] / "app" / "api" / "routers" / "generation" / "batch_media.py"
-    assert len(path.read_text(encoding="utf-8").splitlines()) < 1800
+    jobs_path = Path(__file__).resolve().parents[1] / "app" / "services" / "shot_media_batch_jobs.py"
+    assert len(path.read_text(encoding="utf-8").splitlines()) < 500
     assert callable(bm._append_video_api_ref_mapping)
-    assert callable(bm._is_shot_video_batch_eligible)
-    assert callable(bm._run_shot_media_batch_job)
+    assert bm._is_shot_video_batch_eligible is _is_shot_video_batch_eligible
+    assert bm._run_shot_media_batch_job is _run_shot_media_batch_job
     assert bm._read_shot_media_batch_status is _read_shot_media_batch_status
     assert bm.SHOT_MEDIA_BATCH_STATUS_KEY == SHOT_MEDIA_BATCH_STATUS_KEY
-    # Import appears before eligible helper uses _parse_shot_tech
     src = path.read_text(encoding="utf-8")
-    assert src.index("video_ref_pipeline import") < src.index("def _is_shot_video_batch_eligible")
     assert "from app.services.shot_media_batch_status import" in src
+    assert "from app.services.shot_media_batch_jobs import" in src
+    assert "def _run_shot_media_batch_job" in jobs_path.read_text(encoding="utf-8")
 
 
 def test_video_runner_uses_ref_pipeline_not_batch_media():
@@ -744,6 +749,9 @@ def test_analyze_scene_uses_shot_prompt_context():
     assert az._estimate_tokens is _estimate_tokens
     assert az._detect_output_integrity is _detect_output_integrity
     assert _normalize_subject_name("CHAR:[@Hero]") == "Hero"
+    from app.services.analyze_scene_subject_checks import _format_subject_ref
+    assert az._format_subject_ref is _format_subject_ref
+    assert _format_subject_ref("Hero", "character") == "CHAR:[@Hero]"
     assert _infer_subject_index_allowed_types_for_request(
         mode_lower="entity_design_prop",
         prompt_file_lower="",

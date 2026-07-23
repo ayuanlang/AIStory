@@ -8,11 +8,16 @@ from typing import Any, Dict, List, Optional
 
 from app.core.prompt_injection import unwrap_injection_section, wrap_injection_section
 from app.services.llm_markdown_sanitize import sanitize_subject_index_text
-from app.services.script_analysis_flow import SCENES_BLOCK_END_TOKEN, SCENES_BLOCK_START_TOKEN
+from app.services.script_analysis_flow import (
+    SCENES_BLOCK_END_TOKEN,
+    SCENES_BLOCK_START_TOKEN,
+    extract_entity_profile_block_from_adapted,
+)
 
 logger = logging.getLogger("api_logger")
 
 def _trim_to_scenes_block(raw_text: Any) -> str:
+    """Trim to SCENES_BLOCK, preserving leading `[ENTITY_PROFILE_START]…[ENTITY_PROFILE_END]` when present."""
     text = str(raw_text or "")
     if not text.strip():
         return ""
@@ -21,8 +26,13 @@ def _trim_to_scenes_block(raw_text: Any) -> str:
         return text
     end_idx = text.find(SCENES_BLOCK_END_TOKEN, start_idx + len(SCENES_BLOCK_START_TOKEN))
     if end_idx < 0:
-        return text[start_idx:].lstrip()
-    return text[start_idx:end_idx + len(SCENES_BLOCK_END_TOKEN)].strip()
+        scenes_block = text[start_idx:].lstrip()
+    else:
+        scenes_block = text[start_idx:end_idx + len(SCENES_BLOCK_END_TOKEN)].strip()
+    entity_profile = extract_entity_profile_block_from_adapted(text[:start_idx])
+    if entity_profile:
+        return f"{entity_profile}\n{scenes_block}".strip()
+    return scenes_block
 
 def _normalize_subject_index_entity_type(raw_type: Any) -> str:
     t = str(raw_type or "").strip().lower()

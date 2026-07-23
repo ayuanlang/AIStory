@@ -4125,6 +4125,13 @@ export const updateAdminQueueConfig = async (payload) => (await api.put('/admin/
 export const cancelAdminQueueTask = async (jobId) => (await api.post(`/admin/queue/tasks/${jobId}/cancel`)).data;
 export const cancelAllQueuedAdminTasks = async () => (await api.post('/admin/queue/tasks/cancel-queued')).data;
 
+export const getAdminMemoryStats = async (params = {}) =>
+    (await api.get('/admin/memory-stats', { params })).data;
+export const postAdminMemoryReclaim = async (payload = {}) =>
+    (await api.post('/admin/memory-reclaim', payload)).data;
+export const postAdminMemoryTracemalloc = async (payload = {}) =>
+    (await api.post('/admin/memory-tracemalloc', payload)).data;
+
 export const getApiRoutingMode = async () => {
     const response = await api.get('/settings/system/api_routing_mode');
     return response.data;

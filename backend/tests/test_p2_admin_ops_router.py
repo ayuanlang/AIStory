@@ -18,6 +18,9 @@ def test_admin_ops_exposes_core_routes():
     assert "/admin/smtp-config/broadcast" in paths
     assert "/admin/maintenance-status" in paths
     assert "/admin/maintenance-config" in paths
+    assert "/admin/memory-stats" in paths
+    assert "/admin/memory-reclaim" in paths
+    assert "/admin/memory-tracemalloc" in paths
 
 
 def test_admin_ops_schemas_importable():
