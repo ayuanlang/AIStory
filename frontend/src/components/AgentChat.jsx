@@ -197,6 +197,8 @@ const AgentChat = ({
     onHistoryChange = null,
     loadHistoryLabel = 'Load previous conversation',
     hideHeader = false,
+    /** When set, send this query once on mount if the chat is empty (e.g. diagnosis kickoff). */
+    autoStartQuery = '',
 }) => {
     const [historyByMode, setHistoryByMode] = useState({ project: [], system_management: [] });
     const [loading, setLoading] = useState(false);
@@ -217,6 +219,9 @@ const AgentChat = ({
     onSendCustomRef.current = onSendCustom;
     const onHistoryChangeRef = useRef(onHistoryChange);
     onHistoryChangeRef.current = onHistoryChange;
+    const handleSendRef = useRef(null);
+    const autoStartQueryRef = useRef(String(autoStartQuery || '').trim());
+    autoStartQueryRef.current = String(autoStartQuery || '').trim();
 
     // Persist history to localStorage whenever it changes (skip mid-stream placeholder messages)
     useEffect(() => {
@@ -368,6 +373,28 @@ const AgentChat = ({
             setStreaming(false);
         }
     }, [mode, context, customModeOnly]);
+
+    handleSendRef.current = handleSend;
+
+    // Kick off a default question once when the chat mounts empty (Strict Mode safe).
+    useEffect(() => {
+        const query = autoStartQueryRef.current;
+        if (!query) return undefined;
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            if (cancelled) return;
+            const currentMode = streamModeRef.current || 'project';
+            const currentHistory = Array.isArray(historyRef.current?.[currentMode])
+                ? historyRef.current[currentMode]
+                : [];
+            if (currentHistory.length > 0) return;
+            handleSendRef.current?.(query);
+        }, 0);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, []);
 
     const handleQuickAction = useCallback((actionType) => {
         if (actionType === 'confirm_write') {

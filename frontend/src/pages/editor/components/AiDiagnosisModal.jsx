@@ -6,6 +6,8 @@ import AgentChat from '../../../components/AgentChat';
 import { runScriptAnalysisAiDiagnosis } from '../../../services/api';
 
 const OPS_EMAIL = 'metawave@126.com';
+const DEFAULT_DIAGNOSIS_QUERY_ZH = '当前有什么问题，下一步该怎么办';
+const DEFAULT_DIAGNOSIS_QUERY_EN = 'What issues are there right now, and what should we do next?';
 
 const PAGE_PRESETS = {
     script_analysis: {
@@ -15,9 +17,9 @@ const PAGE_PRESETS = {
         titleZh: 'AI 诊断（Agent）',
         titleEn: 'AI Diagnosis (Agent)',
         descriptionZh:
-            'Agent 模式：可多轮对话。系统会带上操作手册、日志与本集工作区概况；你可追问细化建议。每轮对话按剧本分析接口计费；仅发送已有对话给运营不计费。',
+            '打开后自动发起首轮诊断（「当前有什么问题，下一步该怎么办」）。可多轮追问；后续会带上对话记忆、操作手册、日志与本集工作区概况。每轮按剧本分析接口计费；仅发送已有对话给运营不计费。',
         descriptionEn:
-            'Agent mode: multi-turn chat with the manual, logs, and workspace summary. Follow-ups are supported. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
+            'Opens with an automatic first diagnosis turn. Follow-ups include conversation memory plus the manual, logs, and workspace summary. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
     },
     assets: {
         pageScope: 'assets',
@@ -26,9 +28,9 @@ const PAGE_PRESETS = {
         titleZh: '资产 AI 诊断（Agent）',
         titleEn: 'Assets AI Diagnosis (Agent)',
         descriptionZh:
-            'Agent 模式：可多轮对话。系统会带上资产页操作手册、日志与当前资产工作区概况；你可追问细化建议。每轮对话按剧本分析接口计费；仅发送已有对话给运营不计费。',
+            '打开后自动发起首轮诊断（「当前有什么问题，下一步该怎么办」）。可多轮追问；后续会带上对话记忆、资产页操作手册、日志与当前资产工作区概况。每轮按剧本分析接口计费；仅发送已有对话给运营不计费。',
         descriptionEn:
-            'Agent mode: multi-turn chat with the assets manual, logs, and workspace summary. Follow-ups are supported. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
+            'Opens with an automatic first diagnosis turn. Follow-ups include conversation memory plus the assets manual, logs, and workspace summary. Each turn is billed via the script-analysis API; emailing an existing conversation to ops is free.',
     },
 };
 
@@ -234,11 +236,13 @@ export default function AiDiagnosisModal({
 
                 <div className="flex-1 min-h-0 overflow-hidden [&_.bg-card]:bg-transparent [&_.bg-card]:border-0 [&_.bg-card]:rounded-none [&_.bg-card]:shadow-none">
                     <AgentChat
+                        key={`${pageKey}:${episodeId || 'none'}:${open ? 'open' : 'closed'}`}
                         customModeOnly
                         hideHeader
+                        autoStartQuery={t(DEFAULT_DIAGNOSIS_QUERY_ZH, DEFAULT_DIAGNOSIS_QUERY_EN)}
                         customPlaceholder={t(
-                            '描述卡住的问题，或继续追问……',
-                            'Describe the blocker, or ask a follow-up…'
+                            '继续追问……（会带上本轮对话记忆）',
+                            'Ask a follow-up… (includes conversation memory)'
                         )}
                         loadHistoryLabel={t('加载上次诊断对话', 'Load previous diagnosis chat')}
                         historyStorageKey={preset.historyStorageKey}

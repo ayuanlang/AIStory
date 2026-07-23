@@ -164,7 +164,7 @@ def build_diagnosis_messages(
         messages.append(
             {
                 "role": "user",
-                "content": "请基于以上信息，先判断当前可能卡在哪里，并给出建议下一步。",
+                "content": "当前有什么问题，下一步该怎么办",
             }
         )
 
