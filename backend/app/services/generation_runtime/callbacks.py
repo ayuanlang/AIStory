@@ -328,8 +328,8 @@ def _compact_generation_callback_payload(payload: Dict[str, Any]) -> Dict[str, A
         "task_id": callback_task_id or None,
         "taskId": callback_task_id or None,
         "result_url": callback_result_url or None,
-        "error": str(payload.get("error") or "").strip() or None,
-        "failure_reason": str(payload.get("failure_reason") or "").strip() or None,
+        "error": str(payload.get("error") or "").strip()[:1024] or None,
+        "failure_reason": str(payload.get("failure_reason") or "").strip()[:1024] or None,
         "payload_truncated": True,
     }
 

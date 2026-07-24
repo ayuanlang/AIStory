@@ -13648,9 +13648,16 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setIsRetryingPhase2(false);
                 setActiveAnalysisTaskId('');
                 // Soft-stop monitoring only — keep restored progress logs; no failure/retry prompt.
+                const isFailStatus = ['failed', 'error', 'timeout', 'canceled', 'cancelled', 'stopped', 'not_found'].includes(terminalStatus);
                 setAnalysisFlowStatus((prev) => {
                     const phase = String(prev?.phase || '').trim().toLowerCase();
                     if (!phase || phase === 'idle' || ['completed', 'warning', 'failed'].includes(phase)) return prev;
+                    if (isFailStatus) {
+                        return {
+                            phase: 'failed',
+                            message: t('后台分析任务已异常终止。', 'Background analysis task has terminated abnormally.'),
+                        };
+                    }
                     return {
                         phase: 'completed',
                         message: t('后台分析任务已结束。', 'Background analysis task has finished.'),
@@ -13659,6 +13666,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisUiReport((prev) => {
                     if (!prev || String(prev.status || '').trim().toLowerCase() !== 'running') return prev;
                     const startedAt = Number(prev.startedAt || Date.now());
+                    if (isFailStatus) {
+                        return {
+                            ...prev,
+                            status: 'failed',
+                            error: t('任务在后台异常终止', 'Task terminated abnormally in the background'),
+                            warning: '',
+                            durationMs: Math.max(0, Date.now() - (Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now())),
+                        };
+                    }
                     return {
                         ...prev,
                         status: 'completed',
@@ -19128,7 +19144,19 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             
             // Update the UI report with the new asset counts
-            if (analysisUiReport && typeof analysisUiReport === 'object') {
+            if (!analysisUiReport || typeof analysisUiReport !== 'object') {
+                setAnalysisUiReport(buildCompletedAnalysisUiReport({
+                    status: 'completed',
+                    startedAt: phase2RetryOptionsRef.current?.startedAt || Date.now(),
+                    durationMs: 0,
+                    importReport: {
+                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
+                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
+                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
+                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
+                    },
+                }));
+            } else {
                 const newImportReport = {
                     ...analysisUiReport.importReport,
                     sceneSubjectPostImportReport: syncScenePostImportCheckedCount(
@@ -19164,49 +19192,52 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...prev,
                     importReport: newImportReport,
                 }));
-                const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
-                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
-                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
-                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
-                const hasActionableMissing = postImportSupplementCreated > 0 || postImportSupplementFailed > 0;
-                
-                setAnalysisFlowStatus({
-                    phase: 'completed',
-                    message: hasActionableMissing
-                        ? (
-                            postImportSupplementFailed > 0
-                                ? t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}, failed ${postImportSupplementFailed}).`)
-                                : t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}).`)
-                        )
-                        : (
-                            postImportSupplementSkipped > 0
-                                ? t(`✅ 资产已齐全：${postImportSupplementSkipped} 个条目均已存在于资产库，无需重复生成。`, `Assets already complete: ${postImportSupplementSkipped} item(s) already exist in the library.`)
-                                : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.')
-                        ),
-                });
-                
-                onLog?.('Stage 3 asset design retry completed.', 'success');
+            }
 
-                // Resume storyboards deferred/blocked while ENV was incomplete.
-                const retryTargets = Array.isArray(options?.targetEntityTypes)
-                    ? options.targetEntityTypes.map((x) => String(x || '').trim().toLowerCase())
-                    : [];
-                const touchedEnv = retryTargets.length === 0
-                    || retryTargets.some((k) => ['environments', 'environment', 'env', 'posters', 'covers'].includes(k));
-                if (touchedEnv) {
-                    markEnvironmentAssetDesignReady('phase2-asset-retry');
-                    try {
-                        await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
-                        await ensureStoryboardTasksForImportedScenes(newImportReport);
-                    } catch (resumeErr) {
-                        onLog?.(
-                            t(
-                                `资产重跑后恢复分镜失败：${resumeErr?.message || resumeErr}`,
-                                `Failed to resume storyboard after asset retry: ${resumeErr?.message || resumeErr}`
-                            ),
-                            'warning'
-                        );
-                    }
+            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+            const hasActionableMissing = postImportSupplementCreated > 0 || postImportSupplementFailed > 0;
+            
+            setAnalysisFlowStatus({
+                phase: 'completed',
+                message: hasActionableMissing
+                    ? (
+                        postImportSupplementFailed > 0
+                            ? t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}, failed ${postImportSupplementFailed}).`)
+                            : t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}).`)
+                    )
+                    : (
+                        postImportSupplementSkipped > 0
+                            ? t(`✅ 资产已齐全：${postImportSupplementSkipped} 个条目均已存在于资产库，无需重复生成。`, `Assets already complete: ${postImportSupplementSkipped} item(s) already exist in the library.`)
+                            : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.')
+                    ),
+            });
+            
+            onLog?.('Stage 3 asset design retry completed.', 'success');
+
+            // Resume storyboards deferred/blocked while ENV was incomplete.
+            const retryTargets = Array.isArray(options?.targetEntityTypes)
+                ? options.targetEntityTypes.map((x) => String(x || '').trim().toLowerCase())
+                : [];
+            const touchedEnv = retryTargets.length === 0
+                || retryTargets.some((k) => ['environments', 'environment', 'env', 'posters', 'covers'].includes(k));
+            if (touchedEnv) {
+                markEnvironmentAssetDesignReady('phase2-asset-retry');
+                try {
+                    await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
+                    await ensureStoryboardTasksForImportedScenes(
+                        analysisUiReport?.importReport || null
+                    );
+                } catch (resumeErr) {
+                    onLog?.(
+                        t(
+                            `资产重跑后恢复分镜失败：${resumeErr?.message || resumeErr}`,
+                            `Failed to resume storyboard after asset retry: ${resumeErr?.message || resumeErr}`
+                        ),
+                        'warning'
+                    );
                 }
             }
         } catch (error) {
