@@ -128,7 +128,10 @@ class PaymentService:
         if not getattr(wechatpayv3.core.Core, "_monkeyPatch_pub_key", False):
             _orig_verify = wechatpayv3.core.Core._verify_signature
             def _safe_verify_signature(self_core, headers, body):
-                serial_no = headers.get('Wechatpay-Serial', headers.get('wechatpay-serial', ''))
+                # The original _verify_signature parses headers.
+                # Find the actual serial no key it uses
+                serial_no = headers.get('Wechatpay-Serial', headers.get('wechatpay-serial', headers.get('HTTP_WECHATPAY_SERIAL', '')))
+                
                 try:
                     int('0x' + serial_no, 16)
                 except ValueError:
@@ -138,6 +141,21 @@ class PaymentService:
                             self_core._logger.error(f"Cannot verify signature: WeChat Pay returned '{serial_no}' instead of a Hex Certificate Serial No. "
                                                     "This uses the new Public Key rotation system. Please configure 'public_key_id' and 'public_key'.")
                         return False
+                    else:
+                        # Re-implement the end of _orig_verify to bypass the crash that happens when evaluating `int`
+                        try:
+                            from wechatpayv3.utils import rsa_verify
+                            timestamp = headers.get('Wechatpay-Timestamp', headers.get('wechatpay-timestamp', headers.get('HTTP_WECHATPAY_TIMESTAMP', '')))
+                            nonce = headers.get('Wechatpay-Nonce', headers.get('wechatpay-nonce', headers.get('HTTP_WECHATPAY_NONCE', '')))
+                            signature = headers.get('Wechatpay-Signature', headers.get('wechatpay-signature', headers.get('HTTP_WECHATPAY_SIGNATURE', '')))
+                            if not rsa_verify(timestamp, nonce, body, signature, self_core._public_key):
+                                return False
+                            return True
+                        except Exception as e:
+                            if self_core._logger:
+                                self_core._logger.error(f"_safe_verify_signature bypass failed: {e}")
+                            return False
+
                 return _orig_verify(self_core, headers, body)
             wechatpayv3.core.Core._verify_signature = _safe_verify_signature
             wechatpayv3.core.Core._monkeyPatch_pub_key = True
