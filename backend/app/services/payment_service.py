@@ -177,6 +177,9 @@ class PaymentService:
                                 raise Exception(f'wechatpayv3 does not support this algorithm: {signature_type}')
                                 
                             if not rsa_verify(timestamp, nonce, body, signature, self_core._public_key):
+                                if self_core._logger:
+                                    self_core._logger.error(f"rsa_verify returned False. Check if your public_key is correct and properly formatted. "
+                                                            f"Len of pubkey var: {len(str(self_core._public_key))}, signature: {signature[:10]}...")
                                 return False
                             return True
                         except Exception as e:
