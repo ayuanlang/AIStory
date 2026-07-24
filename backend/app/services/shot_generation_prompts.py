@@ -488,7 +488,15 @@ def _build_scene_subject_image_prompts_cn_section(
         prompt_cn = re.sub(r"\s+", " ", str(getattr(ent, "generation_prompt_cn", None) or "")).strip()
         if not prompt_cn:
             continue
-        prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={prompt_cn}")
+            
+        dependency_info = ""
+        visual_deps = getattr(ent, "visual_dependencies", [])
+        if visual_deps and isinstance(visual_deps, list) and len(visual_deps) > 0:
+            dependency_info = f" | 此环境有依赖，依赖环境为: {', '.join(str(d) for d in visual_deps)}"
+        elif getattr(ent, "base_name_en", None):
+            dependency_info = f" | 此环境有依赖，依赖环境为: {getattr(ent, 'base_name_en', '')}"
+            
+        prompt_lines.append(f"- {subject_ref} | generation_prompt_cn={prompt_cn}{dependency_info}")
 
     if not prompt_lines:
         logger.info(

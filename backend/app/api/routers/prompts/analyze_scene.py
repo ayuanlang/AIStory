@@ -192,27 +192,23 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
     except Exception:
         pass
 
-    if not request.project_metadata and getattr(request, "episode_id", None):
+    request_episode = None
+    if getattr(request, "episode_id", None):
+        request_episode = db.query(Episode).filter(Episode.id == request.episode_id).first()
+        if not request_episode:
+            raise HTTPException(status_code=404, detail="Episode not found")
+        if bool(getattr(request_episode, "is_deleted", False)):
+            raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
+
+    if not request.project_metadata and request_episode:
         try:
-            _auto_ep = db.query(Episode).filter(Episode.id == request.episode_id).first()
-            if _auto_ep:
-                _auto_pr = db.query(Project).filter(Project.id == _auto_ep.project_id).first()
-                if _auto_pr and isinstance(_auto_pr.global_info, dict):
-                    request.project_metadata = _auto_pr.global_info
-                    logger.info("[analyze_scene] Automatically populated project_metadata from DB")
+            _auto_pr = db.query(Project).filter(Project.id == request_episode.project_id).first()
+            if _auto_pr and isinstance(_auto_pr.global_info, dict):
+                request.project_metadata = _auto_pr.global_info
+                logger.info("[analyze_scene] Automatically populated project_metadata from DB")
         except Exception as e:
             logger.warning(f"[analyze_scene] Failed to auto-fetch project_metadata: {e}")
 
-    if not request.project_metadata and getattr(request, "episode_id", None):
-        try:
-            _auto_ep = db.query(Episode).filter(Episode.id == request.episode_id).first()
-            if _auto_ep:
-                _auto_pr = db.query(Project).filter(Project.id == _auto_ep.project_id).first()
-                if _auto_pr and isinstance(_auto_pr.global_info, dict):
-                    request.project_metadata = _auto_pr.global_info
-                    logger.info("[analyze_scene] Automatically populated project_metadata from DB")
-        except Exception as e:
-            logger.warning(f"[analyze_scene] Failed to auto-fetch project_metadata: {e}")
     if request.project_metadata:
         try:
             keys = list(request.project_metadata.keys())

@@ -7969,7 +7969,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 throw new Error(t('视频时长不可用', 'Video duration unavailable'));
             }
 
-            const safeLastTime = Math.max(0, rawDuration - 0.05);
+            const safeLastTime = Math.max(0, rawDuration - 0.01);
             const firstSampleTime = safeLastTime > 0.12
                 ? Math.min(Math.max(0.08, rawDuration * 0.01), Math.max(0, safeLastTime - 0.04))
                 : 0;

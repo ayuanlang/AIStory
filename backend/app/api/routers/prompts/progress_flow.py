@@ -910,6 +910,8 @@ async def run_scene_analysis_flow_node(
             episode = db.query(Episode).filter(Episode.id == int(raw_payload.get("episode_id"))).first()
             if not episode:
                 raise HTTPException(status_code=404, detail="Episode not found")
+            if bool(getattr(episode, "is_deleted", False)):
+                raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
             _require_project_access(db, episode.project_id, current_user)
             if raw_payload.get("project_id") and int(raw_payload.get("project_id")) != int(episode.project_id):
                 raise HTTPException(status_code=400, detail="project_id does not match episode.project_id")
@@ -1292,6 +1294,8 @@ async def run_scene_analysis_flow_node(
         episode = db.query(Episode).filter(Episode.id == episode_id).first()
         if not episode:
             raise HTTPException(status_code=404, detail="Episode not found")
+        if bool(getattr(episode, "is_deleted", False)):
+            raise HTTPException(status_code=404, detail="Episode not found or has been deleted")
         _require_project_access(db, episode.project_id, current_user)
 
         if request.project_id and int(request.project_id) != int(episode.project_id):

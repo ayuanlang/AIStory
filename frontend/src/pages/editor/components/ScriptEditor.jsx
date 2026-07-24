@@ -13879,6 +13879,44 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         return fullContent;
     };
 
+    const DELETED_SEGMENT_MARKER_REGEX = /^(?:\[|\(|（)\s*(?:已删除|作废|废弃|deleted)\s*(?:\]|\)|）)/i;
+    const DELETED_ONLY_LINE_REGEX = /^\s*(?:\[|\(|（)?\s*(?:已删除|作废|废弃|deleted)\s*(?:\]|\)|）)?\s*[:：-]?\s*$/i;
+
+    const isExplicitlyDeletedSegment = (segment) => {
+        const title = String(segment?.title || '').trim();
+        const content = String(segment?.content || '').trim();
+        if (DELETED_SEGMENT_MARKER_REGEX.test(title)) return true;
+        if (DELETED_SEGMENT_MARKER_REGEX.test(content)) return true;
+        if (DELETED_ONLY_LINE_REGEX.test(content)) return true;
+        return false;
+    };
+
+    const stripExplicitDeletedLines = (text) => {
+        return String(text || '')
+            .split('\n')
+            .filter((line) => !DELETED_SEGMENT_MARKER_REGEX.test(String(line || '').trim()))
+            .join('\n')
+            .trim();
+    };
+
+    const getAnalysisScriptContent = () => {
+        if (!isRawMode && segments.length > 0) {
+            const revisedBlocks = segments
+                .filter((segment) => !isExplicitlyDeletedSegment(segment))
+                .map((segment) => {
+                    const title = String(segment?.title || '').trim();
+                    const revised = String(segment?.content || '').trim();
+                    if (!revised) return '';
+                    return title ? `### ${title}\n${revised}` : revised;
+                })
+                .filter(Boolean);
+            if (revisedBlocks.length > 0) {
+                return revisedBlocks.join('\n\n').trim();
+            }
+        }
+        return stripExplicitDeletedLines(rawContent || '');
+    };
+
     const handleSave = async () => {
         if (!activeEpisode) return;
         if (onLog) onLog("Saving Script...");
@@ -14816,7 +14854,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     }, []);
 
     const handleAnalysisClick = async () => {
-        const actualContent = getCurrentScriptContent();
+        const actualContent = getAnalysisScriptContent();
         if (!actualContent || actualContent.trim().length < 10) {
             alert("Script content is too short for analysis.");
             return;
