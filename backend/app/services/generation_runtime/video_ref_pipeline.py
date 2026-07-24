@@ -1826,10 +1826,12 @@ def _append_video_api_ref_mapping(
             failed_names.append(f"{entity_name}->Image{mapped_idx}")
 
     if failed_names:
-        logger.warning(
-            "[_append_video_api_ref_mapping] inject pattern miss | failed=%s",
-            ",".join(failed_names[:12]),
-        )
+        real_miss = [f for f in failed_names if not f.split("->")[0].startswith("附加参考")]
+        if real_miss:
+            logger.warning(
+                "[_append_video_api_ref_mapping] inject pattern miss | failed=%s",
+                ",".join(real_miss[:12]),
+            )
 
     # When prompt has no CHAR/ENV/PROP tokens (or names only appear as plain text
     # that regex missed), still emit an explicit ImageN↔name map so the provider

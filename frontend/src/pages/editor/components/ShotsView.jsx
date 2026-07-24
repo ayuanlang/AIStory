@@ -8569,14 +8569,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const videoRefPromptText = buildShotVideoRefPromptText(shotSnapshot, tech);
 
             if (effectiveVideoMode.includes('entity_refs')) {
-                const missingEntityRefSlots = getMissingShotVideoEntityRefSlots(
-                    buildShotVideoEntityRefSlots({
-                        promptText: videoRefPromptText,
-                        entityPool: resolvedEntities,
-                        includeAssociatedEntities: false,
-                        preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
-                    })
-                );
+                const entityRefSlots = buildShotVideoEntityRefSlots({
+                    promptText: videoRefPromptText,
+                    entityPool: resolvedEntities,
+                    includeAssociatedEntities: false,
+                    preferredEpisodeId: activeEpisode?.id ?? shotSnapshot?.episode_id ?? null,
+                });
+                const missingEntityRefSlots = getMissingShotVideoEntityRefSlots(entityRefSlots);
+                
                 if (missingEntityRefSlots.length > 0) {
                     const missingNames = missingEntityRefSlots
                         .map((slot) => slot.name || slot.nameEn)
@@ -8587,6 +8587,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                         `Detected ${missingEntityRefSlots.length} referenced entities without reference images${missingNames ? `: ${missingNames}` : ''}. Missing references will not be sent to the video API. Submit anyway?`
                     ));
                     if (!proceed) {
+                        setShotGeneratingState(targetShotId, 'video', false);
+                        return;
+                    }
+                }
+
+                const hasEnvRef = entityRefSlots.some(slot => String(slot.type).toLowerCase() === 'environment' || String(slot.type).toLowerCase() === 'env');
+                if (!hasEnvRef) {
+                    const proceedEnv = await confirmUiMessage(t(
+                        `当前视频参考图中没有检测到环境(ENV)参考图。这可能导致生成的视频背景不一致。是否继续提交？`,
+                        `No environment (ENV) reference image detected. This may result in inconsistent video backgrounds. Submit anyway?`
+                    ));
+                    if (!proceedEnv) {
                         setShotGeneratingState(targetShotId, 'video', false);
                         return;
                     }

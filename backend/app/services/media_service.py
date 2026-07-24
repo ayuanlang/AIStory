@@ -2657,9 +2657,9 @@ class MediaGenerationService:
             )
 
         if is_vip:
-            # User preference: vip defaults to 4k preset, but preserve original framing.
+            # User preference: vip defaults to 1k preset, but preserve original framing.
             ratio_key = ratio_text if ratio_text and ratio_text != "auto" else ""
-            tier_map = vip_presets_by_tier["4k"]
+            tier_map = vip_presets_by_tier["1k"]
             if ratio_key not in tier_map:
                 ratio_hint = self._parse_ratio_float(ratio_key)
                 if ratio_hint:
