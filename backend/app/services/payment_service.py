@@ -130,7 +130,13 @@ class PaymentService:
             def _safe_verify_signature(self_core, headers, body):
                 # The original _verify_signature parses headers.
                 # Find the actual serial no key it uses
-                serial_no = headers.get('Wechatpay-Serial', headers.get('wechatpay-serial', headers.get('HTTP_WECHATPAY_SERIAL', '')))
+                serial_mark = 'Wechatpay-Serial'
+                if headers.get('HTTP_WECHATPAY_SIGNATURE'):
+                    serial_mark = 'HTTP_WECHATPAY_SERIAL'
+                if headers.get('wechatpay-signature'):
+                    serial_mark = 'wechatpay-serial'
+
+                serial_no = headers.get(serial_mark, '')
                 
                 try:
                     int('0x' + serial_no, 16)
@@ -145,9 +151,31 @@ class PaymentService:
                         # Re-implement the end of _orig_verify to bypass the crash that happens when evaluating `int`
                         try:
                             from wechatpayv3.utils import rsa_verify
-                            timestamp = headers.get('Wechatpay-Timestamp', headers.get('wechatpay-timestamp', headers.get('HTTP_WECHATPAY_TIMESTAMP', '')))
-                            nonce = headers.get('Wechatpay-Nonce', headers.get('wechatpay-nonce', headers.get('HTTP_WECHATPAY_NONCE', '')))
-                            signature = headers.get('Wechatpay-Signature', headers.get('wechatpay-signature', headers.get('HTTP_WECHATPAY_SIGNATURE', '')))
+                            
+                            signature_mark = 'Wechatpay-Signature'
+                            timestamp_mark = 'Wechatpay-Timestamp'
+                            nonce_mark = 'Wechatpay-Nonce'
+                            signature_type_mark = 'Wechatpay-Signature-Type'
+                            
+                            if headers.get('HTTP_WECHATPAY_SIGNATURE'):
+                                signature_mark = 'HTTP_WECHATPAY_SIGNATURE'
+                                timestamp_mark = 'HTTP_WECHATPAY_TIMESTAMP'
+                                nonce_mark = 'HTTP_WECHATPAY_NONCE'
+                                signature_type_mark = 'HTTP_WECHATPAY_SIGNATURE_TYPE'
+                            if headers.get('wechatpay-signature'):
+                                signature_mark = 'wechatpay-signature'
+                                timestamp_mark = 'wechatpay-timestamp'
+                                nonce_mark = 'wechatpay-nonce'
+                                signature_type_mark = 'wechatpay-signature-type'
+                                
+                            signature = headers.get(signature_mark, '')
+                            timestamp = headers.get(timestamp_mark, '')
+                            nonce = headers.get(nonce_mark, '')
+                            signature_type = headers.get(signature_type_mark, '')
+                            
+                            if signature_type != 'WECHATPAY2-SHA256-RSA2048':
+                                raise Exception(f'wechatpayv3 does not support this algorithm: {signature_type}')
+                                
                             if not rsa_verify(timestamp, nonce, body, signature, self_core._public_key):
                                 return False
                             return True
