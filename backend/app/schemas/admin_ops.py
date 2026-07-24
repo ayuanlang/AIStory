@@ -62,6 +62,8 @@ class PaymentConfig(BaseModel):
     api_v3_key: Optional[str] = ""
     cert_serial_no: Optional[str] = ""
     private_key: Optional[str] = ""
+    public_key: Optional[str] = ""
+    public_key_id: Optional[str] = ""
     notify_url: Optional[str] = ""
     use_mock: bool = True
 

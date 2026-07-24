@@ -185,6 +185,8 @@ const UserAdmin = () => {
         api_v3_key: '',
         cert_serial_no: '',
         private_key: '',
+        public_key: '',
+        public_key_id: '',
         notify_url: '',
         use_mock: true
     });
@@ -5761,8 +5763,27 @@ const UserAdmin = () => {
                                             <textarea 
                                                 value={paymentConfig.private_key}
                                                 onChange={(e) => setPaymentConfig({...paymentConfig, private_key: e.target.value})}
-                                                className="w-full h-48 bg-black/40 border border-gray-700 rounded p-2.5 text-xs font-mono focus:border-primary outline-none resize-none focus:ring-1 focus:ring-primary"
+                                                className="w-full h-32 bg-black/40 border border-gray-700 rounded p-2.5 text-xs font-mono focus:border-primary outline-none resize-none focus:ring-1 focus:ring-primary"
                                                 placeholder={t('-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----')}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('平台公钥 ID (可选，新版)', 'Public Key ID')}</label>
+                                            <input 
+                                                type="text" 
+                                                value={paymentConfig.public_key_id || ''}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, public_key_id: e.target.value})}
+                                                className="w-full bg-black/40 border border-gray-700 rounded p-2.5 text-sm focus:border-primary outline-none focus:ring-1 focus:ring-primary"
+                                                placeholder="PUB_KEY_ID_..."
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs uppercase font-bold text-gray-500 mb-1">{t('平台公钥 (可选，新版)', 'Public Key (PEM)')}</label>
+                                            <textarea 
+                                                value={paymentConfig.public_key || ''}
+                                                onChange={(e) => setPaymentConfig({...paymentConfig, public_key: e.target.value})}
+                                                className="w-full h-32 bg-black/40 border border-gray-700 rounded p-2.5 text-xs font-mono focus:border-primary outline-none resize-none focus:ring-1 focus:ring-primary"
+                                                placeholder="-----BEGIN PUBLIC KEY-----\n..."
                                             />
                                         </div>
                                     </div>

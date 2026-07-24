@@ -32,6 +32,8 @@ def _wechat_config_to_dict(row: Optional[WechatPayConfig]) -> Dict[str, Any]:
         "api_v3_key": str(row.api_v3_key or "").strip(),
         "cert_serial_no": str(row.cert_serial_no or "").strip(),
         "private_key": str(row.private_key or ""),
+        "public_key": str(getattr(row, "public_key", "") or ""),
+        "public_key_id": str(getattr(row, "public_key_id", "") or "").strip(),
         "notify_url": str(row.notify_url or "").strip(),
         "use_mock": bool(row.use_mock),
     }

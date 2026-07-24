@@ -42,6 +42,8 @@ def get_payment_config(
         api_v3_key=str(setting.api_v3_key or ""),
         cert_serial_no=str(setting.cert_serial_no or ""),
         private_key=str(setting.private_key or ""),
+        public_key=str(getattr(setting, "public_key", "") or ""),
+        public_key_id=str(getattr(setting, "public_key_id", "") or ""),
         notify_url=str(setting.notify_url or ""),
         use_mock=bool(setting.use_mock),
     )
@@ -70,6 +72,12 @@ def update_payment_config(
     setting.api_v3_key = str(idx.api_v3_key or "").strip()
     setting.cert_serial_no = str(idx.cert_serial_no or "").strip()
     setting.private_key = str(idx.private_key or "")
+    
+    if hasattr(setting, "public_key"):
+        setting.public_key = str(idx.public_key or "")
+    if hasattr(setting, "public_key_id"):
+        setting.public_key_id = str(idx.public_key_id or "").strip()
+
     setting.notify_url = str(idx.notify_url or "").strip()
     setting.use_mock = bool(idx.use_mock)
     setting.updated_at = now_bj_iso()
@@ -84,6 +92,8 @@ def update_payment_config(
         "api_v3_key": idx.api_v3_key,
         "cert_serial_no": idx.cert_serial_no,
         "private_key": idx.private_key,
+        "public_key": idx.public_key,
+        "public_key_id": idx.public_key_id,
         "notify_url": idx.notify_url,
         "use_mock": idx.use_mock
     })

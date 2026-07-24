@@ -793,6 +793,8 @@ class WechatPayConfig(Base):
     api_v3_key = Column(String, nullable=False, default="")
     cert_serial_no = Column(String, nullable=False, default="")
     private_key = Column(Text, nullable=False, default="")
+    public_key = Column(Text, nullable=True, default="")
+    public_key_id = Column(String, nullable=True, default="")
     notify_url = Column(String, nullable=False, default="")
     use_mock = Column(Boolean, default=True)
     is_active = Column(Boolean, default=True)
