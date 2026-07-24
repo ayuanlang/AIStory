@@ -1686,8 +1686,12 @@ export const deleteEntity = async (entityId) => {
     return response.data;
 }
 
-export const deleteAllEntities = async (projectId, episodeId) => {
-    const response = await api.delete(`/projects/${projectId}/episodes/${episodeId}/entities`);
+export const deleteAllEntities = async (projectId, episodeId, subjectType = null) => {
+    const params = {};
+    if (subjectType) {
+        params.subject_type = subjectType;
+    }
+    const response = await api.delete(`/projects/${projectId}/episodes/${episodeId}/entities`, { params });
     return response.data;
 }
 

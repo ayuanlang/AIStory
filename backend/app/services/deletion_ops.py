@@ -385,6 +385,7 @@ def _soft_delete_entities(
     entity_ids: Optional[List[int]] = None,
     project_id: Optional[int] = None,
     episode_id: Optional[int] = None,
+    subject_type: Optional[str] = None,
     now: Optional[str] = None,
     batch_id: Optional[str] = None,
 ) -> int:
@@ -398,6 +399,8 @@ def _soft_delete_entities(
         filters.append(Entity.project_id == project_id)
     if episode_id is not None:
         filters.append(Entity.episode_id == episode_id)
+    if subject_type is not None:
+        filters.append(Entity.type == subject_type)
     matched_ids = [row[0] for row in db.query(Entity.id).filter(*filters).all()]
     if not matched_ids:
         return 0

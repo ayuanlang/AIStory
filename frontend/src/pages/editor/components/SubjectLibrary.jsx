@@ -4812,23 +4812,43 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
         }
     };
 
-    const handleDeleteAllEntities = async () => {
+    const handleDeleteAllEntities = async (subjectType = null) => {
         if (!currentEpisode?.id) {
             alert(t('请先选择分集后再清空该分集的主体库。', 'Select an episode before clearing its subject library.'));
             return;
         }
-        if (!await confirmUiMessage(t(
+        
+        let confirmMsg = t(
             '警告：将删除当前分集下的全部主体/实体（软删除，可从数据库恢复）。确定继续？',
             'WARNING: This will delete ALL subjects/entities in the current episode (soft delete). Continue?'
-        ))) return;
+        );
+        
+        if (subjectType) {
+            const typesZh = {
+                character: '角色',
+                environment: '环境',
+                prop: '道具'
+            };
+            const typesEn = {
+                character: 'Characters',
+                environment: 'Environments',
+                prop: 'Props'
+            };
+            confirmMsg = t(
+                `警告：将删除当前分集下的全部${typesZh[subjectType] || subjectType}（软删除）。确定继续？`,
+                `WARNING: This will delete ALL ${typesEn[subjectType] || subjectType} in the current episode (soft delete). Continue?`
+            );
+        }
+
+        if (!await confirmUiMessage(confirmMsg)) return;
         try {
-            await deleteAllEntities(projectId, currentEpisode.id);
+            await deleteAllEntities(projectId, currentEpisode.id, subjectType);
             loadEntities();
             setViewingEntity(null);
             setRefImage(null);
         } catch (e) {
             console.error(e);
-            alert(`Failed to delete all entities: ${e?.message || 'Unknown error'}`);
+            alert(`Failed to delete entities: ${e?.message || 'Unknown error'}`);
         }
     };
 
@@ -7696,13 +7716,42 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                             >
                                 <RotateCcw size={16} />
                             </button>
-                             <button 
-                                onClick={handleDeleteAllEntities}
-                                className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white hover:text-red-400 outline-none hover:border-red-500/50 transition-colors flex items-center justify-center"
-                                title={t('删除全部主体资产', 'Delete All Subjects')}
-                            >
-                                <Trash2 size={16} />
-                            </button>
+                            <div className="relative group/deleteall">
+                                <button 
+                                    onClick={() => handleDeleteAllEntities(null)}
+                                    className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-xs text-white hover:text-red-400 outline-none hover:border-red-500/50 transition-colors flex items-center justify-center relative pr-6"
+                                    title={t('删除主体资产', 'Delete Subjects')}
+                                >
+                                    <Trash2 size={16} />
+                                    <ChevronDown size={14} className="absolute right-1 text-white/50" />
+                                </button>
+                                <div className="absolute right-0 top-full mt-1 w-32 bg-[#1C1C1F] border border-white/10 rounded shadow-xl opacity-0 invisible group-hover/deleteall:opacity-100 group-hover/deleteall:visible group-focus-within/deleteall:opacity-100 group-focus-within/deleteall:visible transition-all z-[100] py-1">
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleDeleteAllEntities(null)}
+                                    >
+                                        {t('删除全部分集', 'Delete All')}
+                                    </div>
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap border-t border-white/5"
+                                        onClick={() => handleDeleteAllEntities('character')}
+                                    >
+                                        {t('仅删除角色', 'Delete Characters')}
+                                    </div>
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleDeleteAllEntities('environment')}
+                                    >
+                                        {t('仅删除环境', 'Delete Environments')}
+                                    </div>
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleDeleteAllEntities('prop')}
+                                    >
+                                        {t('仅删除道具', 'Delete Props')}
+                                    </div>
+                                </div>
+                            </div>
                             <button
                                 onClick={openAiEntityCreateModal}
                                 className="bg-[#111114] border border-white/10 rounded px-2 py-1 text-white outline-none hover:border-primary/50 transition-colors flex items-center justify-center"

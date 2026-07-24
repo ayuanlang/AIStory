@@ -1087,6 +1087,7 @@ def delete_entity(
 def delete_episode_entities(
     project_id: int,
     episode_id: int,
+    subject_type: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1112,6 +1113,7 @@ def delete_episode_entities(
         project_id=project_id,
         episode_id=episode_id,
         batch_id=batch_id,
+        subject_type=subject_type,
     )
     _finalize_deletion_batch(db, batch_id)
     db.commit()
