@@ -70,6 +70,8 @@ class PaymentService:
         cert_serial_no = self.config.get('cert_serial_no') or settings.WECHAT_CERT_SERIAL_NO
         notify_url = self.config.get('notify_url') or settings.WECHAT_NOTIFY_URL
         private_key = self.config.get('private_key')
+        public_key_id = self.config.get('public_key_id') or getattr(settings, 'WECHAT_PUBLIC_KEY_ID', None)
+        public_key = self.config.get('public_key') or getattr(settings, 'WECHAT_PUBLIC_KEY', None)
 
         # If private_key not in config, try reading file from settings path
         if not private_key and settings.WECHAT_PRIVATE_KEY_PATH:
@@ -78,6 +80,11 @@ class PaymentService:
                     private_key = f.read()
             except Exception as e:
                 logger.warning(f"Could not read private key file: {e}")
+
+        # Guard against users pasting a certificate instead of a private key
+        if private_key and "-----BEGIN CERTIFICATE-----" in private_key and "-----BEGIN PRIVATE KEY-----" not in private_key:
+            logger.error("The private_key contains a CERTIFICATE tag instead of a PRIVATE KEY. You likely pasted the wrong file content. Please provide a valid private key.")
+            private_key = None
 
         # Check essential config
         missing_fields = []
@@ -115,6 +122,26 @@ class PaymentService:
 
         private_key = _clean_pem(private_key)
 
+        # Monkey-patch wechatpayv3 to prevent crash when WeChat sends a Public Key ID (e.g. PUB_KEY_ID_...)
+        # instead of a Certificate Serial No. Provide a clean error message instead of an int() ValueError.
+        import wechatpayv3.core
+        if not getattr(wechatpayv3.core.Core, "_monkeyPatch_pub_key", False):
+            _orig_verify = wechatpayv3.core.Core._verify_signature
+            def _safe_verify_signature(self_core, headers, body):
+                serial_no = headers.get('Wechatpay-Serial', headers.get('wechatpay-serial', ''))
+                try:
+                    int('0x' + serial_no, 16)
+                except ValueError:
+                    # It's not a hex string, e.g. "PUB_KEY_ID_..."
+                    if not self_core._public_key_id or serial_no != self_core._public_key_id:
+                        if self_core._logger:
+                            self_core._logger.error(f"Cannot verify signature: WeChat Pay returned '{serial_no}' instead of a Hex Certificate Serial No. "
+                                                    "This uses the new Public Key rotation system. Please configure 'public_key_id' and 'public_key'.")
+                        return False
+                return _orig_verify(self_core, headers, body)
+            wechatpayv3.core.Core._verify_signature = _safe_verify_signature
+            wechatpayv3.core.Core._monkeyPatch_pub_key = True
+
         try:
             logger.info(f"Initializing WeChatPay with MCHID={mchid}, APPID={appid}, CERT_SERIAL={cert_serial_no}")
             
@@ -123,17 +150,23 @@ class PaymentService:
             # This usually means the APIV3 Key is wrong, or the Merchant Cert Serial No does not match the Private Key.
             # Or the network request to WeChat failed.
             
-            self.wxpay = WeChatPay(
-                wechatpay_type=WeChatPayType.NATIVE,
-                mchid=mchid,
-                private_key=private_key,
-                cert_serial_no=cert_serial_no,
-                apiv3_key=api_v3_key,
-                appid=appid,
-                notify_url=notify_url,
-                cert_dir=str(cert_dir), # Cache certs
-                logger=logger
-            )
+            kwargs = {
+                'wechatpay_type': WeChatPayType.NATIVE,
+                'mchid': mchid,
+                'private_key': private_key,
+                'cert_serial_no': cert_serial_no,
+                'apiv3_key': api_v3_key,
+                'appid': appid,
+                'notify_url': notify_url,
+                'cert_dir': str(cert_dir), # Cache certs
+                'logger': logger
+            }
+            if public_key_id:
+                kwargs['public_key_id'] = public_key_id
+            if public_key:
+                kwargs['public_key'] = public_key
+
+            self.wxpay = WeChatPay(**kwargs)
             logger.info("WeChatPay initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to init WeChatPay: {e}. Possible causes: Wrong APIV3 Key, or Cert Serial No mismatch.", exc_info=True)
