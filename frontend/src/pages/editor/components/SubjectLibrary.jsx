@@ -9345,6 +9345,57 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         <div className="flex flex-col h-full space-y-4">
                                             <div className="mb-4">
                                                 <h4 className="text-xs font-bold uppercase text-muted-foreground mb-2">{t('修改资产', 'Modify Asset')}</h4>
+
+                                                {viewingEntity?.subject_type === 'environment' && (
+                                                    <div className="mb-4 space-y-2 border border-white/10 rounded-md p-3 bg-white/5">
+                                                        <div className="text-xs font-medium text-white/80">{t('旋转环境基准图', 'Rotate Environment')}</div>
+                                                        <div className="text-[10px] text-white/50 mb-2">
+                                                            {t('选择需要旋转到视野正前方的角度，生成时会自动对四向拼图进行循环移位重排。', 'Select the angle to rotate to the front (0 degree position). The four-direction grid will be shifted accordingly.')}
+                                                        </div>
+                                                        <div className="flex gap-2">
+                                                            {[90, 180, 270].map(angle => (
+                                                                <button
+                                                                    key={angle}
+                                                                    className="flex-1 py-1.5 px-3 bg-white/10 hover:bg-white/20 text-white rounded text-xs transition-colors disabled:opacity-50"
+                                                                    disabled={generating || isAdvancedLocalModifying || isAdvancedOptimizing}
+                                                                    onClick={async () => {
+                                                                        const base = viewingEntity?.generation_prompt_cn || '';
+                                                                        const appendInstruction = `请将当前的四向拼图中的${angle}度视野旋转到最前方的0度格（原左上宫格位置），然后其余角度（${(angle + 90) % 360}度，${(angle + 180) % 360}度，${(angle + 270) % 360}度）依顺时针的相对顺序自然对应到接下来的几个格子（90度格，180度格，270度格），保持各宫格排布的相对顺序不乱。`;
+                                                                        
+                                                                        const finalPrompt = base ? `${base}\n\n【旋转指令】：${appendInstruction}` : appendInstruction;
+                                                                        
+                                                                        setPromptDrafts(prev => ({ ...prev, cn: finalPrompt }));
+                                                                        setPrompt(finalPrompt);
+
+                                                                        const updated = { ...viewingEntity, generation_prompt_cn: finalPrompt };
+                                                                        setViewingEntity(updated);
+                                                                        updateEntity(updated.id, { generation_prompt_cn: finalPrompt });
+
+                                                                        const autoRefs = [];
+                                                                        if (viewingEntity?.image_url) {
+                                                                            autoRefs.push({
+                                                                                url: viewingEntity.image_url,
+                                                                                type: 'image',
+                                                                                weight: 0.8
+                                                                            });
+                                                                        }
+                                                                        
+                                                                        if (onLog) onLog(t('正在旋转生成新图片...', 'Rotating and generating new image...'), 'info');
+                                                                        try {
+                                                                            await handleGenerate(viewingEntity, autoRefs, finalPrompt);
+                                                                            if (onLog) onLog(t('旋转指令提交成功', 'Rotation submitted successfully'), 'success');
+                                                                        } catch (err) {
+                                                                            console.error(err);
+                                                                            if (onLog) onLog(t('生成失败', 'Generation failed'), 'error');
+                                                                        }
+                                                                    }}
+                                                                >
+                                                                    {t('旋转 ', 'Rotate ')} {angle}°
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                                 <p className="text-[10px] text-white/50 mb-4">
                                                     {t('输入具体指令以修改该资产的提示词。提交后将自动应用修改并重新生成图片。', 'Enter specific instructions to modify the prompt. Generation will be triggered automatically.')}
                                                 </p>
