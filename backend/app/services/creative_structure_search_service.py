@@ -68,6 +68,9 @@ def build_creative_structure_search_queries(key_elements: Dict[str, Any]) -> Lis
     for term in _as_str_list(key_elements.get("trope_search_terms"), limit=4):
         add(f"{term} 短剧 热门桥段 高潮 名场面")
         add(f"{term} short drama trope climax beat")
+    for term in _as_str_list(key_elements.get("entertainment_search_terms"), limit=4):
+        add(f"{term} 经典搞笑 名场面 娱乐化 桥段")
+        add(f"{term} funny entertaining trope comedic moments")
     for term in _as_str_list(key_elements.get("hot_topic_search_terms"), limit=3):
         add(f"{term} 短剧 热门话题 名场面")
         add(f"{term} micro drama trending iconic scene")

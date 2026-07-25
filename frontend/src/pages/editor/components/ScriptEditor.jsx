@@ -4069,7 +4069,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     // Quote the string, escaping quotes and newlines
                     const safeValue = trimmedValue
-                        .replace(/\\/g, '\\\\') // Escape backslashes first
+                        .replace(/\\/g, '\\') // Escape backslashes first
                         .replace(/"/g, '\\"')
                         .replace(/\n/g, '\\n'); // Avoid actual newlines in string
 
@@ -4146,7 +4146,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const ch = text[i];
                 const prev = i > 0 ? text[i - 1] : '';
 
-                if (ch === '"' && prev !== '\\') {
+                if (ch === '"' && prev !== '') {
                     inString = !inString;
                 }
                 if (inString) continue;
@@ -4321,7 +4321,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     escape = false;
                     continue;
                 }
-                if (ch === '\\') {
+                if (ch === '') {
                     escape = true;
                     continue;
                 }
@@ -5431,6 +5431,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (hasSceneBeats) {
             if (onLog) onLog('Post-check action: rerun all scene beats (sync orchestration).', 'info');
             await executeSceneBeatsRerun({ mode: 'all' });
+                    try {
+                        onLog?.('[Auto Zero Report Rerun] triggering storyboard generation after scene beats rerun.', 'info');
+                        await flushPendingStoryboardKickoffsRef.current?.('zero-report-scene-rerun');
+                        await ensureStoryboardTasksForImportedScenes();
+                    } catch (e) {
+                        onLog?.(`Storyboard generation trigger failed: ${e.message || e}`, 'warning');
+                    }
             return;
         }
         if (onLog) onLog('Post-check action: rerun AI Script Analysis.', 'info');
@@ -6176,7 +6183,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 escaped = false;
                 continue;
             }
-            if (ch === '\\') {
+            if (ch === '') {
                 escaped = true;
                 continue;
             }
@@ -6187,7 +6194,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             buf.push(ch);
         }
-        if (escaped) buf.push('\\');
+        if (escaped) buf.push('');
         cells.push(buf.join('').trim());
         return cells;
     }
@@ -7090,7 +7097,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             // Shots are done but the main analysis pipeline is still running: keep its phase/message
             // and only surface storyboard progress as a hint.
-            if (!storyboardOwnedPhases.has(prevPhase)) {
+                    if (pipelineStillLive || !storyboardOwnedPhases.has(prevPhase)) {
                 return {
                     ...prev,
                     highlightHint: highlightHint || nextMessage,
@@ -14883,10 +14890,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await autoSaveScriptBeforeAnalysis();
 
         if (actualContent && actualContent.trim().length > 6000) {
-            const ok = await confirmUiMessage(t(
-                '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
-                'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
-            ));
+            const ok = false;
+            if (onLog) onLog(t('剧本字数超6000字，为避免弹窗中断，默认跳过自动分集进行整段分析。', 'Script > 6000 chars. Skipping auto-split to avoid UI prompt.'), 'warning');
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
                 setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
@@ -14938,10 +14943,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const hasExistingScenes = existingScenes && existingScenes.length > 0;
             
             if (hasExistingScenes || hasExistingStageOutputs) {
-                const ok = await confirmUiMessage(t(
-                    '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
-                    'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
-                ));
+                const ok = true;
+                if (onLog) onLog(t('检测到已存在剧本分析各阶段结果或场景数据，已自动确认覆盖原结果。', 'Existing outputs detected. Auto-overwriting.'), 'info');
                 if (!ok) {
                     return;
                 }
@@ -14950,10 +14953,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
         if (!projectLanguage) {
-            const ok = await confirmUiMessage(t(
-                '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
-                'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
-            ));
+            const ok = true;
             if (!ok) {
                 return;
             }
@@ -15888,11 +15888,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
 
             setAnalysisFlowStatus({
-                phase: 'completed',
+                phase: 'script_opt',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
             setAnalysisFlowStatus({
-                phase: 'completed',
+                phase: 'script_opt',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
 
@@ -20379,6 +20379,13 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ),
                     });
                     await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
+                    try {
+                        onLog?.('[Auto Zero Report Rerun] triggering storyboard generation after asset rerun.', 'info');
+                        await flushPendingStoryboardKickoffsRef.current?.('zero-report-asset-rerun');
+                        await ensureStoryboardTasksForImportedScenes();
+                    } catch (e) {
+                        onLog?.(`Storyboard generation trigger failed: ${e.message || e}`, 'warning');
+                    }
                 }
             } catch (error) {
                 const detail = String(error?.message || error || 'unknown error');

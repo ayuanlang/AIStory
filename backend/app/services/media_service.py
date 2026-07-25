@@ -6883,6 +6883,7 @@ class MediaGenerationService:
                 "watermark": False
             }
             if is_seedance_model:
+                payload["return_last_frame"] = True
                 is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
                 requested_res = str(tool_conf.get("resolution") or tool_conf.get("video_resolution") or "").strip()
                 if is_draft_mode:
@@ -12288,6 +12289,14 @@ class MediaGenerationService:
                                     video_url = c_data.get("url") or c_data.get("video_url")
                             except Exception:
                                 pass
+                        
+                        last_frame_url_res = None
+                        if isinstance(content, dict):
+                            last_frame_url_res = content.get("last_frame_url")
+                        if not last_frame_url_res and isinstance(p_data.get("data"), dict):
+                            data_content = p_data.get("data", {}).get("content", {}) or {}
+                            last_frame_url_res = data_content.get("last_frame_url")
+
                         if not video_url:
                             return {
                                 "error": "Generation completed without video URL",
@@ -12336,6 +12345,8 @@ class MediaGenerationService:
                                 usage.get("total_tokens"),
                                 usage.get("completion_tokens") or usage.get("output_tokens"),
                             )
+                        if last_frame_url_res:
+                            metadata["last_frame_url"] = last_frame_url_res
                         return {"url": video_url, "metadata": metadata}
                     elif status_l in ["failed", "error", "canceled", "cancelled"]:
                         return {"error": "Generation Failed", "details": p_data.get("error")}
@@ -13463,6 +13474,10 @@ class MediaGenerationService:
             gen_type == "image"
             and str(model_lower or "").strip().lower() in {"gpt-image/1.5-image-to-image", "gpt-image/1-5-image-to-image"}
         )
+        is_gpt_image_2_i2i = bool(
+            gen_type == "image"
+            and str(model_lower or "").strip().lower() in {"gpt-image/2-image-to-image", "gpt-image-2-image-to-image"}
+        )
         is_gpt_image_2 = bool(
             gen_type == "image"
             and str(model_lower or "").strip().lower().replace("/", "-").startswith("gpt-image-2")
@@ -13511,14 +13526,17 @@ class MediaGenerationService:
                 else: res_str = "2560x1440"
                 payload_input["size"] = res_str
                 payload_input.pop("image_size", None)
-            elif is_gpt_image_15_i2i:
-                # KIE 1.5 Image-To-Image contract:
-                # model=gpt-image/1.5-image-to-image, input.input_urls, input.aspect_ratio, input.quality
-                allowed_ar = {"1:1", "2:3", "3:2"}
-                ar_val = str(payload_input.get("aspect_ratio") or "").strip()
-                if ar_val not in allowed_ar:
-                    ar_val = "3:2"
-                payload_input["aspect_ratio"] = ar_val
+            elif is_gpt_image_15_i2i or is_gpt_image_2_i2i:
+                # KIE 1.5/2.0 Image-To-Image contract:
+                # model=gpt-image-2-image-to-image, input.input_urls, input.aspect_ratio, input.quality
+                if is_gpt_image_2_i2i:
+                    payload_input["aspect_ratio"] = "auto"
+                else:
+                    allowed_ar = {"1:1", "2:3", "3:2"}
+                    ar_val = str(payload_input.get("aspect_ratio") or "").strip()
+                    if ar_val not in allowed_ar:
+                        ar_val = "3:2"
+                    payload_input["aspect_ratio"] = ar_val
 
                 payload_input.pop("image_size", None)
             elif is_seedream_5_lite_i2i:
@@ -13861,7 +13879,7 @@ class MediaGenerationService:
                     resolved_refs.append(resolved)
 
         if resolved_refs and not is_topaz_video_upscale:
-            if is_gpt_image_15_i2i:
+            if is_gpt_image_15_i2i or is_gpt_image_2_i2i:
                 payload_input["input_urls"] = resolved_refs
                 payload_input.pop("image_urls", None)
                 payload_input.pop("image_url", None)
@@ -13933,10 +13951,10 @@ class MediaGenerationService:
                     "runtime_model": model,
                 }
 
-        if is_gpt_image_15_i2i and not isinstance(payload_input.get("input_urls"), list):
+        if (is_gpt_image_15_i2i or is_gpt_image_2_i2i) and not isinstance(payload_input.get("input_urls"), list):
             return {
                 "error": "KIE submission validation failed",
-                "details": "gpt-image/1.5-image-to-image requires input.input_urls (at least one image URL)",
+                "details": "gpt-image/1.5 or 2.0 image-to-image requires input.input_urls (at least one image URL)",
                 "submit_failed": True,
                 "runtime_model": model,
             }

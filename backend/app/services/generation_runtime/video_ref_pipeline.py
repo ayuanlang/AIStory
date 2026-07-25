@@ -675,6 +675,16 @@ def _ensure_video_frame_role_instructions(
         elif mode in {"start_end", "entity_refs_start_end"} and len(urls) >= 2:
             end_idx = len(urls)
 
+    # Automatically infer 'start_end' from 'entity_refs' if start and end frames are available and same environment
+    if mode == "entity_refs" and start_url and end_url:
+        start_idx = None
+        end_idx = None
+        for idx, url in enumerate(urls, start=1):
+            if _normalize_media_ref_key(url) == _normalize_media_ref_key(start_url):
+                start_idx = idx
+            if _normalize_media_ref_key(url) == _normalize_media_ref_key(end_url):
+                end_idx = idx
+
     prefix = f"参考@Image{start_idx} 作为第一帧, " if start_idx else ""
     if end_idx:
         suffix = f", 参考@Image{end_idx} 作为最后一帧"

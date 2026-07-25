@@ -1,0 +1,185 @@
+if (autoZeroReportHandledRef.current.key === reportKey) return;
+        if (analysisFallbackRetryRef.current.running) return;
+
+        analysisFallbackRetryRef.current.running = true;
+
+        (async () => {
+            try {
+                if (isSceneBeatsOnlyRerun) {
+                    onLog?.('[Auto Zero Report Rerun] scene-beats-only rerun completed; skipping asset/scene fallback checks.', 'info');
+                    return;
+                }
+
+                const importReport = (analysisUiReport?.importReport && typeof analysisUiReport.importReport === 'object')
+                    ? analysisUiReport.importReport
+                    : {};
+                const scenePostReport = (importReport.sceneSubjectPostImportReport && typeof importReport.sceneSubjectPostImportReport === 'object')
+                    ? importReport.sceneSubjectPostImportReport
+                    : {};
+
+                const snapshotResolvedSceneCount = firstPositiveFiniteNumber(
+                    analysisUiReport?.resolvedSceneImportCount,
+                    lastSceneImportSuccessRef.current?.episodeId === activeEpisode.id
+                        ? lastSceneImportSuccessRef.current?.count
+                        : 0,
+                    resolveImportReportSceneCount(importReport, scenePostReport, null),
+                );
+                const dbSceneCount = snapshotResolvedSceneCount > 0
+                    ? snapshotResolvedSceneCount
+                    : await fetchEpisodeSceneCountWithRetry(fetchScenes, activeEpisode.id);
+                const resolvedSceneCount = firstPositiveFiniteNumber(snapshotResolvedSceneCount, dbSceneCount);
+                const hasPersistedSceneMarkdown = Boolean(String(activeEpisode?.ai_scene_analysis_scene_markdown || '').trim());
+
+                const subjectIndexText = resolveSubjectIndexTextForAssetRerun();
+                const subjectIndexEntries = parseSubjectIndexEntriesForAssetRerun(subjectIndexText);
+                const expectedAssetCategories = new Set(
+                    (subjectIndexEntries || []).map((entry) => String(entry?.category || '').trim()).filter(Boolean)
+                );
+
+                const dbEntities = (projectId && activeEpisode?.id)
+                    ? await fetchEntities(projectId, { episode_id: Number(activeEpisode.id) }).catch(() => [])
+                    : [];
+                const subtaskReports = Array.isArray(scenePostReport?.subtaskReports) ? scenePostReport.subtaskReports : [];
+                const hasEntityDesignPayload = hasPersistedEntityDesignPayload(activeEpisode?.ai_entity_design_result);
+                const stage3CompletedOk = Boolean(analysisUiReport?.stage3SubtasksOk)
+                    || (subtaskReports.length > 0 && subtaskReports.every(
+                        (report) => String(report?.status || '').trim().toLowerCase() === 'ok'
+                    ));
+
+                const assetCategorySpecs = [
+                    { key: 'characters', labelZh: '角色', targets: ['characters'], reportType: 'character' },
+                    { key: 'props', labelZh: '道具', targets: ['props'], reportType: 'prop' },
+                    { key: 'environments', labelZh: '场景/环境', targets: ['environments'], reportType: 'environment' },
+                    { key: 'posters', labelZh: '封面/海报', targets: ['posters', 'covers'], reportType: 'poster' },
+                ];
+
+                const pendingAssetTargets = [];
+                const pendingLabels = [];
+
+                if (hasEntityDesignPayload && stage3CompletedOk && expectedAssetCategories.size > 0) {
+                    onLog?.('[Auto Zero Report Rerun] Stage 3 completed with persisted entity design; skipping asset auto-rerun.', 'info');
+                } else {
+                for (const spec of assetCategorySpecs) {
+                    if (!expectedAssetCategories.has(spec.key)) continue;
+
+                    if (isAssetCategorySatisfiedBySubtaskReports(subtaskReports, spec.key)) {
+                        onLog?.(
+                            `[Auto Zero Report Rerun] ${spec.labelZh} Stage 3 subtask ok (created+skipped>0); skipping auto-rerun.`,
+                            'info'
+                        );
+                        continue;
+                    }
+
+                    const insertedCount = resolveImportReportAssetInsertedCount(importReport, spec.reportType);
+                    const skippedCount = resolveImportReportAssetSkippedCount(importReport, spec.reportType);
+                    const handledCount = resolveImportReportAssetHandledCount(importReport, spec.reportType, spec.key);
+                    if (handledCount > 0 && (insertedCount > 0 || skippedCount > 0)) {
+                        onLog?.(
+                            `[Auto Zero Report Rerun] ${spec.labelZh} handled=${handledCount} (created=${insertedCount} skipped=${skippedCount}); skipping auto-rerun.`,
+                            'info'
+                        );
+                        continue;
+                    }
+
+                    const categoryEntries = (subjectIndexEntries || []).filter((entry) => entry?.category === spec.key);
+                    if (categoryEntries.length > 0 && dbEntities.length > 0) {
+                        const coveredCount = countSubjectIndexEntriesCoveredInDb(categoryEntries, spec.reportType, dbEntities);
+                        if (coveredCount >= categoryEntries.length) {
+                            onLog?.(
+                                `[Auto Zero Report Rerun] ${spec.labelZh} already present in DB (${coveredCount}/${categoryEntries.length}); skipping auto-rerun.`,
+                                'info'
+                            );
+                            continue;
+                        }
+                    }
+
+                    pendingLabels.push(spec.labelZh);
+                    spec.targets.forEach((target) => {
+                        if (!pendingAssetTargets.includes(target)) pendingAssetTargets.push(target);
+                    });
+                }
+                }
+
+                const shouldRerunScenes = !isSceneBeatsOnlyRerun
+                    && resolvedSceneCount === 0
+                    && !hasPersistedSceneMarkdown
+                    && canAttemptAnalysisFallback(activeEpisode.id, 'scene_beats')
+                    && Boolean(buildStage1RestartSourceText())
+                    && Boolean(subjectIndexText);
+
+                if (resolvedSceneCount > 0 && onLog) {
+                    onLog?.(`[Auto Zero Report Rerun] scene count resolved=${resolvedSceneCount}; skipping scene beats auto-rerun.`, 'info');
+                } else if (hasPersistedSceneMarkdown && onLog) {
+                    onLog?.('[Auto Zero Report Rerun] scene markdown already persisted; skipping scene beats auto-rerun.', 'info');
+                } else if (isSceneBeatsOnlyRerun && onLog) {
+                    onLog?.('[Auto Zero Report Rerun] scene-beats-only rerun report; skipping scene beats auto-rerun.', 'info');
+                }
+
+                if (pendingAssetTargets.length > 0 && onLog) {
+                    onLog?.(
+                        `[Auto Zero Report Rerun] zero-count asset categories detected from report: ${pendingLabels.join('、')} (expected from subject index=${expectedAssetCategories.size}).`,
+                        'warning'
+                    );
+                } else if (expectedAssetCategories.size > 0 && onLog) {
+                    onLog?.('[Auto Zero Report Rerun] asset categories look healthy (created/skipped/subtasks/DB); skipping asset auto-rerun.', 'info');
+                }
+
+                if (!shouldRerunScenes && pendingAssetTargets.length <= 0) return;
+
+                const shouldRerunAssets = pendingAssetTargets.length > 0
+                    && canAttemptAnalysisFallback(activeEpisode.id, 'asset_gen');
+
+                if (!shouldRerunScenes && !shouldRerunAssets) {
+                    onLog?.(
+                        `[Auto Zero Report Rerun] skipped: fallback retry limit reached (max ${MAX_ANALYSIS_FALLBACK_ATTEMPTS} per category).`,
+                        'warning'
+                    );
+                    return;
+                }
+
+                if (shouldRerunScenes) {
+                    recordAnalysisFallbackAttempt(activeEpisode.id, 'scene_beats');
+                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'scene_beats');
+                    onLog?.(
+                        `[Auto Zero Report Rerun] scenes count is 0, rerunning scene beats (remaining auto retries: ${remaining}).`,
+                        'warning'
+                    );
+                    setAnalysisFlowStatus({
+                        phase: 'scene_beats',
+                        message: t(
+                            `检查报告发现“场景”为 0，正在自动单独重排场景（剩余 ${remaining} 次）...`,
+                            `Report found scenes=0. Auto-rerunning scene beats (${remaining} auto retries left)...`
+                        ),
+                    });
+                    await executeSceneBeatsRerun({ mode: 'all' });
+                }
+
+                if (shouldRerunAssets) {
+                    if (isSceneBeatsOnlyRerun) {
+                        onLog?.('[Auto Zero Report Rerun] skipped asset auto-rerun for scene-beats-only rerun report.', 'info');
+                        return;
+                    }
+                    autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
+                    persistAnalysisSessionSnapshot(activeEpisode.id);
+                    const targetEntityTypes = Array.from(new Set(pendingAssetTargets));
+                    const remaining = getAnalysisFallbackRemaining(activeEpisode.id, 'asset_gen');
+                    onLog?.(
+                        `[Auto Zero Report Rerun] asset count is 0, rerunning categories=${targetEntityTypes.join(',')} (remaining auto retries: ${remaining}).`,
+                        'warning'
+                    );
+                    setAnalysisFlowStatus({
+                        phase: 'assets_gen',
+                        message: t(
+                            `检查报告发现 ${pendingLabels.join('、')} 为 0，正在自动单独重跑对应资产类型（剩余 ${remaining} 次）...`,
+                            `Report found zero-count asset categories (${pendingLabels.join(', ')}). Auto-rerunning (${remaining} auto retries left)...`
+                        ),
+                    });
+                    await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
+                }
+            } catch (error) {
+                const detail = String(error?.message || error || 'unknown error');
+                onLog?.(`[Auto Zero Report Rerun] failed: ${detail}`, 'warning');
+            } finally {
+                autoZeroReportHandledRef.current = { key: reportKey, handledAt: Date.now() };
+                analysisFallbackRetryRef.current.running = false;
+                persistAnalysisSessionSnapshot

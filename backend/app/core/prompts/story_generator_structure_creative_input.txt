@@ -7,6 +7,7 @@ Rules:
 - Output ONLY a valid JSON object. No markdown, no code fences, no explanations.
 - Infer the dominant language of the input and write every JSON value in that same language.
 - Preserve the user's original ideas, scenes, lines, and constraints. Do not replace with unrelated stories.
+- Incorporate entertainment value (娱乐化考虑): if the plot allows, include entertaining/comedic character configurations in the core cast, and adapt classic comedic moments or tropes within the setup or development.
 - Use search snippets as reference material only; synthesize across multiple angles:
   1) classic visual/image composition (经典画面/镜头感)
   2) memorable dialogue and verbal hooks (经典对白/台词)

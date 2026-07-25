@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, TrendingUp , Activity} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -3574,7 +3574,20 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                     )}
 
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    
+
+<div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <label className="text-xs text-muted-foreground uppercase font-bold block">
+                                        {t('天马行空的想法', 'Wild Ideas & Creative Prompt')}
+                                    </label>
+                                    <div className="text-[11px] text-muted-foreground/80 mt-1">
+                                        {t('先把脑海中的画面、台词、怪念头倒在这里；点「结构化预填」会先提取关键要素，再搜索经典名场面/热门桥段/热门话题，最后预填 I1–I9。', 'Pour raw scenes, lines, and quirky ideas here; Structure extracts key elements, searches classic scenes/tropes/hot topics, then prefills I1–I9.')}
+                                    </div>
+                                </div>
+
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-3">
                             <div className="flex items-start justify-between gap-3">
                                 <div>
@@ -3654,16 +3667,7 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                         <div className="sm:col-span-2 text-xs text-muted-foreground mb-1">
                             {t('大模型将根据【产品规格】严格套用不同的工业化叙事节奏与起承转合结构，并针对【受众定位】极化核心看点与张力。', 'The AI will apply distinct rhythmic and structural pacing based on the chosen Product Format and polarize constraints based on target audience.')}
                         </div>
-                        <div className="sm:col-span-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
-                            <div className="flex items-start justify-between gap-3">
-                                <div>
-                                    <label className="text-xs text-muted-foreground uppercase font-bold block">
-                                        {t('天马行空的想法', 'Wild Ideas & Creative Prompt')}
-                                    </label>
-                                    <div className="text-[11px] text-muted-foreground/80 mt-1">
-                                        {t('先把脑海中的画面、台词、怪念头倒在这里；点「结构化预填」会先提取关键要素，再搜索经典名场面/热门桥段/热门话题，最后预填 I1–I9。', 'Pour raw scenes, lines, and quirky ideas here; Structure extracts key elements, searches classic scenes/tropes/hot topics, then prefills I1–I9.')}
-                                    </div>
-                                </div>
+                        
                                 <button
                                     type="button"
                                     onClick={handleStructureCreativeInput}
@@ -3943,6 +3947,64 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             </div>
                         )}
                     </div>
+                    <div className="mt-4 border border-white/10 rounded-xl bg-black/20 p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                <Activity className="w-4 h-4 text-primary" /> {t('剧本页面诊断与状态面板', 'Generation Status & Diagnosis')}
+                            </h4>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                            {t('基于当前输入与生成的诊断追踪。', 'Current status and output diagnostic tracking.')}
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('全局框架状态', 'Framework Status')}</div>
+                                <div className="font-bold text-white">{info.story_dna_global_md ? t('已建立', 'Established') : t('待补充', 'Missing')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('创意标准输入(I1-I9)', 'Creative I1-I9')}</div>
+                                <div className="font-bold text-white">{globalStoryInput.logline ? t('已填核心', 'Core Filled') : t('待细化', 'Needs Detail')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('主线分集生成', 'Episodes Gen')}</div>
+                                <div className="font-bold text-white">{episodeScriptsProgress?.running ? t('运行中', 'Running') : t('闲置状态', 'Idle')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('生成分集数量', 'Episodes Target')}</div>
+                                <div className="font-bold text-white">{globalStoryInput.episodes_count || 0} 集</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mt-4 border border-white/10 rounded-xl bg-black/20 p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                <Activity className="w-4 h-4 text-primary" /> {t('剧本页面诊断与状态面板', 'Generation Status & Diagnosis')}
+                            </h4>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                            {t('基于当前输入与生成的诊断追踪。', 'Current status and output diagnostic tracking.')}
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('全局框架状态', 'Framework Status')}</div>
+                                <div className="font-bold text-white">{info.story_dna_global_md ? t('已建立', 'Established') : t('待补充', 'Missing')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('创意标准输入(I1-I9)', 'Creative I1-I9')}</div>
+                                <div className="font-bold text-white">{globalStoryInput.logline ? t('已填核心', 'Core Filled') : t('待细化', 'Needs Detail')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('主线分集生成', 'Episodes Gen')}</div>
+                                <div className="font-bold text-white">{episodeScriptsProgress?.running ? t('运行中', 'Running') : t('闲置状态', 'Idle')}</div>
+                            </div>
+                            <div className="border border-white/10 rounded-lg p-3 bg-black/30">
+                                <div className="text-xs text-muted-foreground">{t('生成分集数量', 'Episodes Target')}</div>
+                                <div className="font-bold text-white">{globalStoryInput.episodes_count || 0} 集</div>
+                            </div>
+                        </div>
+                    </div>
+                
+                
                 </div>
                 )}
 

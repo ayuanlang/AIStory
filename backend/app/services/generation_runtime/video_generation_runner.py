@@ -1629,6 +1629,28 @@ async def _run_generate_video(
             )
             reservation_tx = None
             reservation_tx_id = None
+            
+        # Register last frame as asset if present
+        try:
+            last_frame_url_val = (final_meta or {}).get("last_frame_url")
+            if last_frame_url_val and resolved_shot_id:
+                from app.services.generation_runtime.asset_registration import _register_asset_helper
+                
+                dummy_req = type("DummyReq", (), {
+                    "project_id": resolved_project_id,
+                    "target_type": "shot_entity",
+                     "target_id": resolved_shot_id,
+                    "role": "last_frame"
+                })()
+                
+                # Make a distinct identifier
+                lf_meta = {"provider": final_provider, "model": final_model, "is_last_frame": True, "source_shot_id": resolved_shot_id}
+                
+                new_asset_id = _register_asset_helper(db, current_user.id, last_frame_url_val, dummy_req, source_metadata=lf_meta)
+                if new_asset_id:
+                    _debug_log(f"Registered last_frame_url as asset {new_asset_id} for shot {resolved_shot_id}")
+        except Exception as lf_err:
+             _debug_log(f"Failed to register last_frame_url as asset: {lf_err}", "warning")
 
         return result
     except asyncio.CancelledError:
