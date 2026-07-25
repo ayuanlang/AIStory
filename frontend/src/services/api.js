@@ -3354,6 +3354,11 @@ export const getLlmCallLogs = async (params = {}) => {
     return response.data;
 }
 
+export const cleanLlmLogs = async (days = 3) => {
+    const response = await api.delete(`/admin/llm_logs/clean?days=${days}`);
+    return response.data;
+}
+
 export const getAdminRuntimeLogView = async (params = {}) => {
     const response = await api.get('/admin/runtime-logs/view', { params });
     return response.data;

@@ -4069,7 +4069,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
                     // Quote the string, escaping quotes and newlines
                     const safeValue = trimmedValue
-                        .replace(/\\/g, '\\') // Escape backslashes first
+                        .replace(/\\/g, '\\\\') // Escape backslashes first
                         .replace(/"/g, '\\"')
                         .replace(/\n/g, '\\n'); // Avoid actual newlines in string
 
@@ -4146,7 +4146,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 const ch = text[i];
                 const prev = i > 0 ? text[i - 1] : '';
 
-                if (ch === '"' && prev !== '') {
+                if (ch === '"' && prev !== '\\') {
                     inString = !inString;
                 }
                 if (inString) continue;
@@ -4321,7 +4321,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     escape = false;
                     continue;
                 }
-                if (ch === '') {
+                if (ch === '\\') {
                     escape = true;
                     continue;
                 }
@@ -5431,13 +5431,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         if (hasSceneBeats) {
             if (onLog) onLog('Post-check action: rerun all scene beats (sync orchestration).', 'info');
             await executeSceneBeatsRerun({ mode: 'all' });
-                    try {
-                        onLog?.('[Auto Zero Report Rerun] triggering storyboard generation after scene beats rerun.', 'info');
-                        await flushPendingStoryboardKickoffsRef.current?.('zero-report-scene-rerun');
-                        await ensureStoryboardTasksForImportedScenes();
-                    } catch (e) {
-                        onLog?.(`Storyboard generation trigger failed: ${e.message || e}`, 'warning');
-                    }
             return;
         }
         if (onLog) onLog('Post-check action: rerun AI Script Analysis.', 'info');
@@ -6183,7 +6176,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 escaped = false;
                 continue;
             }
-            if (ch === '') {
+            if (ch === '\\') {
                 escaped = true;
                 continue;
             }
@@ -6194,7 +6187,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             buf.push(ch);
         }
-        if (escaped) buf.push('');
+        if (escaped) buf.push('\\');
         cells.push(buf.join('').trim());
         return cells;
     }
@@ -7097,7 +7090,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             // Shots are done but the main analysis pipeline is still running: keep its phase/message
             // and only surface storyboard progress as a hint.
-                    if (pipelineStillLive || !storyboardOwnedPhases.has(prevPhase)) {
+            if (!storyboardOwnedPhases.has(prevPhase)) {
                 return {
                     ...prev,
                     highlightHint: highlightHint || nextMessage,
@@ -13553,6 +13546,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const episodeId = activeEpisode.id;
         if (analysisResumeCoordinatorRef.current.running && analysisResumeCoordinatorRef.current.episodeId === episodeId) return;
         if (analysisResumeInFlightRef.current || phase2GenerationInFlightRef.current || isRetryingPhase2) return;
+        if (analysisRunInFlightRef.current || sceneBeatsOnlyRerunInFlightRef.current) return;
         if (analysisFallbackRetryRef.current.running) return;
 
         const pendingMarker = loadAnalysisTaskMarker(episodeId);
@@ -13655,16 +13649,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setIsRetryingPhase2(false);
                 setActiveAnalysisTaskId('');
                 // Soft-stop monitoring only — keep restored progress logs; no failure/retry prompt.
-                const isFailStatus = ['failed', 'error', 'timeout', 'canceled', 'cancelled', 'stopped', 'not_found'].includes(terminalStatus);
                 setAnalysisFlowStatus((prev) => {
                     const phase = String(prev?.phase || '').trim().toLowerCase();
                     if (!phase || phase === 'idle' || ['completed', 'warning', 'failed'].includes(phase)) return prev;
-                    if (isFailStatus) {
-                        return {
-                            phase: 'failed',
-                            message: t('后台分析任务已异常终止。', 'Background analysis task has terminated abnormally.'),
-                        };
-                    }
                     return {
                         phase: 'completed',
                         message: t('后台分析任务已结束。', 'Background analysis task has finished.'),
@@ -13673,15 +13660,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 setAnalysisUiReport((prev) => {
                     if (!prev || String(prev.status || '').trim().toLowerCase() !== 'running') return prev;
                     const startedAt = Number(prev.startedAt || Date.now());
-                    if (isFailStatus) {
-                        return {
-                            ...prev,
-                            status: 'failed',
-                            error: t('任务在后台异常终止', 'Task terminated abnormally in the background'),
-                            warning: '',
-                            durationMs: Math.max(0, Date.now() - (Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now())),
-                        };
-                    }
                     return {
                         ...prev,
                         status: 'completed',
@@ -14890,8 +14868,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await autoSaveScriptBeforeAnalysis();
 
         if (actualContent && actualContent.trim().length > 6000) {
-            const ok = false;
-            if (onLog) onLog(t('剧本字数超6000字，为避免弹窗中断，默认跳过自动分集进行整段分析。', 'Script > 6000 chars. Skipping auto-split to avoid UI prompt.'), 'warning');
+            const ok = await confirmUiMessage(t(
+                '检测到剧本内容超过6000字，考虑到大模型可能漏剧情，建议先进行分集处理。是否允许AI帮您自动切分集并保存？(选择“取消”则忽略并继续分析整段内容)',
+                'Script length exceeds 6000 characters. Large models might miss plot details. Auto-split it into episodes? (Cancel to proceed analyzing as a whole)'
+            ));
             if (ok) {
                 if (onLog) onLog("开始调用剧本分隔提示词自动分集...");
                 setAnalysisFlowStatus({ phase: 'script_opt', message: t('正在为您深度阅读并切分剧本分集，请耐心等待...', 'Deep reading and splitting script episodes, this may take a while...') });
@@ -14943,8 +14923,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const hasExistingScenes = existingScenes && existingScenes.length > 0;
             
             if (hasExistingScenes || hasExistingStageOutputs) {
-                const ok = true;
-                if (onLog) onLog(t('检测到已存在剧本分析各阶段结果或场景数据，已自动确认覆盖原结果。', 'Existing outputs detected. Auto-overwriting.'), 'info');
+                const ok = await confirmUiMessage(t(
+                    '检测到已存在剧本分析各阶段结果或场景数据。重新分析将清空并覆盖原结果，是否继续重新生成？（选择“取消”则保留并使用原来的结果）',
+                    'Existing stage analysis outputs or scenes detected. Regenerating will clear and overwrite previous results. Continue? (Choose Cancel to keep existing results)'
+                ));
                 if (!ok) {
                     return;
                 }
@@ -14953,7 +14935,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
 
         const projectLanguage = getInfoValue(['language', 'project_language', 'lang']);
         if (!projectLanguage) {
-            const ok = true;
+            const ok = await confirmUiMessage(t(
+                '检测到项目语言为空。建议先在“项目信息”里填写语言，以保证分析输出语言稳定。是否继续分析？',
+                'Project language is empty. Set language in Project Info first for stable analysis output. Continue anyway?'
+            ));
             if (!ok) {
                 return;
             }
@@ -15888,11 +15873,11 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
 
             setAnalysisFlowStatus({
-                phase: 'script_opt',
+                phase: 'completed',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
             setAnalysisFlowStatus({
-                phase: 'script_opt',
+                phase: 'completed',
                 message: t('🚀 分析有了新进展，正在为您整理出炉...', 'LLM returned: saving raw output and filling the analysis Output Workspace...'),
             });
 
@@ -17853,6 +17838,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         setIsAnalyzing(true);
         analysisRunInFlightRef.current = true;
         analysisStopRequestedRef.current = false;
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt,
+            durationMs: 0,
+            runTag: 'scene_beats_only_rerun',
+            error: '',
+            warning: '',
+        }));
         beginSceneOrchestrationPanelTracking(orchestrationSceneCount);
         setAnalysisFlowStatus({
             phase: 'scene_beats',
@@ -19119,6 +19113,15 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         activeAnalysisTaskIdsRef.current.clear();
         setActiveAnalysisTaskId('');
         setIsRetryingPhase2(true);
+        setAnalysisUiReport((prev) => ({
+            ...(prev && typeof prev === 'object' ? prev : {}),
+            status: 'running',
+            startedAt: Date.now(),
+            durationMs: 0,
+            runTag: 'phase2_retry',
+            error: '',
+            warning: '',
+        }));
         clearAnalysisTaskMarker(activeEpisode?.id);
         logSelectedScriptAnalysisApi('Stage 3 asset rerun');
         try {
@@ -19144,19 +19147,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             );
             
             // Update the UI report with the new asset counts
-            if (!analysisUiReport || typeof analysisUiReport !== 'object') {
-                setAnalysisUiReport(buildCompletedAnalysisUiReport({
-                    status: 'completed',
-                    startedAt: phase2RetryOptionsRef.current?.startedAt || Date.now(),
-                    durationMs: 0,
-                    importReport: {
-                        sceneSubjectPostImportReport: postImportSceneSubjectReport,
-                        dbPersistedCounts: postImportSceneSubjectReport?.dbPersistedCounts,
-                        dbRunInsertedCounts: postImportSceneSubjectReport?.dbRunInsertedCounts,
-                        importedSubjectCounts: postImportSceneSubjectReport?.importedSubjectCounts,
-                    },
-                }));
-            } else {
+            if (analysisUiReport && typeof analysisUiReport === 'object') {
                 const newImportReport = {
                     ...analysisUiReport.importReport,
                     sceneSubjectPostImportReport: syncScenePostImportCheckedCount(
@@ -19192,52 +19183,49 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     ...prev,
                     importReport: newImportReport,
                 }));
-            }
-
-            const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
-            const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
-            const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
-            const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
-            const hasActionableMissing = postImportSupplementCreated > 0 || postImportSupplementFailed > 0;
-            
-            setAnalysisFlowStatus({
-                phase: 'completed',
-                message: hasActionableMissing
-                    ? (
-                        postImportSupplementFailed > 0
-                            ? t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}, failed ${postImportSupplementFailed}).`)
-                            : t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}).`)
-                    )
-                    : (
-                        postImportSupplementSkipped > 0
-                            ? t(`✅ 资产已齐全：${postImportSupplementSkipped} 个条目均已存在于资产库，无需重复生成。`, `Assets already complete: ${postImportSupplementSkipped} item(s) already exist in the library.`)
-                            : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.')
-                    ),
-            });
-            
-            onLog?.('Stage 3 asset design retry completed.', 'success');
-
-            // Resume storyboards deferred/blocked while ENV was incomplete.
-            const retryTargets = Array.isArray(options?.targetEntityTypes)
-                ? options.targetEntityTypes.map((x) => String(x || '').trim().toLowerCase())
-                : [];
-            const touchedEnv = retryTargets.length === 0
-                || retryTargets.some((k) => ['environments', 'environment', 'env', 'posters', 'covers'].includes(k));
-            if (touchedEnv) {
-                markEnvironmentAssetDesignReady('phase2-asset-retry');
-                try {
-                    await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
-                    await ensureStoryboardTasksForImportedScenes(
-                        analysisUiReport?.importReport || null
-                    );
-                } catch (resumeErr) {
-                    onLog?.(
-                        t(
-                            `资产重跑后恢复分镜失败：${resumeErr?.message || resumeErr}`,
-                            `Failed to resume storyboard after asset retry: ${resumeErr?.message || resumeErr}`
+                const postImportMissingItems = Number(postImportSceneSubjectReport?.missingItemCount || 0);
+                const postImportSupplementCreated = Number(postImportSceneSubjectReport?.supplementReport?.createdItems?.length || 0);
+                const postImportSupplementFailed = Number(postImportSceneSubjectReport?.supplementReport?.failedItems?.length || 0);
+                const postImportSupplementSkipped = Number(postImportSceneSubjectReport?.supplementReport?.skippedItems?.length || 0);
+                const hasActionableMissing = postImportSupplementCreated > 0 || postImportSupplementFailed > 0;
+                
+                setAnalysisFlowStatus({
+                    phase: 'completed',
+                    message: hasActionableMissing
+                        ? (
+                            postImportSupplementFailed > 0
+                                ? t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个，失败 ${postImportSupplementFailed} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}, failed ${postImportSupplementFailed}).`)
+                                : t(`🔄 补全完毕！成功新建 ${postImportSupplementCreated} 个资产（跳过 ${postImportSupplementSkipped} 个）。`, `Retry completed: created ${postImportSupplementCreated} new assets (skipped ${postImportSupplementSkipped}).`)
+                        )
+                        : (
+                            postImportSupplementSkipped > 0
+                                ? t(`✅ 资产已齐全：${postImportSupplementSkipped} 个条目均已存在于资产库，无需重复生成。`, `Assets already complete: ${postImportSupplementSkipped} item(s) already exist in the library.`)
+                                : t('重试✅ 工作圆满完成！未发现缺失的资产。', 'Retry completed: no missing entities detected, workflow finished.')
                         ),
-                        'warning'
-                    );
+                });
+                
+                onLog?.('Stage 3 asset design retry completed.', 'success');
+
+                // Resume storyboards deferred/blocked while ENV was incomplete.
+                const retryTargets = Array.isArray(options?.targetEntityTypes)
+                    ? options.targetEntityTypes.map((x) => String(x || '').trim().toLowerCase())
+                    : [];
+                const touchedEnv = retryTargets.length === 0
+                    || retryTargets.some((k) => ['environments', 'environment', 'env', 'posters', 'covers'].includes(k));
+                if (touchedEnv) {
+                    markEnvironmentAssetDesignReady('phase2-asset-retry');
+                    try {
+                        await flushPendingStoryboardKickoffsRef.current?.('phase2-asset-retry');
+                        await ensureStoryboardTasksForImportedScenes(newImportReport);
+                    } catch (resumeErr) {
+                        onLog?.(
+                            t(
+                                `资产重跑后恢复分镜失败：${resumeErr?.message || resumeErr}`,
+                                `Failed to resume storyboard after asset retry: ${resumeErr?.message || resumeErr}`
+                            ),
+                            'warning'
+                        );
+                    }
                 }
             }
         } catch (error) {
@@ -20379,13 +20367,6 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                         ),
                     });
                     await handleRetryPhase2({ targetEntityTypes, autoZeroReportRerun: true });
-                    try {
-                        onLog?.('[Auto Zero Report Rerun] triggering storyboard generation after asset rerun.', 'info');
-                        await flushPendingStoryboardKickoffsRef.current?.('zero-report-asset-rerun');
-                        await ensureStoryboardTasksForImportedScenes();
-                    } catch (e) {
-                        onLog?.(`Storyboard generation trigger failed: ${e.message || e}`, 'warning');
-                    }
                 }
             } catch (error) {
                 const detail = String(error?.message || error || 'unknown error');

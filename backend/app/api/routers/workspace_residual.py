@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Dict, List, Optional, Union
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -218,6 +219,26 @@ def get_llm_logs(
         query = query.filter(LLMCallLog.tag == tag)
     logs = query.offset(offset).limit(limit).all()
     return logs
+
+
+@router.delete("/admin/llm_logs/clean")
+def clean_llm_logs(
+    days: int = 3,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only superusers can manage LLM Call Logs")
+    
+    cutoff_time = datetime.utcnow() - timedelta(days=days)
+    import dateutil.parser
+    # SQLite often stores time as ISO string, so we'll delete items where timestamp < cutoff
+    # A simple approach for SQLite/Postgres str comparison
+    cutoff_str = cutoff_time.isoformat()
+    
+    deleted_count = db.query(LLMCallLog).filter(LLMCallLog.timestamp < cutoff_str).delete(synchronize_session=False)
+    db.commit()
+    return {"status": "success", "deleted_count": deleted_count, "cutoff": cutoff_str}
 
 
 @router.get("/projects/{project_id}/backup_export")
