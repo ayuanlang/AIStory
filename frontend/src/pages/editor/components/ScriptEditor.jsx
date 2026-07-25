@@ -7304,7 +7304,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 `本场关联环境 ENV 尚未完成资产设计：${missingLabel}`,
                 `Scene-linked ENV asset design incomplete: ${missingLabel}`
             );
-            if (!force) {
+            if (!force && sceneEnvGate.reason !== 'scene_not_found' && environmentAssetDesignPendingRef.current) {
                 // First deferral: queue for the next env-ready flush.
                 // Resume path: do not re-enqueue (avoids tight retry loops while ENV is still missing);
                 // release claim so a later stranded flush / ENV retry can pick this marker up.
@@ -7955,7 +7955,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             const unresolved = isStoryboardProgressUnresolved(progress)
                 || promiseCount > 0
                 || queued > 0
-                || strandedWaitingEnvCount() > 0;
+                || (environmentAssetDesignPendingRef.current && strandedWaitingEnvCount() > 0);
             const withinGrace = autoStartEnabled
                 && hasExpectedImportedScenes()
                 && Number(progress.started || 0) <= 0
@@ -12750,11 +12750,12 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     } else if (promptFiles.some((p) => p.key === 'environments')) {
                         onLog?.(
                             t(
-                                '[分镜生成] 环境与海报资产设计未成功完成，分镜将保持等待，不会使用旧环境结果放行',
-                                '[Storyboard] Environment/poster asset design did not complete; storyboard stays gated (stale env JSON will not open the gate)'
+                                '[分镜生成] 环境与海报资产设计未成功完成，将终止等待并置为失败。',
+                                '[Storyboard] Environment/poster asset design did not complete; failing pending kickoffs.'
                             ),
                             'warning'
                         );
+                        markEnvironmentAssetDesignReady('env-subtask-failed');
                     }
 
                     return {

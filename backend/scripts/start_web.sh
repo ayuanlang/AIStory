@@ -17,6 +17,7 @@ python add_scene_ai_shots_result_column.py || echo "[WARN] add_scene_ai_shots_re
 python add_users_email_verification_columns.py || echo "[WARN] add_users_email_verification_columns.py failed, continuing"
 python ensure_assets_meta_info_column.py || echo "[WARN] ensure_assets_meta_info_column.py failed, continuing"
 python backfill_user_verification_for_active.py || echo "[WARN] backfill_user_verification_for_active.py failed, continuing"
+python add_llm_call_logs_columns.py || echo "[WARN] add_llm_call_logs_columns.py failed, continuing"
 python cleanup_llm_call_logs.py || echo "[WARN] cleanup_llm_call_logs.py failed, continuing"
 echo "[boot] KIE data import is disabled during deploy"
 export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-1}"
