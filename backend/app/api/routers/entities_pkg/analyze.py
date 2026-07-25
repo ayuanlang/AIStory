@@ -437,7 +437,8 @@ async def _execute_analyze_entity_image(
             "You are an expert visual analyst. "
             "Analyze the provided subject image and UPDATE fields from what is visibly present in the image. "
             "For character/prop: image-only reverse prompting — do NOT force Stage-3 four-panel sheet reconstruction; "
-            "describe the actual image composition and visible details. Keep name/name_en unchanged; generation_prompt_en=\"\"."
+            "describe the actual image composition and visible details. Keep name/name_en unchanged; generation_prompt_en=\"\".\n"
+            "CRITICAL: You MUST strictly re-analyze the new image and update the anchor_description accordingly based on the new visual features. Do NOT just copy the old anchor_description."
         )
     else:
         base_instruction = (
@@ -445,7 +446,8 @@ async def _execute_analyze_entity_image(
             "Analyze the provided subject image and UPDATE the existing subject fields to match visible evidence. "
             "Rewrite generation_prompt_cn in the ORIGINAL Stage-3 asset-design prompt format for this subject type "
             "(main environment 2x2 four-direction grid; derivative ENV A/B/C; poster 4:3). "
-            "Do NOT invent a new free-form prompt style."
+            "Do NOT invent a new free-form prompt style.\n"
+            "CRITICAL: You MUST strictly re-analyze the new image and update the anchor_description accordingly based on the new visual features. Do NOT just copy the old anchor_description."
         )
     schema_instruction = _build_entity_analysis_schema_instruction(entity, analysis_category)
 

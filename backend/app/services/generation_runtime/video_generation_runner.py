@@ -1648,9 +1648,41 @@ async def _run_generate_video(
                 
                 new_asset_id = _register_asset_helper(db, current_user.id, last_frame_url_val, dummy_req, source_metadata=lf_meta)
                 if new_asset_id:
-                    _debug_log(f"Registered last_frame_url as asset {new_asset_id} for shot {resolved_shot_id}")
+                    logger.info(f"Registered last_frame_url as asset {new_asset_id} for shot {resolved_shot_id}")
+
+                # Propagate to next shot if same environment
+                current_shot = db.query(Shot).filter(Shot.id == resolved_shot_id).first()
+                if current_shot:
+                    from app.models.all_models import Scene
+                    next_shot = db.query(Shot).filter(
+                        Shot.episode_id == current_shot.episode_id,
+                        Shot.id > current_shot.id,
+                        Shot.is_deleted == False
+                    ).order_by(Shot.id.asc()).first()
+
+                    if next_shot:
+                        current_scene = db.query(Scene).filter(Scene.id == current_shot.scene_id).first()
+                        next_scene = db.query(Scene).filter(Scene.id == next_shot.scene_id).first()
+
+                        env_current = (current_scene.environment_name or "").strip() if current_scene else ""
+                        env_next = (next_scene.environment_name or "").strip() if next_scene else ""
+
+                        is_same_env = False
+                        if current_scene and next_scene and current_scene.id == next_scene.id:
+                            is_same_env = True
+                        elif env_current and env_next and env_current == env_next:
+                            # It has environment_name and they exactly match
+                            is_same_env = True
+
+                        logger.info(f"[LastFramePropagation] Evaluating propagation. current_shot={current_shot.id}, next_shot={next_shot.id}, is_same_env={is_same_env}, env_current='{env_current}', env_next='{env_next}'")
+
+                        if is_same_env:
+                            logger.info(f"[LastFramePropagation] Environment matches. Propagating last_frame_url to shot {next_shot.id} as start frame.")
+                            next_shot.image_url = last_frame_url_val
+                            db.commit()
+
         except Exception as lf_err:
-             _debug_log(f"Failed to register last_frame_url as asset: {lf_err}", "warning")
+             logger.warning(f"Failed to register/propagate last_frame_url as asset: {lf_err}")
 
         return result
     except asyncio.CancelledError:
