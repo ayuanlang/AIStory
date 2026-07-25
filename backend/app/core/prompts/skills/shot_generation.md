@@ -619,7 +619,7 @@ Beats → AI Shot List；主列 `Video Content (CN)`，`Shot Logic (CN)` **必�
 #### H. 特殊视角关键词（`特殊视角运镜:`）
 | 类型 | 机位关键词 | ENV/硬禁 |
 |---|---|---|
-| **FPV** | POV Handoff｜Head Follow｜Scope Overlay｜Snorricam｜Screen View POV｜FPV Dive | 须 POV 衍生 ENV；**禁**口型主拍 |
+| **FPV** | POV Handoff｜Head Follow｜Scope Overlay｜Snorricam｜Screen View POV｜FPV Dive | 须 POV 衍生 ENV（以主观角色视角建置、不包含主观角色自身）；**禁**口型主拍 |
 | **OPV** | Static Master｜Profile Two-Shot｜Surveillance｜OTS/Dirty Single｜Pull Back OPV | 第三者；口型用 OPV/OTS/MCU |
 | **ACT** | Body/Chest Mount｜Snorricam｜Dash/Helmet Cam｜Mount Off→OPV | 主体≤2；须脱离过渡 |
 | **虫蚁** | Worm's-Eye｜Ground-Level｜Table-Level｜Macro｜Tilt Up 揭示 | 须尺度参照；禁口型 |
@@ -716,7 +716,7 @@ Beats → AI Shot List；主列 `Video Content (CN)`，`Shot Logic (CN)` **必�
 
 **`Video Content (CN)` 转译规则（强制，禁遗留推导信息）**
 - 上游拓扑/转角/可见性 Delta **须在写作前消化**，正文**只输出镜头语言**，不得把 Stage 1/2 的推导字段、度数坐标、拓扑公式粘贴进视频提示词。
-- **必写要素（衍生 ENV 或正反/OTS/POV 切换时）**：
+- **必写要素（衍生 ENV 或正反/OTS/POV 切换时，POV 镜头以主观角色视角建置、不包含主观角色自身）**：
   1. **机位落点**：站在/位于哪一结构侧（如「会议桌长边侧面、胸口高度 Eye-level」——**仅当该侧发光墙体本镜画内可见时**才可点名窗/灯实体）。
   2. **观察朝向 / 回转**：相对主视角 Master 轴的**顺时针回转 N 度**，或等效运镜名（Reverse Shot、Left-Shoulder OTS、POV Handoff、Pan to New Axis、Motivated Reframe 等）；可写「沿桌轴线/门槛轴线顺时针回转 180 度」。
   3. **背景更替**：用自然语言写 BG **看见什么**；机位后方半空间只写「不可见」一句，**禁止**点名已退出可见的发光/墙体实体（❌「主视角时的百叶窗墙位于机位后方」——百叶窗名泄漏；✅「背景为半开木门与门外冷蓝走廊；机位后方半空间不可见」）。
