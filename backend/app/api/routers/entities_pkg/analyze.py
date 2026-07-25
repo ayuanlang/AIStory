@@ -397,6 +397,10 @@ async def _execute_analyze_entity_image(
         "model": api_model,
         "config": {
             **api_config,
+            "__resolved_user_id": current_user.id,
+            "__resolved_user_name": current_user.username,
+            "__resolved_project_id": entity.project_id,
+            "__resolved_action": f"资产分析({analysis_category})",
             "__selected_system_api_id": selected_dropdown_id,
         },
     }

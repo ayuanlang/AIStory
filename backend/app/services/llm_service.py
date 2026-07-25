@@ -393,6 +393,13 @@ class LLMService:
                 model = payload.get("request", {}).get("model", "")
             api_url = payload.get("url") or payload.get("request", {}).get("url", "")
             
+            # Find tracing context natively in the payload or config
+            cfg = payload.get("config", {}) or payload.get("request", {}).get("config", {})
+            user_id = payload.get("user_id") or cfg.get("__resolved_user_id")
+            user_name = payload.get("user_name") or cfg.get("__resolved_user_name")
+            project_id = payload.get("project_id") or cfg.get("__resolved_project_id")
+            action = payload.get("action") or cfg.get("__resolved_action")
+            
             # Request vs Response mapping
             if "request" in payload:
                 payload_json = json.dumps(_strip_base64_from_log(payload.get("request", {})), ensure_ascii=False)
@@ -449,6 +456,10 @@ class LLMService:
                         log_entry.error_msg = str(error_msg)
                     if latency_ms is not None:
                         log_entry.latency_ms = latency_ms
+                    if user_id: log_entry.user_id = user_id
+                    if user_name: log_entry.user_name = user_name
+                    if project_id: log_entry.project_id = project_id
+                    if action: log_entry.action = action
                 else:
                     log_entry = LLMCallLog(
                         tag=tag,
@@ -459,7 +470,11 @@ class LLMService:
                         response_json=response_json,
                         error_msg=str(error_msg) if error_msg else None,
                         latency_ms=latency_ms,
-                        request_id=request_id
+                        request_id=request_id,
+                        user_id=user_id,
+                        user_name=user_name,
+                        project_id=project_id,
+                        action=action
                     )
                     db.add(log_entry)
                 db.commit()

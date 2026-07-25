@@ -194,6 +194,9 @@ def _resolve_story_generator_script_analysis_llm_config(
     system_api_id: Any = None,
     context: str,
     project_global_info: Optional[Dict[str, Any]] = None,
+    user_name: Optional[str] = None,
+    project_id: Optional[int] = None,
+    action_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     resolved_fn = _script_analysis_function_api_name(function_name)
     llm_config, _, _, _ = _resolve_script_analysis_dropdown_llm_config(
@@ -209,6 +212,12 @@ def _resolve_story_generator_script_analysis_llm_config(
             project_global_info,
             context=context,
         )
+    if isinstance(llm_config, dict):
+        llm_config.setdefault("config", {})
+        if user_id: llm_config["config"]["__resolved_user_id"] = user_id
+        if user_name: llm_config["config"]["__resolved_user_name"] = user_name
+        if project_id: llm_config["config"]["__resolved_project_id"] = project_id
+        if action_name: llm_config["config"]["__resolved_action"] = action_name
     return llm_config
 
 

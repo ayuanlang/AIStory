@@ -413,6 +413,9 @@ async def generate_project_character_profile(
         system_api_id=system_api_id,
         context="generate_project_character_profile",
         project_global_info=project.global_info,
+        user_name=current_user.username,
+        project_id=project_id,
+        action_name="生成角色档案设定",
     )
     provider = llm_config.get("provider") if llm_config else None
     model = llm_config.get("model") if llm_config else None

@@ -1215,6 +1215,9 @@ async def generate_project_episode_scripts_from_global_framework(
         system_api_id=getattr(req, "system_api_id", None),
         context="generate_episode_scripts",
         project_global_info=project_global_info,
+        user_name=current_user.username,
+        project_id=project_id,
+        action_name="生成分集剧本",
     )
     if not llm_config or not (llm_config.get("api_key") or "").strip():
         raise HTTPException(status_code=400, detail="No valid LLM API key configured in active settings")

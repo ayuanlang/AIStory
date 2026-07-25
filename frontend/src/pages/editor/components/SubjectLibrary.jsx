@@ -4827,12 +4827,14 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
             const typesZh = {
                 character: '角色',
                 environment: '环境',
-                prop: '道具'
+                prop: '道具',
+                cover_poster: '海报'
             };
             const typesEn = {
                 character: 'Characters',
                 environment: 'Environments',
-                prop: 'Props'
+                prop: 'Props',
+                cover_poster: 'Posters'
             };
             confirmMsg = t(
                 `警告：将删除当前分集下的全部${typesZh[subjectType] || subjectType}（软删除）。确定继续？`,
@@ -7730,7 +7732,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
                                         onClick={() => handleDeleteAllEntities(null)}
                                     >
-                                        {t('删除全部分集', 'Delete All')}
+                                        {t('删除所有实体', 'Delete All Entities')}
                                     </div>
                                     <div 
                                         className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap border-t border-white/5"
@@ -7749,6 +7751,12 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                         onClick={() => handleDeleteAllEntities('prop')}
                                     >
                                         {t('仅删除道具', 'Delete Props')}
+                                    </div>
+                                    <div 
+                                        className="px-3 py-1.5 text-xs text-white/80 hover:text-red-400 hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                                        onClick={() => handleDeleteAllEntities('cover_poster')}
+                                    >
+                                        {t('仅删除海报', 'Delete Posters')}
                                     </div>
                                 </div>
                             </div>

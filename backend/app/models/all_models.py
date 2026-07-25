@@ -135,6 +135,10 @@ class SystemLog(Base):
 class LLMCallLog(Base):
     __tablename__ = "llm_call_logs"
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_name = Column(String, nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    action = Column(String, nullable=True)
     tag = Column(String, index=True, nullable=True)
     provider = Column(String, index=True, nullable=True)
     model = Column(String, index=True, nullable=True)
