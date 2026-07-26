@@ -5224,6 +5224,19 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             if (requestSeq === shotsRefreshRequestSeqRef.current) {
                 setShots(filtered);
                 setHasShotInitialLoadCompleted(true);
+                
+                // Keep editingShot in sync with the freshly loaded master data
+                setEditingShot(prev => {
+                    if (!prev) return prev;
+                    const updated = filtered.find(s => String(s.id) === String(prev.id));
+                    if (!updated) return prev;
+                    
+                    // Update if image_url or video_url has changed externally (e.g. from previous shot's last_frame propagation)
+                    if (updated.image_url !== prev.image_url || updated.video_url !== prev.video_url) {
+                        return { ...prev, image_url: updated.image_url, video_url: updated.video_url };
+                    }
+                    return prev;
+                });
             }
 
                 // Legacy Auto-Sync Check (Optional, but kept for script-to-shot workflow convenience)

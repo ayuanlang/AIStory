@@ -1000,42 +1000,58 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 const latestEntities = await fetchEntities(projectId, { include_project_null_episode: true });
                 let changed = false;
                 const updatesToApply = [];
-                setAnalyzingEntities(prev => {
-                    const next = { ...prev };
-                    analyzingIds.forEach(id => {
-                        const latest = latestEntities.find(e => String(e.id) === id);
-                        const trackingData = next[id];
-                        if (!trackingData) return;
-
-                        const initialAnalysisTime = trackingData?.initialAnalysisTime;
-                        const startedAt = trackingData?.startedAt || Date.now();
-
-                        // If entity no longer exists, timeout 45s passed, or if analysis time changed
-                        if (!latest) {
-                            delete next[id];
-                            changed = true;
-                        } else if (getEntityAnalysisTime(latest) !== initialAnalysisTime) {
-                            delete next[id];
-                            changed = true;
-                            updatesToApply.push({ id, latest });
-                        } else if (Date.now() - startedAt > 300000) {
-                            // Timeout safety catch (5 minutes)
-                            delete next[id];
-                            changed = true;
-                            if (onLog) onLog(`Subject analysis timed out for ${latest.name}`, "warning");
-                        }
-                    });
-
-                    if (changed && subjectAnalyzingStorageKey) {
-                        try {
-                            if (Object.keys(next).length === 0) localStorage.removeItem(subjectAnalyzingStorageKey);
-                            else localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(next));
-                        } catch {}
-                    }
-                    return changed ? next : prev;
-                });
                 
-                updatesToApply.forEach(({ id, latest }) => {
+                // Calculate updates BEFORE setAnalyzingEntities so we can iterate them!
+                analyzingIds.forEach(id => {
+                    const latest = latestEntities.find(e => String(e.id) === id);
+                    const trackingData = currentAnalyzing[id];
+                    if (!trackingData) return;
+
+                    const initialAnalysisTime = trackingData?.initialAnalysisTime;
+                    const startedAt = trackingData?.startedAt || Date.now();
+
+                    if (!latest) {
+                        changed = true;
+                    } else if (getEntityAnalysisTime(latest) !== initialAnalysisTime) {
+                        changed = true;
+                        updatesToApply.push({ id, latest });
+                    } else if (Date.now() - startedAt > 300000) {
+                        changed = true;
+                    }
+                });
+
+                if (changed) {
+                    setAnalyzingEntities(prev => {
+                        const next = { ...prev };
+                        analyzingIds.forEach(id => {
+                            const latest = latestEntities.find(e => String(e.id) === id);
+                            const trackingData = next[id];
+                            if (!trackingData) return;
+
+                            const initialAnalysisTime = trackingData?.initialAnalysisTime;
+                            const startedAt = trackingData?.startedAt || Date.now();
+
+                            if (!latest) {
+                                delete next[id];
+                            } else if (getEntityAnalysisTime(latest) !== initialAnalysisTime) {
+                                delete next[id];
+                            } else if (Date.now() - startedAt > 300000) {
+                                delete next[id];
+                                if (onLog) onLog(aSubject analysis timed out for ${latest.name}`, 'warning');
+                            }
+                        });
+
+                        if (subjectAnalyzingStorageKey) {
+                            try {
+                                if (Object.keys(next).length === 0) localStorage.removeItem(subjectAnalyzingStorageKey);
+                                else localStorage.setItem(subjectAnalyzingStorageKey, JSON.stringify(next));
+                            } catch {}
+                        }
+                        return next;
+                    });
+                }
+                
+                updatesToApply.forEach(/{ id, latest }) => {
                     let isError = false;
                     let errMsg = "Unknown error";
                     try {

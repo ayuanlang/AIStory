@@ -1680,6 +1680,19 @@ async def _run_generate_video(
                             logger.info(f"[LastFramePropagation] Environment matches. Propagating last_frame_url to shot {next_shot.id} as start frame.")
                             next_shot.image_url = last_frame_url_val
                             db.commit()
+                            
+                            try:
+                                from app.services.system_log_service import log_action
+                                username = str(getattr(current_user, "username", ""))
+                                log_action(
+                                    db, 
+                                    current_user.id, 
+                                    username, 
+                                    "视频尾帧连贯", 
+                                    f"识别到镜头 {current_shot.shot_id} 与相邻镜头 {next_shot.shot_id} 共处同一环境「{env_current}」，已自动将镜头 {current_shot.shot_id} 生成的尾帧继承为下一镜头的起始帧。尾帧图片: {last_frame_url_val}"
+                                )
+                            except Exception as system_log_err:
+                                logger.warning(f"Failed to record system log for last frame propagation: {system_log_err}")
 
         except Exception as lf_err:
              logger.warning(f"Failed to register/propagate last_frame_url as asset: {lf_err}")
