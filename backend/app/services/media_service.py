@@ -2928,17 +2928,17 @@ class MediaGenerationService:
 
         return cfg
 
-    def _normalize_bool_value(self, value: Any) -> Optional[bool]:
+    def _normalize_bool_value(self, value: Any, default: Optional[bool] = None) -> Optional[bool]:
         if isinstance(value, bool):
             return value
         raw = str(value or "").strip().lower()
         if not raw:
-            return None
+            return default
         if raw in {"1", "true", "yes", "y", "on", "supported"}:
             return True
         if raw in {"0", "false", "no", "n", "off", "unsupported"}:
             return False
-        return None
+        return default
 
     def _normalize_kie_standard_value(self, dimension: str, raw_value: Any) -> Optional[str]:
         dim = str(dimension or "").strip().upper()
@@ -6835,8 +6835,23 @@ class MediaGenerationService:
             # If the user is specifically using Seedance 2.0 through the generic Doubao provider flow,
             # route it to the advanced ark_seedance handler to fully support audio/video/multi-image refs.
             if "seedance-2" in str(model or "").lower():
+                target_config = dict(config)
+                
+                # Try to fetch the proper AK:SK:EP_TOKEN configured in ark-seedance provider settings
+                from app.db.session import SessionLocal
+                with SessionLocal() as session:
+                    ark_bundle = self._collect_provider_key_pool_bundle(session, "Video", "ark-seedance")
+                    pooled_keys = self._normalize_api_keys(ark_bundle.get("provider_api_keys"))
+                    if pooled_keys:
+                        target_config["api_key"] = self._pick_runtime_api_key(ark_bundle)
+                        
+                        # Merge the config properties to make sure we don't lose callback / project configurations
+                        ark_inner_config = ark_bundle.get("provider_api_keys", [{}])[0].get("config", {}) if isinstance(ark_bundle.get("provider_api_keys"), list) and ark_bundle["provider_api_keys"] and isinstance(ark_bundle["provider_api_keys"][0], dict) else {}
+                        if isinstance(ark_inner_config, dict):
+                            target_config["config"] = {**tool_conf, **ark_inner_config}
+                            
                 return await self._handle_ark_seedance_generation(
-                    gen_type, prompt, config, reference_image_url=ref_image, duration=duration, aspect_ratio=aspect_ratio
+                    gen_type, prompt, target_config, reference_image_url=ref_image, duration=duration, aspect_ratio=aspect_ratio
                 )
 
             content_payload = [{"type": "text", "text": prompt}]
