@@ -1276,25 +1276,29 @@ export const collectMatchedSubjectImageUrlsFromPrompt = ({
 export const DEFAULT_SHOT_VIDEO_MODE = 'entity_refs';
 export const DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT = 9;
 
-export const limitVideoReferenceSlots = (imageRefs = [], videoRefs = [], maxTotal = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT) => {
+export const limitVideoReferenceSlots = (imageRefs = [], videoRefs = [], audioRefs = [], maxTotal = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT) => {
     const maxSlots = Math.max(1, Number(maxTotal) || DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT);
     const images = normalizeMediaRefList(Array.isArray(imageRefs) ? imageRefs : []);
     const videos = normalizeMediaRefList(Array.isArray(videoRefs) ? videoRefs : []);
-    const combined = [...images, ...videos];
+    const audios = normalizeMediaRefList(Array.isArray(audioRefs) ? audioRefs : []);
+    const combined = [...images, ...videos, ...audios];
     if (combined.length <= maxSlots) {
-        return { imageRefs: images, videoRefs: videos, truncated: 0 };
+        return { imageRefs: images, videoRefs: videos, audioRefs: audios, truncated: 0 };
     }
 
     const keptImages = [];
     const keptVideos = [];
+    const keptAudios = [];
     combined.slice(0, maxSlots).forEach((url) => {
-        if (videos.includes(url)) keptVideos.push(url);
+        if (audios.includes(url)) keptAudios.push(url);
+        else if (videos.includes(url)) keptVideos.push(url);
         else keptImages.push(url);
     });
 
     return {
         imageRefs: keptImages,
         videoRefs: keptVideos,
+        audioRefs: keptAudios,
         truncated: combined.length - maxSlots,
     };
 };
@@ -1383,17 +1387,32 @@ export const isVideoMediaRefUrl = (url) => {
     return /\.(mp4|webm|mov|m4v|avi|mkv)$/i.test(String(pathname || '').toLowerCase());
 };
 
+export const isAudioMediaRefUrl = (url) => {
+    const rawUrl = String(url || '').trim();
+    if (!rawUrl) return false;
+    let pathname = rawUrl;
+    try {
+        pathname = new URL(rawUrl, window.location.origin).pathname || rawUrl;
+    } catch {
+        pathname = rawUrl.split('?')[0].split('#')[0];
+    }
+    return /\.(mp3|wav|m4a|aac|flac|ogg)$/i.test(String(pathname || '').toLowerCase());
+};
+
 export const splitVideoReferenceMediaUrls = (urls = []) => {
     const imageRefs = [];
     const videoRefs = [];
+    const audioRefs = [];
     normalizeMediaRefList(urls).forEach((rawUrl) => {
         if (isVideoMediaRefUrl(rawUrl)) {
             videoRefs.push(rawUrl);
+        } else if (isAudioMediaRefUrl(rawUrl)) {
+            audioRefs.push(rawUrl);
         } else {
             imageRefs.push(rawUrl);
         }
     });
-    return { imageRefs, videoRefs };
+    return { imageRefs, videoRefs, audioRefs };
 };
 
 /** Same ref list as the shot editor "Refs (Video)" panel (WYSIWYG source of truth). */
@@ -1457,17 +1476,17 @@ export const resolveShotVideoActiveRefs = ({
 /** Map editor-visible refs to video API fields without re-injecting hidden frames. */
 export const buildShotVideoSubmitRefsFromActiveRefs = ({
     activeRefs = [],
-    shotLike = {},
     techObj = {},
     slotLimit = DEFAULT_VIDEO_REFERENCE_SLOT_LIMIT,
 } = {}) => {
     const mode = resolveUnifiedVideoMode(techObj);
     const displayedRefs = normalizeMediaRefList(activeRefs);
-    const { imageRefs, videoRefs } = splitVideoReferenceMediaUrls(displayedRefs);
-    const limited = limitVideoReferenceSlots(imageRefs, videoRefs, slotLimit);
+    const { imageRefs, videoRefs, audioRefs } = splitVideoReferenceMediaUrls(displayedRefs);
+    const limited = limitVideoReferenceSlots(imageRefs, videoRefs, audioRefs, slotLimit);
 
     let imageUrls = [...limited.imageRefs];
     let refVideoUrls = [...limited.videoRefs];
+    let refAudioUrls = [...limited.audioRefs];
     let lastFrameUrl = null;
 
     const endRef = String(techObj?.end_frame_url || '').trim();
@@ -1481,6 +1500,7 @@ export const buildShotVideoSubmitRefsFromActiveRefs = ({
         displayedRefs,
         imageUrls: normalizeMediaRefList(imageUrls),
         refVideoUrls: normalizeMediaRefList(refVideoUrls),
+        refAudioUrls: normalizeMediaRefList(refAudioUrls),
         lastFrameUrl,
         truncated: limited.truncated,
     };

@@ -1037,7 +1037,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                 delete next[id];
                             } else if (Date.now() - startedAt > 300000) {
                                 delete next[id];
-                                if (onLog) onLog(aSubject analysis timed out for ${latest.name}`, 'warning');
+                                if (onLog) onLog(`Subject analysis timed out for ${latest.name}`, 'warning');
                             }
                         });
 
@@ -1051,7 +1051,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                     });
                 }
                 
-                updatesToApply.forEach(/{ id, latest }) => {
+                updatesToApply.forEach(({ id, latest }) => {
                     let isError = false;
                     let errMsg = "Unknown error";
                     try {

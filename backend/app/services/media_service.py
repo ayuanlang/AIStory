@@ -962,6 +962,14 @@ class MediaGenerationService:
             extra_sources=config,
         )
 
+        reference_audio_raw = tool_conf.get("reference_audio_urls") or tool_conf.get("ref_audio_urls") or config.get("reference_audio_urls") or []
+        if isinstance(reference_audio_raw, str):
+            reference_audio_urls_list = [reference_audio_raw] if reference_audio_raw.strip() else []
+        elif isinstance(reference_audio_raw, list):
+            reference_audio_urls_list = [str(x) for x in reference_audio_raw if x]
+        else:
+            reference_audio_urls_list = []
+
         if not ref_image and not reference_video_urls_list:
             return {"error": "seedance 2.0 requires at least one image or video reference"}
 
@@ -1464,6 +1472,58 @@ class MediaGenerationService:
             asset_rebuild_source_urls.append(str(video_source_url or "").strip())
             asset_ref_types.append(video_asset_type)
 
+        if reference_audio_urls_list:
+            _debug_log(
+                f"[ark-seedance] processing reference audios | count={len(reference_audio_urls_list)}",
+                "info",
+            )
+        for audio_ref in reference_audio_urls_list:
+            audio_raw = str(audio_ref or "").strip()
+            if not audio_raw:
+                continue
+            audio_asset_type = "Audio"
+
+            try:
+                resolved_audio = await self._resolve_ref_for_api_async(
+                    audio_raw,
+                    force_data_uri_for_local=False,
+                    prefer_public_upload_url=True,
+                )
+                if resolved_audio:
+                    audio_raw = str(resolved_audio or "").strip()
+            except Exception:
+                pass
+
+            if not audio_raw:
+                continue
+
+            audio_asset_ref = audio_raw
+            audio_source_url = ""
+            if not audio_raw.startswith("asset://"):
+                if not audio_raw.lower().startswith(("http://", "https://")):
+                    return {
+                        "error": "Ark private asset mode requires a publicly accessible HTTP(S) reference audio URL",
+                        "submit_failed": True,
+                    }
+                audio_source_url = audio_raw
+                try:
+                    rebuilt_audio_asset = await _register_private_asset_from_public_url(audio_raw, project_name, audio_asset_type)
+                    if not rebuilt_audio_asset:
+                        return {
+                            "error": f"Failed to register Ark private audio asset from reference URL: {_strip_query_from_log_url(audio_raw)[:200]}",
+                            "submit_failed": True,
+                        }
+                    audio_asset_ref = rebuilt_audio_asset
+                except Exception as register_err:
+                    return {
+                        "error": f"Private audio asset flow raised exception: {register_err}",
+                        "submit_failed": True,
+                    }
+
+            asset_image_refs.append(str(audio_asset_ref or "").strip())
+            asset_rebuild_source_urls.append(str(audio_source_url or "").strip())
+            asset_ref_types.append(audio_asset_type)
+
         asset_image_refs = [item for item in asset_image_refs if item]
         if not asset_image_refs:
             return {"error": "seedance 2.0 requires at least one valid image or video reference"}
@@ -1581,8 +1641,8 @@ class MediaGenerationService:
         task_payload = {
             "model": model_id,
             "content": content_items,
-            "generate_audio": True,
-            "watermark": True
+            "generate_audio": self._normalize_bool_value(tool_conf.get("generate_audio"), default=True),
+            "watermark": self._normalize_bool_value(tool_conf.get("watermark"), default=True)
         }
         is_draft_mode = self._normalize_bool_value(tool_conf.get("draft_mode") or tool_conf.get("draft"))
         requested_res = str(tool_conf.get("resolution") or tool_conf.get("video_resolution") or "").strip()
@@ -6772,6 +6832,13 @@ class MediaGenerationService:
             if last_frame_url and "1-0-pro-fast" in (model or ""):
                 model = "doubao-seedance-1-5-pro-251215"
             
+            # If the user is specifically using Seedance 2.0 through the generic Doubao provider flow,
+            # route it to the advanced ark_seedance handler to fully support audio/video/multi-image refs.
+            if "seedance-2" in str(model or "").lower():
+                return await self._handle_ark_seedance_generation(
+                    gen_type, prompt, config, reference_image_url=ref_image, duration=duration, aspect_ratio=aspect_ratio
+                )
+
             content_payload = [{"type": "text", "text": prompt}]
             
             # Handle Refs (List vs Single)

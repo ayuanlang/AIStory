@@ -8739,7 +8739,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             }
 
             onLog?.(
-                `Video API payload mode=${effectiveVideoMode}, visible_refs=${resolvedDisplayedRefs.length}, image_urls=${apiSubmitImageUrls.length}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
+                `Video API payload mode=${effectiveVideoMode}, visible_refs=${resolvedDisplayedRefs.length}, image_urls=${apiSubmitImageUrls.length}, ref_videos=${Array.isArray(apiRefVideoUrls) ? apiRefVideoUrls.length : 0}, ref_audios=${Array.isArray(submitRefPlan.refAudioUrls) ? submitRefPlan.refAudioUrls.length : 0}, last_frame=${apiLastFrameUrl ? 'yes' : 'no'}, keyframes=${Array.isArray(apiKeyframes) ? apiKeyframes.length : 0}, duration=${durParam}`,
                 'info'
             );
 
@@ -8772,6 +8772,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     ...(apiSubmitImageUrls.length > 0
                         ? { image_urls: apiSubmitImageUrls }
                         : (submitRefPlan.imageUrls.length > 0 ? { ref_image_url: submitRefPlan.imageUrls } : {})),
+                    ...(submitRefPlan.refAudioUrls?.length > 0 ? { ref_audio_urls: submitRefPlan.refAudioUrls } : {}),
                     entity_url_map: tech.entity_url_map || undefined,
                     negative_prompt: buildEntityNegativePrompt(rawPrompt, null, resolvedEntities),
                     on_job_created: (jobId) => {
