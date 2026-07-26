@@ -180,7 +180,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
   - **正反例**：❌ `fixed_furniture_and_set_dressing:林医生坐左、桌上有银打火机`｜✅ `会议桌居中+转椅分列桌左右（空椅）`；角色→`CHAR`，银打火机→`PROP`。
   - **输出前空镜终检**：逐 ENV 行清除人物名/人称/肢体动作视线/持物/临场道具/已单列 PROP 同物；残留则删并归位。主环境头尾双锚、固定实体世界朝向以 Stage 1 清单为准透传，**不**在本阶段重做跨衍生朝向推演或四向拼图成稿（归 Stage 3）。
 - 主环境与 Scene 边界完全继承 Stage 1；**已声明**主/衍生环境必须逐条提取并保留依赖。Beat 有触发线索但【衍生环境】未列 → **回流**（见「核心任务」），禁止并入主环境、禁止补建。
-- **特效/状态/氛围衍生环境（强制）**：仅当 Stage 1 **已声明**且符合「改写固定结构/边界/布局，或跨 Beat 可持续重大氛围/风格切换 + 至少延续至下一 Beat」时提取；命名 `{主环境名}_{状态/域场/氛围标识}`；`base_entity` / `dependency_reference` / `reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`empty_view_delta` 须具名受影响固定实体及可见作用，禁止空泛「能量弥漫」与技术布光参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。瞬时光效不建 ENV。Beat 有状态切换证据但【衍生环境】未声明 → 回流，禁止补建。
+- **特效/状态/氛围衍生环境（强制）**：仅当 Stage 1 **已声明**且符合「改写固定结构/边界/布局，或跨 Beat 可持续重大氛围/风格切换 + 至少延续至下一 Beat」时提取；命名 `{基准视角衍生名}_{状态/域场/氛围标识}`（如 `{角度}度{主环境名}_{状态标识}`，必须在命名中按衍生环境规则明确视角度数）；`base_entity` / `dependency_reference` / `reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态；`empty_view_delta` 须具名受影响固定实体及可见作用，禁止空泛「能量弥漫」与技术布光参数；`return_or_continue:continue` 直至 Stage 1 写明恢复。瞬时光效不建 ENV。Beat 有状态切换证据但【衍生环境】未声明 → 回流，禁止补建。
 - **状态后视角衍生（强制）**：状态 `continue` 期间 Stage 1 **已声明**的 `{N}度{主环境名}_{状态标识}` 须提取，依赖全部指向该状态衍生名；若 Beat 再切视角但未声明对应行 → 回流，禁止本阶段按公式新建。
 - 时序断点：Stage 1 已声明时序衍生则提取建链；证据不足写 `upstream_missing_time_variant_env:需要回流 Stage 1 补时序衍生环境`。
 - Stage 1 已声明衍生环境须按「衍生实体命名规范」归一为 `{角度}度{主环境名}`；禁止保留编号/缩写式旧名。
@@ -203,7 +203,7 @@ Stage 1 每个 Beat 按**六环节**成稿；本阶段**只读取、不重写** 
   - **0 度视角衍生（首场 Master 可拍 ENV）**：仅当 Stage 1【衍生环境】**已声明**时提取；`subject_name_zh` = `0度{主环境名}`（状态前）；`view_angle_from_main:0`；`referenceable:Yes`；`generatable:Yes`；`reference_env:{主环境名}`；**须含**触发原因、`spatial_axis`、`lens_profile:Wide`、`axis_crossing`（不含四向具名，归 Stage 3）。Stage 1 漏写 Master → 回流，禁止本阶段补行。状态基准确立后的 Master 写 `0度{主环境名}_{状态标识}`，依赖指向该状态衍生。
   - **其他视角衍生环境**：`subject_name_zh` = `{观察角度}度{主环境名}`（状态前）或 `{观察角度}度{主环境名}_{状态标识}`（状态后）；`view_angle_from_main` = N；`referenceable:Yes`；`generatable:Yes`；`reference_env` = **当前空镜基准**（主环境或状态衍生）；**须含**触发原因、`spatial_axis`、`lens_profile`、`axis_crossing`（**不含**四向具名实体描述，归 Stage 3）。
   - **OTS/反打角两步确认（强制，适用于 N≠0 视角衍生）**：**① N_对手 → ② (N_对手±180)%360**（细则 Stage 1 §12，不重述）。同 Scene 内同角度需区分多个观察区域时，追加 `_{衍生类型/观察区域/可见方向}`。
-  - **状态/特效/氛围衍生环境**：`subject_name_zh` = `{主环境名}_{状态/域场/氛围标识}`；`base_entity` / `dependency_reference` / **`reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态**；该行成为后续视角/再状态的被依赖基准。
+  - **状态/特效/氛围衍生环境**：`subject_name_zh` = `{基准视角衍生名}_{状态/域场/氛围标识}`（如 `{角度}度{主环境名}_{状态标识}`，必须保留度数）；`base_entity` / `dependency_reference` / **`reference_env` 按「依赖链时序优先原则」指向主环境或紧邻上一完整状态**；该行成为后续视角/再状态的被依赖基准。
   - **英文**：`subject_name_en` = `{ViewAngle} Deg {Base Environment English Name}`，同角度多区域时追加 ` {Derivative Type/View Region}`；主环境英文名不加角度前缀；状态后视角追加状态英文标识。
 - **角色（CHAR）**：
   - **基础版**：`subject_name_zh` = Stage 1 原名（逐字一致）；`base_entity` = `None`。
