@@ -18338,6 +18338,109 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         await executeSceneBeatsRerun({ mode, sceneId });
     }, [executeSceneBeatsRerun, sceneBeatsRerunModal.mode, sceneBeatsRerunModal.sceneId, t]);
 
+    const handleRerunScriptOptOnly = async () => {
+        if (isAnalyzing || !activeEpisode?.id) return;
+        const content = String(rawContent || activeEpisode?.script_content || '').trim();
+        if (!content) {
+            alert(t('没有可用的剧本内容，无法重跑剧本统筹。', 'No script content available to rerun script coordination.'));
+            return;
+        }
+
+        if (!window.confirm(t('将重跑“剧本统筹”（Stage 1），重新梳理剧本结构、提取 Beats，结果可用于覆盖后续流程的上下文（不自动清空后面的产物）。确认继续吗？', 'Script Coordination (Stage 1) will be regenerated. This affects subsequent contexts. (Subsequent outputs won\'t be auto-cleared). Are you sure?'))) {
+            return;
+        }
+
+        let metadata = null;
+        if (project) {
+            metadata = {
+                title: project.title,
+                synopsis: project.summary,
+                genre: project.genre_tags?.join(', '),
+                language: project.language,
+                theme: (project.styles && project.styles.length > 0) ? project.styles[0] : null,
+            };
+        }
+
+        const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
+        const startedAt = Date.now();
+        setIsAnalyzing(true);
+        analysisRunInFlightRef.current = true;
+        analysisStopRequestedRef.current = false;
+        setAnalysisFlowStatus({
+            phase: 'script_opt',
+            message: t('正在重跑剧本统筹...', 'Rerunning script coordination...'),
+        });
+
+        try {
+            const result = await awaitAnalyzeSceneWithRecovery(
+                () => runScriptAnalysisFlowAnalyzeNode(
+                    'script_optimization',
+                    content,
+                    customSystemPrompt,
+                    metadata,
+                    activeEpisode?.id || null,
+                    analysisAttentionNotes,
+                    selectedReuseSubjectAssets,
+                    {
+                        onTaskCreated: (taskId) => {
+                            const stableTaskId = String(taskId || '').trim();
+                            setActiveAnalysisTaskId(stableTaskId);
+                            saveAnalysisTaskMarker(activeEpisode.id, { taskId: stableTaskId, startedAt, phase: 1 });
+                            if (typeof updateEpisodeAnalysisRun === 'function') {
+                                updateEpisodeAnalysisRun(activeEpisode.id, { taskId: stableTaskId, phase: 1 });
+                            }
+                        },
+                    },
+                    projectId,
+                    'script_analysis',
+                    resolveSelectedScriptAnalysisApiId()
+                ),
+                { startedAt, baselineText: baselineAnalysisText }
+            );
+
+            const analyzedText = extractAnalysisTextFromResult(result);
+            if (typeof persistLlmResultContent === 'function') {
+                await persistLlmResultContent(analyzedText || '', 'ai_scene_analysis_result', { source: 'rerun-stage1' });
+            }
+            
+            setLlmRawResultContent(analyzedText || "");
+            setLlmResultContent(normalizeLlmMarkdownTable(analyzedText || ""));
+            lastLoadedAnalysisRef.current = analyzedText || "";
+
+            notifyUiMessage(t('剧本统筹重跑完成。', 'Script coordination rerun completed.'), 'success');
+            setAnalysisUiReport({
+                status: 'completed',
+                message: t('剧本统筹重跑已完成！', 'Script coordination rerun has finished!'),
+            });
+            if (typeof triggerStageOutputsRefresh === 'function') {
+                triggerStageOutputsRefresh();
+            }
+        } catch (error) {
+            console.error('[ScriptEditor] Failed to rerun script optimization:', error);
+            const friendlyErr = (error?.response?.data?.detail) || error?.message || String(error);
+            if (error?.message && error.message.includes('用户已中断')) {
+                setAnalysisUiReport({
+                    status: 'warning',
+                    error: '',
+                    warning: t('剧本统筹重跑已由用户停止。', 'Script coordination rerun was stopped by user.'),
+                });
+            } else {
+                setAnalysisUiReport({
+                    status: 'error',
+                    error: friendlyErr,
+                    message: t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`),
+                });
+                alert(t(`剧本统筹重跑失败：${friendlyErr}`, `Script coordination rerun failed: ${friendlyErr}`));
+            }
+        } finally {
+            setIsAnalyzing(false);
+            analysisRunInFlightRef.current = false;
+            setAnalysisFlowStatus(null);
+            setActiveAnalysisTaskId(null);
+            clearAnalysisTaskMarker(activeEpisode?.id);
+        }
+    };
+
     const handleRerunSceneBeatsOnly = openSceneBeatsRerunModal;
 
     const buildStoryboardRerunCandidates = useCallback(async () => {
@@ -21324,11 +21427,17 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                         >
                                             {t('编辑', 'Edit')}
                                         </button>
+                                        <button onClick={handleRerunScriptOptOnly} disabled={isAnalyzing} className={diagnosticBtnClass}>
+                                            {t('重跑', 'Rerun')}
+                                        </button>
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-1">
                                         {scriptOptActive ? renderProcessingLabel() : (
-                                            <span className="text-[10px] text-white/30">{t('等待中', 'Pending')}</span>
+                                            <button onClick={handleRerunScriptOptOnly} disabled={isAnalyzing || !activeEpisode?.id} className="text-[10px] px-2 py-0.5 rounded border border-purple-500/50 text-purple-200 bg-purple-500/20 hover:bg-purple-500/30 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1">
+                                                {isAnalyzing ? <Loader2 className="w-3 h-3 animate-spin"/> : null}
+                                                {isAnalyzing ? t('处理中', 'Processing') : t('可重跑', 'Ready')}
+                                            </button>
                                         )}
                                     </div>
                                 )}
