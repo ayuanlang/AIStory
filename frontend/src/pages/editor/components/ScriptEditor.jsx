@@ -18403,7 +18403,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     'script_analysis',
                     resolveSelectedScriptAnalysisApiId()
                 ),
-                { startedAt, baselineText: baselineAnalysisText }
+                { startedAt, baselineText: baselineAnalysisText, disableEpisodeRecovery: true }
             );
 
             const analyzedText = extractAnalysisTextFromResult(result);

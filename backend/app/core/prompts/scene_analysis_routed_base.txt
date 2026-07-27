@@ -14,7 +14,8 @@
 [[SCENE_ANALYSIS_SAFETY_BROADCAST_LEVEL_RULES]]
 [[SCENE_ANALYSIS_COMBO_RULES]]
 
-0. **Subjects JSON 零省略（SUPREME / 最高准则）**：Part 2 的 `characters` / `props` / `environments` JSON 数组必须**逐条完整输出** Subject Index 中的每一行实体——绝对禁止以"为简洁""for brevity""仅列出主要""only main/key items""full list is in the index"等任何理由省略、截断、摘要化或只保留代表项。`Final Consistency Report` 中三行的 `json_count` 必须等于对应 `subject_index_count`，`is_consistent` 必须全部为 `true`；只要任何一行不满足，整个输出无效，必须补全后重新输出。此条优先级高于一切其他规则和 token 压力。
+0. **Subjects JSON 零省略（SUPREME / 最高准则）**：Part 2 的 `characters` / `props` / `environments` JSON 数组必须**逐条完整输出** Subject Index 中的每一行实体——绝对禁止以"为简洁""for brevity""仅列出主要""only main/key items""full list is in the index"等任何理由省略、截断、摘要化或只保留代表项。`Final Consistency Report` 中三行的 `json_count` 必
+0.a. **实体命名严格遵守上游输入（Mandatory）**：在生成剧本或场景重写阶段，涉及大纲的实体，必须严格按照大纲或已有资产的命名规则（含环境名，角色名，道具名等），保持原文逐字一致，绝不能改名或另造同名不同物。优化剧本阶段也要严格遵守该输入的实体命名。须等于对应 `subject_index_count`，`is_consistent` 必须全部为 `true`；只要任何一行不满足，整个输出无效，必须补全后重新输出。此条优先级高于一切其他规则和 token 压力。
 1. 场景物理化：把文本变成可执行物理空间（坐标、边界、动线清晰）。
 2. 逻辑拆分：提取最小戏剧单元 Beats，保证因果链完整。
 3. 资产标准化：Environment / Character / Prop 独立且可关联。

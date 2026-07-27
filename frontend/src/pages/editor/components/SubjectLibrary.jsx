@@ -476,6 +476,7 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
     const [tempPromptSubmitLang, setTempPromptSubmitLang] = useState('');
     const [showPromptLangMenu, setShowPromptLangMenu] = useState(false);
     const [refImage, setRefImage] = useState(null);
+    const [inheritAppearance, setInheritAppearance] = useState(true);
     /** Dependency tokens excluded from this generation's asset-reference refs (session-only). */
     const [excludedVisualDepKeys, setExcludedVisualDepKeys] = useState([]);
     const [isUploadingRef, setIsUploadingRef] = useState(false);
@@ -6368,9 +6369,16 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                 );
             }
 
+            let effectiveFinalPrompt = finalPrompt;
+            let effectivePromptToUse = promptToUse;
+            if (inheritAppearance && uniqueRefs.length > 0) {
+                effectiveFinalPrompt = effectiveFinalPrompt.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
+                effectivePromptToUse = effectivePromptToUse.replace(/【相貌】[\s\S]*?【\/相貌】/g, '【相貌】根据参考图生成【/相貌】');
+            }
+
             const { prompt: submissionPrompt, negative_prompt: entityNegativePrompt } = buildEntityImageGenerationPrompts(
-                finalPrompt,
-                promptToUse,
+                effectiveFinalPrompt,
+                effectivePromptToUse,
                 activeEntity,
                 allEntities
             );
@@ -10040,6 +10048,19 @@ export const SubjectLibrary = ({ projectId, project, currentEpisode, episodes = 
                                                          </button>
                                                      </div>
                                                  )}
+
+                                                 <div className="mt-2 flex items-center gap-2">
+                                                     <input 
+                                                         type="checkbox" 
+                                                         id="inheritAppearanceCheckbox"
+                                                         checked={inheritAppearance}
+                                                         onChange={(e) => setInheritAppearance(e.target.checked)}
+                                                         className="rounded bg-black/40 border-white/10"
+                                                     />
+                                                     <label htmlFor="inheritAppearanceCheckbox" className="text-xs text-white/80 cursor-pointer">
+                                                         {t('继承相貌（如果有参考图，将在提交前把相貌标签内容由参考图决定）', 'Inherit appearance from reference images')}
+                                                     </label>
+                                                 </div>
 
                                                  {/* Asset Picker Popover */}
                                                  {refSelectionMode === 'assets' && !refImage && (
