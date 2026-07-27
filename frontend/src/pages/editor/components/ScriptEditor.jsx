@@ -21975,13 +21975,26 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                                     style={{ minHeight: '60px' }}
                                                     ref={(el) => {
                                                         if (el) {
+                                                            if (el.dataset.content === el.value) return;
+                                                            const scrollParent = el.closest('.overflow-y-auto');
+                                                            const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
+                                                            const scrollTopWindow = window.scrollY;
                                                             el.style.height = 'auto';
                                                             el.style.height = el.scrollHeight + 'px';
+                                                            el.dataset.content = el.value;
+                                                            if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
+                                                            window.scrollTo(0, scrollTopWindow);
                                                         }
                                                     }}
                                                     onInput={(e) => {
-                                                        e.target.style.height = 'auto';
-                                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                                        const el = e.target;
+                                                        const scrollParent = el.closest('.overflow-y-auto');
+                                                        const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
+                                                        const scrollTopWindow = window.scrollY;
+                                                        el.style.height = 'auto';
+                                                        el.style.height = el.scrollHeight + 'px';
+                                                        if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
+                                                        window.scrollTo(0, scrollTopWindow);
                                                     }}
                                                     value={seg.content || ''}
                                                     onChange={(e) => handleSegmentChange(idx, 'content', e.target.value)}

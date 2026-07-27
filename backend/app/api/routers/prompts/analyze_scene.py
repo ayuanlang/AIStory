@@ -576,6 +576,42 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     _estimate_tokens(meta_str),
                 )
 
+        if is_script_optimization_stage and getattr(request, "project_id", None):
+            try:
+                from app.models.all_models import Entity
+                from app.api.routers.entities_pkg.analyze import _entity_analysis_is_main_environment
+                
+                global_envs = db.query(Entity).filter(
+                    Entity.project_id == request.project_id,
+                    Entity.type == "environment"
+                ).all()
+                
+                import re
+                
+                # 按格式提取 [ENV_BLOCK_START] 后第一个逗号前的环境名
+                extracted_env_names = set()
+                env_block_pattern = re.compile(r"\[ENV_BLOCK_START\]\s*([^,，\n]+)[,，]")
+                
+                for match in env_block_pattern.finditer(user_content):
+                    extracted_env_names.add(match.group(1).strip())
+                for match in env_block_pattern.finditer(request_text_for_prompt):
+                    extracted_env_names.add(match.group(1).strip())
+
+                env_prompts = []
+                for env in global_envs:
+                    if _entity_analysis_is_main_environment(env):
+                        env_name = str(getattr(env, "name", "") or "").strip()
+                        prompt_cn = str(getattr(env, "generation_prompt_cn", "") or getattr(env, "description", "")).strip()
+                        if env_name and prompt_cn and (env_name in extracted_env_names):
+                            env_prompts.append(f"环境名称：{env_name}\n既有提示词：{prompt_cn}")
+                
+                if env_prompts:
+                    env_injection = "\n\n".join(env_prompts)
+                    user_content += f"\n\n[已存在的全局主环境约束]\n当前项目已存在以下主环境，你在剧本优化设计（包括但不限于视觉描述、光影、氛围等）相关场景与环境时，请务必严格按以下既有提示词的要求延续和参考，不可与既有提示词产生冲突：\n{env_injection}\n"
+                    logger.info("[analyze_scene] injected %d global environment prompts for script optimization", len(env_prompts))
+            except Exception as e:
+                logger.warning("[analyze_scene] failed to inject global environments for script optimization: %s", e)
+
         attention_notes_raw = (getattr(request, "analysis_attention_notes", None) or "").strip()
         attention_notes = attention_notes_raw
         if attention_notes and (not is_scene_beats_stage):

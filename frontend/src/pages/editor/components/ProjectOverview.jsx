@@ -3929,8 +3929,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <textarea
                                 ref={(el) => {
                                     if (el) {
+                                        if (el.dataset.content === el.value) return;
+                                        const scrollParent = el.closest('.overflow-y-auto');
+                                        const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
+                                        const scrollTopWindow = window.scrollY;
                                         el.style.height = 'auto';
                                         el.style.height = el.scrollHeight + 'px';
+                                        el.dataset.content = el.value;
+                                        if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
+                                        window.scrollTo(0, scrollTopWindow);
                                     }
                                 }}
                                 className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[12rem] resize-none overflow-hidden"
@@ -4197,8 +4204,15 @@ export const ProjectOverview = ({ id, project: initialProject = null, onProjectU
                             <textarea
                                 ref={(el) => {
                                     if (el) {
+                                        if (el.dataset.content === el.value) return;
+                                        const scrollParent = el.closest('.overflow-y-auto');
+                                        const scrollTopContainer = scrollParent ? scrollParent.scrollTop : 0;
+                                        const scrollTopWindow = window.scrollY;
                                         el.style.height = 'auto';
                                         el.style.height = el.scrollHeight + 'px';
+                                        el.dataset.content = el.value;
+                                        if (scrollParent) scrollParent.scrollTop = scrollTopContainer;
+                                        window.scrollTo(0, scrollTopWindow);
                                     }
                                 }}
                                 className="bg-black/30 border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-primary/50 focus:outline-none w-full min-h-[14rem] resize-none overflow-hidden"
