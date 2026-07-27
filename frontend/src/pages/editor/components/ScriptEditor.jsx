@@ -18361,6 +18361,14 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             };
         }
 
+        let customSystemPrompt = '';
+        try {
+            const res = await fetchPrompt('skills/scene_analysis_feature_stack/scene_planning_1_script_optimization.md');
+            customSystemPrompt = String(res?.content || '').trim();
+        } catch (e) {
+            console.error("Failed to fetch system prompt for rerun", e);
+        }
+
         const baselineAnalysisText = String(activeEpisode?.ai_scene_analysis_result || '').trim();
         const startedAt = Date.now();
         setIsAnalyzing(true);
@@ -18435,8 +18443,9 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         } finally {
             setIsAnalyzing(false);
             analysisRunInFlightRef.current = false;
-            setAnalysisFlowStatus(null);
-            setActiveAnalysisTaskId(null);
+            setAnalysisFlowStatus({ phase: 'idle', message: '' });
+            setActiveAnalysisTaskId('');
+            analysisStopRequestedRef.current = false;
             clearAnalysisTaskMarker(activeEpisode?.id);
         }
     };
