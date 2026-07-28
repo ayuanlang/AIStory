@@ -9230,6 +9230,8 @@ const UserAdmin = () => {
                                               <tr>
                                                   <th className="px-4 py-3">ID</th>
                                                   <th className="px-4 py-3">Time</th>
+                                                  <th className="px-4 py-3">User/Project</th>
+                                                  <th className="px-4 py-3">Action</th>
                                                   <th className="px-4 py-3">Provider</th>
                                                   <th className="px-4 py-3">Model</th>
                                                   <th className="px-4 py-3">{t('状态', 'Status')}</th>
@@ -9243,6 +9245,13 @@ const UserAdmin = () => {
                                                   <tr key={log.id} className="hover:bg-white/5">
                                                       <td className="px-4 py-3 opacity-60">#{log.id}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
+                                                      <td className="px-4 py-3">
+                                                          <div className="flex flex-col">
+                                                              {log.user_id ? <span className="text-xs text-emerald-400">U{log.user_id}: {log.user_name || '-'}</span> : <span className="text-xs text-gray-500">System</span>}
+                                                              {log.project_id && <span className="text-xs text-sky-400">P{log.project_id}</span>}
+                                                          </div>
+                                                      </td>
+                                                      <td className="px-4 py-3 whitespace-nowrap text-xs">{log.action || '-'}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.provider}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">{log.model}</td>
                                                       <td className="px-4 py-3 whitespace-nowrap">

@@ -390,6 +390,11 @@ async def _execute_analyze_entity_image(
         cost = billing_service.estimate_cost(db, "analysis_character", api_provider, api_model)
         billing_service.check_can_proceed(current_user, cost)
 
+    # 3. Construct System Prompt based on Entity Type (Stage-3 original prompt formats)
+    entity_type = (entity.type or "character").lower()
+    analysis_category = _entity_analysis_category(entity_type)
+    is_main_env = analysis_category == "environment" and _entity_analysis_is_main_environment(entity)
+
     llm_config = {
         "provider": api_provider,
         "api_key": api_api_key,
@@ -430,11 +435,6 @@ async def _execute_analyze_entity_image(
         if finish_reason not in (None, ""):
             payload["finish_reason"] = finish_reason
         return payload
-
-    # 3. Construct System Prompt based on Entity Type (Stage-3 original prompt formats)
-    entity_type = (entity.type or "character").lower()
-    analysis_category = _entity_analysis_category(entity_type)
-    is_main_env = analysis_category == "environment" and _entity_analysis_is_main_environment(entity)
 
     if analysis_category in {"character", "prop"}:
         base_instruction = (

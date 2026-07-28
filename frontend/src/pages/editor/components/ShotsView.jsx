@@ -12451,9 +12451,46 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         </button>
                                                                     </div>
                                                                 </div>
-                                                                <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border border-white/10 relative overflow-hidden flex items-center justify-center`}>
+                                                                <div style={isPortrait ? { aspectRatio: aspectParts.widthPart + "/" + aspectParts.heightPart } : undefined} className={`${isPortrait ? "" : "aspect-video"} bg-black rounded border border-white/10 relative overflow-hidden flex items-center justify-center group/image`}>
                                                                     {frame.url ? (
-                                                                        <SafeImage src={frame.url} className="max-w-full max-h-full object-contain" />
+                                                                        <>
+                                                                            <SafeImage src={frame.url} className="max-w-full max-h-full object-contain" />
+                                                                            <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    title={t('加入参考图', 'Add to Refs')}
+                                                                                    onClick={async (e) => {
+                                                                                        e.stopPropagation();
+                                                                                        const nextTech = { ...JSON.parse(editingShot?.technical_notes || '{}') };
+                                                                                        let changed = false;
+                                                                                        const startUrls = Array.isArray(nextTech.ref_image_urls) ? [...nextTech.ref_image_urls] : [];
+                                                                                        if (!startUrls.includes(frame.url)) {
+                                                                                            startUrls.push(frame.url);
+                                                                                            nextTech.ref_image_urls = startUrls;
+                                                                                            nextTech.ref_image_urls_user_edited = true;
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        const videoUrls = Array.isArray(nextTech.video_ref_image_urls) ? [...nextTech.video_ref_image_urls] : [];
+                                                                                        if (!videoUrls.includes(frame.url)) {
+                                                                                            videoUrls.push(frame.url);
+                                                                                            nextTech.video_ref_image_urls = videoUrls;
+                                                                                            nextTech.video_ref_image_urls_user_edited = true;
+                                                                                            nextTech.video_ref_image_urls_manual = true;
+                                                                                            changed = true;
+                                                                                        }
+                                                                                        if (changed) {
+                                                                                            await persistEditingShotUpdates({ technical_notes: JSON.stringify(nextTech) });
+                                                                                            onLog?.(t('已加入参考图', 'Added to Refs'), 'success');
+                                                                                        } else {
+                                                                                            onLog?.(t('参考图已存在', 'Ref already exists'), 'info');
+                                                                                        }
+                                                                                    }}
+                                                                                    className="bg-black/60 hover:bg-primary text-white p-1 rounded transition-colors"
+                                                                                >
+                                                                                    <Plus className="w-3 h-3"/>
+                                                                                </button>
+                                                                            </div>
+                                                                        </>
                                                                     ) : (
                                                                         <div className="absolute inset-0 flex items-center justify-center opacity-20">
                                                                             <ImageIcon className="w-6 h-6" />
@@ -12573,19 +12610,55 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                     openAssetDetailModal('keyframe', idx);
                                                                 }}
                                                             />
-                                                            <button 
-                                                                onClick={async (e) => {
-                                                                    e.stopPropagation();
-                                                                    if(!await confirmUiMessage("Remove image?")) return;
-                                                                    const updated = [...localKeyframes];
-                                                                    updated[idx].url = "";
-                                                                    setLocalKeyframes(updated);
-                                                                    reconstructKeyframes(updated);
-                                                                }}
-                                                                className="absolute top-1 right-1 bg-black/60 text-white p-1 rounded opacity-0 group-hover/image:opacity-100 transition-opacity"
-                                                            >
-                                                                <Trash2 className="w-3 h-3"/>
-                                                            </button>
+                                                            <div className="absolute top-1 right-1 flex flex-col gap-1 opacity-0 group-hover/image:opacity-100 transition-opacity">
+                                                                <button
+                                                                    type="button"
+                                                                    title={t('加入参考图', 'Add to Refs')}
+                                                                    onClick={async (e) => {
+                                                                        e.stopPropagation();
+                                                                        const nextTech = { ...JSON.parse(editingShot?.technical_notes || '{}') };
+                                                                        let changed = false;
+                                                                        const startUrls = Array.isArray(nextTech.ref_image_urls) ? [...nextTech.ref_image_urls] : [];
+                                                                        if (!startUrls.includes(kf.url)) {
+                                                                            startUrls.push(kf.url);
+                                                                            nextTech.ref_image_urls = startUrls;
+                                                                            nextTech.ref_image_urls_user_edited = true;
+                                                                            changed = true;
+                                                                        }
+                                                                        const videoUrls = Array.isArray(nextTech.video_ref_image_urls) ? [...nextTech.video_ref_image_urls] : [];
+                                                                        if (!videoUrls.includes(kf.url)) {
+                                                                            videoUrls.push(kf.url);
+                                                                            nextTech.video_ref_image_urls = videoUrls;
+                                                                            nextTech.video_ref_image_urls_user_edited = true;
+                                                                            nextTech.video_ref_image_urls_manual = true;
+                                                                            changed = true;
+                                                                        }
+                                                                        if (changed) {
+                                                                            await persistEditingShotUpdates({ technical_notes: JSON.stringify(nextTech) });
+                                                                            onLog?.(t('已加入参考图', 'Added to Refs'), 'success');
+                                                                        } else {
+                                                                            onLog?.(t('参考图已存在', 'Ref already exists'), 'info');
+                                                                        }
+                                                                    }}
+                                                                    className="bg-black/60 hover:bg-primary text-white p-1 rounded transition-colors"
+                                                                >
+                                                                    <Plus className="w-3 h-3"/>
+                                                                </button>
+                                                                <button 
+                                                                    type="button"
+                                                                    onClick={async (e) => {
+                                                                        e.stopPropagation();
+                                                                        if(!await confirmUiMessage("Remove image?")) return;
+                                                                        const updated = [...localKeyframes];
+                                                                        updated[idx].url = "";
+                                                                        setLocalKeyframes(updated);
+                                                                        reconstructKeyframes(updated);
+                                                                    }}
+                                                                    className="bg-black/60 text-white p-1 rounded hover:bg-red-500/80 transition-colors"
+                                                                >
+                                                                    <Trash2 className="w-3 h-3"/>
+                                                                </button>
+                                                            </div>
                                                         </>
                                                     ) : (
                                                         <div className="absolute inset-0 flex items-center justify-center opacity-20">
