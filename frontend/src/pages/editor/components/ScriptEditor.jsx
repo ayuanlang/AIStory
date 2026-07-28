@@ -2536,6 +2536,21 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
     const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
     const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('environment');
     const [reuseDropdownOpen, setReuseDropdownOpen] = useState(false);
+    const reuseDropdownRef = useRef(null);
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (reuseDropdownRef.current && !reuseDropdownRef.current.contains(event.target)) {
+                setReuseDropdownOpen(false);
+            }
+        };
+        if (reuseDropdownOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [reuseDropdownOpen]);
+
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
@@ -21239,7 +21254,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </button>
                     {isRawMode && (
                         <>
-                            <div className="relative">
+                            <div className="relative" ref={reuseDropdownRef}>
                                 <button
                                     type="button"
                                     onClick={() => setReuseDropdownOpen(!reuseDropdownOpen)}
