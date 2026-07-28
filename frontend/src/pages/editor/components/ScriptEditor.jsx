@@ -21201,7 +21201,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                 systemApiId={selectedScriptAnalysisApiId}
                 onLog={onLog}
             />
-            <div className="relative shrink-0 mb-5 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent px-4 py-4 sm:px-6 sm:py-5">
+            <div className="relative shrink-0 mb-5 overflow-visible rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent px-4 py-4 sm:px-6 sm:py-5">
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(168,85,247,0.10),transparent_55%)]" />
                 <div className="relative flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div className="min-w-0">
@@ -21255,7 +21255,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                                     )}
                                 </button>
                                 {reuseDropdownOpen && (
-                                    <div className="absolute top-12 right-0 z-50 w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-3 flex flex-col gap-3">
+                                    <div className="absolute top-12 left-0 z-[100] w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-3 flex flex-col gap-3">
                                         <div className="flex items-center justify-between">
                                             <h4 className="text-xs font-bold text-white/70">{t('选择资产注入', 'Inject Assets')}</h4>
                                             <button onClick={() => setReuseDropdownOpen(false)} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>

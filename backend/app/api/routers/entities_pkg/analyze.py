@@ -944,6 +944,8 @@ async def _execute_analyze_entity_image(
         }
         # Re-assign to trigger SQLAlchemy detection of mutation if needed
         entity.custom_attributes = dict(custom_attrs)
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(entity, "custom_attributes")
 
 
         logger.info(

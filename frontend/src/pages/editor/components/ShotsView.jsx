@@ -12485,9 +12485,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                                             onLog?.(t('参考图已存在', 'Ref already exists'), 'info');
                                                                                         }
                                                                                     }}
-                                                                                    className="bg-black/60 hover:bg-primary text-white p-1 rounded transition-colors"
+                                                                                    className="bg-black/60 hover:bg-primary text-white px-1.5 py-1 rounded transition-colors flex items-center gap-1 text-[10px]"
                                                                                 >
                                                                                     <Plus className="w-3 h-3"/>
+                                                                                    <span>{t('加入参考', 'Add Ref')}</span>
                                                                                 </button>
                                                                             </div>
                                                                         </>
@@ -12640,9 +12641,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                             onLog?.(t('参考图已存在', 'Ref already exists'), 'info');
                                                                         }
                                                                     }}
-                                                                    className="bg-black/60 hover:bg-primary text-white p-1 rounded transition-colors"
+                                                                    className="bg-black/60 hover:bg-primary text-white px-1.5 py-1 rounded transition-colors flex items-center gap-1 text-[10px]"
                                                                 >
                                                                     <Plus className="w-3 h-3"/>
+                                                                    <span>{t('加入参考', 'Add Ref')}</span>
                                                                 </button>
                                                                 <button 
                                                                     type="button"
