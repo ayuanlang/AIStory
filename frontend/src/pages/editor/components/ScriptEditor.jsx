@@ -10,7 +10,7 @@ import remarkBreaks from 'remark-breaks';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope } from 'lucide-react';
+import { BookOpen, Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Bot, Stethoscope } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -2534,7 +2534,8 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         sceneCountWithShots: 0,
     });
     const [selectedReuseSubjectIds, setSelectedReuseSubjectIds] = useState([]);
-    const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('all');
+    const [reuseSubjectTypeFilter, setReuseSubjectTypeFilter] = useState('environment');
+    const [reuseDropdownOpen, setReuseDropdownOpen] = useState(false);
     const [reuseSubjectKeyword, setReuseSubjectKeyword] = useState('');
     const [isLoadingSubjectAssets, setIsLoadingSubjectAssets] = useState(false);
     const [isSavingReuseSubjects, setIsSavingReuseSubjects] = useState(false);
@@ -9066,15 +9067,10 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
             }
             setIsLoadingSubjectAssets(true);
             try {
-                // Asset injection / reuse UI must stay episode-scoped (never other episodes).
-                const entities = await fetchEntities(projectId, {
-                    episode_id: Number(activeEpisode.id),
-                });
+                // Fetch all project entities for global reuse injection
+                const entities = await fetchEntities(projectId);
                 if (!mounted) return;
-                const episodeScoped = (Array.isArray(entities) ? entities : []).filter(
-                    (entity) => String(entity?.episode_id || '').trim() === String(activeEpisode.id)
-                );
-                setAvailableSubjectAssets(episodeScoped);
+                setAvailableSubjectAssets(Array.isArray(entities) ? entities : []);
             } catch (e) {
                 console.error(e);
                 if (mounted) setAvailableSubjectAssets([]);
@@ -11084,9 +11080,7 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
         const selected = new Set((selectedReuseSubjectIds || []).map(v => String(v)));
         return availableSubjectAssets
             .filter((asset) => {
-                if (!selected.has(String(asset.id))) return false;
-                if (!currentEpisodeId) return false;
-                return String(asset?.episode_id || '').trim() === currentEpisodeId;
+                return selected.has(String(asset.id));
             })
             .map(asset => ({
                 id: asset.id,
@@ -21245,6 +21239,62 @@ export const ScriptEditor = ({ activeEpisode, projectId, project, onUpdateScript
                     </button>
                     {isRawMode && (
                         <>
+                            <div className="relative">
+                                <button
+                                    type="button"
+                                    onClick={() => setReuseDropdownOpen(!reuseDropdownOpen)}
+                                    className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold border border-white/10 bg-white/5 text-white/90 hover:bg-white/10 transition-colors"
+                                    title={t('选择需注入进剧本的全局资产', 'Select global assets to inject')}
+                                >
+                                    <BookOpen className="w-4 h-4" />
+                                    {t('全局资产', 'Global Assets')}
+                                    {selectedReuseSubjectIds.length > 0 && (
+                                        <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-xs">
+                                            {selectedReuseSubjectIds.length}
+                                        </span>
+                                    )}
+                                </button>
+                                {reuseDropdownOpen && (
+                                    <div className="absolute top-12 right-0 z-50 w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl p-3 flex flex-col gap-3">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-xs font-bold text-white/70">{t('选择资产注入', 'Inject Assets')}</h4>
+                                            <button onClick={() => setReuseDropdownOpen(false)} className="text-white/50 hover:text-white"><X className="w-4 h-4" /></button>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <select
+                                                className="bg-white/5 border border-white/10 text-xs rounded px-2 py-1 flex-1 text-white/90 outline-none"
+                                                value={reuseSubjectTypeFilter}
+                                                onChange={e => setReuseSubjectTypeFilter(e.target.value)}
+                                            >
+                                                <option value="all">{t('全部分类', 'All Categories')}</option>
+                                                {reuseSubjectTypeOptions.map(tOption => (
+                                                    <option key={tOption} value={tOption}>{tOption}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto custom-scrollbar flex flex-col gap-1 border border-white/5 bg-white/[0.02] p-2 rounded">
+                                            {filteredSubjectAssets.length === 0 ? (
+                                                <div className="text-[10px] text-white/30 text-center py-4">{t('暂无可见资产', 'No assets')}</div>
+                                            ) : (
+                                                filteredSubjectAssets.map(asset => (
+                                                    <label key={asset.id} className="flex items-start gap-2 text-xs text-white/80 hover:bg-white/5 p-1.5 rounded cursor-pointer transition-colors">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="mt-0.5 accent-primary"
+                                                            checked={selectedReuseSubjectIds.includes(String(asset.id))}
+                                                            onChange={() => toggleReuseSubject(asset.id)}
+                                                        />
+                                                        <div className="flex flex-col">
+                                                            <span className="font-semibold">{asset.name}</span>
+                                                            {asset.description && <span className="text-[10px] text-white/50 line-clamp-1">{asset.description}</span>}
+                                                        </div>
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                             <FunctionApiSelector
                                 functionName="script_analysis"
                                 configs={functionApiConfigs}

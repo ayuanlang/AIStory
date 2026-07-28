@@ -2,6 +2,8 @@
 """Prompts/analyze section routes — symbols pulled from shared module."""
 from __future__ import annotations
 
+import re
+
 from app.api.routers.prompts import shared as _shared
 
 router = _shared.router
@@ -585,8 +587,6 @@ async def analyze_scene(request: AnalyzeSceneRequest, current_user: User = Depen
                     Entity.project_id == request.project_id,
                     Entity.type == "environment"
                 ).all()
-                
-                import re
                 
                 # 按格式提取 [ENV_BLOCK_START] 后第一个逗号前的环境名
                 extracted_env_names = set()
