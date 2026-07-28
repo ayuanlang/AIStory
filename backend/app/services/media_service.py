@@ -908,7 +908,7 @@ class MediaGenerationService:
 
         return r_json.get("Result", r_json)
 
-    async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, duration=None, aspect_ratio=None) -> dict:
+    async def _handle_ark_seedance_generation(self, category: str, prompt: str, config: dict, reference_image_url: str = None, last_frame_url: str = None, duration=None, aspect_ratio=None) -> dict:
         api_key = config.get("api_key", "")
         tool_conf = config.get("config", {}) or {}
         ak, sk, dp_token = "", "", ""
@@ -1638,9 +1638,13 @@ class MediaGenerationService:
             ref_type = asset_ref_types[idx] if idx < len(asset_ref_types) else "Image"
             content_items.append(_build_ark_reference_content(image_ref, ref_type))
 
+        if last_frame_url and str(last_frame_url).strip():
+            content_items.append(_build_ark_reference_content(str(last_frame_url).strip(), "Image"))
+
         task_payload = {
             "model": model_id,
             "content": content_items,
+            "return_last_frame": True,
             "generate_audio": self._normalize_bool_value(tool_conf.get("generate_audio"), default=True),
             "watermark": self._normalize_bool_value(tool_conf.get("watermark"), default=True)
         }
@@ -5260,7 +5264,7 @@ class MediaGenerationService:
                 if effective_provider == "grsai":
                     return await self._handle_grsai_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio, negative_prompt=negative_prompt)
                 if effective_provider == "ark-seedance":
-                    return await self._handle_ark_seedance_generation("video", prompt, active_config, effective_reference_image_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio)
+                    return await self._handle_ark_seedance_generation("video", prompt, active_config, effective_reference_image_url, last_frame_url=effective_last_frame_url, duration=effective_duration, aspect_ratio=effective_aspect_ratio)
                 if effective_provider == "kie":
                     return await self._handle_kie_generation(
                         "video",
@@ -6851,7 +6855,7 @@ class MediaGenerationService:
                             target_config["config"] = {**tool_conf, **ark_inner_config}
                             
                 return await self._handle_ark_seedance_generation(
-                    gen_type, prompt, target_config, reference_image_url=ref_image, duration=duration, aspect_ratio=aspect_ratio
+                    gen_type, prompt, target_config, reference_image_url=ref_image, last_frame_url=last_frame_url, duration=duration, aspect_ratio=aspect_ratio
                 )
 
             content_payload = [{"type": "text", "text": prompt}]
