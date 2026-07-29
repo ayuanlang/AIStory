@@ -676,13 +676,31 @@ async def _run_scene_markdown_node_per_scene(
                 "total_count": total_scenes,
                 "failed_scenes": failed_scene_reports,
                 "succeeded_count": len(success_by_index),
+                "skipped_missing_beat1_scenes": skipped_missing_beat1_reports,
+                "skipped_missing_beat1_count": len(skipped_missing_beat1_reports),
+            },
+        )
+
+    # Missing Beat 1 scenes are intentionally skipped (not hard failures). Merge only
+    # orchestrated successes — never assume every indexed unit is in success_by_index.
+    if not success_by_index:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SCENE_MARKDOWN_MISSING_BEAT_1",
+                "failed_count": len(skipped_missing_beat1_reports),
+                "total_count": total_scenes,
+                "failed_scenes": skipped_missing_beat1_reports,
+                "succeeded_count": 0,
+                "skipped_missing_beat1_scenes": skipped_missing_beat1_reports,
+                "skipped_missing_beat1_count": len(skipped_missing_beat1_reports),
             },
         )
 
     per_scene_outputs: List[str] = []
     per_scene_results: List[Dict[str, Any]] = []
     last_result: Any = None
-    for index, _unit in indexed_scene_units:
+    for index in sorted(success_by_index):
         outcome = success_by_index[index]
         _index, scene_id, scene_text, result, attempts_used = outcome
         per_scene_outputs.append(scene_text)

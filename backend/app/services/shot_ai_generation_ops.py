@@ -26,6 +26,7 @@ from app.services.script_analysis_llm_config import (
     _script_analysis_action_label,
 )
 from app.services.shot_generation_prompts import (
+    _build_ai_shots_response_validator,
     _build_shot_prompts,
     _build_shot_regenerate_prompts,
     _extract_shot_regenerate_marker,
