@@ -1090,29 +1090,46 @@ def _execute_provider_task_query(
     provider_status_l = str(provider_status or "").strip().lower()
     result_url = str(poll_result.get("url") or "").strip()
     existing_result_url = str(_extract_job_result_url(job.get("result")) or "").strip()
-    can_recover = bool(
-        result_url
-        and provider_status_l in {
-            "succeeded",
-            "success",
-            "completed",
-            "done",
-            "finish",
-            "finished",
-            "complete",
-        }
-        and stable_job_id
-        and not str(stable_job_id).startswith("audit-tx:")
-        and not str(stable_job_id).startswith("provider-task:")
+    success_statuses = {
+        "succeeded",
+        "success",
+        "completed",
+        "done",
+        "finish",
+        "finished",
+        "complete",
+        "successful",
+    }
+    # Some providers only return a ready URL without a clear status field.
+    provider_ready = bool(result_url) and (
+        provider_status_l in success_statuses
+        or not provider_status_l
     )
+    is_synthetic_job = (
+        not stable_job_id
+        or str(stable_job_id).startswith("audit-tx:")
+        or str(stable_job_id).startswith("provider-task:")
+    )
+    can_recover = bool(provider_ready)
 
     recovery_applied = False
     recovery_skipped_reason = None
     if can_recover and apply_recovery:
         try:
-            recovery_applied = bool(_apply_poll_success("video", stable_job_id, job, poll_result))
-            if not recovery_applied:
-                recovery_skipped_reason = "recovery_apply_returned_false"
+            if not is_synthetic_job:
+                recovery_applied = bool(_apply_poll_success("video", stable_job_id, job, poll_result))
+                if not recovery_applied:
+                    recovery_skipped_reason = "recovery_apply_returned_false"
+            else:
+                recovery_applied = bool(
+                    _recover_shot_video_from_provider_url(
+                        shot_id=job.get("shot_id"),
+                        result_url=result_url,
+                        job=job,
+                    )
+                )
+                if not recovery_applied:
+                    recovery_skipped_reason = "shot_persist_returned_false"
         except Exception as exc:
             logger.exception(
                 "[VideoJob] query-provider-task recovery failed | job_id=%s task_id=%s error=%s",
@@ -1123,10 +1140,6 @@ def _execute_provider_task_query(
             recovery_skipped_reason = str(exc)
     elif can_recover and not apply_recovery:
         recovery_skipped_reason = "awaiting_client_confirm"
-    elif apply_recovery and not can_recover and result_url and provider_status_l in {
-        "succeeded", "success", "completed", "done", "finish", "finished", "complete",
-    }:
-        recovery_skipped_reason = "no_recoverable_job_record"
     elif provider_status_l in {"failed", "error", "canceled", "cancelled"}:
         recovery_skipped_reason = f"provider_terminal_{provider_status_l}"
     elif not result_url:
@@ -1135,7 +1148,7 @@ def _execute_provider_task_query(
         recovery_skipped_reason = "provider_not_succeeded"
 
     live = {}
-    if stable_job_id and not str(stable_job_id).startswith(("audit-tx:", "provider-task:")):
+    if stable_job_id and not is_synthetic_job:
         live = _hydrate_job("video", stable_job_id) or {}
     live_result_url = str(
         _extract_job_result_url((live or {}).get("result"))
@@ -1146,7 +1159,7 @@ def _execute_provider_task_query(
 
     return {
         "ok": True,
-        "job_id": stable_job_id or None,
+        "job_id": None if is_synthetic_job else (stable_job_id or None),
         "job_status": (live or {}).get("status") or job.get("status"),
         "provider": provider or job.get("provider"),
         "provider_task_id": provider_task_id,
@@ -1162,6 +1175,76 @@ def _execute_provider_task_query(
         "transaction_id": job.get("_audit_transaction_id"),
         "shot_id": job.get("shot_id"),
     }
+
+
+def _recover_shot_video_from_provider_url(
+    *,
+    shot_id: Any,
+    result_url: str,
+    job: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Persist a provider result URL onto the shot when no recoverable video job exists."""
+    from app.db.session import SessionLocal
+    from app.models.all_models import Project, Shot, User
+    from app.services.generation_runtime.media_persist import _persist_shot_media_slot
+
+    stable_url = str(result_url or "").strip()
+    try:
+        shot_pk = int(str(shot_id or "").strip())
+    except Exception:
+        shot_pk = 0
+    if not stable_url or shot_pk <= 0:
+        return False
+
+    db = SessionLocal()
+    try:
+        shot = db.query(Shot).filter(Shot.id == shot_pk).first()
+        if shot is None:
+            return False
+        project = None
+        if getattr(shot, "project_id", None) is not None:
+            project = db.query(Project).filter(Project.id == int(shot.project_id)).first()
+        owner = None
+        try:
+            owner_id = int((job or {}).get("user_id") or 0)
+        except Exception:
+            owner_id = 0
+        if owner_id > 0:
+            owner = db.query(User).filter(User.id == owner_id).first()
+        if owner is None and project is not None and getattr(project, "owner_id", None) is not None:
+            owner = db.query(User).filter(User.id == int(project.owner_id)).first()
+        if owner is None or project is None:
+            logger.warning(
+                "[VideoJob] shot persist recovery missing owner/project | shot_id=%s user_id=%s project_id=%s",
+                shot_pk,
+                owner_id or None,
+                getattr(shot, "project_id", None),
+            )
+            return False
+
+        result = _persist_shot_media_slot(
+            db,
+            owner,
+            project,
+            shot,
+            slot="video",
+            source_url_override=stable_url,
+        )
+        ok = bool(result) and (
+            bool(result.get("persisted_url"))
+            or bool(result.get("oss_uploaded"))
+            or bool(getattr(shot, "video_url", None))
+        )
+        if ok:
+            logger.info(
+                "[VideoJob] shot video recovered from provider url | shot_id=%s url=%s persisted=%s",
+                shot_pk,
+                stable_url,
+                result.get("persisted_url") if isinstance(result, dict) else None,
+            )
+        return ok
+    finally:
+        db.close()
 
 
 @router.get("/generate/video/shots/{shot_id}/latest-job")

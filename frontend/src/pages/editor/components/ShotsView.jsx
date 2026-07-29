@@ -5577,14 +5577,20 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             });
             const statusText = result?.provider_status || result?.job_status || '-';
             const providerTaskId = String(result?.provider_task_id || '').trim();
-            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId || '-'} provider_task_id=${providerTaskId || '-'} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)}`);
+            const resultUrl = String(result?.result_url || '').trim();
+            const statusLower = String(result?.provider_status || '').trim().toLowerCase();
+            const statusLooksReady = !statusLower || [
+                'succeeded', 'success', 'completed', 'done', 'finish', 'finished', 'complete', 'successful',
+            ].includes(statusLower);
+            const canDownload = Boolean(result?.can_recover) || Boolean(resultUrl && statusLooksReady);
+            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId || '-'} provider_task_id=${providerTaskId || '-'} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)} can_download=${canDownload} result_url=${resultUrl ? 'yes' : 'no'}`);
 
             if (!providerTaskId) {
                 showNotification(t('当前镜头没有可查询的供应商任务 ID', 'No provider_task_id available for this shot'), 'warning');
                 return;
             }
 
-            if (result?.can_recover) {
+            if (canDownload) {
                 const localShot = resolveLocalShot();
                 const existingVideoUrl = String(localShot?.video_url || '').trim();
                 if (existingVideoUrl) {
