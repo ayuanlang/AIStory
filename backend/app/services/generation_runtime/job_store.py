@@ -696,6 +696,9 @@ def _compact_job_result(result: Any) -> Any:
         if compact_meta:
             compact["metadata"] = compact_meta
 
+    if not compact and "url" not in result:
+        return result
+
     return compact or {"url": result.get("url")}
 
 
@@ -862,6 +865,12 @@ def _extract_job_result_url(result: Any) -> str:
     nested_data = result.get("data")
     if isinstance(nested_data, dict):
         nested_url = _extract_job_result_url(nested_data)
+        if nested_url:
+            return nested_url
+
+    event_data = result.get("eventData")
+    if isinstance(event_data, dict):
+        nested_url = _extract_job_result_url(event_data)
         if nested_url:
             return nested_url
 

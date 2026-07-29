@@ -167,6 +167,20 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
                     if normalized:
                         return normalized
 
+    event_data = payload.get("eventData")
+    if isinstance(event_data, dict):
+        nested_candidates = (
+            event_data.get("id"),
+            event_data.get("task_id"),
+            event_data.get("taskId"),
+            event_data.get("job_id"),
+            event_data.get("jobId"),
+        )
+        for value in nested_candidates:
+            normalized = str(value or "").strip()
+            if normalized:
+                return normalized
+
     return ""
 
 

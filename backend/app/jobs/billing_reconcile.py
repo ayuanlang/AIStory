@@ -836,3 +836,43 @@ def run_billing_reconcile_by_action_ids(
         "process_log": process_log,
         "created_at": now_bj().isoformat(timespec="seconds"),
     }
+
+
+
+
+def run_billing_reconcile_single(provider: str, task_id: str) -> Dict[str, Any]:
+    """Manual admin reconcile for a single specific provider and task_id."""
+    provider = str(provider or "").strip()
+    task_id = str(task_id or "").strip()
+    if not provider or not task_id:
+        return {"ok": False, "error": "provider and task_id are required"}
+
+    with SessionLocal() as db:
+        api_key, resolved_endpoint, resolved_api_id = _resolve_system_api_credentials(
+            db, system_api_id=None, provider=provider
+        )
+        query_endpoint = resolved_endpoint
+        if _provider_is_kie(provider) and not query_endpoint:
+            query_endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
+        if "runninghub" in provider.lower() and not query_endpoint:
+            query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
+
+        if not api_key:
+            return {"ok": False, "error": "No api_key found for provider"}
+
+        usage = media_service.fetch_provider_task_usage(
+            task_id=task_id,
+            api_key=api_key,
+            query_endpoint=query_endpoint or None,
+            provider=provider,
+            refresh_if_missing=True,
+        )
+        if not usage:
+            return {"ok": False, "error": "No usage or task found from provider"}
+
+        return {
+            "ok": True,
+            "provider": provider,
+            "task_id": task_id,
+            "usage": usage
+        }

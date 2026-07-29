@@ -14,8 +14,10 @@ from app.db.session import get_db
 from app.jobs.billing_reconcile import (
     list_billing_reconcile_candidates,
     run_billing_reconcile_by_action_ids,
+    run_billing_reconcile_single,
 )
 from app.models.all_models import User
+from app.services.system_log_service import log_action
 
 router = APIRouter(tags=["admin-billing-reconcile"])
 
@@ -108,3 +110,36 @@ def post_billing_reconcile_run(
         lookback_days=req.lookback_days,
     )
     return BillingReconcileRunOut(**result)
+
+
+class BillingReconcileSingleRequest(BaseModel):
+    provider: str
+    task_id: str
+
+class BillingReconcileSingleOut(BaseModel):
+    ok: bool
+    error: Optional[str] = None
+    provider: Optional[str] = None
+    task_id: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
+
+@router.post("/admin/billing-reconcile/single", response_model=BillingReconcileSingleOut)
+def post_billing_reconcile_single(
+    req: BillingReconcileSingleRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_superuser(current_user)
+    _ = db
+    if not req.provider or not req.task_id:
+        raise HTTPException(status_code=400, detail="provider and task_id are required")
+
+    log_action(
+        db,
+        user_id=current_user.id,
+        user_name=current_user.username,
+        action="BILLING_RECONCILE_SINGLE",
+        details=f"Provider: {req.provider}, TaskID: {req.task_id}"
+    )
+    result = run_billing_reconcile_single(req.provider, req.task_id)
+    return BillingReconcileSingleOut(**result)

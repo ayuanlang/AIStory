@@ -4256,3 +4256,8 @@ export const generateEntityDerived = async (projectId, entityName, baseEntityId,
 };
 
 
+
+export const runAdminBillingReconcileSingle = async (payload = {}) => {
+    const response = await api.post('/admin/billing-reconcile/single', payload || {});
+    return response.data;
+};

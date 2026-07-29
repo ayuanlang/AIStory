@@ -3567,9 +3567,9 @@ const Editor = ({
     const MENU_ITEMS = [
     { id: 'overview', label: '项目信息', icon: Briefcase },
     { id: 'script', label: '剧本', icon: FileText },
-    { id: 'scenes', label: '场景', icon: ImageIcon },
     { id: 'subjects', label: '资产', icon: Users },
     { id: 'shots', label: '分镜', icon: Film },
+    { id: 'scenes', label: '场景统计', icon: ImageIcon },
 ];
     const activeMenuItem = MENU_ITEMS.find((item) => item.id === activeTab) || MENU_ITEMS[0];
     const shouldRenderScriptTab = activeTab === 'script' || visitedTabs.has('script') || Boolean(assetRerunRequest);
