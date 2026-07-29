@@ -103,6 +103,7 @@ import {
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
     queryVideoJobProviderTask,
+    queryVideoShotProviderTask,
     getLatestVideoJobForShot,
     getGenerationJobPool,
     stopGenerationJob,
@@ -5503,12 +5504,6 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         setQueryingVideoTaskByShot((prev) => ({ ...prev, [stableShotId]: true }));
         let jobId = '';
         try {
-            jobId = await resolveVideoJobIdForShot(stableShotId);
-            if (!jobId) {
-                showNotification(t('当前镜头没有可查询的视频任务', 'No video job available to query for this shot'), 'warning');
-                return;
-            }
-
             const resolveLocalShot = () => (
                 (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
                 || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
@@ -5517,14 +5512,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             );
 
             const runDownloadAndSync = async (queryResult) => {
-                setPendingVideoJob(stableShotId, jobId);
+                const recoverJobId = String(queryResult?.job_id || jobId || '').trim();
+                if (recoverJobId && !String(recoverJobId).startsWith('audit-tx:') && !String(recoverJobId).startsWith('provider-task:')) {
+                    setPendingVideoJob(stableShotId, recoverJobId);
+                }
                 setShotGeneratingState(stableShotId, 'video', true);
                 setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
                 showNotification(
                     t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
                     'info'
                 );
-                const recoverResult = await queryVideoJobProviderTask(jobId, { apply_recovery: true });
+                const recoverResult = await queryVideoShotProviderTask(stableShotId, { apply_recovery: true });
+                jobId = String(recoverResult?.job_id || recoverJobId || '').trim();
                 setVideoTaskQueryModal((prev) => ({
                     ...(prev || {}),
                     shotId: stableShotId,
@@ -5536,7 +5535,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 }));
                 const synced = await syncShotVideoAfterOssPersist({
                     shotId: stableShotId,
-                    jobId,
+                    jobId: jobId || undefined,
                     initialUrl: String(recoverResult?.result_url || queryResult?.result_url || '').trim(),
                 });
                 if (!synced) {
@@ -5554,7 +5553,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     } catch (syncErr) {
                         console.warn('[VideoTaskQuery] post-recovery shot sync failed:', syncErr);
                     }
-                    releaseShotVideoUi({ shotId: stableShotId, jobId });
+                    releaseShotVideoUi({ shotId: stableShotId, jobId: jobId || undefined });
                     showNotification(
                         t('已触发下载/OSS，请稍后刷新查看视频', 'Download/OSS started; refresh later if video is not visible yet'),
                         'warning'
@@ -5565,14 +5564,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                 return true;
             };
 
-            const result = await queryVideoJobProviderTask(jobId, { apply_recovery: false });
+            // Resolve + query by shot: latest provider_task_id from billing audit / job snapshots.
+            const result = await queryVideoShotProviderTask(stableShotId, { apply_recovery: false });
+            jobId = String(result?.job_id || '').trim();
+            if (jobId && !jobId.startsWith('audit-tx:') && !jobId.startsWith('provider-task:')) {
+                rememberLastVideoJobId(stableShotId, jobId);
+            }
             setVideoTaskQueryModal({
                 shotId: stableShotId,
                 jobId,
                 result: result || {},
             });
             const statusText = result?.provider_status || result?.job_status || '-';
-            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)}`);
+            const providerTaskId = String(result?.provider_task_id || '').trim();
+            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId || '-'} provider_task_id=${providerTaskId || '-'} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)}`);
+
+            if (!providerTaskId) {
+                showNotification(t('当前镜头没有可查询的供应商任务 ID', 'No provider_task_id available for this shot'), 'warning');
+                return;
+            }
 
             if (result?.can_recover) {
                 const localShot = resolveLocalShot();
@@ -5615,7 +5625,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         normalizeShotPromptDefaults,
         onLog,
         releaseShotVideoUi,
-        resolveVideoJobIdForShot,
+        rememberLastVideoJobId,
         setPendingVideoJob,
         setShotGeneratingState,
         showNotification,
@@ -14390,6 +14400,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                 <div>job_id: <span className="font-mono text-white">{videoTaskQueryModal.jobId || '-'}</span></div>
                                 <div>provider: <span className="font-mono text-white">{videoTaskQueryModal.result?.provider || '-'}</span></div>
                                 <div>provider_task_id: <span className="font-mono text-white break-all">{videoTaskQueryModal.result?.provider_task_id || '-'}</span></div>
+                                <div>source: <span className="font-mono text-white">{videoTaskQueryModal.result?.source || '-'}</span></div>
+                                <div>transaction_id: <span className="font-mono text-white">{videoTaskQueryModal.result?.transaction_id || '-'}</span></div>
                                 <div>job_status: <span className="font-mono text-white">{videoTaskQueryModal.result?.job_status || '-'}</span></div>
                                 <div>provider_status: <span className="font-mono text-cyan-200">{videoTaskQueryModal.result?.provider_status || '-'}</span></div>
                                 <div>recovery: <span className="font-mono text-white">{String(Boolean(videoTaskQueryModal.result?.recovery_applied))}</span></div>

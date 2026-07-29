@@ -2335,6 +2335,18 @@ export const queryVideoJobProviderTask = async (jobId, { apply_recovery = false 
     return response?.data || {};
 };
 
+export const queryVideoShotProviderTask = async (shotId, { apply_recovery = false } = {}) => {
+    const stableShotId = String(shotId || '').trim();
+    if (!stableShotId) {
+        throw new Error('shot_id is required');
+    }
+    const response = await api.post(
+        `/generate/video/shots/${encodeURIComponent(stableShotId)}/query-provider-task`,
+        { apply_recovery: Boolean(apply_recovery) },
+    );
+    return response?.data || {};
+};
+
 export const getLatestVideoJobForShot = async (shotId) => {
     const stableShotId = String(shotId || '').trim();
     if (!stableShotId) {

@@ -726,158 +726,306 @@ def _load_video_job_for_query(job_id: str) -> Dict[str, Any]:
     return job if isinstance(job, dict) else {}
 
 
-@router.get("/generate/video/shots/{shot_id}/latest-job")
-def get_latest_video_job_for_shot(
-    shot_id: str,
-    response: Response,
-    db: Session = Depends(get_db),
-    current_claims: Dict[str, Any] = Depends(get_current_claims),
-):
-    """Resolve the latest video generation job for a shot (for provider-task query)."""
-    _apply_no_store_headers(response)
+def _parse_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _extract_provider_task_id_from_mapping(payload: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("provider_task_id", "task_id", "taskId"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    billing = payload.get("billing_context") if isinstance(payload.get("billing_context"), dict) else {}
+    for key in ("provider_task_id", "task_id", "taskId"):
+        value = str(billing.get(key) or "").strip()
+        if value:
+            return value
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    for key in ("provider_task_id", "task_id", "taskId"):
+        value = str(result.get(key) or "").strip()
+        if value:
+            return value
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    for key in ("provider_task_id", "task_id", "taskId"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _resolve_shot_pk_candidates(db: Session, shot_id: str) -> List[str]:
     safe_shot_id = str(shot_id or "").strip()
     if not safe_shot_id:
-        raise HTTPException(status_code=400, detail="shot_id is required")
-
-    current_user_id = current_claims.get("user_id")
-    current_username = str(current_claims.get("username") or "").strip().lower()
-    is_superuser = bool(current_claims.get("is_superuser"))
+        return []
+    candidates: List[str] = [safe_shot_id]
+    shot = None
     try:
-        safe_cid = int(current_user_id) if current_user_id is not None else -1
+        shot_pk = int(safe_shot_id)
+        shot = db.query(models.Shot).filter(models.Shot.id == shot_pk).first()
+        candidates.append(str(shot_pk))
     except Exception:
-        safe_cid = -1
-
-    # Prefer durable shot technical_notes.video_metadata.job_id when present.
-    shot_job_id = ""
-    try:
         shot = None
-        try:
-            shot_pk = int(safe_shot_id)
-            shot = db.query(models.Shot).filter(models.Shot.id == shot_pk).first()
-        except Exception:
-            shot = None
-        if shot is None:
-            shot = (
-                db.query(models.Shot)
-                .filter(models.Shot.shot_id == safe_shot_id)
-                .order_by(models.Shot.id.desc())
-                .first()
+    if shot is None:
+        shot = (
+            db.query(models.Shot)
+            .filter(models.Shot.shot_id == safe_shot_id)
+            .order_by(models.Shot.id.desc())
+            .first()
+        )
+    if shot is not None and getattr(shot, "id", None) is not None:
+        candidates.append(str(int(shot.id)))
+    # Preserve order, unique.
+    out: List[str] = []
+    seen = set()
+    for item in candidates:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _find_latest_video_provider_task_from_audit(
+    db: Session,
+    shot_id: str,
+    *,
+    current_user_id: Optional[int] = None,
+    is_superuser: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Latest video provider_task_id for a shot from billing audit / job snapshots."""
+    shot_keys = _resolve_shot_pk_candidates(db, shot_id)
+    if not shot_keys:
+        return None
+
+    from sqlalchemy import String, cast, or_
+
+    from app.services.generation_task_queue import (
+        _shot_id_sql_like_patterns,
+        find_generation_job_states_by_shot_id,
+        find_generation_tasks_by_shot_id,
+    )
+
+    candidates: List[Dict[str, Any]] = []
+
+    like_filters = []
+    for key in shot_keys:
+        for pattern in _shot_id_sql_like_patterns(key):
+            like_filters.append(cast(models.TransactionHistory.details, String).like(pattern))
+
+    if like_filters:
+        rows = (
+            db.query(models.TransactionHistory)
+            .filter(or_(*like_filters))
+            .order_by(models.TransactionHistory.id.desc())
+            .limit(120)
+            .all()
+        )
+        for row in rows:
+            details = _parse_json_object(getattr(row, "details", None))
+            detail_shot = str(details.get("shot_id") or "").strip()
+            if detail_shot not in set(shot_keys):
+                continue
+            desc = str(getattr(row, "description", None) or "").strip().lower()
+            function_name = str(details.get("function_name") or "").strip().lower()
+            is_video = (
+                "video" in desc
+                or "video" in function_name
+                or str(details.get("asset_type") or "").strip().lower() == "video"
+                or bool(details.get("duration_seconds") or details.get("duration"))
             )
-        if shot is not None:
-            notes = {}
+            if not is_video and desc and "refund" not in desc:
+                # Keep rows that explicitly carry video provider tasks even if description is sparse.
+                pass
+            if "refund" in desc:
+                continue
+            provider_task_id = _extract_provider_task_id_from_mapping(details)
+            if not provider_task_id:
+                continue
+            owner_id = getattr(row, "user_id", None)
             try:
-                notes = json.loads(getattr(shot, "technical_notes", None) or "{}")
-                if not isinstance(notes, dict):
-                    notes = {}
+                safe_oid = int(owner_id) if owner_id is not None else None
             except Exception:
-                notes = {}
-            video_meta = notes.get("video_metadata") if isinstance(notes.get("video_metadata"), dict) else {}
-            shot_job_id = str(
-                video_meta.get("job_id")
-                or notes.get("job_id")
-                or ""
-            ).strip()
-    except Exception:
-        logger.exception("[VideoJob] read shot metadata for latest-job failed | shot_id=%s", safe_shot_id)
-        shot_job_id = ""
+                safe_oid = None
+            if (
+                not is_superuser
+                and current_user_id is not None
+                and safe_oid is not None
+                and int(current_user_id) != safe_oid
+            ):
+                continue
+            created_at = getattr(row, "created_at", None)
+            recency = 0.0
+            try:
+                if isinstance(created_at, (int, float)):
+                    recency = float(created_at)
+                elif created_at:
+                    recency = datetime.fromisoformat(str(created_at).replace("Z", "+00:00")).timestamp()
+            except Exception:
+                recency = float(getattr(row, "id", 0) or 0)
+            candidates.append(
+                {
+                    "provider_task_id": provider_task_id,
+                    "provider": details.get("resolved_provider") or details.get("provider") or getattr(row, "provider", None),
+                    "model": details.get("resolved_model") or details.get("model") or getattr(row, "model", None),
+                    "system_api_id": details.get("resolved_system_api_id") or details.get("system_api_id"),
+                    "query_endpoint": details.get("query_endpoint") or details.get("queryEndpoint"),
+                    "shot_id": detail_shot,
+                    "user_id": safe_oid,
+                    "job_id": str(details.get("job_id") or "").strip() or None,
+                    "transaction_id": int(getattr(row, "id", 0) or 0) or None,
+                    "status": details.get("status") or None,
+                    "created_at": created_at,
+                    "recency_ts": recency,
+                    "source": "transaction_history",
+                }
+            )
 
-    candidates = _collect_video_jobs_for_shot(safe_shot_id)
-    if shot_job_id:
-        # Prefer durable shot metadata job_id when present.
-        matched = next((j for j in candidates if str(j.get("job_id") or "") == shot_job_id), None)
-        if matched is None:
-            from app.services.generation_runtime.job_store import _read_video_job_file as _read_vj
-            file_job = _read_vj(shot_job_id)
-            with VIDEO_JOB_LOCK:
-                live = dict(VIDEO_JOB_STORE.get(shot_job_id) or {})
-            matched = dict(file_job or live or {"job_id": shot_job_id, "shot_id": safe_shot_id})
-            matched["job_id"] = shot_job_id
-        candidates = [matched] + [j for j in candidates if str(j.get("job_id") or "") != shot_job_id]
-
-    for job in candidates:
-        job_id = str(job.get("job_id") or "").strip()
-        if not job_id:
-            continue
-        hydrated = _hydrate_video_job_record(job_id, job)
-        owner_id = hydrated.get("user_id")
-        owner_username = str(hydrated.get("username") or "").strip().lower()
+    # Job snapshots / queue rows that already carry provider_task_id.
+    for key in shot_keys:
         try:
-            safe_oid = int(owner_id) if owner_id is not None else -2
+            for state in find_generation_job_states_by_shot_id(kind="video", shot_id=key, limit=40):
+                provider_task_id = _extract_provider_task_id_from_mapping(state)
+                if not provider_task_id:
+                    continue
+                owner_id = state.get("user_id")
+                try:
+                    safe_oid = int(owner_id) if owner_id is not None else None
+                except Exception:
+                    safe_oid = None
+                if (
+                    not is_superuser
+                    and current_user_id is not None
+                    and safe_oid is not None
+                    and int(current_user_id) != safe_oid
+                ):
+                    continue
+                candidates.append(
+                    {
+                        "provider_task_id": provider_task_id,
+                        "provider": state.get("provider"),
+                        "model": state.get("model"),
+                        "system_api_id": state.get("system_api_id"),
+                        "query_endpoint": state.get("query_endpoint"),
+                        "shot_id": str(state.get("shot_id") or key),
+                        "user_id": safe_oid,
+                        "job_id": str(state.get("job_id") or "").strip() or None,
+                        "transaction_id": None,
+                        "status": state.get("status"),
+                        "created_at": state.get("finished_at") or state.get("updated_at") or state.get("created_at"),
+                        "recency_ts": _video_job_recency_ts(state),
+                        "source": "job_state",
+                    }
+                )
         except Exception:
-            safe_oid = -2
-        is_owner = (safe_cid == safe_oid and safe_oid > 0) or (owner_username and owner_username == current_username)
-        if not is_superuser and owner_id is not None and not is_owner:
-            continue
-        from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
-        provider_task_id = _extract_job_provider_task_id(hydrated)
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "status": hydrated.get("status") or job.get("status"),
-            "provider": hydrated.get("provider") or job.get("provider"),
-            "provider_task_id": provider_task_id or None,
-            "shot_id": safe_shot_id,
-            "created_at": hydrated.get("created_at") or job.get("created_at"),
-            "finished_at": hydrated.get("finished_at") or job.get("finished_at"),
-            "source": (
-                "shot_metadata" if job_id == shot_job_id
-                else (hydrated.get("_lookup_source") or job.get("_lookup_source") or "job_store")
-            ),
-        }
+            logger.exception("[VideoJob] audit job_state lookup failed | shot_id=%s", key)
 
-    if shot_job_id:
-        return {
-            "ok": True,
-            "job_id": shot_job_id,
-            "status": None,
-            "provider": None,
-            "provider_task_id": None,
-            "shot_id": safe_shot_id,
-            "created_at": None,
-            "finished_at": None,
-            "source": "shot_metadata",
-        }
+        try:
+            for task in find_generation_tasks_by_shot_id(kind="video", shot_id=key, limit=40):
+                payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+                provider_task_id = _extract_provider_task_id_from_mapping(payload)
+                if not provider_task_id:
+                    continue
+                owner_id = task.get("user_id")
+                try:
+                    safe_oid = int(owner_id) if owner_id is not None else None
+                except Exception:
+                    safe_oid = None
+                if (
+                    not is_superuser
+                    and current_user_id is not None
+                    and safe_oid is not None
+                    and int(current_user_id) != safe_oid
+                ):
+                    continue
+                fake_job = dict(payload)
+                fake_job["created_at"] = task.get("created_at")
+                fake_job["finished_at"] = task.get("finished_at")
+                candidates.append(
+                    {
+                        "provider_task_id": provider_task_id,
+                        "provider": payload.get("provider"),
+                        "model": payload.get("model"),
+                        "system_api_id": payload.get("system_api_id"),
+                        "query_endpoint": payload.get("query_endpoint"),
+                        "shot_id": str(payload.get("shot_id") or key),
+                        "user_id": safe_oid,
+                        "job_id": str(task.get("job_id") or "").strip() or None,
+                        "transaction_id": None,
+                        "status": task.get("status"),
+                        "created_at": task.get("finished_at") or task.get("created_at"),
+                        "recency_ts": _video_job_recency_ts(fake_job),
+                        "source": "task_queue",
+                    }
+                )
+        except Exception:
+            logger.exception("[VideoJob] audit task_queue lookup failed | shot_id=%s", key)
 
-    raise HTTPException(status_code=404, detail="No video job found for this shot")
+    if not candidates:
+        return None
+
+    # Latest provider_task_id only: sort by recency, then transaction/job id.
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("recency_ts") or 0.0),
+            int(item.get("transaction_id") or 0),
+            str(item.get("created_at") or ""),
+        ),
+        reverse=True,
+    )
+    best = dict(candidates[0])
+    best.pop("recency_ts", None)
+    return best
 
 
-@router.post("/generate/video/jobs/{job_id}/query-provider-task")
-def query_video_job_provider_task(
-    job_id: str,
-    response: Response,
-    req: Optional[VideoJobProviderTaskQueryRequest] = None,
-    current_claims: Dict[str, Any] = Depends(get_current_claims),
-):
-    """Query upstream provider task API for a video job.
+def _build_synthetic_job_from_provider_task_ref(ref: Dict[str, Any], *, shot_id: str) -> Dict[str, Any]:
+    provider_task_id = str((ref or {}).get("provider_task_id") or "").strip()
+    job_id = str((ref or {}).get("job_id") or "").strip()
+    if not job_id:
+        tx_id = (ref or {}).get("transaction_id")
+        job_id = f"audit-tx:{tx_id}" if tx_id else f"provider-task:{provider_task_id}"
+    system_api_id = (ref or {}).get("system_api_id")
+    provider = (ref or {}).get("provider")
+    return {
+        "job_id": job_id,
+        "shot_id": str((ref or {}).get("shot_id") or shot_id),
+        "user_id": (ref or {}).get("user_id"),
+        "status": (ref or {}).get("status"),
+        "provider": provider,
+        "model": (ref or {}).get("model"),
+        "system_api_id": system_api_id,
+        "provider_task_id": provider_task_id,
+        "task_id": provider_task_id,
+        "taskId": provider_task_id,
+        "query_endpoint": (ref or {}).get("query_endpoint"),
+        "created_at": (ref or {}).get("created_at"),
+        "billing_context": {
+            "provider": provider,
+            "system_api_id": system_api_id,
+            "shot_id": str((ref or {}).get("shot_id") or shot_id),
+            "provider_task_id": provider_task_id,
+            "query_endpoint": (ref or {}).get("query_endpoint"),
+        },
+        "_lookup_source": (ref or {}).get("source") or "transaction_history",
+        "_audit_transaction_id": (ref or {}).get("transaction_id"),
+    }
 
-    When apply_recovery=true and the provider task already succeeded, reuse the
-    timeout-poll recovery path to download the file and persist to OSS / bind shot.
-    """
-    _apply_no_store_headers(response)
-    apply_recovery = bool(getattr(req, "apply_recovery", False)) if req is not None else False
-    stable_job_id = str(job_id or "").strip()
-    if not stable_job_id:
-        raise HTTPException(status_code=400, detail="job_id is required")
 
-    job = _load_video_job_for_query(stable_job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    owner_id = job.get("user_id")
-    owner_username = str(job.get("username") or "").strip().lower()
-    current_user_id = current_claims.get("user_id")
-    current_username = str(current_claims.get("username") or "").strip().lower()
-    is_superuser = bool(current_claims.get("is_superuser"))
-    try:
-        safe_cid = int(current_user_id) if current_user_id is not None else -1
-        safe_oid = int(owner_id) if owner_id is not None else -2
-    except Exception:
-        safe_cid = -1
-        safe_oid = -2
-    is_owner = (safe_cid == safe_oid and safe_oid > 0) or (owner_username and owner_username == current_username)
-    if not is_superuser and not is_owner:
-        raise HTTPException(status_code=403, detail="Not allowed to query this job")
-
+def _execute_provider_task_query(
+    *,
+    job: Dict[str, Any],
+    apply_recovery: bool = False,
+) -> Dict[str, Any]:
     from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
     from app.services.generation_runtime.job_store import _extract_job_result_url
     from app.services.generation_runtime.timeout_poll_recovery import (
@@ -887,7 +1035,8 @@ def query_video_job_provider_task(
     )
     from app.services.media_service import media_service
 
-    provider_task_id = _extract_job_provider_task_id(job)
+    stable_job_id = str((job or {}).get("job_id") or "").strip()
+    provider_task_id = _extract_job_provider_task_id(job) or _extract_provider_task_id_from_mapping(job)
     if not provider_task_id:
         raise HTTPException(
             status_code=400,
@@ -898,7 +1047,6 @@ def query_video_job_provider_task(
     if not api_key:
         raise HTTPException(status_code=400, detail=f"No api_key found for provider {provider or '-'}")
 
-    # Usage + full raw payload for admin/debug display.
     fetched = media_service.fetch_provider_task_usage(
         task_id=provider_task_id,
         api_key=api_key,
@@ -914,7 +1062,6 @@ def query_video_job_provider_task(
         if k != "raw_response"
     }
 
-    # Result URL / status for download+OSS recovery (same path as timeout poll).
     poll_result = media_service.fetch_provider_task_result(
         task_id=provider_task_id,
         api_key=api_key,
@@ -954,12 +1101,14 @@ def query_video_job_provider_task(
             "finished",
             "complete",
         }
+        and stable_job_id
+        and not str(stable_job_id).startswith("audit-tx:")
+        and not str(stable_job_id).startswith("provider-task:")
     )
 
     recovery_applied = False
     recovery_skipped_reason = None
     if can_recover and apply_recovery:
-        # Reuse timeout-poll success path: download remote file → OSS → bind shot.
         try:
             recovery_applied = bool(_apply_poll_success("video", stable_job_id, job, poll_result))
             if not recovery_applied:
@@ -974,6 +1123,10 @@ def query_video_job_provider_task(
             recovery_skipped_reason = str(exc)
     elif can_recover and not apply_recovery:
         recovery_skipped_reason = "awaiting_client_confirm"
+    elif apply_recovery and not can_recover and result_url and provider_status_l in {
+        "succeeded", "success", "completed", "done", "finish", "finished", "complete",
+    }:
+        recovery_skipped_reason = "no_recoverable_job_record"
     elif provider_status_l in {"failed", "error", "canceled", "cancelled"}:
         recovery_skipped_reason = f"provider_terminal_{provider_status_l}"
     elif not result_url:
@@ -981,13 +1134,20 @@ def query_video_job_provider_task(
     else:
         recovery_skipped_reason = "provider_not_succeeded"
 
-    live = _hydrate_job("video", stable_job_id) or job
-    live_result_url = str(_extract_job_result_url(live.get("result")) or existing_result_url or result_url or "").strip() or None
+    live = {}
+    if stable_job_id and not str(stable_job_id).startswith(("audit-tx:", "provider-task:")):
+        live = _hydrate_job("video", stable_job_id) or {}
+    live_result_url = str(
+        _extract_job_result_url((live or {}).get("result"))
+        or existing_result_url
+        or result_url
+        or ""
+    ).strip() or None
 
     return {
         "ok": True,
-        "job_id": stable_job_id,
-        "job_status": live.get("status") or job.get("status"),
+        "job_id": stable_job_id or None,
+        "job_status": (live or {}).get("status") or job.get("status"),
         "provider": provider or job.get("provider"),
         "provider_task_id": provider_task_id,
         "query_endpoint": query_endpoint or None,
@@ -998,5 +1158,152 @@ def query_video_job_provider_task(
         "recovery_skipped_reason": recovery_skipped_reason,
         "usage": usage or None,
         "raw_response": raw_response if isinstance(raw_response, dict) else None,
+        "source": job.get("_lookup_source"),
+        "transaction_id": job.get("_audit_transaction_id"),
+        "shot_id": job.get("shot_id"),
     }
+
+
+@router.get("/generate/video/shots/{shot_id}/latest-job")
+def get_latest_video_job_for_shot(
+    shot_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
+):
+    """Resolve the latest provider_task_id for a shot (billing audit preferred)."""
+    _apply_no_store_headers(response)
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_shot_id:
+        raise HTTPException(status_code=400, detail="shot_id is required")
+
+    current_user_id = current_claims.get("user_id")
+    is_superuser = bool(current_claims.get("is_superuser"))
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else None
+    except Exception:
+        safe_cid = None
+
+    latest = _find_latest_video_provider_task_from_audit(
+        db,
+        safe_shot_id,
+        current_user_id=safe_cid,
+        is_superuser=is_superuser,
+    )
+    if not latest or not latest.get("provider_task_id"):
+        raise HTTPException(status_code=404, detail="No provider_task_id found for this shot")
+
+    return {
+        "ok": True,
+        "job_id": latest.get("job_id"),
+        "status": latest.get("status"),
+        "provider": latest.get("provider"),
+        "model": latest.get("model"),
+        "system_api_id": latest.get("system_api_id"),
+        "provider_task_id": latest.get("provider_task_id"),
+        "query_endpoint": latest.get("query_endpoint"),
+        "shot_id": str(latest.get("shot_id") or safe_shot_id),
+        "created_at": latest.get("created_at"),
+        "finished_at": None,
+        "transaction_id": latest.get("transaction_id"),
+        "source": latest.get("source") or "transaction_history",
+    }
+
+
+@router.post("/generate/video/shots/{shot_id}/query-provider-task")
+def query_video_shot_provider_task(
+    shot_id: str,
+    response: Response,
+    req: Optional[VideoJobProviderTaskQueryRequest] = None,
+    db: Session = Depends(get_db),
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
+):
+    """Query provider by the latest provider_task_id linked to this shot in audit records."""
+    _apply_no_store_headers(response)
+    apply_recovery = bool(getattr(req, "apply_recovery", False)) if req is not None else False
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_shot_id:
+        raise HTTPException(status_code=400, detail="shot_id is required")
+
+    current_user_id = current_claims.get("user_id")
+    is_superuser = bool(current_claims.get("is_superuser"))
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else None
+    except Exception:
+        safe_cid = None
+
+    latest = _find_latest_video_provider_task_from_audit(
+        db,
+        safe_shot_id,
+        current_user_id=safe_cid,
+        is_superuser=is_superuser,
+    )
+    if not latest or not latest.get("provider_task_id"):
+        raise HTTPException(status_code=404, detail="No provider_task_id found for this shot")
+
+    job = _build_synthetic_job_from_provider_task_ref(latest, shot_id=safe_shot_id)
+    real_job_id = str(latest.get("job_id") or "").strip()
+    if real_job_id:
+        loaded = _load_video_job_for_query(real_job_id)
+        if loaded:
+            # Keep audit provider_task_id authoritative when present.
+            for key, value in job.items():
+                if value in (None, "", {}, []) and loaded.get(key) not in (None, "", {}, []):
+                    continue
+                if key.startswith("_"):
+                    loaded[key] = value
+                    continue
+                if key in {"provider_task_id", "task_id", "taskId", "system_api_id", "provider", "query_endpoint"}:
+                    if value not in (None, ""):
+                        loaded[key] = value
+                elif loaded.get(key) in (None, ""):
+                    loaded[key] = value
+            job = loaded
+            job["job_id"] = real_job_id
+
+    result = _execute_provider_task_query(job=job, apply_recovery=apply_recovery)
+    result["shot_id"] = safe_shot_id
+    result["source"] = latest.get("source") or result.get("source")
+    result["transaction_id"] = latest.get("transaction_id") or result.get("transaction_id")
+    return result
+
+
+@router.post("/generate/video/jobs/{job_id}/query-provider-task")
+def query_video_job_provider_task(
+    job_id: str,
+    response: Response,
+    req: Optional[VideoJobProviderTaskQueryRequest] = None,
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
+):
+    """Query upstream provider task API for a video job.
+
+    When apply_recovery=true and the provider task already succeeded, reuse the
+    timeout-poll recovery path to download the file and persist to OSS / bind shot.
+    """
+    _apply_no_store_headers(response)
+    apply_recovery = bool(getattr(req, "apply_recovery", False)) if req is not None else False
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+
+    job = _load_video_job_for_query(stable_job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    owner_id = job.get("user_id")
+    owner_username = str(job.get("username") or "").strip().lower()
+    current_user_id = current_claims.get("user_id")
+    current_username = str(current_claims.get("username") or "").strip().lower()
+    is_superuser = bool(current_claims.get("is_superuser"))
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else -1
+        safe_oid = int(owner_id) if owner_id is not None else -2
+    except Exception:
+        safe_cid = -1
+        safe_oid = -2
+    is_owner = (safe_cid == safe_oid and safe_oid > 0) or (owner_username and owner_username == current_username)
+    if not is_superuser and not is_owner:
+        raise HTTPException(status_code=403, detail="Not allowed to query this job")
+
+    return _execute_provider_task_query(job=job, apply_recovery=apply_recovery)
 
