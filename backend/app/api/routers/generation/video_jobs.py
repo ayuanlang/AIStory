@@ -537,6 +537,209 @@ class VideoJobProviderTaskQueryRequest(BaseModel):
     apply_recovery: bool = False
 
 
+def _extract_video_job_shot_id(job: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(job, dict):
+        return ""
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    context = job.get("context") if isinstance(job.get("context"), dict) else {}
+    request = job.get("request") if isinstance(job.get("request"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    result_meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    return str(
+        job.get("shot_id")
+        or job.get("ownerShotId")
+        or metadata.get("shot_id")
+        or metadata.get("ownerShotId")
+        or payload.get("shot_id")
+        or payload.get("ownerShotId")
+        or context.get("shot_id")
+        or context.get("ownerShotId")
+        or request.get("shot_id")
+        or result_meta.get("shot_id")
+        or ""
+    ).strip()
+
+
+def _video_job_recency_ts(job: Optional[Dict[str, Any]]) -> float:
+    if not isinstance(job, dict):
+        return 0.0
+    for key in ("finished_at", "started_at", "created_at", "updated_at"):
+        raw = job.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            text = str(raw).strip()
+            if not text:
+                continue
+            # Accept unix seconds / ms and ISO timestamps.
+            if text.replace(".", "", 1).isdigit():
+                value = float(text)
+                return value / 1000.0 if value > 1e12 else value
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+    return 0.0
+
+
+def _collect_video_jobs_for_shot(shot_id: str) -> List[Dict[str, Any]]:
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_shot_id:
+        return []
+
+    from app.services.generation_runtime.job_store import VIDEO_JOB_FILE_DIR, _read_video_job_file
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+
+    def _consider(raw_job: Optional[Dict[str, Any]], fallback_job_id: str = "") -> None:
+        if not isinstance(raw_job, dict):
+            return
+        job = dict(raw_job)
+        job_id = str(job.get("job_id") or fallback_job_id or "").strip()
+        if not job_id:
+            return
+        if _extract_video_job_shot_id(job) != safe_shot_id:
+            return
+        job["job_id"] = job_id
+        prev = by_id.get(job_id)
+        if not prev or _video_job_recency_ts(job) >= _video_job_recency_ts(prev):
+            by_id[job_id] = job
+
+    with VIDEO_JOB_LOCK:
+        for job_id, payload in list(VIDEO_JOB_STORE.items()):
+            _consider(payload, str(job_id))
+
+    try:
+        if os.path.isdir(VIDEO_JOB_FILE_DIR):
+            for name in os.listdir(VIDEO_JOB_FILE_DIR):
+                if not str(name).endswith(".json"):
+                    continue
+                job_id = str(name)[:-5].strip()
+                if not job_id:
+                    continue
+                _consider(_read_video_job_file(job_id), job_id)
+    except Exception:
+        logger.exception("[VideoJob] scan job files for shot failed | shot_id=%s", safe_shot_id)
+
+    jobs = list(by_id.values())
+    jobs.sort(key=_video_job_recency_ts, reverse=True)
+    return jobs
+
+
+@router.get("/generate/video/shots/{shot_id}/latest-job")
+def get_latest_video_job_for_shot(
+    shot_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
+):
+    """Resolve the latest video generation job for a shot (for provider-task query)."""
+    _apply_no_store_headers(response)
+    safe_shot_id = str(shot_id or "").strip()
+    if not safe_shot_id:
+        raise HTTPException(status_code=400, detail="shot_id is required")
+
+    current_user_id = current_claims.get("user_id")
+    current_username = str(current_claims.get("username") or "").strip().lower()
+    is_superuser = bool(current_claims.get("is_superuser"))
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else -1
+    except Exception:
+        safe_cid = -1
+
+    # Prefer durable shot technical_notes.video_metadata.job_id when present.
+    shot_job_id = ""
+    try:
+        shot = None
+        try:
+            shot_pk = int(safe_shot_id)
+            shot = db.query(models.Shot).filter(models.Shot.id == shot_pk).first()
+        except Exception:
+            shot = None
+        if shot is None:
+            shot = (
+                db.query(models.Shot)
+                .filter(models.Shot.shot_id == safe_shot_id)
+                .order_by(models.Shot.id.desc())
+                .first()
+            )
+        if shot is not None:
+            notes = {}
+            try:
+                notes = json.loads(getattr(shot, "technical_notes", None) or "{}")
+                if not isinstance(notes, dict):
+                    notes = {}
+            except Exception:
+                notes = {}
+            video_meta = notes.get("video_metadata") if isinstance(notes.get("video_metadata"), dict) else {}
+            shot_job_id = str(
+                video_meta.get("job_id")
+                or notes.get("job_id")
+                or ""
+            ).strip()
+    except Exception:
+        logger.exception("[VideoJob] read shot metadata for latest-job failed | shot_id=%s", safe_shot_id)
+        shot_job_id = ""
+
+    candidates = _collect_video_jobs_for_shot(safe_shot_id)
+    if shot_job_id:
+        # Prefer durable shot metadata job_id when present.
+        matched = next((j for j in candidates if str(j.get("job_id") or "") == shot_job_id), None)
+        if matched is None:
+            from app.services.generation_runtime.job_store import _read_video_job_file as _read_vj
+            file_job = _read_vj(shot_job_id)
+            with VIDEO_JOB_LOCK:
+                live = dict(VIDEO_JOB_STORE.get(shot_job_id) or {})
+            matched = dict(file_job or live or {"job_id": shot_job_id, "shot_id": safe_shot_id})
+            matched["job_id"] = shot_job_id
+        candidates = [matched] + [j for j in candidates if str(j.get("job_id") or "") != shot_job_id]
+
+    for job in candidates:
+        job_id = str(job.get("job_id") or "").strip()
+        if not job_id:
+            continue
+        hydrated = _hydrate_video_job_record(job_id, job)
+        owner_id = hydrated.get("user_id")
+        owner_username = str(hydrated.get("username") or "").strip().lower()
+        try:
+            safe_oid = int(owner_id) if owner_id is not None else -2
+        except Exception:
+            safe_oid = -2
+        is_owner = (safe_cid == safe_oid and safe_oid > 0) or (owner_username and owner_username == current_username)
+        if not is_superuser and owner_id is not None and not is_owner:
+            continue
+        from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+        provider_task_id = _extract_job_provider_task_id(hydrated)
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "status": hydrated.get("status") or job.get("status"),
+            "provider": hydrated.get("provider") or job.get("provider"),
+            "provider_task_id": provider_task_id or None,
+            "shot_id": safe_shot_id,
+            "created_at": hydrated.get("created_at") or job.get("created_at"),
+            "finished_at": hydrated.get("finished_at") or job.get("finished_at"),
+            "source": "shot_metadata" if job_id == shot_job_id else "job_store",
+        }
+
+    if shot_job_id:
+        return {
+            "ok": True,
+            "job_id": shot_job_id,
+            "status": None,
+            "provider": None,
+            "provider_task_id": None,
+            "shot_id": safe_shot_id,
+            "created_at": None,
+            "finished_at": None,
+            "source": "shot_metadata",
+        }
+
+    raise HTTPException(status_code=404, detail="No video job found for this shot")
+
+
 @router.post("/generate/video/jobs/{job_id}/query-provider-task")
 def query_video_job_provider_task(
     job_id: str,

@@ -2335,6 +2335,18 @@ export const queryVideoJobProviderTask = async (jobId, { apply_recovery = false 
     return response?.data || {};
 };
 
+export const getLatestVideoJobForShot = async (shotId) => {
+    const stableShotId = String(shotId || '').trim();
+    if (!stableShotId) {
+        throw new Error('shot_id is required');
+    }
+    const response = await api.get(
+        `/generate/video/shots/${encodeURIComponent(stableShotId)}/latest-job`,
+        { skipAuthRedirect: true },
+    );
+    return response?.data || {};
+};
+
 export const getGenerationJobPool = async (params = {}) => {
     const response = await api.get('/generate/jobs/pool', { params, skipAuthRedirect: true });
     return response?.data || {};

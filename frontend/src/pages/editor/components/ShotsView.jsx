@@ -103,6 +103,7 @@ import {
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
     queryVideoJobProviderTask,
+    getLatestVideoJobForShot,
     getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
@@ -2149,6 +2150,96 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const row = all?.[stableShotId];
         return String(row?.jobId || row?.lastJobId || '').trim();
     }, [readVideoJobStateStorage]);
+
+    const rememberLastVideoJobId = useCallback((shotId, jobId) => {
+        const stableShotId = String(shotId || '').trim();
+        const stableJobId = String(jobId || '').trim();
+        if (!stableShotId || !stableJobId) return;
+        const prev = readVideoJobStateStorage();
+        const existing = (prev?.[stableShotId] && typeof prev[stableShotId] === 'object') ? prev[stableShotId] : {};
+        const pendingJobId = String(existing.jobId || '').trim();
+        writeVideoJobStateStorage({
+            ...prev,
+            [stableShotId]: {
+                ...existing,
+                // Keep active pending job untouched; only cache for query.
+                jobId: pendingJobId,
+                lastJobId: stableJobId,
+            },
+        });
+    }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
+
+    const resolveVideoJobIdForShot = useCallback(async (shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return '';
+
+        const isUsableJobId = (value) => {
+            const id = String(value || '').trim();
+            if (!id) return false;
+            if (id.startsWith('asset:') || id.startsWith('shot-current-')) return false;
+            return true;
+        };
+
+        const localJobId = getLastVideoJobId(stableShotId);
+        if (isUsableJobId(localJobId)) return localJobId;
+
+        const localShot = (
+            (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
+            || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+            || null
+        );
+        try {
+            const tech = parseShotTechnicalNotes(localShot?.technical_notes);
+            const meta = (tech?.video_metadata && typeof tech.video_metadata === 'object') ? tech.video_metadata : {};
+            const metaJobId = String(meta?.job_id || tech?.job_id || '').trim();
+            if (isUsableJobId(metaJobId)) {
+                rememberLastVideoJobId(stableShotId, metaJobId);
+                return metaJobId;
+            }
+        } catch (_) {
+            // ignore parse errors
+        }
+
+        try {
+            const data = await getGenerationJobPool({
+                kind: 'video',
+                shot_id: stableShotId,
+                running_only: false,
+                limit: 50,
+            });
+            const items = Array.isArray(data?.items) ? data.items : [];
+            const ranked = items
+                .map((item) => ({
+                    jobId: String(item?.job_id || item?.id || '').trim(),
+                    createdAtMs: Date.parse(String(item?.finished_at || item?.started_at || item?.created_at || '')) || 0,
+                    hasProviderTask: Boolean(String(item?.provider_task_id || item?.task_id || '').trim()),
+                }))
+                .filter((row) => isUsableJobId(row.jobId))
+                .sort((a, b) => {
+                    if (a.hasProviderTask !== b.hasProviderTask) return a.hasProviderTask ? -1 : 1;
+                    return (b.createdAtMs || 0) - (a.createdAtMs || 0);
+                });
+            if (ranked[0]?.jobId) {
+                rememberLastVideoJobId(stableShotId, ranked[0].jobId);
+                return ranked[0].jobId;
+            }
+        } catch (poolErr) {
+            console.warn('[VideoTaskQuery] job pool lookup failed:', poolErr);
+        }
+
+        try {
+            const latest = await getLatestVideoJobForShot(stableShotId);
+            const remoteJobId = String(latest?.job_id || '').trim();
+            if (isUsableJobId(remoteJobId)) {
+                rememberLastVideoJobId(stableShotId, remoteJobId);
+                return remoteJobId;
+            }
+        } catch (latestErr) {
+            console.warn('[VideoTaskQuery] latest-job lookup failed:', latestErr);
+        }
+
+        return '';
+    }, [getLastVideoJobId, rememberLastVideoJobId]);
 
     const setPendingImageJob = useCallback((shotId, kind, jobId, options = {}) => {
         const stableShotId = String(shotId || '').trim();
@@ -5407,71 +5498,73 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             showNotification(t('缺少镜头 ID', 'Missing shot ID'), 'warning');
             return;
         }
-        const jobId = getLastVideoJobId(stableShotId);
-        if (!jobId) {
-            showNotification(t('当前镜头没有可查询的视频任务', 'No video job available to query for this shot'), 'warning');
-            return;
-        }
-
-        const resolveLocalShot = () => (
-            (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
-            || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
-            || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null)
-            || { id: stableShotId }
-        );
-
-        const runDownloadAndSync = async (queryResult) => {
-            setPendingVideoJob(stableShotId, jobId);
-            setShotGeneratingState(stableShotId, 'video', true);
-            setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
-            showNotification(
-                t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
-                'info'
-            );
-            const recoverResult = await queryVideoJobProviderTask(jobId, { apply_recovery: true });
-            setVideoTaskQueryModal((prev) => ({
-                ...(prev || {}),
-                shotId: stableShotId,
-                jobId,
-                result: {
-                    ...(queryResult || {}),
-                    ...(recoverResult || {}),
-                },
-            }));
-            const synced = await syncShotVideoAfterOssPersist({
-                shotId: stableShotId,
-                jobId,
-                initialUrl: String(recoverResult?.result_url || queryResult?.result_url || '').trim(),
-            });
-            if (!synced) {
-                try {
-                    const latestShot = await fetchShot(stableShotId);
-                    if (latestShot?.id) {
-                        const normalized = normalizeShotPromptDefaults(latestShot);
-                        setEditingShot((prev) => (
-                            prev && String(prev.id) === stableShotId ? { ...prev, ...normalized } : prev
-                        ));
-                        setShots((prev) => prev.map((item) => (
-                            String(item?.id) === stableShotId ? { ...item, ...normalized } : item
-                        )));
-                    }
-                } catch (syncErr) {
-                    console.warn('[VideoTaskQuery] post-recovery shot sync failed:', syncErr);
-                }
-                releaseShotVideoUi({ shotId: stableShotId, jobId });
-                showNotification(
-                    t('已触发下载/OSS，请稍后刷新查看视频', 'Download/OSS started; refresh later if video is not visible yet'),
-                    'warning'
-                );
-                return false;
-            }
-            showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
-            return true;
-        };
 
         // Inspect-only query must NOT flip into generate-running by itself.
         setQueryingVideoTaskByShot((prev) => ({ ...prev, [stableShotId]: true }));
+        let jobId = '';
         try {
+            jobId = await resolveVideoJobIdForShot(stableShotId);
+            if (!jobId) {
+                showNotification(t('当前镜头没有可查询的视频任务', 'No video job available to query for this shot'), 'warning');
+                return;
+            }
+
+            const resolveLocalShot = () => (
+                (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
+                || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+                || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null)
+                || { id: stableShotId }
+            );
+
+            const runDownloadAndSync = async (queryResult) => {
+                setPendingVideoJob(stableShotId, jobId);
+                setShotGeneratingState(stableShotId, 'video', true);
+                setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
+                showNotification(
+                    t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
+                    'info'
+                );
+                const recoverResult = await queryVideoJobProviderTask(jobId, { apply_recovery: true });
+                setVideoTaskQueryModal((prev) => ({
+                    ...(prev || {}),
+                    shotId: stableShotId,
+                    jobId,
+                    result: {
+                        ...(queryResult || {}),
+                        ...(recoverResult || {}),
+                    },
+                }));
+                const synced = await syncShotVideoAfterOssPersist({
+                    shotId: stableShotId,
+                    jobId,
+                    initialUrl: String(recoverResult?.result_url || queryResult?.result_url || '').trim(),
+                });
+                if (!synced) {
+                    try {
+                        const latestShot = await fetchShot(stableShotId);
+                        if (latestShot?.id) {
+                            const normalized = normalizeShotPromptDefaults(latestShot);
+                            setEditingShot((prev) => (
+                                prev && String(prev.id) === stableShotId ? { ...prev, ...normalized } : prev
+                            ));
+                            setShots((prev) => prev.map((item) => (
+                                String(item?.id) === stableShotId ? { ...item, ...normalized } : item
+                            )));
+                        }
+                    } catch (syncErr) {
+                        console.warn('[VideoTaskQuery] post-recovery shot sync failed:', syncErr);
+                    }
+                    releaseShotVideoUi({ shotId: stableShotId, jobId });
+                    showNotification(
+                        t('已触发下载/OSS，请稍后刷新查看视频', 'Download/OSS started; refresh later if video is not visible yet'),
+                        'warning'
+                    );
+                    return false;
+                }
+                showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
+                return true;
+            };
+
             const result = await queryVideoJobProviderTask(jobId, { apply_recovery: false });
             setVideoTaskQueryModal({
                 shotId: stableShotId,
@@ -5519,10 +5612,10 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     }, [
         confirmUiMessage,
         editingShot,
-        getLastVideoJobId,
         normalizeShotPromptDefaults,
         onLog,
         releaseShotVideoUi,
+        resolveVideoJobIdForShot,
         setPendingVideoJob,
         setShotGeneratingState,
         showNotification,
@@ -12174,9 +12267,9 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                 <button
                                                     type="button"
                                                     onClick={() => handleQueryVideoProviderTask(editingShot?.id)}
-                                                    disabled={Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id)}
+                                                    disabled={!editingShot?.id || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])}
                                                     className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 ${
-                                                        Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id)
+                                                        !editingShot?.id || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
                                                             ? 'bg-white/10 text-white/40 cursor-not-allowed'
                                                             : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
                                                     }`}
@@ -13977,7 +14070,7 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         label: t('查询任务', 'Query Task'),
                                                                         busyLabel: t('查询中...', 'Querying...'),
                                                                         onClick: () => handleQueryVideoProviderTask(editingShot?.id),
-                                                                        disabled: Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id),
+                                                                        disabled: !editingShot?.id || Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]),
                                                                         busy: Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]),
                                                                         variant: 'secondary',
                                                                         title: t('查询供应商任务状态（不进入生成运行态）', 'Query provider task status (does not enter generating state)'),
