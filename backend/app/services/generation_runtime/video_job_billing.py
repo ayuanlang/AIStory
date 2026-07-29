@@ -837,6 +837,41 @@ async def _settle_or_cancel_video_job_billing_from_callback(
         if usage:
             settle_details["provider_usage"] = usage
             settle_details["usage_source"] = usage_source or settle_details.get("usage_source") or "provider"
+            # Always promote callback/query tokens onto settle details (Ark Seedance usage.*).
+            actual_from_usage = _resolve_usage_token_total(usage)
+            if actual_from_usage > 0:
+                settle_details["total_tokens"] = int(actual_from_usage)
+                settle_details["output_tokens"] = int(
+                    max(
+                        0,
+                        _safe_int_token(
+                            usage.get("completion_tokens")
+                            or usage.get("output_tokens")
+                            or actual_from_usage
+                        ),
+                    )
+                )
+                settle_details["completion_tokens"] = int(
+                    max(
+                        0,
+                        _safe_int_token(
+                            usage.get("completion_tokens")
+                            or usage.get("output_tokens")
+                            or actual_from_usage
+                        ),
+                    )
+                )
+                if settle_details.get("token_source") in (None, "", "estimate"):
+                    settle_details["token_source"] = "api_usage"
+                settle_details.setdefault("billing_basis", "provider_tokens")
+            elif settle_details.get("token_source") in (None, ""):
+                # Explicitly mark missing supplier usage so reconcile can pick it up.
+                settle_details["token_source"] = "estimate"
+                settle_details.setdefault("usage_source", usage_source or "callback_no_usage")
+        elif settle_details.get("token_source") in (None, "") and is_token_billing:
+            # Token-billed job finished without supplier usage → keep estimate + reconcile later.
+            settle_details["token_source"] = "estimate"
+            settle_details.setdefault("usage_source", "callback_no_usage")
         if provider:
             settle_details["provider"] = provider
         if model:

@@ -335,6 +335,8 @@ def admin_get_queue_stats(
             "worker_slots_total": retry_worker_slots_total,
             "worker_slots_in_use": retry_worker_slots_in_use,
             "worker_slots_available": retry_worker_slots_available,
+            "timeout_poll_max_attempts": _queue_cfg_int("timeout_poll_max_attempts", 3, minimum=1, maximum=10),
+            "timeout_poll_interval_seconds": _queue_cfg_int("timeout_poll_interval_seconds", 30, minimum=5, maximum=300),
         },
     }
 

@@ -1434,6 +1434,17 @@ async def _run_generate_image_job(
                 current_result_url,
             )
             return
+        # Forced provider poll supplement (incl. pure callback mode) before permanent fail.
+        try:
+            from app.services.generation_runtime.timeout_poll_recovery import maybe_start_timeout_poll_recovery
+
+            if _extract_job_provider_task_id(current_job) and maybe_start_timeout_poll_recovery(
+                "image", job_id, current_job
+            ):
+                mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
+                return {"defer_completion": True}
+        except Exception:
+            logger.exception("[ImageJob] timeout poll recovery start failed | job_id=%s", job_id)
         try:
             billing_service.log_failed_transaction(
                 db,

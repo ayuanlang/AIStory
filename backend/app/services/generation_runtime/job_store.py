@@ -13,7 +13,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.core.config import settings
 from app.core.queue_config import DEFAULT_QUEUE_CONFIG, load_queue_config
@@ -30,6 +30,7 @@ __all__ = [
     "GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK",
     "GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS",
     "GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS",
+    "GENERATION_CALLBACK_ASYNC_REPROCESS",
     "GENERATION_CALLBACK_FILE_DIR",
     "GENERATION_CALLBACK_FINALIZE_MAX_CONCURRENCY",
     "GENERATION_CALLBACK_FINALIZE_SEMAPHORE",
@@ -198,6 +199,9 @@ GENERATION_CALLBACK_ASYNC_INFLIGHT_TTL_SECONDS = max(10, int(os.getenv("GENERATI
 GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS", "4000") or 4000))
 GENERATION_CALLBACK_ASYNC_INFLIGHT: Dict[str, float] = {}
 GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK = threading.Lock()
+# Tickets that received a newer callback while finalize was still in-flight.
+# Cleared + reprocessed when the current finalize finishes.
+GENERATION_CALLBACK_ASYNC_REPROCESS: Set[str] = set()
 IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS = max(30, int(os.getenv("IMAGE_CALLBACK_PERSIST_INFLIGHT_TTL_SECONDS", "600") or 600))
 IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS = max(200, int(os.getenv("IMAGE_CALLBACK_PERSIST_INFLIGHT_MAX_ITEMS", "8000") or 8000))
 IMAGE_CALLBACK_PERSIST_INFLIGHT: Dict[str, float] = {}
@@ -696,6 +700,9 @@ def _compact_job_result(result: Any) -> Any:
         if compact_meta:
             compact["metadata"] = compact_meta
 
+    if not compact and "url" not in result:
+        return result
+
     return compact or {"url": result.get("url")}
 
 
@@ -865,6 +872,12 @@ def _extract_job_result_url(result: Any) -> str:
         if nested_url:
             return nested_url
 
+    event_data = result.get("eventData")
+    if isinstance(event_data, dict):
+        nested_url = _extract_job_result_url(event_data)
+        if nested_url:
+            return nested_url
+
     nested_content = result.get("content")
     if isinstance(nested_content, dict):
         nested_url = _extract_job_result_url(nested_content)
@@ -933,6 +946,8 @@ def _job_is_callback_waiting(job: Optional[Dict[str, Any]]) -> bool:
     if status in _CALLBACK_WAIT_STATUSES:
         return True
     upstream_state = str(payload.get("upstream_submit_state") or "").strip().lower()
+    if "callback_timeout_poll" in upstream_state and "exhausted" not in upstream_state:
+        return True
     if "callback_pending" not in upstream_state:
         return False
     # Defensive: submit race may briefly keep running/submit with callback_pending.

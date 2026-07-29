@@ -2261,18 +2261,38 @@ class MediaGenerationService:
         query_endpoint: Optional[str] = None,
         provider: Optional[str] = None,
         refresh_if_missing: bool = True,
+        include_raw_response: bool = False,
     ) -> Dict[str, Any]:
         """Query provider task usage and return normalized billing fields.
 
         KIE Market uses: GET /api/v1/jobs/recordInfo?taskId=...
         RunningHub uses: POST /openapi/v2/query {"taskId": ...}
+
+        When include_raw_response=True, also attach the full provider API JSON under
+        key ``raw_response`` (for admin single-task inspect).
         """
+        def _with_raw(usage_payload: Optional[Dict[str, Any]], raw: Any) -> Dict[str, Any]:
+            out = dict(usage_payload or {})
+            if include_raw_response and isinstance(raw, dict) and raw:
+                out["raw_response"] = raw
+            return out
+
         stable_task_id = str(task_id or "").strip()
         stable_key = str(api_key or "").strip()
         if not stable_task_id or not stable_key:
             return {}
 
         provider_l = str(provider or "").strip().lower()
+        # ark-seedance stores AK:SK:EP_TOKEN; Ark HTTP APIs expect Bearer EP_TOKEN only.
+        if (
+            stable_key.count(":") >= 2
+            and ("ark" in provider_l or "seedance" in provider_l or "volc" in provider_l or "doubao" in provider_l)
+        ):
+            ep_token = stable_key.split(":", 2)[2].strip()
+            if ":" in ep_token:
+                ep_token = ep_token.split(":", 1)[0].strip()
+            if ep_token:
+                stable_key = ep_token
         endpoint = str(query_endpoint or "").strip()
         if not _is_kie_record_info_endpoint(endpoint, provider_l):
             endpoint = self._normalize_doubao_video_tasks_endpoint(query_endpoint)
@@ -2351,7 +2371,7 @@ class MediaGenerationService:
                     stable_task_id,
                     exc,
                 )
-                return {}
+                return _with_raw({}, raw_payload) if include_raw_response else {}
 
             if usage:
                 usage["raw_task"] = {
@@ -2359,7 +2379,7 @@ class MediaGenerationService:
                     "status": raw_payload.get("status") or raw_payload.get("state"),
                     "model": raw_payload.get("model"),
                 }
-            return usage
+            return _with_raw(usage, raw_payload)
 
         is_kie = _is_kie_record_info_endpoint(endpoint, provider_l)
         endpoint_candidates = [endpoint] if endpoint else []
@@ -2435,7 +2455,7 @@ class MediaGenerationService:
                 stable_task_id,
                 exc,
             )
-            return {}
+            return _with_raw({}, raw_payload) if include_raw_response else {}
 
         usage = _normalize_provider_task_usage(_extract_provider_task_usage(raw_payload))
         if usage or not refresh_if_missing:
@@ -2446,7 +2466,7 @@ class MediaGenerationService:
                     "status": data_obj.get("state") or raw_payload.get("status") or raw_payload.get("state"),
                     "model": data_obj.get("model") or raw_payload.get("model"),
                 }
-            return usage
+            return _with_raw(usage, raw_payload)
 
         try:
             time.sleep(0.5)
@@ -2473,7 +2493,333 @@ class MediaGenerationService:
                 "status": data_obj.get("state") or raw_payload.get("status") or raw_payload.get("state"),
                 "model": data_obj.get("model") or raw_payload.get("model"),
             }
-        return usage
+        return _with_raw(usage, raw_payload)
+
+    def fetch_provider_task_result(
+        self,
+        *,
+        task_id: str,
+        api_key: str,
+        query_endpoint: Optional[str] = None,
+        provider: Optional[str] = None,
+        kind: str = "image",
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """One-shot provider task query for timeout/callback-supplement recovery.
+
+        Returns ``{url, status, raw, metadata}`` when a media URL is ready,
+        ``{status, raw, pending: True}`` while still running, or ``{error, ...}``.
+        """
+        stable_task_id = str(task_id or "").strip()
+        stable_key = str(api_key or "").strip()
+        if not stable_task_id or not stable_key:
+            return {"error": "missing_task_id_or_api_key"}
+
+        provider_l = str(provider or "").strip().lower()
+        kind_l = str(kind or "image").strip().lower() or "image"
+        endpoint = str(query_endpoint or "").strip()
+        base = str(base_url or "").strip().rstrip("/")
+
+        # ark-seedance stores AK:SK:EP_TOKEN; Ark HTTP APIs expect Bearer EP_TOKEN only.
+        if (
+            stable_key.count(":") >= 2
+            and ("ark" in provider_l or "seedance" in provider_l or "volc" in provider_l or "doubao" in provider_l)
+        ):
+            ep_token = stable_key.split(":", 2)[2].strip()
+            if ":" in ep_token:
+                ep_token = ep_token.split(":", 1)[0].strip()
+            if ep_token:
+                stable_key = ep_token
+
+        headers = {"Authorization": f"Bearer {stable_key}", "Content-Type": "application/json"}
+
+        def _normalize_status(value: Any) -> str:
+            text = str(value or "").strip().lower()
+            if text in {"success", "succeeded", "completed", "done", "finish", "finished", "complete", "successed"}:
+                return "succeeded"
+            if text in {"fail", "failed", "error"}:
+                return "failed"
+            if text in {"canceled", "cancelled"}:
+                return "canceled"
+            if text in {
+                "waiting",
+                "queued",
+                "queuing",
+                "processing",
+                "running",
+                "generating",
+                "pending",
+                "submitted",
+                "in_progress",
+                "in-progress",
+            }:
+                return "running"
+            return text
+
+        def _pick_url(payload: Any) -> str:
+            from app.services.generation_runtime.job_store import _extract_job_result_url
+
+            found = str(_extract_job_result_url(payload) or "").strip()
+            if found:
+                return found
+            urls = self._extract_urls_from_payload(payload)
+            if not urls:
+                return ""
+            if kind_l in {"video", "audio"}:
+                for url in urls:
+                    lower = url.lower()
+                    if any(token in lower for token in (".mp4", ".mov", ".webm", "video/", ".mp3", "audio/")):
+                        return url
+            return urls[0]
+
+        def _pack(raw: Dict[str, Any], *, status: str = "", url: str = "", pending: bool = False, error: str = "") -> Dict[str, Any]:
+            out: Dict[str, Any] = {
+                "raw": raw if isinstance(raw, dict) else {},
+                "status": status or None,
+                "metadata": {
+                    "task_id": stable_task_id,
+                    "taskId": stable_task_id,
+                    "provider": provider_l or None,
+                    "query_endpoint": endpoint or None,
+                    "timeout_poll_recovery": True,
+                },
+            }
+            if url:
+                out["url"] = url
+                out["status"] = status or "succeeded"
+            if pending:
+                out["pending"] = True
+            if error:
+                out["error"] = error
+            return out
+
+        is_runninghub = (
+            "runninghub" in provider_l
+            or "runninghub.cn" in str(endpoint or "").lower()
+            or "/openapi/v2/query" in str(endpoint or "").lower()
+        )
+        is_grsai = "grsai" in provider_l or "dakka.com" in str(endpoint or base or "").lower()
+        is_kie = _is_kie_record_info_endpoint(endpoint, provider_l) or (
+            "kie" in provider_l and not is_runninghub and not is_grsai
+        )
+        is_ark = (
+            "ark" in provider_l
+            or "seedance" in provider_l
+            or "volces.com" in str(endpoint or base or "").lower()
+            or "/contents/generations/tasks" in str(endpoint or "").lower()
+        )
+
+        try:
+            raw_payload: Dict[str, Any] = {}
+
+            if is_runninghub:
+                if not endpoint:
+                    endpoint = "https://www.runninghub.cn/openapi/v2/query"
+                elif endpoint.startswith("/"):
+                    endpoint = f"{base or 'https://www.runninghub.cn'}{endpoint}"
+
+                def _rh_post(use_proxy: bool = True):
+                    kwargs = {
+                        "headers": headers,
+                        "json": {"taskId": stable_task_id},
+                        "timeout": 30,
+                        "verify": False,
+                    }
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.post(endpoint, **kwargs)
+
+                try:
+                    resp = _rh_post(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _rh_post(False)
+                if resp is None or getattr(resp, "status_code", None) != 200:
+                    return {"error": f"runninghub_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "runninghub_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "runninghub_invalid_payload"}
+
+                data_obj = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
+                status = _normalize_status(
+                    raw_payload.get("status")
+                    or raw_payload.get("state")
+                    or data_obj.get("status")
+                    or data_obj.get("state")
+                )
+                url = _pick_url(raw_payload)
+                if url and status not in {"failed", "canceled"}:
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"}:
+                    return _pack(raw_payload, status=status, error=status)
+                return _pack(raw_payload, status=status or "running", pending=True)
+
+            if is_grsai:
+                poll_url = endpoint
+                if not poll_url or "recordInfo" in poll_url or "record-info" in poll_url:
+                    root = base
+                    if not root and endpoint:
+                        root = re.sub(r"/v1/(draw|video).*$", "", endpoint, flags=re.IGNORECASE)
+                        root = re.sub(r"/v1/?$", "", root).rstrip("/")
+                    if not root:
+                        root = "https://grsaiapi.com"
+                    poll_url = f"{root}/v1/draw/result"
+                endpoint = poll_url
+
+                def _grsai_post(use_proxy: bool = True):
+                    kwargs = {
+                        "headers": headers,
+                        "json": {"id": stable_task_id},
+                        "timeout": (10, 30),
+                        "verify": False,
+                    }
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    return requests.post(poll_url, **kwargs)
+
+                try:
+                    resp = _grsai_post(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _grsai_post(False)
+                if resp is None or getattr(resp, "status_code", None) != 200:
+                    return {"error": f"grsai_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "grsai_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "grsai_invalid_payload"}
+
+                data_block = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else raw_payload
+                status = _normalize_status(
+                    (data_block.get("status") if isinstance(data_block, dict) else None)
+                    or raw_payload.get("status")
+                )
+                url = _pick_url(raw_payload)
+                if url and status not in {"failed", "canceled"}:
+                    if oss_storage_service.is_managed_url(url):
+                        url = str(oss_storage_service.refresh_url(url) or url)
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"}:
+                    return _pack(raw_payload, status=status, error=status)
+                return _pack(raw_payload, status=status or "running", pending=True)
+
+            if is_kie:
+                if not endpoint:
+                    endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
+                endpoint_candidates = [endpoint]
+                if "/recordInfo" in endpoint:
+                    endpoint_candidates.append(endpoint.replace("/recordInfo", "/record-info"))
+                elif "/record-info" in endpoint:
+                    endpoint_candidates.append(endpoint.replace("/record-info", "/recordInfo"))
+
+                def _kie_get(use_proxy: bool = True):
+                    kwargs = {"headers": headers, "timeout": 45, "verify": False}
+                    if not use_proxy:
+                        kwargs["proxies"] = {"http": None, "https": None}
+                    last_resp = None
+                    param_candidates = (
+                        {"taskId": stable_task_id},
+                        {"task_id": stable_task_id},
+                        {"id": stable_task_id},
+                    )
+                    for url in endpoint_candidates:
+                        for params in param_candidates:
+                            try:
+                                resp = requests.get(url, params=params, **kwargs)
+                                last_resp = resp
+                                if getattr(resp, "status_code", None) == 200:
+                                    return resp
+                            except Exception:
+                                continue
+                    return last_resp
+
+                try:
+                    resp = _kie_get(True)
+                except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                    resp = _kie_get(False)
+                if resp is None or getattr(resp, "status_code", None) != 200:
+                    return {"error": f"kie_http_{getattr(resp, 'status_code', None)}"}
+                try:
+                    raw_payload = resp.json() if resp.content else {}
+                except Exception:
+                    return {"error": "kie_invalid_json"}
+                if not isinstance(raw_payload, dict):
+                    return {"error": "kie_invalid_payload"}
+                if raw_payload and not _kie_response_looks_successful(raw_payload):
+                    # Still try URL extraction; some deployments return non-200 business codes.
+                    pass
+
+                record_raw = raw_payload.get("data") or raw_payload.get("result") or raw_payload
+                if isinstance(record_raw, list):
+                    record = record_raw[0] if (record_raw and isinstance(record_raw[0], dict)) else {}
+                elif isinstance(record_raw, dict):
+                    record = record_raw
+                else:
+                    record = {}
+                status = _normalize_status(
+                    record.get("state") or record.get("status") or raw_payload.get("state") or raw_payload.get("status")
+                )
+                url = _pick_url(record.get("resultJson") if isinstance(record, dict) else None) or _pick_url(record) or _pick_url(raw_payload)
+                if url and status not in {"failed", "canceled"}:
+                    return _pack(raw_payload, status="succeeded", url=url)
+                if status in {"failed", "canceled"}:
+                    return _pack(raw_payload, status=status, error=status)
+                return _pack(raw_payload, status=status or "running", pending=True)
+
+            # Ark / Seedance / generic GET {endpoint}/{task_id}
+            if not endpoint:
+                if is_ark:
+                    endpoint = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+                elif base:
+                    endpoint = base
+                else:
+                    return {"error": "missing_query_endpoint"}
+            endpoint = self._normalize_doubao_video_tasks_endpoint(endpoint)
+            target_url = f"{endpoint.rstrip('/')}/{urllib.parse.quote(stable_task_id)}"
+
+            def _generic_get(use_proxy: bool = True):
+                kwargs = {"headers": headers, "timeout": 30, "verify": False}
+                if not use_proxy:
+                    kwargs["proxies"] = {"http": None, "https": None}
+                return requests.get(target_url, **kwargs)
+
+            try:
+                resp = _generic_get(True)
+            except (requests.exceptions.ProxyError, requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+                resp = _generic_get(False)
+            if resp is None or getattr(resp, "status_code", None) != 200:
+                return {"error": f"provider_http_{getattr(resp, 'status_code', None)}"}
+            try:
+                raw_payload = resp.json() if resp.content else {}
+            except Exception:
+                return {"error": "provider_invalid_json"}
+            if not isinstance(raw_payload, dict):
+                return {"error": "provider_invalid_payload"}
+
+            data_obj = raw_payload.get("data") if isinstance(raw_payload.get("data"), dict) else {}
+            status = _normalize_status(
+                raw_payload.get("status")
+                or raw_payload.get("state")
+                or data_obj.get("status")
+                or data_obj.get("state")
+            )
+            url = _pick_url(raw_payload)
+            if url and status not in {"failed", "canceled"}:
+                return _pack(raw_payload, status="succeeded", url=url)
+            if status in {"failed", "canceled"}:
+                return _pack(raw_payload, status=status, error=status)
+            return _pack(raw_payload, status=status or "running", pending=True)
+        except Exception as exc:
+            logger.warning(
+                "[TimeoutPoll] provider task result query failed | provider=%s task_id=%s error=%s",
+                provider_l or None,
+                stable_task_id,
+                exc,
+            )
+            return {"error": str(exc)}
 
     def _finalize_kie_poll_metadata(
         self,

@@ -72,6 +72,22 @@ def _prune_generation_callback_locked() -> None:
             GENERATION_CALLBACK_STORE.pop(ticket, None)
 
 
+def _generation_callback_payload_priority(payload: Dict[str, Any]) -> int:
+    """Higher = more authoritative. Prevents running from clobbering succeeded."""
+    if not isinstance(payload, dict):
+        return 0
+    status_raw = str(payload.get("status") or "").strip() or _extract_callback_status(payload)
+    status = _normalize_generation_status(status_raw)
+    has_url = bool(_extract_job_result_url(payload))
+    if status == "succeeded" or has_url:
+        return 3
+    if status in {"failed", "canceled"}:
+        return 2
+    if status == "running":
+        return 1
+    return 0
+
+
 def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> None:
     stable_ticket = str(ticket or "").strip()
     if not stable_ticket:
@@ -88,6 +104,19 @@ def _set_generation_callback_payload(ticket: str, payload: Dict[str, Any]) -> No
 
     with GENERATION_CALLBACK_LOCK:
         _prune_generation_callback_locked()
+        existing = GENERATION_CALLBACK_STORE.get(stable_ticket) or {}
+        existing_payload = existing.get("payload") if isinstance(existing.get("payload"), dict) else {}
+        if existing_payload:
+            existing_rank = _generation_callback_payload_priority(existing_payload)
+            new_rank = _generation_callback_payload_priority(normalized_payload)
+            if new_rank < existing_rank:
+                logger.info(
+                    "[GenerationCallback] ignore lower-priority overwrite | ticket=%s existing_status=%s new_status=%s",
+                    stable_ticket,
+                    existing_payload.get("status"),
+                    normalized_payload.get("status"),
+                )
+                return
         GENERATION_CALLBACK_STORE[stable_ticket] = dict(callback_record)
 
     _write_generation_callback_file(stable_ticket, callback_record)
@@ -166,6 +195,20 @@ def _extract_callback_task_id(payload: Dict[str, Any]) -> str:
                     normalized = str(value or "").strip()
                     if normalized:
                         return normalized
+
+    event_data = payload.get("eventData")
+    if isinstance(event_data, dict):
+        nested_candidates = (
+            event_data.get("id"),
+            event_data.get("task_id"),
+            event_data.get("taskId"),
+            event_data.get("job_id"),
+            event_data.get("jobId"),
+        )
+        for value in nested_candidates:
+            normalized = str(value or "").strip()
+            if normalized:
+                return normalized
 
     return ""
 
@@ -1232,6 +1275,13 @@ def _settle_or_cancel_image_job_billing_from_callback(
             or billing_context.get("model")
             or ""
         ).strip() or None
+        callback_usage: Dict[str, Any] = {}
+        try:
+            from app.services.media_service import _extract_provider_task_usage, _normalize_provider_task_usage
+
+            callback_usage = _normalize_provider_task_usage(_extract_provider_task_usage(callback_payload))
+        except Exception:
+            callback_usage = {}
         if is_token_billing:
             settle_details = {
                 "input_tokens": int(billing_context.get("input_tokens") or 0),
@@ -1241,6 +1291,26 @@ def _settle_or_cancel_image_job_billing_from_callback(
                 "billing_mode": "ACTUAL",
                 "token_source": "estimate",
             }
+            try:
+                from app.services.model_invocation_billing import _resolve_usage_token_total
+
+                actual_tokens = int(_resolve_usage_token_total(callback_usage) or 0)
+            except Exception:
+                actual_tokens = 0
+            if actual_tokens > 0:
+                settle_details["total_tokens"] = actual_tokens
+                settle_details["output_tokens"] = int(
+                    callback_usage.get("completion_tokens")
+                    or callback_usage.get("output_tokens")
+                    or actual_tokens
+                )
+                settle_details["completion_tokens"] = settle_details["output_tokens"]
+                settle_details["token_source"] = "api_usage"
+                settle_details["usage_source"] = "callback"
+                settle_details["provider_usage"] = callback_usage
+                settle_details["billing_basis"] = "provider_tokens"
+            else:
+                settle_details["usage_source"] = "callback_no_usage"
         else:
             settle_details = {
                 "item": "image",
@@ -1253,6 +1323,9 @@ def _settle_or_cancel_image_job_billing_from_callback(
             ar = str(billing_context.get("aspect_ratio") or job.get("aspect_ratio") or "").strip()
             if ar:
                 settle_details["aspect_ratio"] = ar
+            if callback_usage:
+                settle_details["provider_usage"] = callback_usage
+                settle_details["usage_source"] = "callback"
         if provider:
             settle_details["provider"] = provider
         if model:
@@ -2304,6 +2377,7 @@ def _mark_generation_callback_inflight(ticket: str) -> bool:
         ]
         for key in stale:
             GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(key, None)
+            GENERATION_CALLBACK_ASYNC_REPROCESS.discard(key)
         if len(GENERATION_CALLBACK_ASYNC_INFLIGHT) > GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS:
             ordered = sorted(
                 GENERATION_CALLBACK_ASYNC_INFLIGHT.items(),
@@ -2312,10 +2386,33 @@ def _mark_generation_callback_inflight(ticket: str) -> bool:
             overflow = len(GENERATION_CALLBACK_ASYNC_INFLIGHT) - GENERATION_CALLBACK_ASYNC_INFLIGHT_MAX_ITEMS
             for key, _ in ordered[:overflow]:
                 GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(key, None)
+                GENERATION_CALLBACK_ASYNC_REPROCESS.discard(key)
         if stable_ticket in GENERATION_CALLBACK_ASYNC_INFLIGHT:
             return False
         GENERATION_CALLBACK_ASYNC_INFLIGHT[stable_ticket] = now_ts
     return True
+
+
+def _mark_generation_callback_reprocess(ticket: str) -> None:
+    """Queue another finalize pass after the current in-flight one finishes."""
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return
+    with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
+        GENERATION_CALLBACK_ASYNC_REPROCESS.add(stable_ticket)
+
+
+def _finish_generation_callback_inflight(ticket: str) -> bool:
+    """Clear inflight. Return True when a newer callback arrived and needs reprocess."""
+    stable_ticket = str(ticket or "").strip()
+    if not stable_ticket:
+        return False
+    with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
+        GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(stable_ticket, None)
+        if stable_ticket in GENERATION_CALLBACK_ASYNC_REPROCESS:
+            GENERATION_CALLBACK_ASYNC_REPROCESS.discard(stable_ticket)
+            return True
+        return False
 
 
 def _clear_generation_callback_inflight(ticket: str) -> None:
@@ -2324,6 +2421,7 @@ def _clear_generation_callback_inflight(ticket: str) -> None:
         return
     with GENERATION_CALLBACK_ASYNC_INFLIGHT_LOCK:
         GENERATION_CALLBACK_ASYNC_INFLIGHT.pop(stable_ticket, None)
+        GENERATION_CALLBACK_ASYNC_REPROCESS.discard(stable_ticket)
 
 
 def _mark_image_callback_persist_inflight(job_id: str) -> bool:
@@ -2418,14 +2516,37 @@ async def _process_generation_callback_async(ticket: str, payload: Dict[str, Any
             asyncio.run(_finalize_image_jobs_from_provider_callback(stable_ticket))
             asyncio.run(_finalize_video_jobs_from_provider_callback(stable_ticket))
 
+    # Seed only when store is empty. Never re-write a newer callback (e.g. succeeded)
+    # with a stale snapshot captured when this task was first scheduled (e.g. running).
+    seed_payload = payload if isinstance(payload, dict) else {}
+    # Caller already marked inflight before scheduling this task.
+    owns_inflight = True
     try:
-        async with GENERATION_CALLBACK_FINALIZE_SEMAPHORE:
-            await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, payload)
-            await asyncio.to_thread(_run_callback_finalizers)
-    except Exception:
-        logger.exception("[GenerationCallback] async finalize failed | ticket=%s", stable_ticket)
+        while owns_inflight:
+            try:
+                async with GENERATION_CALLBACK_FINALIZE_SEMAPHORE:
+                    latest = await asyncio.to_thread(_get_generation_callback_payload, stable_ticket)
+                    if not latest and seed_payload:
+                        await asyncio.to_thread(_set_generation_callback_payload, stable_ticket, seed_payload)
+                    await asyncio.to_thread(_run_callback_finalizers)
+            except Exception:
+                logger.exception("[GenerationCallback] async finalize failed | ticket=%s", stable_ticket)
+
+            if not _finish_generation_callback_inflight(stable_ticket):
+                owns_inflight = False
+                return
+            owns_inflight = _mark_generation_callback_inflight(stable_ticket)
+            if not owns_inflight:
+                # Another worker already claimed the reprocess.
+                return
+            seed_payload = {}
+            logger.info(
+                "[GenerationCallback] reprocessing after newer callback arrived in-flight | ticket=%s",
+                stable_ticket,
+            )
     finally:
-        _clear_generation_callback_inflight(stable_ticket)
+        if owns_inflight:
+            _clear_generation_callback_inflight(stable_ticket)
 
 
 

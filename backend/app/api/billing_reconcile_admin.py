@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -121,7 +121,10 @@ class BillingReconcileSingleOut(BaseModel):
     error: Optional[str] = None
     provider: Optional[str] = None
     task_id: Optional[str] = None
+    query_endpoint: Optional[str] = None
+    system_api_id: Optional[int] = None
     usage: Optional[Dict[str, Any]] = None
+    raw_response: Optional[Dict[str, Any]] = None
 
 @router.post("/admin/billing-reconcile/single", response_model=BillingReconcileSingleOut)
 def post_billing_reconcile_single(

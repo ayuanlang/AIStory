@@ -89,21 +89,40 @@ def _has_actual_supplier_usage(
     if basis == "provider_kie_credits":
         return True
 
+    nested_usage = usage.get("provider_usage") if isinstance(usage.get("provider_usage"), dict) else {}
+    nested_details = details.get("provider_usage") if isinstance(details.get("provider_usage"), dict) else {}
+    # Nested callback/query usage (e.g. Ark Seedance usage.completion_tokens) counts as actual.
+    nested_kie = resolve_provider_kie_credits(nested_usage) or resolve_provider_kie_credits(nested_details)
+    if nested_kie > 0:
+        return True
+
     token_source = str(usage.get("token_source") or details.get("token_source") or "").strip().lower()
+    usage_source = str(usage.get("usage_source") or details.get("usage_source") or "").strip().lower()
     total_tokens = _safe_int_tokens(
         usage.get("total_tokens")
         or usage.get("completion_tokens")
         or usage.get("output_tokens")
         or details.get("actual_total_tokens")
         or details.get("total_tokens")
+        or details.get("completion_tokens")
+        or nested_usage.get("total_tokens")
+        or nested_usage.get("completion_tokens")
+        or nested_usage.get("output_tokens")
+        or nested_details.get("total_tokens")
+        or nested_details.get("completion_tokens")
+        or nested_details.get("output_tokens")
     )
-    if token_source == "api_usage" and total_tokens > 0:
-        return True
+    if total_tokens > 0 and token_source != "estimate":
+        if token_source == "api_usage":
+            return True
+        # Callback often stores tokens under provider_usage without token_source stamp.
+        if nested_usage or nested_details:
+            return True
+        if usage_source in {"callback", "provider", "task_query", "reconcile"}:
+            return True
 
     if _has_runninghub_supplier_cost(usage) or _has_runninghub_supplier_cost(details):
         return True
-    nested_usage = usage.get("provider_usage") if isinstance(usage.get("provider_usage"), dict) else {}
-    nested_details = details.get("provider_usage") if isinstance(details.get("provider_usage"), dict) else {}
     if _has_runninghub_supplier_cost(nested_usage) or _has_runninghub_supplier_cost(nested_details):
         return True
 
@@ -197,6 +216,20 @@ def _scan_job_dirs_for_task(reservation_tx_id: Optional[int]) -> Dict[str, Any]:
     return {}
 
 
+def _first_api_key_from_value(value: Any) -> str:
+    if isinstance(value, str):
+        raw = value.strip()
+        return raw.split(",")[0].strip() if raw else ""
+    if isinstance(value, dict):
+        return _first_api_key_from_value(value.get("api_key") or value.get("key") or "")
+    if isinstance(value, list):
+        for item in value:
+            found = _first_api_key_from_value(item)
+            if found:
+                return found
+    return ""
+
+
 def _resolve_system_api_credentials(
     db: Session,
     *,
@@ -211,47 +244,89 @@ def _resolve_system_api_credentials(
         sid = 0
     if sid > 0:
         row = db.query(SystemAPISetting).filter(SystemAPISetting.id == sid).first()
-    if row is None and provider:
-        provider_l = str(provider or "").strip().lower()
-        candidates = (
+    provider_l = str(provider or "").strip().lower()
+    if row is None and provider_l:
+        # Exact provider match first (do not limit to recent N rows — older
+        # providers like ark-seedance can fall outside a fixed window).
+        exact_rows = (
             db.query(SystemAPISetting)
             .filter(SystemAPISetting.provider.isnot(None))
             .order_by(SystemAPISetting.id.desc())
-            .limit(60)
             .all()
         )
-        for candidate in candidates:
+        for candidate in exact_rows:
             provider_text = str(getattr(candidate, "provider", "") or "").strip().lower()
-            base_url = str(getattr(candidate, "base_url", "") or "").strip().lower()
-            if not provider_text and not base_url:
-                continue
-            if provider_l and (
-                provider_text == provider_l
-                or provider_text.startswith(provider_l + "/")
-                or provider_l.startswith(provider_text)
-                or ("kie" in provider_l and (provider_text.startswith("kie") or "kie.ai" in base_url))
-            ):
+            if provider_text == provider_l and _first_api_key_from_value(getattr(candidate, "api_key", None)):
                 row = candidate
                 break
-    if row is None:
-        return "", "", None
-    raw_key = str(getattr(row, "api_key", "") or "").strip()
-    api_key = raw_key.split(",")[0].strip() if raw_key else ""
-    conf = getattr(row, "config", None)
+        if row is None:
+            for candidate in exact_rows:
+                provider_text = str(getattr(candidate, "provider", "") or "").strip().lower()
+                base_url = str(getattr(candidate, "base_url", "") or "").strip().lower()
+                if not provider_text and not base_url:
+                    continue
+                if (
+                    provider_text.startswith(provider_l + "/")
+                    or provider_l.startswith(provider_text + "/")
+                    or provider_l.startswith(provider_text)
+                    or ("kie" in provider_l and (provider_text.startswith("kie") or "kie.ai" in base_url))
+                    or (
+                        ("ark" in provider_l or "seedance" in provider_l)
+                        and ("ark" in provider_text or "seedance" in provider_text or "volces.com" in base_url)
+                    )
+                ):
+                    if _first_api_key_from_value(getattr(candidate, "api_key", None)):
+                        row = candidate
+                        break
+
+    api_key = ""
     query_endpoint = ""
-    if isinstance(conf, dict):
-        query_endpoint = str(conf.get("query_endpoint") or "").strip()
-    if not query_endpoint:
-        query_endpoint = str(getattr(row, "base_url", "") or "").strip()
-    if _provider_is_kie(getattr(row, "provider", None)) and not query_endpoint:
+    resolved_id: Optional[int] = None
+    if row is not None:
+        api_key = _first_api_key_from_value(getattr(row, "api_key", None))
+        conf = getattr(row, "config", None)
+        if isinstance(conf, dict):
+            query_endpoint = str(conf.get("query_endpoint") or "").strip()
+        if not query_endpoint:
+            query_endpoint = str(getattr(row, "base_url", "") or "").strip()
+        resolved_id = int(getattr(row, "id", 0) or 0) or None
+
+    # Fallback: provider key pool (same source used by generation runtime).
+    if not api_key and provider_l:
+        try:
+            from app.models.all_models import ProviderKeyPool
+
+            pool = (
+                db.query(ProviderKeyPool)
+                .filter(ProviderKeyPool.provider.isnot(None))
+                .all()
+            )
+            for candidate in pool:
+                if str(getattr(candidate, "provider", "") or "").strip().lower() != provider_l:
+                    continue
+                api_key = _first_api_key_from_value(getattr(candidate, "api_keys", None))
+                if api_key:
+                    break
+        except Exception:
+            pass
+
+    if not api_key and row is None:
+        return "", "", None
+
+    provider_text = str(getattr(row, "provider", None) or provider_l or "").strip().lower()
+    base_url = str(getattr(row, "base_url", "") or "").strip().rstrip("/") if row is not None else ""
+    if _provider_is_kie(provider_text or provider_l) and not query_endpoint:
         query_endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
-    provider_text = str(getattr(row, "provider", "") or "").strip().lower()
-    base_url = str(getattr(row, "base_url", "") or "").strip().rstrip("/")
     if ("runninghub" in provider_text or "runninghub.cn" in base_url.lower()) and not query_endpoint:
         query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
     elif query_endpoint.startswith("/") and ("runninghub" in provider_text or "runninghub" in base_url.lower()):
         query_endpoint = f"{base_url or 'https://www.runninghub.cn'}{query_endpoint}"
-    return api_key, query_endpoint, int(getattr(row, "id", 0) or 0) or None
+    if (
+        not query_endpoint
+        and ("ark" in provider_text or "seedance" in provider_text or "ark" in provider_l or "seedance" in provider_l)
+    ):
+        query_endpoint = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+    return api_key, query_endpoint, resolved_id
 
 
 def find_reconcile_candidates(
@@ -643,10 +718,18 @@ def summarize_reconcile_candidate(action: TransactionAction, history: Optional[T
         if str(usage.get("billing_basis") or details.get("billing_basis") or "") != "provider_kie_credits":
             missing_reasons.append("missing_kie_credits")
     token_source = str(usage.get("token_source") or details.get("token_source") or "").strip().lower()
+    nested_usage = usage.get("provider_usage") if isinstance(usage.get("provider_usage"), dict) else {}
+    nested_details = details.get("provider_usage") if isinstance(details.get("provider_usage"), dict) else {}
     total_tokens = _safe_int_tokens(
         usage.get("total_tokens")
         or details.get("actual_total_tokens")
         or details.get("total_tokens")
+        or usage.get("completion_tokens")
+        or details.get("completion_tokens")
+        or nested_usage.get("total_tokens")
+        or nested_usage.get("completion_tokens")
+        or nested_details.get("total_tokens")
+        or nested_details.get("completion_tokens")
     )
     if token_source == "estimate" or (total_tokens <= 0 and token_source != "api_usage"):
         missing_reasons.append("missing_api_tokens")
@@ -856,23 +939,45 @@ def run_billing_reconcile_single(provider: str, task_id: str) -> Dict[str, Any]:
             query_endpoint = "https://api.kie.ai/api/v1/jobs/recordInfo"
         if "runninghub" in provider.lower() and not query_endpoint:
             query_endpoint = "https://www.runninghub.cn/openapi/v2/query"
+        if (
+            not query_endpoint
+            and ("ark" in provider.lower() or "seedance" in provider.lower())
+        ):
+            query_endpoint = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
 
         if not api_key:
             return {"ok": False, "error": "No api_key found for provider"}
 
-        usage = media_service.fetch_provider_task_usage(
+        fetched = media_service.fetch_provider_task_usage(
             task_id=task_id,
             api_key=api_key,
             query_endpoint=query_endpoint or None,
             provider=provider,
             refresh_if_missing=True,
+            include_raw_response=True,
         )
-        if not usage:
-            return {"ok": False, "error": "No usage or task found from provider"}
+        raw_response = fetched.get("raw_response") if isinstance(fetched, dict) else None
+        usage = {
+            k: v
+            for k, v in (fetched.items() if isinstance(fetched, dict) else [])
+            if k != "raw_response"
+        }
+        if not usage and not (isinstance(raw_response, dict) and raw_response):
+            return {
+                "ok": False,
+                "error": "No usage or task found from provider",
+                "provider": provider,
+                "task_id": task_id,
+                "query_endpoint": query_endpoint or None,
+                "system_api_id": resolved_api_id,
+            }
 
         return {
             "ok": True,
             "provider": provider,
             "task_id": task_id,
-            "usage": usage
+            "query_endpoint": query_endpoint or None,
+            "system_api_id": resolved_api_id,
+            "usage": usage or None,
+            "raw_response": raw_response if isinstance(raw_response, dict) else None,
         }

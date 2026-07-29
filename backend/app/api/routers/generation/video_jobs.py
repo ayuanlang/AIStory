@@ -223,10 +223,28 @@ async def receive_generation_callback(ticket: str, request: Request, response: R
         payload_result_url or None,
         getattr(getattr(request, "client", None), "host", None),
     )
+    # Progress-only callbacks (running/queued/...) have nothing to finalize and must not
+    # hold the per-ticket inflight lock — otherwise a later succeeded callback can be
+    # ACK'd, stored, then never finalized (or overwritten by the stale running snapshot).
+    is_progress_only = payload_status == "running" and not payload_result_url
+    if is_progress_only:
+        logger.info(
+            "[GenerationCallback] intermediate status stored without finalize | ticket=%s status=%s task_id=%s",
+            stable_ticket,
+            payload_status or None,
+            callback_task_id or None,
+        )
+        return {"ok": True, "ticket": stable_ticket, "accepted": True}
+
     if _mark_generation_callback_inflight(stable_ticket):
         asyncio.create_task(_process_generation_callback_async(stable_ticket, payload if isinstance(payload, dict) else {}))
     else:
-        logger.info("[GenerationCallback] duplicate callback acknowledged while finalize in-flight | ticket=%s", stable_ticket)
+        _mark_generation_callback_reprocess(stable_ticket)
+        logger.info(
+            "[GenerationCallback] duplicate callback queued for reprocess while finalize in-flight | ticket=%s status=%s",
+            stable_ticket,
+            payload_status or None,
+        )
     return {"ok": True, "ticket": stable_ticket, "accepted": True}
 
 
@@ -514,4 +532,174 @@ def get_generate_video_job_status(
         "result": job.get("result"),
     }
 
+
+class VideoJobProviderTaskQueryRequest(BaseModel):
+    apply_recovery: bool = False
+
+
+@router.post("/generate/video/jobs/{job_id}/query-provider-task")
+def query_video_job_provider_task(
+    job_id: str,
+    response: Response,
+    req: Optional[VideoJobProviderTaskQueryRequest] = None,
+    current_claims: Dict[str, Any] = Depends(get_current_claims),
+):
+    """Query upstream provider task API for a video job.
+
+    When apply_recovery=true and the provider task already succeeded, reuse the
+    timeout-poll recovery path to download the file and persist to OSS / bind shot.
+    """
+    _apply_no_store_headers(response)
+    apply_recovery = bool(getattr(req, "apply_recovery", False)) if req is not None else False
+    stable_job_id = str(job_id or "").strip()
+    if not stable_job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+
+    with VIDEO_JOB_LOCK:
+        job = dict(VIDEO_JOB_STORE.get(stable_job_id) or {})
+    if not job:
+        file_job = _read_video_job_file(stable_job_id)
+        if file_job:
+            job = dict(file_job)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = _hydrate_video_job_record(stable_job_id, job)
+
+    owner_id = job.get("user_id")
+    owner_username = str(job.get("username") or "").strip().lower()
+    current_user_id = current_claims.get("user_id")
+    current_username = str(current_claims.get("username") or "").strip().lower()
+    is_superuser = bool(current_claims.get("is_superuser"))
+    try:
+        safe_cid = int(current_user_id) if current_user_id is not None else -1
+        safe_oid = int(owner_id) if owner_id is not None else -2
+    except Exception:
+        safe_cid = -1
+        safe_oid = -2
+    is_owner = (safe_cid == safe_oid and safe_oid > 0) or (owner_username and owner_username == current_username)
+    if not is_superuser and not is_owner:
+        raise HTTPException(status_code=403, detail="Not allowed to query this job")
+
+    from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+    from app.services.generation_runtime.job_store import _extract_job_result_url
+    from app.services.generation_runtime.timeout_poll_recovery import (
+        _apply_poll_success,
+        _hydrate_job,
+        _resolve_poll_credentials,
+    )
+    from app.services.media_service import media_service
+
+    provider_task_id = _extract_job_provider_task_id(job)
+    if not provider_task_id:
+        raise HTTPException(
+            status_code=400,
+            detail="provider_task_id not available yet for this job",
+        )
+
+    api_key, query_endpoint, provider, base_url = _resolve_poll_credentials(job)
+    if not api_key:
+        raise HTTPException(status_code=400, detail=f"No api_key found for provider {provider or '-'}")
+
+    # Usage + full raw payload for admin/debug display.
+    fetched = media_service.fetch_provider_task_usage(
+        task_id=provider_task_id,
+        api_key=api_key,
+        query_endpoint=query_endpoint or None,
+        provider=provider or None,
+        refresh_if_missing=True,
+        include_raw_response=True,
+    )
+    raw_response = fetched.get("raw_response") if isinstance(fetched, dict) else None
+    usage = {
+        k: v
+        for k, v in (fetched.items() if isinstance(fetched, dict) else [])
+        if k != "raw_response"
+    }
+
+    # Result URL / status for download+OSS recovery (same path as timeout poll).
+    poll_result = media_service.fetch_provider_task_result(
+        task_id=provider_task_id,
+        api_key=api_key,
+        query_endpoint=query_endpoint or None,
+        provider=provider or None,
+        kind="video",
+        base_url=base_url or None,
+    )
+    if not isinstance(poll_result, dict):
+        poll_result = {}
+    if not (isinstance(raw_response, dict) and raw_response) and isinstance(poll_result.get("raw"), dict):
+        raw_response = poll_result.get("raw")
+
+    if not usage and not (isinstance(raw_response, dict) and raw_response) and not poll_result.get("url"):
+        raise HTTPException(status_code=404, detail="No response from provider task query")
+
+    provider_status = str(poll_result.get("status") or "").strip() or None
+    if not provider_status and isinstance(raw_response, dict):
+        data_obj = raw_response.get("data") if isinstance(raw_response.get("data"), dict) else {}
+        provider_status = (
+            raw_response.get("status")
+            or raw_response.get("state")
+            or data_obj.get("state")
+            or data_obj.get("status")
+        )
+    provider_status_l = str(provider_status or "").strip().lower()
+    result_url = str(poll_result.get("url") or "").strip()
+    existing_result_url = str(_extract_job_result_url(job.get("result")) or "").strip()
+    can_recover = bool(
+        result_url
+        and provider_status_l in {
+            "succeeded",
+            "success",
+            "completed",
+            "done",
+            "finish",
+            "finished",
+            "complete",
+        }
+    )
+
+    recovery_applied = False
+    recovery_skipped_reason = None
+    if can_recover and apply_recovery:
+        # Reuse timeout-poll success path: download remote file → OSS → bind shot.
+        try:
+            recovery_applied = bool(_apply_poll_success("video", stable_job_id, job, poll_result))
+            if not recovery_applied:
+                recovery_skipped_reason = "recovery_apply_returned_false"
+        except Exception as exc:
+            logger.exception(
+                "[VideoJob] query-provider-task recovery failed | job_id=%s task_id=%s error=%s",
+                stable_job_id,
+                provider_task_id,
+                exc,
+            )
+            recovery_skipped_reason = str(exc)
+    elif can_recover and not apply_recovery:
+        recovery_skipped_reason = "awaiting_client_confirm"
+    elif provider_status_l in {"failed", "error", "canceled", "cancelled"}:
+        recovery_skipped_reason = f"provider_terminal_{provider_status_l}"
+    elif not result_url:
+        recovery_skipped_reason = "no_result_url"
+    else:
+        recovery_skipped_reason = "provider_not_succeeded"
+
+    live = _hydrate_job("video", stable_job_id) or job
+    live_result_url = str(_extract_job_result_url(live.get("result")) or existing_result_url or result_url or "").strip() or None
+
+    return {
+        "ok": True,
+        "job_id": stable_job_id,
+        "job_status": live.get("status") or job.get("status"),
+        "provider": provider or job.get("provider"),
+        "provider_task_id": provider_task_id,
+        "query_endpoint": query_endpoint or None,
+        "provider_status": provider_status,
+        "result_url": live_result_url,
+        "can_recover": can_recover,
+        "recovery_applied": recovery_applied,
+        "recovery_skipped_reason": recovery_skipped_reason,
+        "usage": usage or None,
+        "raw_response": raw_response if isinstance(raw_response, dict) else None,
+    }
 

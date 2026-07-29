@@ -60,6 +60,7 @@ def _reconcile_terminal_job_queue_state(
             "callback_pending" in upstream_state
             or "callback_wait" in upstream_state
             or "callback_retry" in upstream_state
+            or "callback_timeout_poll" in upstream_state
             or not upstream_state
             or upstream_state == "unknown"
         ):
@@ -167,11 +168,59 @@ def _maybe_finalize_stuck_job(
 
     is_callback_wait = _job_is_callback_waiting(job)
     if is_callback_wait:
+        # Even in pure-callback mode: force provider poll + download as callback supplement
+        # before permanently failing the job.
+        try:
+            from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+            from app.services.generation_runtime.timeout_poll_recovery import (
+                is_timeout_poll_in_progress,
+                maybe_start_timeout_poll_recovery,
+            )
+
+            if is_timeout_poll_in_progress(kind, job_id, job):
+                return job
+            if _extract_job_provider_task_id(job) and maybe_start_timeout_poll_recovery(kind, job_id, job):
+                store = IMAGE_JOB_STORE if kind == "image" else VIDEO_JOB_STORE
+                with lock:
+                    updated = dict(store.get(job_id) or {})
+                return updated or job
+        except Exception:
+            import logging
+
+            logging.getLogger("api_logger").exception(
+                "[%sJob] timeout poll recovery start failed | job_id=%s",
+                "Image" if kind == "image" else "Video",
+                job_id,
+            )
+
         timeout_message = (
             f"{kind} job callback wait timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
         )
         upstream_submit_state = "callback_wait_timeout"
     else:
+        # Poll-mode timeout: still try one last provider recovery when we have a task id.
+        try:
+            from app.services.generation_runtime.callbacks import _extract_job_provider_task_id
+            from app.services.generation_runtime.timeout_poll_recovery import (
+                is_timeout_poll_in_progress,
+                maybe_start_timeout_poll_recovery,
+            )
+
+            if is_timeout_poll_in_progress(kind, job_id, job):
+                return job
+            if _extract_job_provider_task_id(job) and maybe_start_timeout_poll_recovery(kind, job_id, job):
+                store = IMAGE_JOB_STORE if kind == "image" else VIDEO_JOB_STORE
+                with lock:
+                    updated = dict(store.get(job_id) or {})
+                return updated or job
+        except Exception:
+            import logging
+
+            logging.getLogger("api_logger").exception(
+                "[%sJob] timeout poll recovery start failed | job_id=%s",
+                "Image" if kind == "image" else "Video",
+                job_id,
+            )
         timeout_message = f"{kind} job timed out after {elapsed_seconds}s (limit={timeout_seconds}s)"
         upstream_submit_state = None
 

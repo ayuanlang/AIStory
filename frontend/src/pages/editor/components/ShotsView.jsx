@@ -26,7 +26,7 @@ import ReactMarkdown from 'react-markdown';
 import { useStore } from '../../../lib/store';
 import LogPanel from '../../../components/LogPanel';
 import ProjectStatusBar from '../../../components/ProjectStatusBar';
-import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw, CaptionsOff, VolumeX, Eraser } from 'lucide-react';
+import { Briefcase, X, LayoutDashboard, FileText, Clapperboard, Users, Film, Settings as SettingsIcon, Settings2, ArrowLeft, ChevronDown, Plus, Trash2, Upload, Download, Table as TableIcon, Edit3, ScrollText, LayoutList, Copy, Image as ImageIcon, Video, FolderOpen, Maximize2, Info, RefreshCw, Wand2, Link as LinkIcon, CheckCircle, CheckCircle2, Check, Languages, Loader2, Save, Layers, ArrowUp, Sparkles, Square, CheckSquare, MoreHorizontal, Crop, Unlink, PanelsTopLeft, AlertTriangle, Cpu, Timer, Scissors, RotateCcw, CaptionsOff, VolumeX, Eraser, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { API_URL, BASE_URL, ASSET_BASE_URL } from '../../../config';
 import { setUiLang as setGlobalUiLang } from '../../../lib/uiLang';
@@ -102,6 +102,7 @@ import {
     startShotMediaBatch,
     getShotMediaBatchStatus,
     getVideoGenerationJobStatus,
+    queryVideoJobProviderTask,
     getGenerationJobPool,
     stopGenerationJob,
     deleteGenerationJob,
@@ -1129,6 +1130,8 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
     const [isShotBatchStarting, setIsShotBatchStarting] = useState(false);
     const [isStoppingShotBatch, setIsStoppingShotBatch] = useState(false);
     const [stoppingVideoByShot, setStoppingVideoByShot] = useState({});
+    const [queryingVideoTaskByShot, setQueryingVideoTaskByShot] = useState({});
+    const [videoTaskQueryModal, setVideoTaskQueryModal] = useState(null);
     const [translatingPromptField, setTranslatingPromptField] = useState('');
     const [batchProgress, setBatchProgress] = useState({
         current: 0,
@@ -2007,10 +2010,13 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         const stableJobId = String(jobId || '').trim();
         if (!stableShotId || !stableJobId) return;
         const prev = readVideoJobStateStorage();
+        const existing = (prev?.[stableShotId] && typeof prev[stableShotId] === 'object') ? prev[stableShotId] : {};
         const next = {
             ...prev,
             [stableShotId]: {
+                ...existing,
                 jobId: stableJobId,
+                lastJobId: stableJobId,
                 startedAt: Number(options?.startedAt || 0) || Date.now(),
                 ...buildShotJobMeta(stableShotId, 'video', options),
             },
@@ -2023,8 +2029,18 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!stableShotId) return;
         const prev = readVideoJobStateStorage();
         if (!Object.prototype.hasOwnProperty.call(prev, stableShotId)) return;
+        const existing = (prev?.[stableShotId] && typeof prev[stableShotId] === 'object') ? prev[stableShotId] : {};
+        const lastJobId = String(existing.lastJobId || existing.jobId || '').trim();
         const next = { ...prev };
-        delete next[stableShotId];
+        if (lastJobId) {
+            next[stableShotId] = {
+                ...existing,
+                jobId: '',
+                lastJobId,
+            };
+        } else {
+            delete next[stableShotId];
+        }
         writeVideoJobStateStorage(next);
     }, [readVideoJobStateStorage, writeVideoJobStateStorage]);
 
@@ -2046,6 +2062,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             const existingJobId = String(payload?.jobId || '').trim();
             if (existingJobId === stableJobId) {
                 changed = true;
+                const lastJobId = String(payload?.lastJobId || existingJobId || '').trim();
+                if (lastJobId) {
+                    next[shotId] = {
+                        ...(payload && typeof payload === 'object' ? payload : {}),
+                        jobId: '',
+                        lastJobId,
+                    };
+                }
                 return;
             }
             next[shotId] = payload;
@@ -2116,6 +2140,14 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
         if (!stableShotId) return '';
         const all = readVideoJobStateStorage();
         return String(all?.[stableShotId]?.jobId || '').trim();
+    }, [readVideoJobStateStorage]);
+
+    const getLastVideoJobId = useCallback((shotId) => {
+        const stableShotId = String(shotId || '').trim();
+        if (!stableShotId) return '';
+        const all = readVideoJobStateStorage();
+        const row = all?.[stableShotId];
+        return String(row?.jobId || row?.lastJobId || '').trim();
     }, [readVideoJobStateStorage]);
 
     const setPendingImageJob = useCallback((shotId, kind, jobId, options = {}) => {
@@ -5368,6 +5400,135 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
             activeOssVideoSyncRef.current.delete(stableShotId);
         }
     }, [normalizeShotPromptDefaults, onLog, onUpdateShot, refreshShotAssetsMeta, refreshShots, releaseShotVideoUi, t]);
+
+    const handleQueryVideoProviderTask = useCallback(async (shotId) => {
+        const stableShotId = String(shotId || editingShot?.id || '').trim();
+        if (!stableShotId) {
+            showNotification(t('缺少镜头 ID', 'Missing shot ID'), 'warning');
+            return;
+        }
+        const jobId = getLastVideoJobId(stableShotId);
+        if (!jobId) {
+            showNotification(t('当前镜头没有可查询的视频任务', 'No video job available to query for this shot'), 'warning');
+            return;
+        }
+
+        const resolveLocalShot = () => (
+            (editingShotRef.current && String(editingShotRef.current?.id) === stableShotId ? editingShotRef.current : null)
+            || (shotsRef.current || []).find((item) => String(item?.id) === stableShotId)
+            || (editingShot && String(editingShot?.id) === stableShotId ? editingShot : null)
+            || { id: stableShotId }
+        );
+
+        const runDownloadAndSync = async (queryResult) => {
+            setPendingVideoJob(stableShotId, jobId);
+            setShotGeneratingState(stableShotId, 'video', true);
+            setVideoStatuses((prev) => ({ ...prev, [stableShotId]: 'saving_video' }));
+            showNotification(
+                t('任务已成功，正在下载并上传 OSS...', 'Task succeeded; downloading and uploading to OSS...'),
+                'info'
+            );
+            const recoverResult = await queryVideoJobProviderTask(jobId, { apply_recovery: true });
+            setVideoTaskQueryModal((prev) => ({
+                ...(prev || {}),
+                shotId: stableShotId,
+                jobId,
+                result: {
+                    ...(queryResult || {}),
+                    ...(recoverResult || {}),
+                },
+            }));
+            const synced = await syncShotVideoAfterOssPersist({
+                shotId: stableShotId,
+                jobId,
+                initialUrl: String(recoverResult?.result_url || queryResult?.result_url || '').trim(),
+            });
+            if (!synced) {
+                try {
+                    const latestShot = await fetchShot(stableShotId);
+                    if (latestShot?.id) {
+                        const normalized = normalizeShotPromptDefaults(latestShot);
+                        setEditingShot((prev) => (
+                            prev && String(prev.id) === stableShotId ? { ...prev, ...normalized } : prev
+                        ));
+                        setShots((prev) => prev.map((item) => (
+                            String(item?.id) === stableShotId ? { ...item, ...normalized } : item
+                        )));
+                    }
+                } catch (syncErr) {
+                    console.warn('[VideoTaskQuery] post-recovery shot sync failed:', syncErr);
+                }
+                releaseShotVideoUi({ shotId: stableShotId, jobId });
+                showNotification(
+                    t('已触发下载/OSS，请稍后刷新查看视频', 'Download/OSS started; refresh later if video is not visible yet'),
+                    'warning'
+                );
+                return false;
+            }
+            showNotification(t('视频已落盘并写入 OSS', 'Video downloaded and stored to OSS'), 'success');
+            return true;
+        };
+
+        // Inspect-only query must NOT flip into generate-running by itself.
+        setQueryingVideoTaskByShot((prev) => ({ ...prev, [stableShotId]: true }));
+        try {
+            const result = await queryVideoJobProviderTask(jobId, { apply_recovery: false });
+            setVideoTaskQueryModal({
+                shotId: stableShotId,
+                jobId,
+                result: result || {},
+            });
+            const statusText = result?.provider_status || result?.job_status || '-';
+            onLog?.('info', `[VideoTaskQuery] shot=${stableShotId} job=${jobId} provider_status=${statusText} can_recover=${Boolean(result?.can_recover)}`);
+
+            if (result?.can_recover) {
+                const localShot = resolveLocalShot();
+                const existingVideoUrl = String(localShot?.video_url || '').trim();
+                if (existingVideoUrl) {
+                    const confirmed = await confirmUiMessage(t(
+                        '当前镜头已有视频文件。是否下载供应商任务结果并覆盖/更新？',
+                        'This shot already has a video. Download the provider result and update it?'
+                    ));
+                    if (!confirmed) {
+                        showNotification(t('已取消下载', 'Download cancelled'), 'info');
+                        return;
+                    }
+                }
+                await runDownloadAndSync(result);
+            } else {
+                showNotification(
+                    t(`任务查询完成: ${statusText}`, `Task query done: ${statusText}`),
+                    'info'
+                );
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Unknown error';
+            showNotification(`${t('查询任务失败', 'Query task failed')}: ${detail}`, 'error');
+            setVideoTaskQueryModal({
+                shotId: stableShotId,
+                jobId,
+                error: String(detail),
+            });
+        } finally {
+            setQueryingVideoTaskByShot((prev) => {
+                const next = { ...prev };
+                delete next[stableShotId];
+                return next;
+            });
+        }
+    }, [
+        confirmUiMessage,
+        editingShot,
+        getLastVideoJobId,
+        normalizeShotPromptDefaults,
+        onLog,
+        releaseShotVideoUi,
+        setPendingVideoJob,
+        setShotGeneratingState,
+        showNotification,
+        syncShotVideoAfterOssPersist,
+        t,
+    ]);
 
     useEffect(() => {
         setHasShotInitialLoadCompleted(false);
@@ -12011,6 +12172,25 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                     {currentShotGenerating ? t('生成中...', 'Generating...') : t('生成', 'Generate')}
                                                 </button>
                                                 <button
+                                                    type="button"
+                                                    onClick={() => handleQueryVideoProviderTask(editingShot?.id)}
+                                                    disabled={Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id)}
+                                                    className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 ${
+                                                        Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id)
+                                                            ? 'bg-white/10 text-white/40 cursor-not-allowed'
+                                                            : 'bg-cyan-500/20 text-cyan-200 hover:bg-cyan-500/30'
+                                                    }`}
+                                                    title={t('查询供应商任务状态（不进入生成运行态）', 'Query provider task status (does not enter generating state)')}
+                                                    aria-label={t('查询任务', 'Query task')}
+                                                >
+                                                    {Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                        ? <Loader2 className="w-3 h-3 animate-spin"/>
+                                                        : <Search className="w-3 h-3"/>}
+                                                    {Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')])
+                                                        ? t('查询中...', 'Querying...')
+                                                        : t('查询', 'Query')}
+                                                </button>
+                                                <button
                                                     onClick={() => handleForceStopShotVideo(editingShot?.id)}
                                                     className={`text-[10px] font-bold px-3 py-0.5 rounded flex items-center gap-1 ${Boolean(stoppingVideoByShot[String(editingShot?.id || '')]) ? 'bg-red-500/25 text-red-100' : 'bg-red-500/20 text-red-200 hover:bg-red-500/30'}`}
                                                     title={t('强制停止当前镜头的视频生成任务', 'Force stop current shot video job')}
@@ -13793,6 +13973,15 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                                                                         busy: currentShotGenerating,
                                                                         variant: 'primary',
                                                                     })}
+                                                                    {renderDetailActionButton({
+                                                                        label: t('查询任务', 'Query Task'),
+                                                                        busyLabel: t('查询中...', 'Querying...'),
+                                                                        onClick: () => handleQueryVideoProviderTask(editingShot?.id),
+                                                                        disabled: Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]) || !getLastVideoJobId(editingShot?.id),
+                                                                        busy: Boolean(queryingVideoTaskByShot[String(editingShot?.id || '')]),
+                                                                        variant: 'secondary',
+                                                                        title: t('查询供应商任务状态（不进入生成运行态）', 'Query provider task status (does not enter generating state)'),
+                                                                    })}
                                                                     {renderShotEnvChangeBadge(false)}
                                                                     {renderPromptLangMenu('video')}
                                                                     {renderDetailActionButton({
@@ -14086,6 +14275,59 @@ export const ShotsView = ({ activeEpisode, projectId, project, onLog, editingSho
                     </motion.div>
                 )}
              </AnimatePresence>
+
+            {videoTaskQueryModal && (
+                <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4" onClick={() => setVideoTaskQueryModal(null)}>
+                    <div
+                        className="bg-[#1e1e1e] border border-white/10 rounded-lg w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/40">
+                            <h3 className="font-bold flex items-center gap-2 text-sm">
+                                <Search size={16} className="text-cyan-300" />
+                                {t('视频任务查询', 'Video Task Query')}
+                            </h3>
+                            <button type="button" onClick={() => setVideoTaskQueryModal(null)} aria-label="Close">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-3 overflow-auto custom-scrollbar text-xs">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-gray-300">
+                                <div>shot: <span className="font-mono text-white">{videoTaskQueryModal.shotId || '-'}</span></div>
+                                <div>job_id: <span className="font-mono text-white">{videoTaskQueryModal.jobId || '-'}</span></div>
+                                <div>provider: <span className="font-mono text-white">{videoTaskQueryModal.result?.provider || '-'}</span></div>
+                                <div>provider_task_id: <span className="font-mono text-white break-all">{videoTaskQueryModal.result?.provider_task_id || '-'}</span></div>
+                                <div>job_status: <span className="font-mono text-white">{videoTaskQueryModal.result?.job_status || '-'}</span></div>
+                                <div>provider_status: <span className="font-mono text-cyan-200">{videoTaskQueryModal.result?.provider_status || '-'}</span></div>
+                                <div>recovery: <span className="font-mono text-white">{String(Boolean(videoTaskQueryModal.result?.recovery_applied))}</span></div>
+                                <div>can_recover: <span className="font-mono text-white">{String(Boolean(videoTaskQueryModal.result?.can_recover))}</span></div>
+                                <div>result_url: <span className="font-mono text-white break-all">{videoTaskQueryModal.result?.result_url || '-'}</span></div>
+                            </div>
+                            {videoTaskQueryModal.error ? (
+                                <div className="text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3">
+                                    {videoTaskQueryModal.error}
+                                </div>
+                            ) : null}
+                            {videoTaskQueryModal.result?.usage ? (
+                                <div>
+                                    <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{t('归一化用量', 'Normalized usage')}</div>
+                                    <pre className="text-[10px] text-gray-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto bg-black/30 rounded p-2 border border-white/5">
+                                        {JSON.stringify(videoTaskQueryModal.result.usage, null, 2)}
+                                    </pre>
+                                </div>
+                            ) : null}
+                            {videoTaskQueryModal.result?.raw_response ? (
+                                <div>
+                                    <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{t('查询任务 API 完整返回', 'Full task query API response')}</div>
+                                    <pre className="text-[10px] text-cyan-100/90 whitespace-pre-wrap break-all max-h-[420px] overflow-y-auto bg-black/40 rounded p-2 border border-cyan-500/20">
+                                        {JSON.stringify(videoTaskQueryModal.result.raw_response, null, 2)}
+                                    </pre>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {shotReviewModal.open && (
                 <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">

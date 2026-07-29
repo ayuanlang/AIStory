@@ -29,6 +29,10 @@ DEFAULT_QUEUE_CONFIG: Dict[str, Any] = {
     "callback_compensation_scan_interval_seconds": 60,
     "callback_compensation_scan_batch_size": 10,
     "callback_compensation_image_share_percent": 50,
+    # After image/video running timeout: force N provider polls (even in pure callback mode)
+    # as a callback-loss supplement before permanently failing.
+    "timeout_poll_max_attempts": 3,
+    "timeout_poll_interval_seconds": 30,
 }
 
 _LEGACY_QUEUE_CONFIG_FILE = os.path.join(_BACKEND_DIR, "queue_config.json")

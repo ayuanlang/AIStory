@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Scale } from 'lucide-react';
-import { getAdminBillingReconcileCandidates, runAdminBillingReconcile, runAdminBillingReconcileSingle } from '../services/api';
+import { getAdminBillingReconcileCandidates, getSystemSettingsManage, runAdminBillingReconcile, runAdminBillingReconcileSingle } from '../services/api';
 import { getUiLang, tUI } from '../lib/uiLang';
 
 const statusLabel = (status, t) => {
@@ -35,8 +35,18 @@ const BillingReconcileAdmin = () => {
     const [singleTaskId, setSingleTaskId] = useState('');
     const [singleTaskLoading, setSingleTaskLoading] = useState(false);
     const [singleTaskResult, setSingleTaskResult] = useState(null);
+    const [systemProviders, setSystemProviders] = useState([]);
 
     const rows = candidates?.candidates || [];
+
+    const singleProviderOptions = useMemo(() => {
+        const set = new Set(systemProviders);
+        for (const row of rows) {
+            const provider = String(row?.provider || '').trim();
+            if (provider) set.add(provider);
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [systemProviders, rows]);
 
     const fetchCandidates = async () => {
         setIsLoading(true);
@@ -59,6 +69,19 @@ const BillingReconcileAdmin = () => {
 
     useEffect(() => {
         fetchCandidates();
+        (async () => {
+            try {
+                const apis = await getSystemSettingsManage();
+                const set = new Set();
+                for (const row of (Array.isArray(apis) ? apis : [])) {
+                    const provider = String(row?.provider || '').trim();
+                    if (provider) set.add(provider);
+                }
+                setSystemProviders(Array.from(set).sort((a, b) => a.localeCompare(b)));
+            } catch (e) {
+                console.error(e);
+            }
+        })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -86,7 +109,7 @@ const BillingReconcileAdmin = () => {
 
     const handleRunSingle = async () => {
         if (!singleTaskProvider || !singleTaskId) {
-            alert(t('填入提供商和任务ID', 'Please fill both provider and task ID'));
+            alert(t('请选择供应商并填入任务ID', 'Please select provider and fill task ID'));
             return;
         }
         setSingleTaskLoading(true);
@@ -206,13 +229,16 @@ const BillingReconcileAdmin = () => {
             <div className="bg-black/30 border border-white/10 rounded-lg p-3 w-full mb-3">
                 <h4 className="text-sm font-bold text-gray-200 mb-2">{t('单笔对账', 'Single Reconcile')}</h4>
                 <div className="flex flex-wrap gap-2 items-center text-xs">
-                    <input
-                        type="text"
-                        placeholder={t('供应商', 'Provider')}
+                    <select
                         value={singleTaskProvider}
                         onChange={(e) => setSingleTaskProvider(e.target.value)}
                         className="bg-black/40 border border-white/10 rounded px-2 py-1 flex-1 min-w-[150px]"
-                    />
+                    >
+                        <option value="">{t('选择供应商', 'Select provider')}</option>
+                        {singleProviderOptions.map((provider) => (
+                            <option key={provider} value={provider}>{provider}</option>
+                        ))}
+                    </select>
                     <input
                         type="text"
                         placeholder="taskId"
@@ -230,12 +256,41 @@ const BillingReconcileAdmin = () => {
                 </div>
                 {singleTaskResult && (
                     <div className={`mt-3 p-2 rounded text-xs ${singleTaskResult.status === 'ok' || singleTaskResult.ok ? 'bg-green-500/10 text-green-300 border border-green-500/30' : 'bg-red-500/10 text-red-300 border border-red-500/30'}`}>
-                        {singleTaskResult.status === 'ok' || singleTaskResult.ok ? t('对账成功: 用量已补齐', 'Success: Usage recorded') : `${t('对账失败', 'Failed')}: ${singleTaskResult.status || singleTaskResult.error || '-'}`}
-                        {(singleTaskResult.status === 'ok' || singleTaskResult.ok) && singleTaskResult.usage && (
-                           <div className="mt-1 text-[10px] text-gray-500 break-all">
-                               {JSON.stringify(singleTaskResult.usage)}
-                           </div>
-                        )}
+                        <div>
+                            {singleTaskResult.status === 'ok' || singleTaskResult.ok
+                                ? t('查询成功', 'Query succeeded')
+                                : `${t('对账失败', 'Failed')}: ${singleTaskResult.status || singleTaskResult.error || '-'}`}
+                        </div>
+                        {(singleTaskResult.query_endpoint || singleTaskResult.system_api_id) ? (
+                            <div className="mt-1 text-[10px] text-gray-400 break-all">
+                                {singleTaskResult.query_endpoint ? `endpoint: ${singleTaskResult.query_endpoint}` : ''}
+                                {singleTaskResult.system_api_id != null ? ` · system_api_id=${singleTaskResult.system_api_id}` : ''}
+                            </div>
+                        ) : null}
+                        {(singleTaskResult.status === 'ok' || singleTaskResult.ok) && singleTaskResult.usage ? (
+                            <div className="mt-2">
+                                <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">
+                                    {t('归一化用量', 'Normalized usage')}
+                                </div>
+                                <pre className="text-[10px] text-gray-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto bg-black/30 rounded p-2 border border-white/5">
+                                    {JSON.stringify(singleTaskResult.usage, null, 2)}
+                                </pre>
+                            </div>
+                        ) : null}
+                        {(singleTaskResult.raw_response || singleTaskResult.provider_response) ? (
+                            <div className="mt-2">
+                                <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">
+                                    {t('查询任务 API 完整返回', 'Full task query API response')}
+                                </div>
+                                <pre className="text-[10px] text-cyan-100/90 whitespace-pre-wrap break-all max-h-[420px] overflow-y-auto bg-black/40 rounded p-2 border border-cyan-500/20">
+                                    {JSON.stringify(singleTaskResult.raw_response || singleTaskResult.provider_response, null, 2)}
+                                </pre>
+                            </div>
+                        ) : (singleTaskResult.status === 'ok' || singleTaskResult.ok) ? (
+                            <div className="mt-2 text-[10px] text-amber-200">
+                                {t('供应商未返回原始响应体', 'Provider raw response missing')}
+                            </div>
+                        ) : null}
                     </div>
                 )}
             </div>

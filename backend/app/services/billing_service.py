@@ -1961,11 +1961,47 @@ class BillingService:
             usage_out["billing_basis"] = str(payload.get("billing_basis") or "provider_kie_credits")
         if payload.get("provider_usage") and isinstance(payload.get("provider_usage"), dict):
             usage_out["provider_usage"] = dict(payload.get("provider_usage") or {})
+            nested_usage = usage_out["provider_usage"]
+            # Promote callback/query tokens (Ark Seedance usage.*) to top-level billable fields.
+            nested_total = BillingService._to_int(
+                nested_usage.get("total_tokens")
+                or nested_usage.get("completion_tokens")
+                or nested_usage.get("output_tokens")
+                or 0,
+                0,
+            )
+            if total_tokens <= 0 and nested_total > 0:
+                total_tokens = nested_total
+                usage_out["total_tokens"] = max(0, total_tokens)
+                nested_output = BillingService._to_int(
+                    nested_usage.get("completion_tokens")
+                    or nested_usage.get("output_tokens")
+                    or nested_total,
+                    0,
+                )
+                if output_tokens <= 0 and nested_output > 0:
+                    output_tokens = nested_output
+                    usage_out["output_tokens"] = max(0, output_tokens)
+                    usage_out["completion_tokens"] = max(0, nested_output)
+                nested_input = BillingService._to_int(
+                    nested_usage.get("input_tokens") or nested_usage.get("prompt_tokens") or 0,
+                    0,
+                )
+                if input_tokens <= 0 and nested_input > 0:
+                    input_tokens = nested_input
+                    usage_out["input_tokens"] = max(0, input_tokens)
+                    usage_out["prompt_tokens"] = max(0, nested_input)
         if payload.get("usage_source"):
             usage_out["usage_source"] = str(payload.get("usage_source") or "").strip()
         token_source = str(payload.get("token_source") or "").strip().lower()
         if not token_source and isinstance(usage_out.get("provider_usage"), dict):
             token_source = str(usage_out["provider_usage"].get("token_source") or "").strip().lower()
+        # Callback usage without explicit stamp still counts as api_usage when tokens exist.
+        if not token_source and total_tokens > 0 and (
+            str(usage_out.get("usage_source") or "").strip().lower() in {"callback", "provider", "task_query", "reconcile"}
+            or isinstance(usage_out.get("provider_usage"), dict)
+        ):
+            token_source = "api_usage"
         if token_source:
             usage_out["token_source"] = token_source
         if payload.get("billing_basis") and not usage_out.get("billing_basis"):
@@ -3579,6 +3615,26 @@ class BillingService:
                     and nested.get(key) not in (None, "", 0, 0.0)
                 ):
                     out[key] = nested.get(key)
+            nested_tokens = 0
+            try:
+                nested_tokens = max(
+                    0,
+                    int(float(
+                        nested.get("total_tokens")
+                        or nested.get("completion_tokens")
+                        or nested.get("output_tokens")
+                        or 0
+                    )),
+                )
+            except Exception:
+                nested_tokens = 0
+            if nested_tokens > 0 and str(out.get("token_source") or "").strip().lower() in {"", "estimate"}:
+                # Real provider callback/query usage supersedes local estimate stamp.
+                out["token_source"] = "api_usage"
+                if not out.get("billing_basis"):
+                    out["billing_basis"] = "provider_tokens"
+                if not out.get("usage_source"):
+                    out["usage_source"] = str(payload.get("usage_source") or "provider").strip() or "provider"
         compacted = BillingService._compact_audit_payload(
             out,
             drop_zero_keys=BillingService._AUDIT_USAGE_DROP_ZERO_KEYS,

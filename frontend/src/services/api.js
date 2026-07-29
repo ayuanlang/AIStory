@@ -2323,6 +2323,18 @@ export const getVideoGenerationJobStatus = async (jobId, options = {}) => {
     return await fetchVideoJobStatusLimited(jobId, options);
 };
 
+export const queryVideoJobProviderTask = async (jobId, { apply_recovery = false } = {}) => {
+    const stableJobId = String(jobId || '').trim();
+    if (!stableJobId) {
+        throw new Error('job_id is required');
+    }
+    const response = await api.post(
+        `/generate/video/jobs/${encodeURIComponent(stableJobId)}/query-provider-task`,
+        { apply_recovery: Boolean(apply_recovery) },
+    );
+    return response?.data || {};
+};
+
 export const getGenerationJobPool = async (params = {}) => {
     const response = await api.get('/generate/jobs/pool', { params, skipAuthRedirect: true });
     return response?.data || {};

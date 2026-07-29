@@ -195,7 +195,7 @@ _CALLBACK_COMPENSATION_STARTED = False
 _CALLBACK_COMPENSATION_LOCK = threading.Lock()
 # Bump when compensation guards change so StatReload-surviving daemon threads exit
 # instead of keeping pre-fix closures that false-exhaust local poll jobs (~28800s).
-_CALLBACK_COMPENSATION_CODE_VERSION = 5
+_CALLBACK_COMPENSATION_CODE_VERSION = 6
 _CALLBACK_COMPENSATION_THREAD_VERSION = 0
 
 
@@ -276,6 +276,7 @@ def _run_callback_compensation_once() -> None:
                     "callback_pending" in upstream_state
                     or "callback_wait" in upstream_state
                     or "callback_retry" in upstream_state
+                    or "callback_timeout_poll" in upstream_state
                     or not str(job.get("upstream_submit_state") or "").strip()
                     or needs_false_fail_recover
                 )
@@ -395,6 +396,16 @@ def _run_callback_compensation_once() -> None:
         if _is_terminal_generation_job_status(status_after):
             # Timeout/heal path already synced queue; never requeue terminal jobs.
             continue
+
+        # Timeout poll recovery owns the job until it succeeds or exhausts.
+        try:
+            from app.services.generation_runtime.timeout_poll_recovery import is_timeout_poll_in_progress
+
+            if is_timeout_poll_in_progress(kind, job_id, job):
+                mark_generation_task_status_external(job_id, status="waiting_callback", error=None)
+                continue
+        except Exception:
+            pass
 
         if _job_has_success_result(job):
             if kind == "image":

@@ -646,6 +646,7 @@ def _is_provider_direct_oss_url(
         re.match(r"(^|.+\.)clouddn\.com$", hostname, re.IGNORECASE)
         or re.match(r"(^|.+\.)qiniucs\.com$", hostname, re.IGNORECASE)
         or re.match(r"(^|.+\.)woola\.fun$", hostname, re.IGNORECASE)
+        or re.match(r"(^|.+\.)aliyuncs\.com$", hostname, re.IGNORECASE)
         or ".bkt." in hostname
         or "backblaze" in hostname
     )
